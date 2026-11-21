@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BASE="${1:-$ROOT/third_party/aosp17}"
 TAG="android-17.0.0_r1"
 URL="https://android.googlesource.com"
-mkdir -p "$BASE/system" "$BASE/external" "$BASE/frameworks"
+mkdir -p "$BASE/system" "$BASE/external" "$BASE/frameworks" "$BASE/packages/apps"
 
 clone_full() {
   local repo="$1" dst="$2"
@@ -40,5 +40,6 @@ clone_sparse platform/system/core system/core libcutils libutils include libproc
 clone_sparse platform/frameworks/native frameworks/native libs/binder cmds/servicemanager include headers &
 clone_sparse platform/frameworks/base frameworks/base libs/androidfw core/jni core/java/android/content/pm core/java/android/content/res core/java/com/android/internal/pm services/core/java/com/android/server/pm &
 clone_sparse platform/art art libartbase libdexfile compiler runtime &
+clone_full platform/packages/apps/Launcher3 packages/apps/Launcher3 &
 wait
 echo "Fetched minimal AOSP 17 ($TAG) components into $BASE"
