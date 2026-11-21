@@ -143,7 +143,48 @@
   </style>
 </head>
 <body>
-  <main id="playground">
+  <main id="launcher-playground" class="wa-playground" hidden>
+    <header class="wa-toolbar">
+      <h1>Android 17 Launcher3</h1>
+      <div class="wa-controls">
+        <button type="button" id="launcher-form">Phone view</button>
+        <button type="button" id="launcher-locale">Locale EN</button>
+        <a href="?mode=apk">APK mode</a>
+      </div>
+    </header>
+    <section class="wa-device" data-form="desktop" aria-label="Android device">
+      <div class="wa-viewport">
+        <div class="wa-launcher-surface">
+          <canvas width="960" height="660" tabindex="0" aria-label="AOSP 17 Launcher3"></canvas>
+        </div>
+        <div class="wa-app-surface" inert></div>
+        <div class="wa-recents" hidden>
+          <strong>Recent apps</strong>
+          <button type="button" id="launcher-recent-app">No recent apps</button>
+        </div>
+      </div>
+      <nav class="wa-nav" aria-label="Android navigation">
+        <button type="button" data-nav="back">Back</button>
+        <button type="button" data-nav="home">Home</button>
+        <button type="button" data-nav="recents">Recents</button>
+        <button type="button" data-nav="all-apps">All Apps</button>
+      </nav>
+    </section>
+    <div class="wa-bottom">
+      <div class="wa-hud" aria-label="Runtime telemetry">
+        <span data-stat="backend">GPU —</span><span data-stat="fps">FPS —</span>
+        <span data-stat="tick">Wasm —</span><span data-stat="gc">ART GC —</span><span data-stat="activity"></span>
+      </div>
+      <div class="wa-controls">
+        <button type="button" id="launcher-install">Install APK</button>
+        <input type="file" id="launcher-apk" accept=".apk,application/vnd.android.package-archive" multiple hidden>
+        <p class="wa-install-hint">Drop APKs onto the device to install.</p>
+      </div>
+    </div>
+    <p class="wa-status" role="status">Starting Android 17 Launcher3…</p>
+  </main>
+
+  <main id="playground" hidden>
     <header>
       <h1>WasmAndroid</h1>
       <p class="subtitle">Android APK and NDK playground</p>
@@ -232,10 +273,29 @@
     </section>
   </main>
   <script type="module">
-    import { CubePlayground } from './runtime.mjs';
-    const playground = new CubePlayground(document.querySelector('#playground'));
-    void playground.start();
-    addEventListener('pagehide', () => playground.close(), { once: true });
+    const params = new URLSearchParams(location.search);
+    if (params.get('mode') === 'apk') {
+      const { CubePlayground } = await import('./runtime.mjs');
+      const root = document.querySelector('#playground');
+      root.hidden = false;
+      const playground = new CubePlayground(root);
+      void playground.start();
+      addEventListener('pagehide', () => playground.close(), { once: true });
+    } else {
+      const root = document.querySelector('#launcher-playground');
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.href = './launcher.css';
+      document.head.append(stylesheet);
+      root.hidden = false;
+      try {
+        const { mountLauncherPlayground } = await import('./launcher_playground.mjs');
+        const playground = mountLauncherPlayground(root, { backend: params.get('backend') ?? 'auto' });
+        addEventListener('pagehide', () => { void playground.close(); }, { once: true });
+      } catch (error) {
+        root.querySelector('.wa-status').textContent = error.message;
+      }
+    }
   </script>
 </body>
 </html>
