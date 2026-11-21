@@ -1,0 +1,13 @@
+build*/
+*.o
+*.a
+*.wasm
+*.wasm.map
+*.js.mem
+*.worker.js
+*.tmp
+.DS_Store
+__pycache__/
+*.pyc
+node_modules/
+!demos/**/*.so
