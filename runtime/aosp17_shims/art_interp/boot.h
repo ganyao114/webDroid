@@ -2,7 +2,12 @@
 
 #include "runtime_internal.h"
 
+#include <optional>
+
 namespace wa::interp {
+
+enum class Encoding : int32_t { Utf8, Ascii, Latin1, Utf16, Utf16Le, Utf16Be };
+std::optional<Encoding> FindEncoding(std::u16string_view name);
 
 inline constexpr std::string_view kObject = "Ljava/lang/Object;";
 inline constexpr std::string_view kString = "Ljava/lang/String;";

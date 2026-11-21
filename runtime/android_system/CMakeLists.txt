@@ -5,6 +5,7 @@ set(AOSP17_SOURCE_DIR "${wa_default_aosp17}" CACHE PATH "Read-only AOSP android-
 if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
     include(../../cmake/Aosp17Core.cmake)
     include(../../cmake/Aosp17ArtHGraph.cmake)
+    include(../../cmake/Aosp17ArtInterp.cmake)
     include(BinderRuntime.cmake)
     # Compile AOSP translation units independently of SwiftVM's fmt.
     add_library(wa_android_system_apk OBJECT apk_loader.cpp apk_dex.cpp)
@@ -46,7 +47,12 @@ if(EMSCRIPTEN)
     )
     if(TARGET wa_android_system_apk)
         target_link_libraries(android_system PRIVATE wa_android_system_apk wa_android_system_binder)
+        target_sources(android_system PRIVATE art_sf_entry.cpp)
+        target_link_libraries(android_system PRIVATE aosp17_art_interp wa_hal_surfaceflinger)
+        target_compile_options(android_system PRIVATE -ffunction-sections -fdata-sections)
+        target_compile_options(aosp17_art_interp PRIVATE -ffunction-sections -fdata-sections)
         # Accept caller-owned vproc memory through the Emscripten loader.
+        # The ApkAssets path loader uses MEMFS for APKs mounted through the ART entry point.
         target_link_options(android_system PRIVATE -sIMPORTED_MEMORY=1)
         # Android's liblog supplies these C symbols in the unified runtime. The
         # HAL's NDK routes still use wa_android_log for guest console output.
@@ -63,6 +69,20 @@ if(EMSCRIPTEN)
             _wa_system_client_resolve_home_activity _wa_system_client_get_package_info
             _wa_system_client_start_activity _wa_system_client_start_home_activity
             _wa_system_client_get_top_activity _wa_system_client_finish_top_activity)
+        list(APPEND exports
+            _wa_system_art_create _wa_system_art_destroy _wa_system_art_load_dex
+            _wa_system_art_register_resource_natives _wa_system_art_mount_apk
+            _wa_system_art_call_static_int _wa_system_art_call_static_string _wa_system_art_call_static_void
+            _wa_system_art_last_error _wa_system_art_stats_json _wa_system_art_gc_collect
+            _wa_system_art_set_gc_paused _wa_system_art_set_inline_caches_enabled
+            _wa_system_sf_init _wa_system_sf_ctx _wa_system_sf_destroy
+            _wa_sf_create _wa_sf_destroy _wa_sf_begin _wa_sf_set_layer _wa_sf_remove_layer
+            _wa_sf_commit _wa_sf_abort _wa_sf_frame_acquire _wa_sf_frame_release
+            _wa_sf_frame_layers _wa_sf_frame_list _wa_sf_bitmaps
+            _wa_bitmap_put _wa_bitmap_remove _wa_bitmap_acquire _wa_bitmap_release _wa_bitmap_pixels
+            _wa_sf_input _wa_sf_vsync _wa_sf_vsync_read _wa_sf_vsync_write _wa_sf_font_metrics
+            _wa_sf_codec_requests _wa_sf_codec_events _wa_sf_webview_requests _wa_sf_webview_events
+            _wa_canvas_begin _wa_canvas_draw_color _wa_canvas_end)
     else()
         target_link_options(android_system PRIVATE -sFILESYSTEM=0)
     endif()
@@ -75,10 +95,16 @@ else()
         PRIVATE wa_hal_browser svm_wasm svm_arm32_numeric svm_arm64_numeric)
     if(TARGET wa_android_system_apk)
         target_link_libraries(wa_android_system PRIVATE wa_android_system_apk wa_android_system_binder)
+        target_sources(wa_android_system PRIVATE art_sf_entry.cpp)
+        target_link_libraries(wa_android_system PRIVATE aosp17_art_interp PUBLIC wa_hal_surfaceflinger)
     endif()
 endif()
 
 if(BUILD_TESTING AND TARGET wa_android_system_apk)
     add_subdirectory(../../tests/m6_apk_chrome_e2e "${CMAKE_BINARY_DIR}/tests/m6_apk_chrome_e2e")
     add_subdirectory(../../tests/m7_system_binder_e2e "${CMAKE_BINARY_DIR}/tests/m7_system_binder_e2e")
+    if(EMSCRIPTEN OR NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/aosp17/frameworks/base/libs/androidfw")
+        add_subdirectory(../../tests/m7_aosp17_art_interp "${CMAKE_BINARY_DIR}/tests/m7_aosp17_art_interp")
+    endif()
+    add_subdirectory(../../tests/m8_art_perf_and_unified "${CMAKE_BINARY_DIR}/tests/m8_art_perf_and_unified")
 endif()

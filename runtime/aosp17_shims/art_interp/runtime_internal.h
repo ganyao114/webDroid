@@ -4,10 +4,11 @@
 #include "native_thunk.h"
 
 #include <array>
-#include <bitset>
+#include <list>
 #include <map>
 #include <unordered_map>
 
+#include "dex/code_item_accessors.h"
 #include "dex/dex_file.h"
 #include "dex/modifiers.h"
 
@@ -26,15 +27,70 @@ std::string MemberKey(std::string_view name, std::string_view signature);
 std::string Shorty(std::string_view signature);
 std::u16string DecodeUtf8(std::string_view text);
 std::string EncodeUtf8(std::u16string_view text, bool modified = true);
-Value Normalize(Value value, char type);
+inline Value Normalize(Value value, char type) {
+  switch (type) {
+    case 'L': case '[': return Value::Ref(value.ref());
+    case 'J': case 'D': return Value::Bits(value.bits());
+    case 'Z': return Value::Int(value.i() & 1);
+    case 'B': return Value::Int(static_cast<int8_t>(value.i()));
+    case 'C': return Value::Int(static_cast<uint16_t>(value.i()));
+    case 'S': return Value::Int(static_cast<int16_t>(value.i()));
+    default: return Value::Int(value.i());
+  }
+}
 
 struct Field {
   Class* owner;
   std::string name;
   std::string type;
+  char value_type;
   bool is_static;
   size_t slot;
   Value value;
+};
+
+struct MemberCache {
+  void* resolved = nullptr;  // Field, class or string, as determined by the site's opcode.
+  Class* receiver = nullptr;
+};
+
+struct InvokeRegisters {
+  InvokeRegisters(const art::Instruction& instruction, bool range);
+  uint32_t operator[](size_t i) const { return range ? first + i : registers[i]; }
+  size_t size() const { return count; }
+
+  bool range;
+  uint8_t count;
+  uint16_t first = 0;
+  std::array<uint32_t, art::Instruction::kMaxVarArgRegs> registers{};
+};
+
+struct InvokeCache {
+  struct Dispatch {
+    Class* receiver = nullptr;
+    Method* target = nullptr;
+  };
+
+  explicit InvokeCache(InvokeRegisters operands) : operands(operands) {}
+
+  InvokeRegisters operands;
+  Class* owner = nullptr;
+  Method* declaration = nullptr;
+  std::array<Dispatch, 4> receivers{};
+  unsigned replacement = 0;
+};
+
+struct MethodCodeCache {
+  MethodCodeCache(const art::DexFile& dex, const art::dex::CodeItem* item);
+  void VerifyRegisters(Runtime& runtime, const Method& method);
+  void PrepareSites();
+
+  art::CodeItemDataAccessor code;
+  std::vector<uint8_t> instruction_widths;
+  std::vector<uint32_t> site_indices;
+  std::vector<MemberCache> members;
+  std::vector<InvokeCache> invokes;
+  bool sites_prepared = false;
 };
 
 struct Method {
@@ -49,6 +105,7 @@ struct Method {
   NativeThunk native = nullptr;
   CompiledMethod compiled;
   MethodStats stats;
+  std::unique_ptr<MethodCodeCache> code_cache;
 
   bool IsStatic() const { return (flags & art::kAccStatic) != 0; }
   bool IsNative() const { return (flags & art::kAccNative) != 0; }
@@ -62,6 +119,7 @@ enum class InitState { Uninitialized, Initializing, Initialized, Failed };
 
 struct Class {
   std::string descriptor;
+  char kind = 'L';
   const art::DexFile* dex = nullptr;
   uint16_t definition = 0;
   uint32_t flags = 0;
@@ -80,20 +138,35 @@ struct Class {
   std::unordered_map<Method*, Method*> itable;
   Object* mirror = nullptr;
 
-  bool IsArray() const { return descriptor.front() == '['; }
+  bool IsArray() const { return kind == '['; }
   bool IsInterface() const { return (flags & art::kAccInterface) != 0; }
-  bool IsPrimitive() const { return descriptor.size() == 1; }
+  bool IsPrimitive() const { return !IsReference(kind); }
+};
+
+struct HashEntries {
+  using Order = std::list<Object*>;
+  Order order;
+  std::unordered_multimap<int32_t, Order::iterator> buckets;
+  size_t initial_capacity = 0;
+  bool access_order = false;
 };
 
 struct Object {
-  Class* type;
+  Class* type = nullptr;
   Class* represented_class = nullptr;  // Set for java.lang.Class instances.
+  Method* reflected_method = nullptr;
+  Object* weak_referent = nullptr;
+  Object* next_free = nullptr;
   bool marked = false;
+  bool dex_literal = false;
+  bool read_only = false;
   unsigned monitor_depth = 0;
+  uint32_t modifications = 0;
   std::vector<Value> fields;
   std::vector<Value> elements;
   std::u16string text;
   Value payload;
+  std::unique_ptr<HashEntries> table;
 };
 
 class ClassLinker {
@@ -107,6 +180,7 @@ class ClassLinker {
   Method& AddMethod(Class& cls, std::string_view name, std::string_view signature, uint32_t flags,
                     Builtin builtin = {}, std::string_view shorty = {});
   Class& Resolve(std::string_view descriptor);
+  bool HasClass(std::string_view descriptor) const;
   void Initialize(Class& cls);
   Method& FindMethod(Class& cls, std::string_view name, std::string_view signature, bool is_static);
   Method& VirtualMethod(Class& receiver, Method& method);
@@ -129,7 +203,8 @@ class ClassLinker {
 };
 
 struct RootScope {
-  explicit RootScope(Runtime& runtime, size_t slots = 0);
+  explicit RootScope(Runtime& runtime, std::span<const Value> borrowed = {},
+                     Object* receiver = nullptr);
   ~RootScope();
   RootScope(const RootScope&) = delete;
   RootScope& operator=(const RootScope&) = delete;
@@ -139,7 +214,10 @@ struct RootScope {
 
   Runtime& runtime;
   RootScope* previous;
+  std::span<const Value> borrowed;
+  Object* receiver;
   std::vector<Value> values;
+  Class* declaring_class = nullptr;
 };
 
 class GcHeap {
@@ -149,8 +227,12 @@ class GcHeap {
   GcStats Stats() const { return stats_; }
 
  private:
-  std::unordered_map<Object*, std::unique_ptr<Object>> objects_;
+  static constexpr size_t kSlabSize = 256;
+  std::vector<std::unique_ptr<Object[]>> slabs_;
+  std::vector<Object*> worklist_;
+  Object* free_ = nullptr;
   size_t since_collection_ = 0;
+  size_t next_collection_ = 0;
   GcStats stats_;
 };
 
@@ -159,15 +241,18 @@ struct Runtime {
   ~Runtime();
   void InstallBootClasses();
   Value Invoke(Method& method, Object* receiver, std::span<const Value> args);
-  Value Interpret(const Method& method, Object* receiver, std::span<const Value> args);
+  Value Interpret(Method& method, Object* receiver, std::span<const Value> args);
   void Promote(Method& method);
   Object* NewObject(Class& cls, Method& constructor, std::span<const Value> args);
   Object* NewArray(Class& cls, int32_t length);
   Object* NewString(std::u16string text);
   Object* Intern(Object* string);
-  Object* Intern(std::u16string text);
+  Object* InternLiteral(std::u16string text);
   Object* ClassObject(Class& cls);
-  Object& NonNull(Object* object);
+  Object& NonNull(Object* object) {
+    if (!object) Fail("Ljava/lang/NullPointerException;");
+    return *object;
+  }
   Value& ArrayElement(Object& array, int32_t index);
   void StoreArrayElement(Object& array, int32_t index, Value value);
   Object* MakeException(std::string_view type, std::string_view message);
@@ -182,8 +267,14 @@ struct Runtime {
   RootScope* roots = nullptr;
   Object* exception = nullptr;
   std::unordered_map<std::u16string, Object*> interned;  // Weak entries, pruned during sweep.
-  std::bitset<256> executed_opcodes;
+  std::vector<Object*> dex_literals;
+  Class* string_class = nullptr;
+  std::array<Value, 2048> frame_registers;
+  size_t register_top = 0;
+  std::array<uint8_t, 256> executed_opcodes{};
   size_t call_depth = 0;
+  bool gc_paused = false;
+  bool inline_caches = true;
 };
 
 }  // namespace wa::interp

@@ -748,16 +748,27 @@ NativeThunk JniBridge::FindAdapter(void* function) const {
 
 void JniBridge::RegisterResources() {
   if (resources_registered_) return;
+  for (auto type : {"Landroid/content/res/StringBlock;", "Landroid/content/res/XmlBlock;",
+                    "Landroid/content/res/ApkAssets;", "Landroid/content/res/AssetManager;"}) {
+    if (!runtime_.linker.HasClass(type)) throw std::logic_error(std::string("Resource DEX missing ") + type);
+  }
   JniBridge* expected = nullptr;
   if (!resource_owner.compare_exchange_strong(expected, this)) {
     throw std::logic_error("AOSP resource JNI caches belong to another interpreter instance");
   }
-  resources_registered_ = true;
-  ActiveBridge active(*this);
-  LocalFrame locals(*this);
-  for (auto reg : {android::register_android_content_StringBlock, android::register_android_content_XmlBlock,
-                   android::register_android_content_res_ApkAssets, android::register_android_content_AssetManager}) {
-    if (reg(Env()) != JNI_OK) throw std::runtime_error("AOSP resource JNI registration failed");
+  try {
+    ActiveBridge active(*this);
+    LocalFrame locals(*this);
+    for (auto reg : {android::register_android_content_StringBlock, android::register_android_content_XmlBlock,
+                     android::register_android_content_res_ApkAssets, android::register_android_content_AssetManager}) {
+      const auto status = reg(Env());
+      if (runtime_.exception) throw ManagedException{};
+      if (status != JNI_OK) throw std::runtime_error("AOSP resource JNI registration failed");
+    }
+    resources_registered_ = true;
+  } catch (...) {
+    resource_owner.store(nullptr);
+    throw;
   }
 }
 

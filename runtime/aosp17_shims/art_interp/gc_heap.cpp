@@ -1,11 +1,13 @@
 #include "jni_bridge.h"
 
+#include <algorithm>
 #include <cassert>
 #include <stdexcept>
 
 namespace wa::interp {
 
-RootScope::RootScope(Runtime& rt, size_t slots) : runtime(rt), previous(rt.roots), values(slots) {
+RootScope::RootScope(Runtime& rt, std::span<const Value> borrowed, Object* receiver)
+    : runtime(rt), previous(rt.roots), borrowed(borrowed), receiver(receiver) {
   runtime.roots = this;
 }
 
@@ -15,50 +17,81 @@ RootScope::~RootScope() {
 }
 
 Object* GcHeap::Allocate(Runtime& runtime, Class& cls) {
-  if (runtime.options.gc_interval != 0 && since_collection_ >= runtime.options.gc_interval) {
+  if (!runtime.gc_paused && runtime.options.gc_interval != 0 &&
+      since_collection_ >= std::max(runtime.options.gc_interval, next_collection_)) {
     Collect(runtime);
   }
-  auto object = std::make_unique<Object>();
-  object->type = &cls;
+  if (!free_) {
+    slabs_.push_back(std::make_unique<Object[]>(kSlabSize));
+    Object* slab = slabs_.back().get();
+    for (size_t i = kSlabSize; i-- != 0;) {
+      slab[i].next_free = free_;
+      free_ = &slab[i];
+    }
+  }
+  Object* object = free_;
   object->fields.resize(cls.instance_slots);
-  Object* address = object.get();
-  objects_.emplace(address, std::move(object));
+  free_ = object->next_free;
+  object->next_free = nullptr;
+  object->type = &cls;
   ++since_collection_;
-  stats_.live = objects_.size();
-  return address;
+  ++stats_.live;
+  return object;
 }
 
 GcStats GcHeap::Collect(Runtime& runtime) {
-  std::vector<Object*> worklist;
-  worklist.reserve(objects_.size());
-  for (const auto& [address, object] : objects_) object->marked = false;
+  worklist_.reserve(stats_.live);
   const auto mark = [&](Object* object) {
     if (!object) return;
-    if (!objects_.contains(object)) throw std::logic_error("Dangling managed reference during GC");
+    if (!object->type) throw std::logic_error("Dangling managed reference during GC");
     if (object->marked) return;
     object->marked = true;
-    worklist.push_back(object);
+    worklist_.push_back(object);
   };
 
   for (const RootScope* scope = runtime.roots; scope; scope = scope->previous) {
+    mark(scope->receiver);
+    for (Value value : scope->borrowed) mark(value.ref());
     for (Value value : scope->values) mark(value.ref());
   }
+  for (Object* string : runtime.dex_literals) mark(string);
   runtime.linker.VisitRoots(mark);
   runtime.jni->VisitRoots(mark);
   mark(runtime.exception);
-  while (!worklist.empty()) {
-    const Object* object = worklist.back();
-    worklist.pop_back();
+  for (size_t i = 0; i < worklist_.size(); ++i) {
+    const Object* object = worklist_[i];
     for (Value field : object->fields) mark(field.ref());
     for (Value element : object->elements) mark(element.ref());
     mark(object->payload.ref());
+    if (object->table) {
+      for (Object* entry : object->table->order) mark(entry);
+    }
   }
 
+  for (Object* object : worklist_) {
+    if (object->weak_referent && !object->weak_referent->marked) object->weak_referent = nullptr;
+  }
   std::erase_if(runtime.interned, [](const auto& entry) { return !entry.second->marked; });
-  stats_.reclaimed += std::erase_if(objects_, [](const auto& entry) { return !entry.second->marked; });
-  stats_.live = objects_.size();
+  for (const auto& slab : slabs_) {
+    for (size_t i = 0; i < kSlabSize; ++i) {
+      Object& object = slab[i];
+      if (!object.type) continue;
+      if (object.marked) {
+        object.marked = false;
+        continue;
+      }
+      object = Object{};
+      object.next_free = free_;
+      free_ = &object;
+      --stats_.live;
+      ++stats_.reclaimed;
+    }
+  }
+  worklist_.clear();
   ++stats_.collections;
   since_collection_ = 0;
+  // Growth of the tenured live set should not force a full scan for every nursery-sized batch.
+  next_collection_ = stats_.live / 2;
   return stats_;
 }
 

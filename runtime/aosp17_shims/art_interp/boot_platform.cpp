@@ -4,8 +4,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <limits>
+#include <numbers>
 #include <unistd.h>
 
 #include <android-base/properties.h>
@@ -27,35 +29,44 @@ Value ArrayCopy(Runtime& vm, Object*, Values args) {
       static_cast<uint64_t>(dst) + len > to.elements.size()) {
     vm.Fail("Ljava/lang/ArrayIndexOutOfBoundsException;");
   }
-  if (&from == &to && dst > src && dst < src + len) {
-    std::copy_backward(from.elements.begin() + src, from.elements.begin() + src + len,
-                       to.elements.begin() + dst + len);
+  if (len == 0) return {};
+  if (vm.linker.IsAssignable(*to.type, *from.type)) {
+    static_assert(std::is_trivially_copyable_v<Value>);
+    std::memmove(to.elements.data() + dst, from.elements.data() + src, len * sizeof(Value));
   } else {
     for (int32_t i = 0; i < len; ++i) vm.StoreArrayElement(to, dst + i, from.elements[src + i]);
   }
   return {};
 }
 
-void InstallSystem(Runtime& vm) {
-  auto& cl = vm.linker;
-  Class& sys = cl.Define("Ljava/lang/System;", kObject, art::kAccFinal);
-  cl.AddMethod(sys, "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V", art::kAccStatic, ArrayCopy);
-  cl.AddMethod(sys, "identityHashCode", "(Ljava/lang/Object;)I", art::kAccStatic,
-      [](Runtime&, Object*, Values a) { return Value::Int(a[0].ref() ? IdentityHash(a[0].ref()) : 0); });
-  cl.AddMethod(sys, "currentTimeMillis", "()J", art::kAccStatic, [](Runtime&, Object*, Values) {
-    return Value::Long(std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count());
-  });
-  cl.AddMethod(sys, "nanoTime", "()J", art::kAccStatic, [](Runtime&, Object*, Values) {
-    return Value::Long(std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-  });
-  cl.AddMethod(sys, "gc", "()V", art::kAccStatic, [](Runtime& vm, Object*, Values) {
-    vm.heap.Collect(vm);
-    return Value{};
-  });
+template<class Integer> Integer JavaRound(double value) {
+  if (std::isnan(value)) return 0;
+  if (value >= static_cast<double>(std::numeric_limits<Integer>::max())) return std::numeric_limits<Integer>::max();
+  if (value <= static_cast<double>(std::numeric_limits<Integer>::min())) return std::numeric_limits<Integer>::min();
+  const double floor = std::floor(value);
+  return static_cast<Integer>(floor + (value - floor >= 0.5));
+}
 
-  Class& math = cl.Define("Ljava/lang/Math;", kObject, art::kAccFinal);
+template<class T> T Clamp(Runtime& vm, T value, T low, T high) {
+  if constexpr (std::is_floating_point_v<T>) {
+    if (std::isnan(low) || std::isnan(high) || low > high ||
+        (low == 0 && high == 0 && !std::signbit(low) && std::signbit(high))) {
+      vm.Fail("Ljava/lang/IllegalArgumentException;");
+    }
+    if (value == 0) {
+      if (high == 0 && std::signbit(high)) return high;
+      if (low == 0 && !std::signbit(low)) return low;
+    }
+  } else if (low > high) {
+    vm.Fail("Ljava/lang/IllegalArgumentException;");
+  }
+  return std::clamp(value, low, high);
+}
+
+void InstallMath(ClassLinker& cl, std::string_view descriptor) {
+  Class& math = cl.Define(descriptor, kObject, art::kAccFinal);
+  cl.AddField(math, "E", "D", true, Value::Double(std::numbers::e));
+  cl.AddField(math, "PI", "D", true, Value::Double(std::numbers::pi));
   cl.AddMethod(math, "abs", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
     return Value::Int(a[0].i() < 0 ? art::interpreter::SafeSub(0, a[0].i()) : a[0].i());
   });
@@ -91,14 +102,94 @@ void InstallSystem(Runtime& vm) {
       return Value::Double(pick(a[0].d(), a[1].d()));
     });
   }
+  using Unary = double (*)(double);
+  for (const auto& [name, function] : std::initializer_list<std::pair<const char*, Unary>>{
+           {"floor", std::floor}, {"ceil", std::ceil}, {"sqrt", std::sqrt}, {"cbrt", std::cbrt},
+           {"exp", std::exp}, {"log", std::log}, {"sin", std::sin}, {"cos", std::cos}, {"tan", std::tan},
+           {"toRadians", [](double degrees) { return degrees * (std::numbers::pi / 180.0); }},
+           {"toDegrees", [](double radians) { return radians * (180.0 / std::numbers::pi); }},
+           {"signum", [](double value) { return value == 0 || std::isnan(value) ? value : std::copysign(1., value); }}}) {
+    cl.AddMethod(math, name, "(D)D", art::kAccStatic,
+        [function](Runtime&, Object*, Values a) { return Value::Double(function(a[0].d())); });
+  }
+  using Binary = double (*)(double, double);
+  for (const auto& [name, function] : std::initializer_list<std::pair<const char*, Binary>>{
+           {"pow", [](double base, double exp) {
+              if (std::isinf(exp) && std::fabs(base) == 1) return std::numeric_limits<double>::quiet_NaN();
+              return std::pow(base, exp);
+            }}, {"atan2", std::atan2}, {"hypot", std::hypot}}) {
+    cl.AddMethod(math, name, "(DD)D", art::kAccStatic,
+        [function](Runtime&, Object*, Values a) { return Value::Double(function(a[0].d(), a[1].d())); });
+  }
+  cl.AddMethod(math, "signum", "(F)F", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    const float value = a[0].f();
+    return Value::Float(value == 0 || std::isnan(value) ? value : std::copysign(1.f, value));
+  });
+  cl.AddMethod(math, "round", "(F)I", art::kAccStatic,
+      [](Runtime&, Object*, Values a) { return Value::Int(JavaRound<int32_t>(a[0].f())); });
+  cl.AddMethod(math, "round", "(D)J", art::kAccStatic,
+      [](Runtime&, Object*, Values a) { return Value::Long(JavaRound<int64_t>(a[0].d())); });
+  cl.AddMethod(math, "clamp", "(JII)I", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) { return Value::Int(Clamp<int64_t>(vm, a[0].j(), a[1].i(), a[2].i())); });
+  cl.AddMethod(math, "clamp", "(JJJ)J", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) { return Value::Long(Clamp(vm, a[0].j(), a[1].j(), a[2].j())); });
+  cl.AddMethod(math, "clamp", "(FFF)F", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) { return Value::Float(Clamp(vm, a[0].f(), a[1].f(), a[2].f())); });
+  cl.AddMethod(math, "clamp", "(DDD)D", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) { return Value::Double(Clamp(vm, a[0].d(), a[1].d(), a[2].d())); });
+}
+
+void InstallSystem(Runtime& vm) {
+  auto& cl = vm.linker;
+  Class& sys = cl.Define("Ljava/lang/System;", kObject, art::kAccFinal);
+  cl.AddMethod(sys, "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V", art::kAccStatic, ArrayCopy);
+  cl.AddMethod(sys, "identityHashCode", "(Ljava/lang/Object;)I", art::kAccStatic,
+      [](Runtime&, Object*, Values a) { return Value::Int(a[0].ref() ? IdentityHash(a[0].ref()) : 0); });
+  cl.AddMethod(sys, "currentTimeMillis", "()J", art::kAccStatic, [](Runtime&, Object*, Values) {
+    return Value::Long(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+  });
+  cl.AddMethod(sys, "nanoTime", "()J", art::kAccStatic, [](Runtime&, Object*, Values) {
+    return Value::Long(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+  });
+  cl.AddMethod(sys, "gc", "()V", art::kAccStatic, [](Runtime& vm, Object*, Values) {
+    if (!vm.gc_paused) vm.heap.Collect(vm);
+    return Value{};
+  });
+  InstallMath(cl, "Ljava/lang/Math;");
+  InstallMath(cl, "Ljava/lang/StrictMath;");
 
   Class& charset = cl.Define("Ljava/nio/charset/Charset;", kObject, art::kAccAbstract);
   Class& standard = cl.Define("Ljava/nio/charset/StandardCharsets;", kObject, art::kAccFinal);
-  Field& utf8 = cl.AddField(standard, "UTF_8", charset.descriptor, true);
+  static constexpr std::array fields{"UTF_8", "US_ASCII", "ISO_8859_1", "UTF_16", "UTF_16LE", "UTF_16BE"};
+  static constexpr std::array names{u"UTF-8", u"US-ASCII", u"ISO-8859-1", u"UTF-16", u"UTF-16LE", u"UTF-16BE"};
+  for (auto field : fields) cl.AddField(standard, field, charset.descriptor, true);
   cl.AddMethod(standard, "<clinit>", "()V", art::kAccStatic,
-      [&charset, &utf8](Runtime& vm, Object*, Values) {
-        utf8.value = Value::Ref(vm.heap.Allocate(vm, vm.linker.Resolve(charset.descriptor)));
+      [&charset, &standard](Runtime& vm, Object*, Values) {
+        vm.linker.Resolve(charset.descriptor);
+        for (size_t i = 0; i < fields.size(); ++i) {
+          auto* encoding = vm.heap.Allocate(vm, charset);
+          encoding->text = names[i];
+          standard.field_order[i]->value = Value::Ref(encoding);
+        }
         return Value{};
+      });
+  const Builtin charset_name = [](Runtime& vm, Object* self, Values) { return StringValue(vm, self->text); };
+  cl.AddMethod(charset, "name", "()Ljava/lang/String;", 0, charset_name);
+  cl.AddMethod(charset, "toString", "()Ljava/lang/String;", 0, charset_name);
+  cl.AddMethod(charset, "defaultCharset", "()Ljava/nio/charset/Charset;", art::kAccStatic,
+      [&standard](Runtime& vm, Object*, Values) {
+        vm.linker.Initialize(vm.linker.Resolve(standard.descriptor));
+        return standard.field_order.front()->value;
+      });
+  cl.AddMethod(charset, "forName", "(Ljava/lang/String;)Ljava/nio/charset/Charset;", art::kAccStatic,
+      [&standard](Runtime& vm, Object*, Values a) {
+        const auto& name = vm.NonNull(a[0].ref()).text;
+        const auto encoding = FindEncoding(name);
+        if (!encoding) vm.Fail("Ljava/nio/charset/UnsupportedCharsetException;", EncodeUtf8(name));
+        vm.linker.Initialize(vm.linker.Resolve(standard.descriptor));
+        return standard.field_order[static_cast<size_t>(*encoding)]->value;
       });
 
   Class& reflect_array = cl.Define("Ljava/lang/reflect/Array;", kObject, art::kAccFinal);
@@ -268,13 +359,16 @@ void InstallAndroid(Runtime& vm) {
   cl.AddMethod(set, "<init>", "()V", 0, [](Runtime&, Object*, Values) { return Value{}; });
   cl.AddMethod(set, "<init>", "(I)V", 0, [](Runtime& vm, Object* self, Values a) {
     if (a[0].i() < 0) vm.Fail("Ljava/lang/IllegalArgumentException;");
-    self->elements.reserve(a[0].i());
+    self->table = std::make_unique<HashEntries>();
+    self->table->buckets.reserve(a[0].i());
     return Value{};
   });
   cl.AddMethod(set, "valueAt", "(I)Ljava/lang/Object;", 0, [](Runtime& vm, Object* self, Values a) {
     const auto index = a[0].i();
-    if (index < 0 || static_cast<size_t>(index) >= self->elements.size()) vm.Fail("Ljava/lang/IndexOutOfBoundsException;");
-    return self->elements[index];
+    if (index < 0 || !self->table || static_cast<size_t>(index) >= self->table->order.size()) {
+      vm.Fail("Ljava/lang/IndexOutOfBoundsException;");
+    }
+    return (*std::next(self->table->order.begin(), index))->elements[0];
   });
 }
 
