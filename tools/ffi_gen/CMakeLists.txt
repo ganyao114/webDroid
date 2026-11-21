@@ -1,0 +1,12 @@
+add_library(wa_ffi_thunks INTERFACE)
+target_include_directories(wa_ffi_thunks INTERFACE "${CMAKE_CURRENT_LIST_DIR}")
+target_compile_features(wa_ffi_thunks INTERFACE cxx_std_20)
+target_link_libraries(wa_ffi_thunks INTERFACE wa_softmmu)
+if(EMSCRIPTEN)
+    target_compile_options(wa_ffi_thunks INTERFACE $<$<COMPILE_LANGUAGE:CXX>:-fwasm-exceptions>)
+endif()
+
+if(TARGET wa_linker_ffi)
+    add_library(wa_jni_dbt STATIC jni_dbt.cpp)
+    target_link_libraries(wa_jni_dbt PUBLIC wa_ffi_thunks PRIVATE wa_linker_ffi)
+endif()

@@ -1,0 +1,553 @@
+{
+  "version": 1,
+  "records": {
+    "Aarch64Timespec": {
+      "oracle": [
+        "aarch64"
+      ],
+      "c_type": "struct timespec",
+      "size": 16,
+      "align": 8,
+      "codec": "timespec",
+      "fields": [
+        {"name": "tv_sec", "type": "i64", "offset": 0},
+        {"name": "tv_nsec", "type": "i64", "offset": 8}
+      ]
+    },
+    "Aarch64Stat": {
+      "oracle": [
+        "aarch64"
+      ],
+      "c_type": "struct stat",
+      "size": 128,
+      "align": 8,
+      "codec": "stat",
+      "fields": [
+        {"name": "st_dev", "type": "u64", "offset": 0},
+        {"name": "st_ino", "type": "u64", "offset": 8},
+        {"name": "st_mode", "type": "u32", "offset": 16},
+        {"name": "st_nlink", "type": "u32", "offset": 20},
+        {"name": "st_uid", "type": "u32", "offset": 24},
+        {"name": "st_gid", "type": "u32", "offset": 28},
+        {"name": "st_rdev", "type": "u64", "offset": 32},
+        {"name": "reserved1", "type": "u64", "offset": 40, "member": "__pad1", "reserved": true},
+        {"name": "st_size", "type": "i64", "offset": 48},
+        {"name": "st_blksize", "type": "i32", "offset": 56},
+        {"name": "reserved2", "type": "i32", "offset": 60, "member": "__pad2", "reserved": true},
+        {"name": "st_blocks", "type": "i64", "offset": 64},
+        {"name": "st_atim", "type": "Aarch64Timespec", "offset": 72, "host_alias": "st_atimespec"},
+        {"name": "st_mtim", "type": "Aarch64Timespec", "offset": 88, "host_alias": "st_mtimespec"},
+        {"name": "st_ctim", "type": "Aarch64Timespec", "offset": 104, "host_alias": "st_ctimespec"},
+        {"name": "unused4", "type": "u32", "offset": 120, "member": "__unused4", "reserved": true},
+        {"name": "unused5", "type": "u32", "offset": 124, "member": "__unused5", "reserved": true}
+      ]
+    },
+    "Aarch64Iovec": {
+      "oracle": [
+        "aarch64"
+      ],
+      "c_type": "struct iovec",
+      "size": 16,
+      "align": 8,
+      "codec": "iovec",
+      "fields": [
+        {"name": "iov_base", "type": "ptr64", "offset": 0},
+        {"name": "iov_len", "type": "u64", "offset": 8}
+      ]
+    },
+    "Aarch64EpollData": {
+      "oracle": [
+        "aarch64",
+        "x86_64"
+      ],
+      "c_type": "epoll_data_t",
+      "size": 8,
+      "align": 8,
+      "kind": "union",
+      "fields": [
+        {"name": "ptr", "type": "ptr64", "offset": 0},
+        {"name": "fd", "type": "i32", "offset": 0},
+        {"name": "u32", "type": "u32", "offset": 0},
+        {"name": "u64", "type": "u64", "offset": 0}
+      ]
+    },
+    "Aarch64EpollEvent": {
+      "oracle": [
+        "aarch64"
+      ],
+      "c_type": "struct epoll_event",
+      "size": 16,
+      "align": 8,
+      "codec": "epoll_event",
+      "fields": [
+        {"name": "events", "type": "u32", "offset": 0},
+        {"name": "data", "type": "Aarch64EpollData", "offset": 8, "union_member": "u64"}
+      ]
+    },
+    "Aarch64JNINativeMethod": {
+      "oracle": [
+        "aarch64"
+      ],
+      "c_type": "JNINativeMethod",
+      "size": 24,
+      "align": 8,
+      "codec": "jni_native_method",
+      "array": true,
+      "fields": [
+        {"name": "name", "type": "ptr64", "offset": 0},
+        {"name": "signature", "type": "ptr64", "offset": 8},
+        {"name": "fnPtr", "type": "ptr64", "offset": 16}
+      ]
+    },
+    "Aarch64JValue": {
+      "oracle": [
+        "aarch64"
+      ],
+      "c_type": "jvalue",
+      "size": 8,
+      "align": 8,
+      "kind": "union",
+      "codec": "jvalue",
+      "fields": [
+        {"name": "z", "type": "u8", "offset": 0},
+        {"name": "b", "type": "i8", "offset": 0},
+        {"name": "c", "type": "u16", "offset": 0},
+        {"name": "s", "type": "i16", "offset": 0},
+        {"name": "i", "type": "i32", "offset": 0},
+        {"name": "j", "type": "i64", "offset": 0},
+        {"name": "f", "type": "f32", "offset": 0},
+        {"name": "d", "type": "f64", "offset": 0},
+        {"name": "l", "type": "ptr64", "offset": 0}
+      ]
+    },
+    "Aarch64JNIEnv": {
+      "oracle": [
+        "aarch64",
+        "x86_64"
+      ],
+      "c_type": "JNIEnv",
+      "size": 8,
+      "align": 8,
+      "scalar_oracle": true,
+      "fields": [
+        {"name": "functions", "type": "ptr64", "offset": 0}
+      ]
+    },
+    "Armv7Timespec": {
+      "oracle": [
+        "armv7"
+      ],
+      "c_type": "struct timespec",
+      "size": 8,
+      "align": 4,
+      "fields": [
+        {"name": "tv_sec", "type": "i32", "offset": 0},
+        {"name": "tv_nsec", "type": "i32", "offset": 4}
+      ]
+    },
+    "Armv7Stat": {
+      "oracle": [
+        "armv7"
+      ],
+      "c_type": "struct stat",
+      "size": 104,
+      "align": 8,
+      "fields": [
+        {"name": "st_dev", "type": "u64", "offset": 0},
+        {"name": "reserved0", "type": "bytes4", "offset": 8, "member": "__pad0", "reserved": true},
+        {"name": "legacy_ino", "type": "u32", "offset": 12, "member": "__st_ino"},
+        {"name": "st_mode", "type": "u32", "offset": 16},
+        {"name": "st_nlink", "type": "u32", "offset": 20},
+        {"name": "st_uid", "type": "u32", "offset": 24},
+        {"name": "st_gid", "type": "u32", "offset": 28},
+        {"name": "st_rdev", "type": "u64", "offset": 32},
+        {"name": "reserved3", "type": "bytes4", "offset": 40, "member": "__pad3", "reserved": true},
+        {"name": "st_size", "type": "i64", "offset": 48},
+        {"name": "st_blksize", "type": "u32", "offset": 56},
+        {"name": "st_blocks", "type": "u64", "offset": 64},
+        {"name": "st_atim", "type": "Armv7Timespec", "offset": 72},
+        {"name": "st_mtim", "type": "Armv7Timespec", "offset": 80},
+        {"name": "st_ctim", "type": "Armv7Timespec", "offset": 88},
+        {"name": "st_ino", "type": "u64", "offset": 96}
+      ]
+    },
+    "Wasm32Timespec": {
+      "oracle": [
+        "wasm32"
+      ],
+      "c_type": "struct timespec",
+      "size": 16,
+      "align": 8,
+      "fields": [
+        {"name": "tv_sec", "type": "i64", "offset": 0},
+        {"name": "tv_nsec", "type": "i32", "offset": 8}
+      ]
+    },
+    "Wasm32Stat": {
+      "oracle": [
+        "wasm32"
+      ],
+      "c_type": "struct stat",
+      "size": 96,
+      "align": 8,
+      "fields": [
+        {"name": "st_dev", "type": "u32", "offset": 0},
+        {"name": "st_mode", "type": "u32", "offset": 4},
+        {"name": "st_nlink", "type": "u32", "offset": 8},
+        {"name": "st_uid", "type": "u32", "offset": 12},
+        {"name": "st_gid", "type": "u32", "offset": 16},
+        {"name": "st_rdev", "type": "u32", "offset": 20},
+        {"name": "st_size", "type": "i64", "offset": 24},
+        {"name": "st_blksize", "type": "i32", "offset": 32},
+        {"name": "st_blocks", "type": "i32", "offset": 36},
+        {"name": "st_atim", "type": "Wasm32Timespec", "offset": 40},
+        {"name": "st_mtim", "type": "Wasm32Timespec", "offset": 56},
+        {"name": "st_ctim", "type": "Wasm32Timespec", "offset": 72},
+        {"name": "st_ino", "type": "u64", "offset": 88}
+      ]
+    },
+    "Ilp32Iovec": {
+      "oracle": [
+        "armv7",
+        "wasm32"
+      ],
+      "c_type": "struct iovec",
+      "size": 8,
+      "align": 4,
+      "fields": [
+        {"name": "iov_base", "type": "ptr32", "offset": 0},
+        {"name": "iov_len", "type": "u32", "offset": 4}
+      ]
+    },
+    "Ilp32EpollData": {
+      "oracle": [
+        "armv7",
+        "wasm32"
+      ],
+      "c_type": "epoll_data_t",
+      "size": 8,
+      "align": 8,
+      "kind": "union",
+      "fields": [
+        {"name": "ptr", "type": "ptr32", "offset": 0},
+        {"name": "fd", "type": "i32", "offset": 0},
+        {"name": "u32", "type": "u32", "offset": 0},
+        {"name": "u64", "type": "u64", "offset": 0}
+      ]
+    },
+    "Ilp32EpollEvent": {
+      "oracle": [
+        "armv7",
+        "wasm32"
+      ],
+      "c_type": "struct epoll_event",
+      "size": 16,
+      "align": 8,
+      "fields": [
+        {"name": "events", "type": "u32", "offset": 0},
+        {"name": "data", "type": "Ilp32EpollData", "offset": 8}
+      ]
+    },
+    "X86_64EpollEvent": {
+      "oracle": [
+        "x86_64"
+      ],
+      "c_type": "struct epoll_event",
+      "size": 12,
+      "align": 1,
+      "packed": true,
+      "fields": [
+        {"name": "events", "type": "u32", "offset": 0},
+        {"name": "data", "type": "Aarch64EpollData", "offset": 4}
+      ]
+    },
+    "Ilp32JNINativeMethod": {
+      "oracle": [
+        "armv7",
+        "wasm32"
+      ],
+      "c_type": "JNINativeMethod",
+      "size": 12,
+      "align": 4,
+      "fields": [
+        {"name": "name", "type": "ptr32", "offset": 0},
+        {"name": "signature", "type": "ptr32", "offset": 4},
+        {"name": "fnPtr", "type": "ptr32", "offset": 8}
+      ]
+    },
+    "Ilp32JValue": {
+      "oracle": [
+        "armv7",
+        "wasm32"
+      ],
+      "c_type": "jvalue",
+      "size": 8,
+      "align": 8,
+      "kind": "union",
+      "fields": [
+        {"name": "z", "type": "u8", "offset": 0},
+        {"name": "b", "type": "i8", "offset": 0},
+        {"name": "c", "type": "u16", "offset": 0},
+        {"name": "s", "type": "i16", "offset": 0},
+        {"name": "i", "type": "i32", "offset": 0},
+        {"name": "j", "type": "i64", "offset": 0},
+        {"name": "f", "type": "f32", "offset": 0},
+        {"name": "d", "type": "f64", "offset": 0},
+        {"name": "l", "type": "ptr32", "offset": 0}
+      ]
+    },
+    "Ilp32JNIEnv": {
+      "oracle": [
+        "armv7",
+        "wasm32"
+      ],
+      "c_type": "JNIEnv",
+      "size": 4,
+      "align": 4,
+      "scalar_oracle": true,
+      "fields": [
+        {"name": "functions", "type": "ptr32", "offset": 0}
+      ]
+    }
+  },
+  "jni": {
+    "reserved": ["reserved0", "reserved1", "reserved2", "reserved3"],
+    "functions": [
+      "GetVersion",
+      "DefineClass",
+      "FindClass",
+      "FromReflectedMethod",
+      "FromReflectedField",
+      "ToReflectedMethod",
+      "GetSuperclass",
+      "IsAssignableFrom",
+      "ToReflectedField",
+      "Throw",
+      "ThrowNew",
+      "ExceptionOccurred",
+      "ExceptionDescribe",
+      "ExceptionClear",
+      "FatalError",
+      "PushLocalFrame",
+      "PopLocalFrame",
+      "NewGlobalRef",
+      "DeleteGlobalRef",
+      "DeleteLocalRef",
+      "IsSameObject",
+      "NewLocalRef",
+      "EnsureLocalCapacity",
+      "AllocObject",
+      "NewObject",
+      "NewObjectV",
+      "NewObjectA",
+      "GetObjectClass",
+      "IsInstanceOf",
+      "GetMethodID",
+      "CallObjectMethod",
+      "CallObjectMethodV",
+      "CallObjectMethodA",
+      "CallBooleanMethod",
+      "CallBooleanMethodV",
+      "CallBooleanMethodA",
+      "CallByteMethod",
+      "CallByteMethodV",
+      "CallByteMethodA",
+      "CallCharMethod",
+      "CallCharMethodV",
+      "CallCharMethodA",
+      "CallShortMethod",
+      "CallShortMethodV",
+      "CallShortMethodA",
+      "CallIntMethod",
+      "CallIntMethodV",
+      "CallIntMethodA",
+      "CallLongMethod",
+      "CallLongMethodV",
+      "CallLongMethodA",
+      "CallFloatMethod",
+      "CallFloatMethodV",
+      "CallFloatMethodA",
+      "CallDoubleMethod",
+      "CallDoubleMethodV",
+      "CallDoubleMethodA",
+      "CallVoidMethod",
+      "CallVoidMethodV",
+      "CallVoidMethodA",
+      "CallNonvirtualObjectMethod",
+      "CallNonvirtualObjectMethodV",
+      "CallNonvirtualObjectMethodA",
+      "CallNonvirtualBooleanMethod",
+      "CallNonvirtualBooleanMethodV",
+      "CallNonvirtualBooleanMethodA",
+      "CallNonvirtualByteMethod",
+      "CallNonvirtualByteMethodV",
+      "CallNonvirtualByteMethodA",
+      "CallNonvirtualCharMethod",
+      "CallNonvirtualCharMethodV",
+      "CallNonvirtualCharMethodA",
+      "CallNonvirtualShortMethod",
+      "CallNonvirtualShortMethodV",
+      "CallNonvirtualShortMethodA",
+      "CallNonvirtualIntMethod",
+      "CallNonvirtualIntMethodV",
+      "CallNonvirtualIntMethodA",
+      "CallNonvirtualLongMethod",
+      "CallNonvirtualLongMethodV",
+      "CallNonvirtualLongMethodA",
+      "CallNonvirtualFloatMethod",
+      "CallNonvirtualFloatMethodV",
+      "CallNonvirtualFloatMethodA",
+      "CallNonvirtualDoubleMethod",
+      "CallNonvirtualDoubleMethodV",
+      "CallNonvirtualDoubleMethodA",
+      "CallNonvirtualVoidMethod",
+      "CallNonvirtualVoidMethodV",
+      "CallNonvirtualVoidMethodA",
+      "GetFieldID",
+      "GetObjectField",
+      "GetBooleanField",
+      "GetByteField",
+      "GetCharField",
+      "GetShortField",
+      "GetIntField",
+      "GetLongField",
+      "GetFloatField",
+      "GetDoubleField",
+      "SetObjectField",
+      "SetBooleanField",
+      "SetByteField",
+      "SetCharField",
+      "SetShortField",
+      "SetIntField",
+      "SetLongField",
+      "SetFloatField",
+      "SetDoubleField",
+      "GetStaticMethodID",
+      "CallStaticObjectMethod",
+      "CallStaticObjectMethodV",
+      "CallStaticObjectMethodA",
+      "CallStaticBooleanMethod",
+      "CallStaticBooleanMethodV",
+      "CallStaticBooleanMethodA",
+      "CallStaticByteMethod",
+      "CallStaticByteMethodV",
+      "CallStaticByteMethodA",
+      "CallStaticCharMethod",
+      "CallStaticCharMethodV",
+      "CallStaticCharMethodA",
+      "CallStaticShortMethod",
+      "CallStaticShortMethodV",
+      "CallStaticShortMethodA",
+      "CallStaticIntMethod",
+      "CallStaticIntMethodV",
+      "CallStaticIntMethodA",
+      "CallStaticLongMethod",
+      "CallStaticLongMethodV",
+      "CallStaticLongMethodA",
+      "CallStaticFloatMethod",
+      "CallStaticFloatMethodV",
+      "CallStaticFloatMethodA",
+      "CallStaticDoubleMethod",
+      "CallStaticDoubleMethodV",
+      "CallStaticDoubleMethodA",
+      "CallStaticVoidMethod",
+      "CallStaticVoidMethodV",
+      "CallStaticVoidMethodA",
+      "GetStaticFieldID",
+      "GetStaticObjectField",
+      "GetStaticBooleanField",
+      "GetStaticByteField",
+      "GetStaticCharField",
+      "GetStaticShortField",
+      "GetStaticIntField",
+      "GetStaticLongField",
+      "GetStaticFloatField",
+      "GetStaticDoubleField",
+      "SetStaticObjectField",
+      "SetStaticBooleanField",
+      "SetStaticByteField",
+      "SetStaticCharField",
+      "SetStaticShortField",
+      "SetStaticIntField",
+      "SetStaticLongField",
+      "SetStaticFloatField",
+      "SetStaticDoubleField",
+      "NewString",
+      "GetStringLength",
+      "GetStringChars",
+      "ReleaseStringChars",
+      "NewStringUTF",
+      "GetStringUTFLength",
+      "GetStringUTFChars",
+      "ReleaseStringUTFChars",
+      "GetArrayLength",
+      "NewObjectArray",
+      "GetObjectArrayElement",
+      "SetObjectArrayElement",
+      "NewBooleanArray",
+      "NewByteArray",
+      "NewCharArray",
+      "NewShortArray",
+      "NewIntArray",
+      "NewLongArray",
+      "NewFloatArray",
+      "NewDoubleArray",
+      "GetBooleanArrayElements",
+      "GetByteArrayElements",
+      "GetCharArrayElements",
+      "GetShortArrayElements",
+      "GetIntArrayElements",
+      "GetLongArrayElements",
+      "GetFloatArrayElements",
+      "GetDoubleArrayElements",
+      "ReleaseBooleanArrayElements",
+      "ReleaseByteArrayElements",
+      "ReleaseCharArrayElements",
+      "ReleaseShortArrayElements",
+      "ReleaseIntArrayElements",
+      "ReleaseLongArrayElements",
+      "ReleaseFloatArrayElements",
+      "ReleaseDoubleArrayElements",
+      "GetBooleanArrayRegion",
+      "GetByteArrayRegion",
+      "GetCharArrayRegion",
+      "GetShortArrayRegion",
+      "GetIntArrayRegion",
+      "GetLongArrayRegion",
+      "GetFloatArrayRegion",
+      "GetDoubleArrayRegion",
+      "SetBooleanArrayRegion",
+      "SetByteArrayRegion",
+      "SetCharArrayRegion",
+      "SetShortArrayRegion",
+      "SetIntArrayRegion",
+      "SetLongArrayRegion",
+      "SetFloatArrayRegion",
+      "SetDoubleArrayRegion",
+      "RegisterNatives",
+      "UnregisterNatives",
+      "MonitorEnter",
+      "MonitorExit",
+      "GetJavaVM",
+      "GetStringRegion",
+      "GetStringUTFRegion",
+      "GetPrimitiveArrayCritical",
+      "ReleasePrimitiveArrayCritical",
+      "GetStringCritical",
+      "ReleaseStringCritical",
+      "NewWeakGlobalRef",
+      "DeleteWeakGlobalRef",
+      "ExceptionCheck",
+      "NewDirectByteBuffer",
+      "GetDirectBufferAddress",
+      "GetDirectBufferCapacity",
+      "GetObjectRefType"
+    ],
+    "marshallers": {
+      "FindClass": "find_class",
+      "NewStringUTF": "new_string_utf",
+      "RegisterNatives": "register_natives",
+      "CallIntMethodA": "call_int_method_a"
+    }
+  }
+}
