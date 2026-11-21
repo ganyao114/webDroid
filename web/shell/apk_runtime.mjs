@@ -29,6 +29,8 @@ export class ApkRuntime {
   #pageBytes = 0;
   #backing;
   #jit;
+  #tier0Fallbacks = 0;
+  #tier0Instructions = 0;
 
   static async open(options) {
     const runtime = new ApkRuntime();
@@ -133,7 +135,16 @@ export class ApkRuntime {
     }
     if (tier !== 'tier1') throw new Error(`Unknown render tier ${tier}`);
     this.#jit ??= new LiveTier1(this.wasm, this.#guest);
-    return checkStatus(await this.#jit.render(time, x, y), 'Render APK frame with Tier-1 SwiftVM');
+    const before = this.#dbtStats();
+    const instructions = before[1];
+    const fallbacks = before[5];
+    try {
+      return checkStatus(await this.#jit.render(time, x, y), 'Render APK frame with Tier-1 SwiftVM');
+    } finally {
+      const after = this.#dbtStats();
+      this.#tier0Instructions += Number(after[1] - instructions);
+      this.#tier0Fallbacks += Number(after[5] - fallbacks);
+    }
   }
 
   readPixels() {
@@ -162,15 +173,19 @@ export class ApkRuntime {
     return { memory, ring, start, frames, expected: wasm.HEAPU8.slice(scratch, scratch + size) };
   }
 
-  stats() {
+  #dbtStats() {
     const dbtOffset = this.scratch + 8 * mmuFields.length;
     checkStatus(this.wasm._wa_system_get_stats(this.#guest, this.scratch, dbtOffset), 'Read APK guest stats');
-    const read = (fields, offset) => {
-      const values = new BigUint64Array(this.memory, offset, fields.length);
-      return Object.fromEntries(fields.map((name, i) => [name, Number(values[i])]));
-    };
+    return new BigUint64Array(this.memory, dbtOffset, dbtFields.length);
+  }
+
+  stats() {
+    const dbt = this.#dbtStats();
+    const mmu = new BigUint64Array(this.memory, this.scratch, mmuFields.length);
+    const read = (fields, values) => Object.fromEntries(fields.map((name, i) => [name, Number(values[i])]));
     return {
-      mmu: read(mmuFields, this.scratch), dbt: read(dbtFields, dbtOffset), jit: this.#jit?.stats(),
+      mmu: read(mmuFields, mmu), dbt: read(dbtFields, dbt), jit: this.#jit?.stats(),
+      tier1: { tier0_fallbacks: this.#tier0Fallbacks, tier0_instructions: this.#tier0Instructions },
       pageReads: this.#pageReads, pageBytes: this.#pageBytes,
     };
   }

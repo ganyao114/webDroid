@@ -87,7 +87,7 @@ export function inspectElf(bytes) {
     const offset = Number(name);
     const end = table.indexOf(0, offset);
     if (end < 0) throw invalid();
-    return decoder.decode(table.subarray(offset, end));
+    return decoder.decode(table.slice(offset, end));
   });
   return { abi, bits, segments, needed };
 }

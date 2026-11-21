@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AOSP 17 Launcher3 Chrome E2E</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="../../web/shell/launcher.css">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #101317; color: #edf3f6; font: 14px system-ui, sans-serif; }
+    main { margin: 12px auto; width: min(100%, 974px); }
+    #status { margin: 8px 6px 0; color: #c9d9e6; }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="wa-device" data-phase="starting" aria-label="Android device">
+      <div class="wa-viewport">
+        <div class="wa-launcher-surface">
+          <canvas width="960" height="660" tabindex="0" aria-label="AOSP 17 Launcher3"></canvas>
+        </div>
+        <div class="wa-app-surface" inert></div>
+      </div>
+      <nav class="wa-nav" aria-label="Android navigation">
+        <button type="button" data-nav="back">Back</button>
+        <button type="button" data-nav="home">Home</button>
+        <button type="button" data-nav="all-apps">All Apps</button>
+      </nav>
+    </section>
+    <p id="status" role="status">Booting Launcher3…</p>
+  </main>
+  <script type="module">
+    import { runLauncher3E2E } from './launcher3_e2e.mjs';
+    void runLauncher3E2E();
+  </script>
+</body>
+</html>

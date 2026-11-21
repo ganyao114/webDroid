@@ -1,0 +1,148 @@
+.wa-playground {
+  width: min(100%, 1024px);
+  margin: 0 auto;
+  padding: clamp(18px, 4vw, 42px) clamp(12px, 3vw, 24px);
+}
+
+.wa-playground[hidden], .wa-playground [hidden] { display: none; }
+
+.wa-toolbar, .wa-bottom, .wa-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.wa-toolbar, .wa-bottom { justify-content: space-between; }
+.wa-toolbar { margin-bottom: 16px; }
+.wa-toolbar h1 { font-size: clamp(1.7rem, 5vw, 2.7rem); }
+.wa-toolbar a { color: #b5cedc; font-size: .84rem; text-underline-offset: .22em; }
+
+.wa-device {
+  --shell-width: 960px;
+  --shell-ratio: 960 / 660;
+  width: min(100%, calc(var(--shell-width) + 14px));
+  margin: 0 auto;
+  border: 1px solid #3c4755;
+  border-radius: 24px;
+  padding: 6px 6px 0;
+  background: #171e28;
+  box-shadow: 0 18px 48px #070b1066;
+  overflow: hidden;
+}
+
+.wa-device[data-form="phone"] { --shell-width: 390px; --shell-ratio: 390 / 660; }
+.wa-device[data-dragging="true"] { outline: 2px solid #73e8c0; outline-offset: 4px; }
+
+.wa-viewport {
+  position: relative;
+  isolation: isolate;
+  width: 100%;
+  aspect-ratio: var(--shell-ratio);
+  border-radius: 17px;
+  overflow: hidden;
+  background: #101822;
+}
+
+.wa-launcher-surface, .wa-app-surface {
+  position: absolute;
+  inset: 0;
+  transition: opacity 160ms ease;
+}
+
+.wa-device .wa-launcher-surface canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  aspect-ratio: auto;
+  touch-action: none;
+}
+
+.wa-app-surface {
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  background: #101318;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wa-device .wa-app-surface canvas {
+  display: block;
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  touch-action: none;
+}
+
+.wa-device[data-phase="app"] .wa-launcher-surface { opacity: 0; pointer-events: none; }
+.wa-device[data-phase="app"] .wa-app-surface { opacity: 1; pointer-events: auto; }
+.wa-device[data-phase="opening-app"] .wa-launcher-surface { pointer-events: none; }
+
+.wa-nav {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: clamp(3px, 2vw, 16px);
+  padding: 6px 0;
+  min-height: 48px;
+}
+
+.wa-playground button, .wa-nav button {
+  border: 1px solid #384658;
+  border-radius: 9px;
+  padding: 6px 11px;
+  font: 550 .82rem/1.4 system-ui, sans-serif;
+  background: #1e2936;
+  color: #e7eff8;
+  cursor: pointer;
+}
+
+.wa-nav button { border-color: transparent; background: transparent; }
+.wa-playground button:hover, .wa-nav button:hover { border-color: #73e8c0; }
+.wa-playground button:disabled { opacity: .48; cursor: default; }
+.wa-nav [data-nav="home"] { background: #293647; }
+
+.wa-recents {
+  position: absolute;
+  z-index: 2;
+  inset: auto 12px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid #536276;
+  border-radius: 12px;
+  background: #141d29;
+}
+
+.wa-bottom { margin-top: 16px; }
+.wa-hud {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 7px 12px;
+  border: 1px solid #384658;
+  border-radius: 15px;
+  background: #1b2531;
+  color: #dce8f2;
+  font: .76rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.wa-hud [data-stat="backend"] { color: #83e9c6; font-weight: 700; }
+.wa-hud [data-stat="activity"] { overflow-wrap: anywhere; }
+.wa-install-hint, .wa-status { color: #aab8c8; font-size: .84rem; }
+.wa-status { margin: 8px 0 0; overflow-wrap: anywhere; }
+.wa-status[data-error="true"] { color: #ffaaa7; }
+
+@media (prefers-reduced-motion: reduce) {
+  .wa-launcher-surface, .wa-app-surface { transition: none; }
+}
