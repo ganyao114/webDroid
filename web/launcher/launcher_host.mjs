@@ -261,9 +261,10 @@ export class LauncherHost {
   installApk(filename, bytes) {
     if (!this.#session?.ready) throw new Error('Launcher3 is still starting');
     if (!/\.apk$/i.test(filename) || /[\\/\0]/.test(filename)) throw new TypeError('Choose an APK file');
+    if (!(bytes instanceof Uint8Array) || !bytes.byteLength) throw new TypeError('The APK is empty');
     let name = filename;
     for (let n = 2; this.#apks.has(name); ++n) name = `${filename.slice(0, -4)}-${n}.apk`;
-    const owned = bytes.slice();
+    const owned = new Uint8Array(bytes);
     this.#session.abi.installApk(name, owned);
     this.#apks.set(name, owned);
     return name;
@@ -274,7 +275,7 @@ export class LauncherHost {
     // The same upward motion that DragLayer receives from a finger on the workspace.
     const { width, height } = this.size();
     const writer = this.#session.compositor.input;
-    const x = width * 0.5, y = height * 0.91, dy = -height * 0.12;
+    const x = width * 0.54, y = height * 0.80, dy = -height * 0.09;
     const start = Math.max(0, performance.now() - 72);
     writer.write(Input.MOTION, Action.DOWN, start, 0, 0, 0, x, y);
     for (let step = 1; step <= 4; ++step) {
@@ -406,6 +407,8 @@ export class LauncherHost {
     // A compositor initializing on WebGPU may still need the native scene.
     this.#shutdown = Promise.resolve(this.#initialization).catch(() => {}).then(async () => {
       this.#disposeSession();
+      this.#apks.clear();
+      this.#assets = this.#module = undefined;
       await Promise.all([...this.#retiring, this.#audio.close()]);
     });
     return this.#shutdown;

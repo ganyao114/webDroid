@@ -79,7 +79,7 @@ export class ForegroundApk {
     this.#bindInput(canvas, signal);
     const offscreen = canvas.transferControlToOffscreen();
     const worker = this.#worker = new WorkerClient(workerUrl, `launcher-apk-${launch.package}`);
-    const data = bytes.slice().buffer;
+    const data = new Uint8Array(bytes).buffer;
     const metadata = await worker.request('open', { canvas: offscreen, bytes: data }, [offscreen, data]);
     if (signal.aborted) return;
     if (metadata.packageName !== launch.package) {
