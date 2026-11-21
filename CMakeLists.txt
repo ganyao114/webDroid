@@ -20,6 +20,8 @@ add_subdirectory(runtime/hal_browser)
 add_subdirectory(runtime/android_system)
 
 if(BUILD_TESTING AND NOT EMSCRIPTEN)
+    set(WA_M2_FFI_TEST_DBT ON CACHE BOOL "Also run an NDK JNI guest through wa_linker_ffi" FORCE)
     add_subdirectory(tests/m1_dbt_elf)
     add_subdirectory(tests/m1_chrome_ndk_cube)
+    add_subdirectory(tests/m2_ffi_thunks)
 endif()
