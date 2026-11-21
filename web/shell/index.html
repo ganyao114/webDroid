@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WasmAndroid</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
+    body { max-width: 42rem; margin: 4rem auto; padding: 0 1.5rem; }
+    h1 { font-size: 2rem; }
+    li { margin-block: .6rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>WasmAndroid</h1>
+    <p id="status" role="status">Starting the browser runtime…</p>
+    <ul id="vprocs"></ul>
+  </main>
+  <script type="module">
+    import { BrowserRuntime } from './runtime.mjs';
+    const status = document.querySelector('#status');
+    const list = document.querySelector('#vprocs');
+    let runtime;
+    try {
+      runtime = await BrowserRuntime.create({ moduleUrl: '/build/m0_selftest.wasm', poolSize: 4 });
+      const vprocs = await Promise.all([101, 202].map(pid => runtime.spawnVproc({ pid, threads: 2 })));
+      for (const { pid, identities } of vprocs) {
+        const row = document.createElement('li');
+        row.textContent = `vproc ${pid} · ${identities.length} worker threads`;
+        list.append(row);
+      }
+      status.textContent = 'Runtime ready.';
+      addEventListener('pagehide', () => runtime.close(), { once: true });
+    } catch (error) {
+      runtime?.close();
+      status.textContent = error.message;
+      console.error(error);
+    }
+  </script>
+</body>
+</html>
