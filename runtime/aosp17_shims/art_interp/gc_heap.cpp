@@ -16,9 +16,12 @@ RootScope::~RootScope() {
   runtime.roots = previous;
 }
 
+bool GcHeap::ShouldCollect(size_t interval) const {
+  return interval != 0 && since_collection_ >= std::max(interval, next_collection_);
+}
+
 Object* GcHeap::Allocate(Runtime& runtime, Class& cls) {
-  if (!runtime.gc_paused && runtime.options.gc_interval != 0 &&
-      since_collection_ >= std::max(runtime.options.gc_interval, next_collection_)) {
+  if (!runtime.gc_paused && ShouldCollect(runtime.options.gc_interval)) {
     Collect(runtime);
   }
   if (!free_) {

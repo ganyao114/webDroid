@@ -56,9 +56,22 @@ Interfaces DeclareInterfaces(ClassLinker& cl) {
   Abstract(cl, cl.Define(kListIterator, kObject, kInterface, {kIterator}), {
       {"hasPrevious", "()Z"}, {"previous", "()Ljava/lang/Object;"}, {"nextIndex", "()I"},
       {"previousIndex", "()I"}, {"set", "(Ljava/lang/Object;)V"}, {"add", "(Ljava/lang/Object;)V"}});
-  Abstract(cl, cl.Define("Ljava/lang/Iterable;", kObject, kInterface),
-      {{"iterator", "()Ljava/util/Iterator;"}});
+  auto& iterable = cl.Define("Ljava/lang/Iterable;", kObject, kInterface);
+  Abstract(cl, iterable, {{"iterator", "()Ljava/util/Iterator;"}});
+  cl.AddMethod(iterable, "forEach", "(Ljava/util/function/Consumer;)V", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        vm.NonNull(a[0].ref());
+        auto* cursor = CallVirtual(vm, self, "iterator", "()Ljava/util/Iterator;").ref();
+        return CallVirtual(vm, cursor, "forEachRemaining", "(Ljava/util/function/Consumer;)V", a);
+      });
   auto& collection = cl.Define(kCollection, kObject, kInterface, {"Ljava/lang/Iterable;"});
+  cl.AddMethod(collection, "stream", "()Ljava/util/stream/Stream;", 0,
+      [](Runtime& vm, Object* self, Values) {
+        auto& stream = vm.linker.Resolve("Ljava/util/stream/Stream;");
+        auto& factory = vm.linker.FindMethod(stream, "fromCollection",
+            "(Ljava/util/Collection;)Ljava/util/stream/Stream;", true);
+        return vm.Invoke(factory, nullptr, std::array{Value::Ref(self)});
+      });
   Abstract(cl, collection, {
       {"size", "()I"}, {"isEmpty", "()Z"}, {"clear", "()V"}, {"add", "(Ljava/lang/Object;)Z"},
       {"remove", "(Ljava/lang/Object;)Z"}, {"contains", "(Ljava/lang/Object;)Z"},
@@ -431,6 +444,12 @@ void InstallList(ClassLinker& cl, Class& iface) {
   }
   cl.AddMethod(iface, "of", "([Ljava/lang/Object;)Ljava/util/List;", art::kAccStatic,
       [of](Runtime& vm, Object*, Values a) { return of(vm, nullptr, vm.NonNull(a[0].ref()).elements); });
+  cl.AddMethod(iface, "copyOf", "(Ljava/util/Collection;)Ljava/util/List;", art::kAccStatic,
+      [of](Runtime& vm, Object*, Values a) {
+        RootScope roots(vm);
+        const auto array = roots.Hold(CallVirtual(vm, a[0].ref(), "toArray", "()[Ljava/lang/Object;"));
+        return of(vm, nullptr, vm.NonNull(array.ref()).elements);
+      });
 }
 
 struct MapLookup {
@@ -1080,6 +1099,45 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
         art::kAccStatic, factory);
     if (reverse) cl.AddMethod(collections, "reverseOrder", "()Ljava/util/Comparator;", art::kAccStatic, factory);
   }
+  const char compare_signature[] = "(Ljava/lang/Object;Ljava/lang/Object;)I";
+  auto& keys = cl.Define("Lwa/runtime/KeyComparator;", kObject, art::kAccFinal, {kComparator});
+  cl.AddMethod(keys, "compare", compare_signature, 0, [](Runtime& vm, Object* self, Values a) {
+    auto* extractor = self->elements[0].ref();
+    RootScope roots(vm);
+    const auto left = roots.Hold(CallVirtual(vm, extractor, "apply",
+        "(Ljava/lang/Object;)Ljava/lang/Object;", a.first(1)));
+    const auto right = CallVirtual(vm, extractor, "apply",
+        "(Ljava/lang/Object;)Ljava/lang/Object;", a.last(1));
+    auto* order = self->elements[1].ref();
+    if (order) return CallVirtual(vm, order, "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I",
+                                  std::array{left, right});
+    return CallVirtual(vm, left.ref(), "compareTo", "(Ljava/lang/Object;)I", std::array{right});
+  });
+  const Builtin comparing = [&keys](Runtime& vm, Object*, Values a) {
+    vm.NonNull(a[0].ref());
+    if (a.size() == 2) vm.NonNull(a[1].ref());
+    auto* object = vm.heap.Allocate(vm, vm.linker.Resolve(keys.descriptor));
+    object->elements = {a[0], a.size() == 2 ? a[1] : Value{}};
+    return Value::Ref(object);
+  };
+  cl.AddMethod(interfaces.comparator, "comparing", "(Ljava/util/function/Function;)Ljava/util/Comparator;",
+      art::kAccStatic, comparing);
+  cl.AddMethod(interfaces.comparator, "comparing",
+      "(Ljava/util/function/Function;Ljava/util/Comparator;)Ljava/util/Comparator;", art::kAccStatic, comparing);
+  auto& paired = cl.Define("Lwa/runtime/ChainedComparator;", kObject, art::kAccFinal, {kComparator});
+  cl.AddMethod(paired, "compare", compare_signature, 0, [](Runtime& vm, Object* self, Values a) {
+    const auto first = CallVirtual(vm, self->elements[0].ref(), "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a);
+    return first.i() ? first : CallVirtual(vm, self->elements[1].ref(), "compare",
+                                          "(Ljava/lang/Object;Ljava/lang/Object;)I", a);
+  });
+  cl.AddMethod(interfaces.comparator, "thenComparing", "(Ljava/util/function/Function;)Ljava/util/Comparator;", 0,
+      [comparing, &paired](Runtime& vm, Object* self, Values a) {
+        RootScope roots(vm);
+        const auto next = roots.Hold(comparing(vm, nullptr, a));
+        auto* object = vm.heap.Allocate(vm, vm.linker.Resolve(paired.descriptor));
+        object->elements = {Value::Ref(self), next};
+        return Value::Ref(object);
+      });
 }
 
 void InstallCollectionDefaults(ClassLinker& cl, Class& iface) {

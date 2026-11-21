@@ -18,6 +18,7 @@ public class ContextWrapper extends Context {
     @Override public AssetManager getAssets() { return base.getAssets(); }
     @Override public Resources getResources() { return base.getResources(); }
     @Override public PackageManager getPackageManager() { return base.getPackageManager(); }
+    @Override public ContentResolver getContentResolver() { return base.getContentResolver(); }
     @Override public String getPackageName() { return base.getPackageName(); }
     @Override public String getOpPackageName() { return base.getOpPackageName(); }
     @Override public ApplicationInfo getApplicationInfo() { return base.getApplicationInfo(); }

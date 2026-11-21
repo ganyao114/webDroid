@@ -11,6 +11,33 @@ public abstract class Uri implements Parcelable, Comparable<Uri> {
         return new StringUri(value);
     }
     public abstract String getScheme();
+    public String getLastPathSegment() {
+        String uri = toString();
+        int end = uri.length(), query = uri.indexOf('?'), fragment = uri.indexOf('#');
+        if (query >= 0) end = query;
+        if (fragment >= 0) end = Math.min(end, fragment);
+        while (end > 0 && uri.charAt(end - 1) == '/') --end;
+        int start = uri.lastIndexOf('/', end - 1) + 1;
+        return end <= start ? null : decode(uri.substring(start, end));
+    }
+    public static String decode(String value) {
+        if (value == null || value.indexOf('%') < 0) return value;
+        StringBuilder decoded = new StringBuilder(value.length());
+        byte[] run = new byte[value.length() / 3];
+        for (int i = 0; i < value.length();) {
+            if (value.charAt(i) != '%') { decoded.append(value.charAt(i++)); continue; }
+            int count = 0;
+            while (i + 2 < value.length() && value.charAt(i) == '%') {
+                int a = Character.digit(value.charAt(i + 1), 16), b = Character.digit(value.charAt(i + 2), 16);
+                if ((a | b) < 0) break;
+                run[count++] = (byte) (16 * a + b);
+                i += 3;
+            }
+            if (count == 0) { decoded.append('\ufffd'); i++; }
+            else decoded.append(new String(run, 0, count, java.nio.charset.StandardCharsets.UTF_8));
+        }
+        return decoded.toString();
+    }
     @Override public abstract String toString();
     @Override public final int compareTo(Uri other) { return toString().compareTo(other.toString()); }
     @Override public final boolean equals(Object other) { return other instanceof Uri && toString().equals(other.toString()); }

@@ -5,7 +5,7 @@ set(AOSP17_SOURCE_DIR "${wa_default_aosp17}" CACHE PATH "Read-only AOSP android-
 if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
     include(../../cmake/Aosp17Core.cmake)
     include(../../cmake/Aosp17ArtHGraph.cmake)
-    include(../../cmake/Aosp17ArtInterp.cmake)
+    include(../../cmake/Aosp17UiFramework.cmake)
     include(BinderRuntime.cmake)
     # Compile AOSP translation units independently of SwiftVM's fmt.
     add_library(wa_android_system_apk OBJECT apk_loader.cpp apk_dex.cpp)
@@ -27,7 +27,7 @@ if(EMSCRIPTEN)
         svm_arm32_numeric svm_arm64_numeric)
     target_link_options(android_system PRIVATE
         --no-entry -O3 -flto=thin
-        -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker
+        -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node
         -sUSE_WEBGL2=1 -sFULL_ES3=1 -sOFFSCREENCANVAS_SUPPORT=1 -sSHARED_MEMORY=1
         -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=1048576
         -sABORTING_MALLOC=0
@@ -47,8 +47,8 @@ if(EMSCRIPTEN)
     )
     if(TARGET wa_android_system_apk)
         target_link_libraries(android_system PRIVATE wa_android_system_apk wa_android_system_binder)
-        target_sources(android_system PRIVATE art_sf_entry.cpp)
-        target_link_libraries(android_system PRIVATE aosp17_art_interp wa_hal_surfaceflinger)
+        target_sources(android_system PRIVATE art_sf_entry.cpp launcher_session_entry.cpp)
+        target_link_libraries(android_system PRIVATE aosp17_ui_jni aosp17_libandroidfw)
         target_compile_options(android_system PRIVATE -ffunction-sections -fdata-sections)
         target_compile_options(aosp17_art_interp PRIVATE -ffunction-sections -fdata-sections)
         # Accept caller-owned vproc memory through the Emscripten loader.
@@ -75,12 +75,19 @@ if(EMSCRIPTEN)
             _wa_system_art_call_static_int _wa_system_art_call_static_string _wa_system_art_call_static_void
             _wa_system_art_last_error _wa_system_art_stats_json _wa_system_art_gc_collect
             _wa_system_art_set_gc_paused _wa_system_art_set_inline_caches_enabled
+            _wa_system_launcher_create _wa_system_launcher_destroy _wa_system_launcher_sf_ctx
+            _wa_system_launcher_load_framework_dex _wa_system_launcher_set_framework_res_apk
+            _wa_system_launcher_install_apk _wa_system_launcher_boot_apk _wa_system_launcher_tick
+            _wa_system_launcher_resize _wa_system_launcher_pause _wa_system_launcher_resume
+            _wa_system_launcher_send_home _wa_system_launcher_send_back _wa_system_launcher_state_json
+            _wa_system_launcher_consume_launch _wa_system_launcher_last_error
             _wa_system_sf_init _wa_system_sf_ctx _wa_system_sf_destroy
             _wa_sf_create _wa_sf_destroy _wa_sf_begin _wa_sf_set_layer _wa_sf_remove_layer
             _wa_sf_commit _wa_sf_abort _wa_sf_frame_acquire _wa_sf_frame_release
             _wa_sf_frame_layers _wa_sf_frame_list _wa_sf_bitmaps
             _wa_bitmap_put _wa_bitmap_remove _wa_bitmap_acquire _wa_bitmap_release _wa_bitmap_pixels
             _wa_sf_input _wa_sf_vsync _wa_sf_vsync_read _wa_sf_vsync_write _wa_sf_font_metrics
+            _wa_input_push _wa_input_poll
             _wa_sf_codec_requests _wa_sf_codec_events _wa_sf_webview_requests _wa_sf_webview_events
             _wa_canvas_begin _wa_canvas_draw_color _wa_canvas_end)
     else()
@@ -95,8 +102,9 @@ else()
         PRIVATE wa_hal_browser svm_wasm svm_arm32_numeric svm_arm64_numeric)
     if(TARGET wa_android_system_apk)
         target_link_libraries(wa_android_system PRIVATE wa_android_system_apk wa_android_system_binder)
-        target_sources(wa_android_system PRIVATE art_sf_entry.cpp)
-        target_link_libraries(wa_android_system PRIVATE aosp17_art_interp PUBLIC wa_hal_surfaceflinger)
+        target_sources(wa_android_system PRIVATE art_sf_entry.cpp launcher_session_entry.cpp)
+        target_link_libraries(wa_android_system PRIVATE aosp17_ui_jni aosp17_libandroidfw
+            PUBLIC wa_hal_surfaceflinger)
     endif()
 endif()
 
@@ -107,4 +115,9 @@ if(BUILD_TESTING AND TARGET wa_android_system_apk)
         add_subdirectory(../../tests/m7_aosp17_art_interp "${CMAKE_BINARY_DIR}/tests/m7_aosp17_art_interp")
     endif()
     add_subdirectory(../../tests/m8_art_perf_and_unified "${CMAKE_BINARY_DIR}/tests/m8_art_perf_and_unified")
+    if(EMSCRIPTEN OR NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/aosp17/frameworks/base/libs/androidfw")
+        add_subdirectory(../../tests/m8_aosp17_ui_framework "${CMAKE_BINARY_DIR}/tests/m8_aosp17_ui_framework")
+        add_subdirectory(../../tests/m8_aosp17_launcher3_apk "${CMAKE_BINARY_DIR}/tests/m8_aosp17_launcher3_apk")
+    endif()
+    add_subdirectory(../../tests/m9_aosp17_launcher3_boot "${CMAKE_BINARY_DIR}/tests/m9_aosp17_launcher3_boot")
 endif()

@@ -41,8 +41,12 @@ public final class UiRuntime {
         final Resources resources;
         final ApplicationInfo info;
         final PackageManager packages;
+        final android.content.ContentResolver resolver = new android.content.ContentResolver();
         private LayoutInflater inflater;
         private LauncherApps launcher;
+        private WallpaperManager wallpaper;
+        private android.view.inputmethod.InputMethodManager inputMethod;
+        private android.view.accessibility.AccessibilityManager accessibility;
         private Resources.Theme theme;
 
         AppContext(Resources resources, ApplicationInfo info) {
@@ -54,6 +58,7 @@ public final class UiRuntime {
         @Override public String getPackageName() { return info.packageName; }
         @Override public ApplicationInfo getApplicationInfo() { return info; }
         @Override public PackageManager getPackageManager() { return packages; }
+        @Override public android.content.ContentResolver getContentResolver() { return resolver; }
         @Override public Resources.Theme getTheme() {
             if (theme == null) {
                 theme = resources.newTheme();
@@ -72,6 +77,18 @@ public final class UiRuntime {
             if (LAUNCHER_APPS_SERVICE.equals(name)) {
                 if (launcher == null) launcher = new LauncherApps(this);
                 return launcher;
+            }
+            if (INPUT_METHOD_SERVICE.equals(name)) {
+                if (inputMethod == null) inputMethod = new android.view.inputmethod.InputMethodManager();
+                return inputMethod;
+            }
+            if (WALLPAPER_SERVICE.equals(name)) {
+                if (wallpaper == null) wallpaper = new WallpaperManager();
+                return wallpaper;
+            }
+            if (ACCESSIBILITY_SERVICE.equals(name)) {
+                if (accessibility == null) accessibility = new android.view.accessibility.AccessibilityManager();
+                return accessibility;
             }
             return null;
         }
@@ -180,6 +197,14 @@ public final class UiRuntime {
     }
 
     public static Activity getActivity() { return current; }
+    public static void sendHome() {
+        if (current != null) current.onNewIntent(Intent.makeMainActivity(current.getComponentName())
+                .addCategory(Intent.CATEGORY_HOME));
+    }
+    public static void sendBack() { if (current != null) current.onBackPressed(); }
+    public static void packageChanged(String name, boolean replaced) {
+        if (context != null && context.launcher != null) context.launcher.dispatchPackageChanged(name, replaced);
+    }
     public static void pause() { if (current != null) current.performPause(); finishIfRequested(); }
     public static void stop() { if (current != null) current.performStop(); finishIfRequested(); }
     public static void resume() { if (current != null) current.performResume(); finishIfRequested(); }
@@ -197,23 +222,36 @@ public final class UiRuntime {
     }
     private static void finishIfRequested() { if (current != null && current.isFinishing()) destroy(); }
 
-    /** Return 0 after destruction, 1 while paused and 2 after drawing. */
-    public static int doFrame(long nanos, int width, int height, int dpi) {
+    private static int frameWidth, frameHeight, frameDensity;
+    private static boolean drew, forceDraw;
+    private static final Runnable TRAVERSE = () -> {
+        if (current != null && current.isResumed() && !current.isFinishing())
+            drew = current.viewRoot().doFrame(frameWidth, frameHeight, frameDensity, forceDraw);
+    };
+
+    /** Return 0 after destruction, 1 while paused, 2 after drawing or 3 for a retained frame. */
+    public static int doFrame(long nanos, int width, int height, int dpi, boolean force) {
         Looper looper = Looper.getMainLooper();
         if (looper == null) return 0;
+        if (context != null) {
+            var display = context.resources.getDisplayMetrics();
+            if (width != display.widthPixels || height != display.heightPixels || dpi != display.densityDpi) {
+                context.resources.updateDisplay(width, height, dpi);
+                current.onConfigurationChanged(context.resources.getConfiguration());
+            }
+        }
         looper.dispatchDueMessages(nanos / 1_000_000);
         boolean draw = current != null && current.isResumed() && !current.isFinishing();
-        Choreographer choreographer = Choreographer.getInstance();
-        if (draw) {
-            choreographer.postCallback(Choreographer.CALLBACK_TRAVERSAL, () -> {
-                if (current != null && current.isResumed() && !current.isFinishing()) {
-                    current.viewRoot().doFrame(width, height, dpi);
-                }
-            }, null);
-        }
-        choreographer.doFrame(nanos);
+        frameWidth = width;
+        frameHeight = height;
+        frameDensity = dpi;
+        forceDraw = force;
+        drew = false;
+        Choreographer.getInstance().doFrame(nanos, draw ? TRAVERSE : null);
         finishIfRequested();
-        return current == null ? 0 : draw && current.isResumed() ? 2 : 1;
+        if (current == null) return 0;
+        if (!current.isResumed()) return 1;
+        return drew ? 2 : 3;
     }
 
     public static boolean dispatchMotion(long time, int action, int id, int meta, float x, float y, float dx, float dy) {

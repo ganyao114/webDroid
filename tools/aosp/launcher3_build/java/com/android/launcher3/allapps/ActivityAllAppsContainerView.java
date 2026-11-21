@@ -160,7 +160,7 @@ public class ActivityAllAppsContainerView extends AbstractFloatingView {
         grid.setSelection(0);
     }
 
-    public void takeDrawerFocus() { requestFocus(); }
+    public void takeDrawerFocus() { if (!search.requestFocus()) requestFocus(); }
 
     public void finishSearch() {
         InputMethodManager keyboard = getContext().getSystemService(InputMethodManager.class);

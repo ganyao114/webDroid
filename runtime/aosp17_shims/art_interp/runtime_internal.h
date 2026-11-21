@@ -223,6 +223,7 @@ struct RootScope {
 class GcHeap {
  public:
   Object* Allocate(Runtime& runtime, Class& cls);
+  bool ShouldCollect(size_t interval) const;
   GcStats Collect(Runtime& runtime);
   GcStats Stats() const { return stats_; }
 
@@ -240,7 +241,28 @@ struct Runtime {
   explicit Runtime(Options options);
   ~Runtime();
   void InstallBootClasses();
-  Value Invoke(Method& method, Object* receiver, std::span<const Value> args);
+  Value Invoke(Method& method, Object* receiver, std::span<const Value> args) {
+    if (args.size() + 1 != method.shorty.size())
+      Fail("Ljava/lang/VerifyError;", "Wrong argument count for " + method.QualifiedName());
+    if (call_depth >= 384) Fail("Ljava/lang/StackOverflowError;");
+    if (!method.IsStatic()) NonNull(receiver);
+    struct CallDepth {
+      size_t& depth;
+      explicit CallDepth(size_t& depth) : depth(depth) { ++depth; }
+      ~CallDepth() { --depth; }
+    } depth(call_depth);
+
+    constexpr auto monitor = art::kAccSynchronized | art::kAccDeclaredSynchronized;
+    if (method.code && !method.compiled && !(method.flags & monitor) &&
+        (!method.IsStatic() || method.owner->init_state == InitState::Initialized) &&
+        (method.stats.invocations + 1 != options.hotness_threshold || !options.install_wasm)) {
+      ++method.stats.invocations;
+      ++method.stats.interpreted;
+      return Interpret(method, receiver, args);
+    }
+    return InvokeSlow(method, receiver, args);
+  }
+  Value InvokeSlow(Method& method, Object* receiver, std::span<const Value> args);
   Value Interpret(Method& method, Object* receiver, std::span<const Value> args);
   void Promote(Method& method);
   Object* NewObject(Class& cls, Method& constructor, std::span<const Value> args);

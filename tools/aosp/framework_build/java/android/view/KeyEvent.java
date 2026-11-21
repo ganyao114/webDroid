@@ -2,7 +2,8 @@ package android.view;
 
 public class KeyEvent extends InputEvent {
     public static final int ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MULTIPLE = 2;
-    public static final int KEYCODE_UNKNOWN = 0, KEYCODE_BACK = 4, KEYCODE_DPAD_UP = 19, KEYCODE_DPAD_DOWN = 20;
+    public static final int KEYCODE_UNKNOWN = 0, KEYCODE_HOME = 3, KEYCODE_BACK = 4,
+            KEYCODE_DPAD_UP = 19, KEYCODE_DPAD_DOWN = 20;
     public static final int KEYCODE_DPAD_LEFT = 21, KEYCODE_DPAD_RIGHT = 22, KEYCODE_DPAD_CENTER = 23;
     public static final int KEYCODE_SPACE = 62, KEYCODE_ENTER = 66, KEYCODE_DEL = 67, KEYCODE_ESCAPE = 111;
     public static final int META_SHIFT_ON = 1, META_ALT_ON = 2, META_CTRL_ON = 0x1000, META_META_ON = 0x10000;

@@ -11,6 +11,8 @@ public class Path {
     private FillType fillType = FillType.WINDING;
     private float x, y, contourX, contourY;
     private boolean needsMove = true;
+    private RectF roundClip;
+    private float clipRx, clipRy;
 
     public Path() {}
     public Path(Path source) { if (source != null) set(source); }
@@ -21,9 +23,11 @@ public class Path {
         size = source.size;
         x = source.x; y = source.y; contourX = source.contourX; contourY = source.contourY;
         needsMove = source.needsMove; fillType = source.fillType;
+        roundClip = source.roundClip == null ? null : new RectF(source.roundClip);
+        clipRx = source.clipRx; clipRy = source.clipRy;
     }
     public void reset() { rewind(); }
-    public void rewind() { size = 0; x = y = contourX = contourY = 0; needsMove = true; }
+    public void rewind() { size = 0; x = y = contourX = contourY = 0; needsMove = true; roundClip = null; }
     public boolean isEmpty() {
         for (int i = 0; i < size; ++i) {
             float verb = verbs[i * STRIDE];
@@ -43,6 +47,7 @@ public class Path {
         verbs = expanded;
     }
     private void add(int verb, float a, float b, float c, float d, float e, float f) {
+        roundClip = null;
         reserve(size + 1);
         int at = size++ * STRIDE;
         verbs[at] = verb;
@@ -103,6 +108,7 @@ public class Path {
     }
     public void addRoundRect(float l, float t, float r, float b, float rx, float ry, Direction direction) {
         if (l >= r || t >= b) return;
+        boolean solitary = size == 0;
         rx = Math.max(0, Math.min(rx, (r - l) * 0.5f));
         ry = Math.max(0, Math.min(ry, (b - t) * 0.5f));
         float kx = rx * (1 - KAPPA), ky = ry * (1 - KAPPA);
@@ -119,6 +125,16 @@ public class Path {
             cubicTo(r, t + ky, r - kx, t, r - rx, t); lineTo(l + rx, t);
         }
         close();
+        if (solitary) {
+            roundClip = new RectF(l, t, r, b);
+            clipRx = rx;
+            clipRy = ry;
+        }
+    }
+    boolean clip(Canvas canvas) {
+        if (roundClip == null || isInverseFillType())
+            throw new UnsupportedOperationException("Canvas requires a rectangular or rounded path clip");
+        return canvas.clipRoundRect(roundClip.left, roundClip.top, roundClip.right, roundClip.bottom, clipRx, clipRy);
     }
     public void addPath(Path path) { addPath(path, 0, 0); }
     public void addPath(Path path, float dx, float dy) {
@@ -160,6 +176,48 @@ public class Path {
             }
         }
         out.set(l, t, r, b);
+    }
+
+    public float[] approximate(float acceptableError) {
+        if (!(acceptableError >= 0)) throw new IllegalArgumentException("Negative path error");
+        float[] samples = new float[Math.max(6, size * 3)];
+        int count = 0;
+        float px = 0, py = 0, startX = 0, startY = 0, length = 0;
+        for (int at = 0; at < size * STRIDE; at += STRIDE) {
+            int verb = (int) verbs[at];
+            int end = verb == CUBIC ? at + 5 : verb == QUAD ? at + 3 : at + 1;
+            float toX = verb == CLOSE ? startX : verbs[end], toY = verb == CLOSE ? startY : verbs[end + 1];
+            float fromX = px, fromY = py;
+            if (verb == MOVE) { startX = toX; startY = toY; }
+            int steps = verb == QUAD || verb == CUBIC
+                    ? Math.min(256, Math.max(8, (int) Math.ceil(1 / Math.sqrt(acceptableError)))) : 1;
+            if (count + steps * 3 > samples.length)
+                samples = java.util.Arrays.copyOf(samples, Math.max(count + steps * 3, samples.length * 2));
+            for (int step = 1; step <= steps; step++) {
+                float t = (float) step / steps, u = 1 - t;
+                float sx = toX, sy = toY;
+                if (step < steps) {
+                    if (verb == QUAD) {
+                        sx = u*u*fromX + 2*t*u*verbs[at + 1] + t*t*toX;
+                        sy = u*u*fromY + 2*t*u*verbs[at + 2] + t*t*toY;
+                    } else {
+                        sx = u*u*u*fromX + 3*t*u*u*verbs[at + 1] + 3*t*t*u*verbs[at + 3] + t*t*t*toX;
+                        sy = u*u*u*fromY + 3*t*u*u*verbs[at + 2] + 3*t*t*u*verbs[at + 4] + t*t*t*toY;
+                    }
+                }
+                if (verb != MOVE) {
+                    float dx = sx - px, dy = sy - py;
+                    length += (float) Math.sqrt(dx * dx + dy * dy);
+                }
+                samples[count++] = length;
+                samples[count++] = px = sx;
+                samples[count++] = py = sy;
+            }
+        }
+        if (count == 0) return new float[] {0, 0, 0, 1, 0, 0};
+        if (length == 0) return new float[] {0, samples[1], samples[2], 1, px, py};
+        for (int i = 0; i < count; i += 3) samples[i] /= length;
+        return java.util.Arrays.copyOf(samples, count);
     }
 
     public static Path fromPathData(String data) {

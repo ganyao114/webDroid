@@ -8,6 +8,9 @@ import android.util.AttributeSet;
 import java.util.ArrayList;
 
 public abstract class ViewGroup extends View implements ViewParent {
+    private android.animation.LayoutTransition layoutTransition;
+    public android.animation.LayoutTransition getLayoutTransition() { return layoutTransition; }
+    public void setLayoutTransition(android.animation.LayoutTransition value) { layoutTransition = value; }
     private final ArrayList<View> children = new ArrayList<>();
     private View touchTarget, focusedChild;
     private boolean disallowIntercept, clipChildren = true, clipToPadding = true;
@@ -203,10 +206,18 @@ public abstract class ViewGroup extends View implements ViewParent {
                         getScrollX() + getWidth() - getPaddingRight(), getScrollY() + getHeight() - getPaddingBottom());
             }
             long time = android.os.SystemClock.uptimeMillis();
-            for (View child : children) if (child.getVisibility() == VISIBLE) drawChild(canvas, child, time);
+            for (int i = 0; i < children.size(); i++) {
+                View child = children.get(i);
+                if (child.getVisibility() == VISIBLE) drawChild(canvas, child, time);
+            }
         } finally {
             canvas.restoreToCount(state);
         }
+    }
+    @Override public WindowInsets dispatchApplyWindowInsets(WindowInsets insets) {
+        WindowInsets result = super.dispatchApplyWindowInsets(insets);
+        for (int i = 0; i < children.size(); i++) children.get(i).dispatchApplyWindowInsets(result);
+        return result;
     }
     protected boolean drawChild(Canvas canvas, View child, long drawingTime) {
         if (child.getAlpha() <= 0) return false;
@@ -214,9 +225,12 @@ public abstract class ViewGroup extends View implements ViewParent {
         try {
             canvas.translate(child.getX(), child.getY());
             if (child.getAlpha() != 1f) canvas.multiplyAlpha(child.getAlpha());
-            float px = child.getWidth() * 0.5f, py = child.getHeight() * 0.5f;
-            if (child.getRotation() != 0) canvas.rotate(child.getRotation(), px, py);
-            if (child.getScaleX() != 1f || child.getScaleY() != 1f) canvas.scale(child.getScaleX(), child.getScaleY(), px, py);
+            float rotation = child.getRotation(), sx = child.getScaleX(), sy = child.getScaleY();
+            if (rotation != 0 || sx != 1f || sy != 1f) {
+                float px = child.getPivotX(), py = child.getPivotY();
+                if (rotation != 0) canvas.rotate(rotation, px, py);
+                if (sx != 1f || sy != 1f) canvas.scale(sx, sy, px, py);
+            }
             if (clipChildren) canvas.clipRect(0, 0, child.getWidth(), child.getHeight());
             child.draw(canvas);
         } finally {
@@ -313,5 +327,9 @@ public abstract class ViewGroup extends View implements ViewParent {
     }
     @Override public boolean dispatchKeyEvent(KeyEvent event) {
         return (focusedChild != null && focusedChild.dispatchKeyEvent(event)) || super.dispatchKeyEvent(event);
+    }
+    @Override public void cancelLongPress() {
+        super.cancelLongPress();
+        for (int i = 0; i < children.size(); i++) children.get(i).cancelLongPress();
     }
 }

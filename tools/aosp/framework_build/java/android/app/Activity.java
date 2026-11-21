@@ -34,7 +34,7 @@ public class Activity extends ContextThemeWrapper implements KeyEvent.Callback {
         try (TypedArray a = obtainStyledAttributes(new int[] {android.R.attr.windowBackground})) {
             if (a.hasValue(0)) window.setBackgroundDrawable(a.getDrawable(0));
         }
-        root = new ViewRootImpl(window.getDecorView());
+        root = new ViewRootImpl(window.getDecorView(), window);
     }
 
     protected void onCreate(Bundle state) {}
@@ -45,6 +45,7 @@ public class Activity extends ContextThemeWrapper implements KeyEvent.Callback {
     protected void onDestroy() {}
     protected void onRestart() {}
     protected void onNewIntent(Intent intent) {}
+    public void onConfigurationChanged(android.content.res.Configuration configuration) {}
     protected void onSaveInstanceState(Bundle state) {}
     protected void onRestoreInstanceState(Bundle state) {}
     public void onContentChanged() {}
@@ -92,6 +93,11 @@ public class Activity extends ContextThemeWrapper implements KeyEvent.Callback {
     }
 
     public Window getWindow() { return window; }
+    public android.view.WindowManager getWindowManager() { return window.getWindowManager(); }
+    @Override public Object getSystemService(String name) {
+        if (WINDOW_SERVICE.equals(name) && window != null) return getWindowManager();
+        return super.getSystemService(name);
+    }
     public LayoutInflater getLayoutInflater() { return LayoutInflater.from(this); }
     public ComponentName getComponentName() { return component; }
     public String getLocalClassName() { return component.getShortClassName(); }

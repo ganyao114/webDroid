@@ -347,6 +347,12 @@ bool ClassLinker::IsAssignable(const Class& target, const Class& source) const {
   if (target.IsArray()) {
     return source.IsArray() && IsAssignable(*target.component, *source.component);
   }
+  if (!target.IsInterface()) {
+    for (const Class* cls = source.super; cls; cls = cls->super) {
+      if (cls == &target) return true;
+    }
+    return false;
+  }
   for (const Class* cls = &source; cls; cls = cls->super) {
     if (cls == &target) return true;
     for (Class* iface : cls->interfaces) {

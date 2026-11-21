@@ -68,23 +68,32 @@ public final class Choreographer {
         long now = SystemClock.uptimeMillis();
         return now + Math.min(Long.MAX_VALUE - now, Math.max(0, delay));
     }
-    public void doFrame(long nanos) {
+    public void doFrame(long nanos) { doFrame(nanos, null); }
+    public void doFrame(long nanos, Runnable traversal) {
         frameTime = nanos;
         inFrame = true;
         try {
-            for (int type = CALLBACK_INPUT; type <= CALLBACK_COMMIT; type++) dispatch(type, nanos / 1_000_000);
+            for (int type = CALLBACK_INPUT; type <= CALLBACK_COMMIT; type++) {
+                if (!callbacks.isEmpty()) dispatch(type, nanos / 1_000_000);
+                if (type == CALLBACK_TRAVERSAL && traversal != null) traversal.run();
+            }
         } finally {
             inFrame = false;
         }
     }
     private void dispatch(int type, long uptime) {
-        ArrayList<Callback> ready = new ArrayList<>();
+        ArrayList<Callback> ready = null;
         for (int i = 0; i < callbacks.size();) {
             Callback record = callbacks.get(i);
-            if (record.type == type && record.due <= uptime) ready.add(callbacks.remove(i));
+            if (record.type == type && record.due <= uptime) {
+                if (ready == null) ready = new ArrayList<>();
+                ready.add(callbacks.remove(i));
+            }
             else i++;
         }
-        for (Callback record : ready) {
+        if (ready == null) return;
+        for (int i = 0; i < ready.size(); i++) {
+            Callback record = ready.get(i);
             if (record.frame != null) record.frame.doFrame(frameTime);
             else record.runnable.run();
         }

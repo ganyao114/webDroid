@@ -36,6 +36,20 @@ public class AdaptiveIconDrawable extends Drawable implements Drawable.Callback 
     }
     @Override public int getIntrinsicWidth() { return intrinsic(true); }
     @Override public int getIntrinsicHeight() { return intrinsic(false); }
+    @Override public ConstantState getConstantState() {
+        ConstantState back = background == null ? null : background.getConstantState();
+        ConstantState front = foreground == null ? null : foreground.getConstantState();
+        ConstantState mono = monochrome == null ? null : monochrome.getConstantState();
+        if (background != null && back == null || foreground != null && front == null
+                || monochrome != null && mono == null) return null;
+        return new ConstantState() {
+            @Override public Drawable newDrawable() {
+                return new AdaptiveIconDrawable(back == null ? null : back.newDrawable(),
+                        front == null ? null : front.newDrawable(), mono == null ? null : mono.newDrawable());
+            }
+            @Override public int getChangingConfigurations() { return 0; }
+        };
+    }
     private int intrinsic(boolean horizontal) {
         int a = background == null ? -1 : horizontal ? background.getIntrinsicWidth() : background.getIntrinsicHeight();
         int b = foreground == null ? -1 : horizontal ? foreground.getIntrinsicWidth() : foreground.getIntrinsicHeight();

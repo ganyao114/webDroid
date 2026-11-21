@@ -20,6 +20,8 @@ public class GradientDrawable extends Drawable {
     private ColorStateList fill = ColorStateList.valueOf(0), stroke = ColorStateList.valueOf(0);
     private int[] colors;
     private float radius, angle = 90;
+    private float[] cornerRadii;
+    private final android.graphics.Path cornerPath = new android.graphics.Path();
     private Rect padding;
 
     public GradientDrawable() {}
@@ -37,7 +39,12 @@ public class GradientDrawable extends Drawable {
         invalidateSelf();
     }
     public ColorStateList getColor() { return fill; }
-    public void setCornerRadius(float r) { radius = Math.max(0, r); invalidateSelf(); }
+    public void setCornerRadius(float r) { cornerRadii = null; radius = Math.max(0, r); invalidateSelf(); }
+    public void setCornerRadii(float[] values) {
+        if (values != null && values.length < 8) throw new IllegalArgumentException("Eight corner radii required");
+        cornerRadii = values == null ? null : values.clone();
+        invalidateSelf();
+    }
     public float getCornerRadius() { return radius; }
     public void setStroke(int width, int color) { setStroke(width, ColorStateList.valueOf(color)); }
     public void setStroke(int width, ColorStateList color) {
@@ -86,9 +93,27 @@ public class GradientDrawable extends Drawable {
         float l = b.left + inset, t = b.top + inset, r = b.right - inset, bottom = b.bottom - inset;
         if (shape == OVAL) canvas.drawOval(l, t, r, bottom, paint);
         else if (shape == LINE) canvas.drawLine(l, b.exactCenterY(), r, b.exactCenterY(), paint);
-        else if (radius > 0) canvas.drawRoundRect(l, t, r, bottom, radius, radius, paint);
+        else if (cornerRadii != null) {
+            final float maxX = Math.max(0, (r - l) * .5f), maxY = Math.max(0, (bottom - t) * .5f);
+            float tlx = corner(0, maxX), tly = corner(1, maxY), trx = corner(2, maxX), try_ = corner(3, maxY);
+            float brx = corner(4, maxX), bry = corner(5, maxY), blx = corner(6, maxX), bly = corner(7, maxY);
+            final float k = 0.44771525f;
+            cornerPath.rewind();
+            cornerPath.moveTo(l + tlx, t);
+            cornerPath.lineTo(r - trx, t);
+            cornerPath.cubicTo(r - trx * k, t, r, t + try_ * k, r, t + try_);
+            cornerPath.lineTo(r, bottom - bry);
+            cornerPath.cubicTo(r, bottom - bry * k, r - brx * k, bottom, r - brx, bottom);
+            cornerPath.lineTo(l + blx, bottom);
+            cornerPath.cubicTo(l + blx * k, bottom, l, bottom - bly * k, l, bottom - bly);
+            cornerPath.lineTo(l, t + tly);
+            cornerPath.cubicTo(l, t + tly * k, l + tlx * k, t, l + tlx, t);
+            cornerPath.close();
+            canvas.drawPath(cornerPath, paint);
+        } else if (radius > 0) canvas.drawRoundRect(l, t, r, bottom, radius, radius, paint);
         else canvas.drawRect(l, t, r, bottom, paint);
     }
+    private float corner(int index, float max) { return Math.max(0, Math.min(cornerRadii[index], max)); }
 
     static GradientDrawable inflateShape(Resources res, XmlResourceParser xml, Resources.Theme theme)
             throws IOException, XmlPullParserException {

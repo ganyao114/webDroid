@@ -12,6 +12,7 @@ import zipfile
 
 sys.dont_write_bytecode = True
 from build_pm_dex import run, write_depfile, write_jar
+from framework_build.generate_unicode import generate as generate_unicode
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
@@ -28,7 +29,6 @@ android/content/res/StringBlock.java
 android/content/res/Validator.java
 android/ravenwood/annotation/RavenwoodKeepWholeClass.java
 android/system/OsConstants.java
-android/text/TextUtils.java
 com/android/internal/annotations/GuardedBy.java
 com/android/internal/pm/pkg/component/AconfigFlags.java
 dalvik/annotation/optimization/CriticalNative.java
@@ -54,6 +54,7 @@ def build(args, stage):
     native_table = args.aosp_root / "frameworks/base/core/jni/android_util_AssetManager.cpp"
     template = SOURCES / "AssetManager.java.in"
     inputs = {Path(__file__).resolve(), HERE / "build_pm_dex.py", manifest, generator,
+              SOURCES / "generate_unicode.py",
               native_table, template, args.javac, args.d8, args.android_jar, *sources, *java_base, *libcore}
     d8_jar = args.d8.parent / "lib/d8.jar"
     if d8_jar.is_file():
@@ -78,6 +79,9 @@ def build(args, stage):
         copy.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(original, copy)
         staged_sources.append(copy)
+    unicode_data = base / "java/text/UnicodeData.java"
+    generate_unicode(unicode_data)
+    staged_sources.append(unicode_data)
     run(args.javac, "--release", "17", "--patch-module", f"java.base={base}",
         "-encoding", "UTF-8", "-proc:none", "-g:source,lines", "-XDstringConcat=inline",
         "-d", classes, *staged_sources)

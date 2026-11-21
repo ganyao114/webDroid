@@ -10,6 +10,7 @@ import android.view.Gravity;
 public class BitmapDrawable extends Drawable {
     private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
     private final Bitmap bitmap;
+    private final Rect destination = new Rect();
     private int density, gravity = Gravity.FILL;
 
     public BitmapDrawable() { this(null, null); }
@@ -30,9 +31,19 @@ public class BitmapDrawable extends Drawable {
     @Override public int getIntrinsicHeight() { return bitmap == null ? -1 : bitmap.getScaledHeight(density); }
     @Override public void draw(Canvas canvas) {
         if (bitmap == null || bitmap.isRecycled()) return;
-        Rect destination = new Rect();
         Gravity.apply(gravity, getIntrinsicWidth(), getIntrinsicHeight(), getBounds(), destination);
         paint.setAlpha(getAlpha());
         canvas.drawBitmap(bitmap, null, destination, paint);
+    }
+    @Override public ConstantState getConstantState() {
+        return new ConstantState() {
+            @Override public Drawable newDrawable() {
+                BitmapDrawable copy = new BitmapDrawable(bitmap);
+                copy.density = density;
+                copy.gravity = gravity;
+                return copy;
+            }
+            @Override public int getChangingConfigurations() { return 0; }
+        };
     }
 }

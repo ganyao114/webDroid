@@ -11,6 +11,7 @@ public class ViewConfiguration {
     public static int getTapTimeout() { return 100; }
     public static int getLongPressTimeout() { return 500; }
     public static int getDoubleTapTimeout() { return 300; }
+    public static int getScrollDefaultDelay() { return 300; }
     public static float getScrollFriction() { return 0.015f; }
     public float getScrollFrictionAmount() { return getScrollFriction(); }
     public int getScaledTouchSlop() { return scaled(8); }

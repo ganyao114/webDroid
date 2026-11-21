@@ -245,23 +245,29 @@ public final class Launcher extends Activity implements ActivityContext {
         }
 
         int[] cell = new int[2];
+        int remaining = snapshot.apps().size() - pinned.size();
         for (AppCatalog.App app : snapshot.apps()) {
             if (pinned.contains(app.item().componentName.flattenToString())) continue;
-            if (hotseat.findVacantCell(cell)) {
-                WorkspaceItemInfo dockItem = app.item().makeWorkspaceItem(this);
-                dockItem.container = Favorites.CONTAINER_HOTSEAT;
-                dockItem.screenId = dockItem.cellX = cell[0];
-                dockItem.cellY = cell[1];
-                addIcon(hotseat, app, dockItem, false);
-                continue;
+            CellLayout target;
+            if (home.getChildCount() == 0 && remaining > 1 && home.findVacantCell(cell)) {
+                target = home;
+            } else if ((remaining > 1 || next.getChildCount() > 0) && hotseat.findVacantCell(cell)) {
+                target = hotseat;
+            } else if (next.findVacantCell(cell)) {
+                target = next;
+            } else if (home.findVacantCell(cell)) {
+                target = home;
+            } else {
+                break;
             }
-            if (!next.findVacantCell(cell)) break;
+            boolean dock = target == hotseat;
             WorkspaceItemInfo icon = app.item().makeWorkspaceItem(this);
-            icon.container = Favorites.CONTAINER_DESKTOP;
-            icon.screenId = 1;
+            icon.container = dock ? Favorites.CONTAINER_HOTSEAT : Favorites.CONTAINER_DESKTOP;
+            icon.screenId = dock ? cell[0] : target == next ? 1 : 0;
             icon.cellX = cell[0];
             icon.cellY = cell[1];
-            addIcon(next, app, icon, true);
+            addIcon(target, app, icon, !dock);
+            remaining--;
         }
         workspace.selectPage(currentPage, false);
         drawer.setApps(snapshot.apps().stream()

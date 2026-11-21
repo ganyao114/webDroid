@@ -2,9 +2,11 @@ package android.content;
 
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.ArraySet;
 import java.util.Set;
+import java.net.URISyntaxException;
 
 public class Intent implements Cloneable {
     public static final String ACTION_MAIN = "android.intent.action.MAIN", ACTION_VIEW = "android.intent.action.VIEW";
@@ -39,6 +41,44 @@ public class Intent implements Cloneable {
     }
     public static Intent makeRestartActivityTask(ComponentName component) {
         return makeMainActivity(component).addFlags(FLAG_ACTIVITY_NEW_TASK | 0x8000);
+    }
+    public static Intent parseUri(String uri, int flags) throws URISyntaxException {
+        final int fragment = uri.lastIndexOf('#');
+        if (fragment < 0 || !uri.startsWith("#Intent;", fragment)) return new Intent(ACTION_VIEW, Uri.parse(uri));
+        Intent result = new Intent(ACTION_VIEW);
+        String scheme = null;
+        int start = fragment + "#Intent;".length();
+        while (!uri.substring(start).equals("end")) {
+            int separator = uri.indexOf(';', start), equals = uri.indexOf('=', start);
+            if (separator < 0 || equals < start || equals >= separator)
+                throw new URISyntaxException(uri, "Invalid intent fragment", start);
+            String key = uri.substring(start, equals);
+            String value = Uri.decode(uri.substring(equals + 1, separator));
+            switch (key) {
+                case "action": result.setAction(value); break;
+                case "category": result.addCategory(value); break;
+                case "type": result.setType(value); break;
+                case "package": result.setPackage(value); break;
+                case "component":
+                    ComponentName component = ComponentName.unflattenFromString(value);
+                    if (component == null) throw new URISyntaxException(uri, "Invalid component", start);
+                    result.setComponent(component);
+                    break;
+                case "scheme": scheme = value; break;
+                case "launchFlags":
+                    try { result.setFlags(Integer.decode(value)); }
+                    catch (NumberFormatException invalid) { throw new URISyntaxException(uri, "Invalid launch flags", start); }
+                    break;
+                default:
+                    if (key.startsWith("S.")) result.putExtra(Uri.decode(key.substring(2)), value);
+                    else throw new URISyntaxException(uri, "Unsupported intent property", start);
+            }
+            start = separator + 1;
+        }
+        String data = uri.substring(0, fragment);
+        if (data.startsWith("intent:")) data = scheme == null ? data.substring(7) : scheme + ':' + data.substring(7);
+        if (!data.isEmpty()) result.setDataAndType(Uri.parse(data), result.getType());
+        return result;
     }
     public Intent setAction(String action) { this.action = action; return this; }
     public String getAction() { return action; }

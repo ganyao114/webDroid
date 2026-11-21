@@ -15,25 +15,25 @@ import org.wasmandroid.ui.NativeMath;
 import org.wasmandroid.ui.XmlValues;
 
 public class VectorDrawable extends Drawable {
-    private final Group root = new Group();
+    private final Group root;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private float viewportWidth = 1, viewportHeight = 1;
     private int width = -1, height = -1, xmlAlpha = 255;
 
     private interface Node {
-        void draw(Canvas canvas, Paint paint, int alpha);
+        void draw(Canvas canvas, VectorDrawable owner, int alpha);
     }
     private static final class Group implements Node {
         final ArrayList<Node> children = new ArrayList<>();
         float pivotX, pivotY, translateX, translateY, rotation, scaleX = 1, scaleY = 1;
-        @Override public void draw(Canvas canvas, Paint paint, int alpha) {
+        @Override public void draw(Canvas canvas, VectorDrawable owner, int alpha) {
             int save = canvas.save();
             try {
                 canvas.translate(translateX + pivotX, translateY + pivotY);
                 canvas.rotate(rotation);
                 canvas.scale(scaleX, scaleY);
                 canvas.translate(-pivotX, -pivotY);
-                for (Node node : children) node.draw(canvas, paint, alpha);
+                for (int i = 0; i < children.size(); i++) children.get(i).draw(canvas, owner, alpha);
             } finally {
                 canvas.restoreToCount(save);
             }
@@ -43,14 +43,15 @@ public class VectorDrawable extends Drawable {
         Path path;
         int fill, stroke;
         float strokeWidth;
-        @Override public void draw(Canvas canvas, Paint paint, int alpha) {
+        @Override public void draw(Canvas canvas, VectorDrawable owner, int alpha) {
+            Paint paint = owner.paint;
             if (fill >>> 24 != 0) {
-                paint.setColor(withAlpha(fill, alpha / 255f));
+                paint.setColor(owner.tinted(withAlpha(fill, alpha / 255f)));
                 paint.setStyle(Paint.Style.FILL);
                 canvas.drawPath(path, paint);
             }
             if (strokeWidth > 0 && stroke >>> 24 != 0) {
-                paint.setColor(withAlpha(stroke, alpha / 255f));
+                paint.setColor(owner.tinted(withAlpha(stroke, alpha / 255f)));
                 paint.setStyle(Paint.Style.STROKE);
                 paint.setStrokeWidth(strokeWidth);
                 canvas.drawPath(path, paint);
@@ -58,6 +59,18 @@ public class VectorDrawable extends Drawable {
         }
     }
 
+    public VectorDrawable() { root = new Group(); }
+    private VectorDrawable(VectorDrawable source) {
+        root = source.root;
+        viewportWidth = source.viewportWidth; viewportHeight = source.viewportHeight;
+        width = source.width; height = source.height; xmlAlpha = source.xmlAlpha;
+    }
+    @Override public ConstantState getConstantState() {
+        return new ConstantState() {
+            @Override public Drawable newDrawable() { return new VectorDrawable(VectorDrawable.this); }
+            @Override public int getChangingConfigurations() { return 0; }
+        };
+    }
     @Override public int getIntrinsicWidth() { return width; }
     @Override public int getIntrinsicHeight() { return height; }
     @Override public void draw(Canvas canvas) {
@@ -68,7 +81,7 @@ public class VectorDrawable extends Drawable {
             canvas.clipRect(b);
             canvas.translate(b.left, b.top);
             canvas.scale(b.width() / viewportWidth, b.height() / viewportHeight);
-            root.draw(canvas, paint, (getAlpha() * xmlAlpha + 127) / 255);
+            root.draw(canvas, this, (getAlpha() * xmlAlpha + 127) / 255);
         } finally {
             canvas.restoreToCount(save);
         }
