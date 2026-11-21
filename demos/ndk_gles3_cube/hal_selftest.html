@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WasmAndroid NDK GLES3 Cube</title>
+<link rel="icon" href="data:,">
+<style>
+  body { margin: 24px; background: #151922; color: #e1e7f0; font: 16px system-ui; }
+  canvas { display: block; width: 256px; height: 256px; background: #000; touch-action: none; }
+  #status { margin-top: 16px; white-space: pre-wrap; }
+</style>
+<canvas id="cube" width="256" height="256" aria-label="Animated textured GLES3 cube"></canvas>
+<div id="status" role="status">Running graphics and audio checks…</div>
+<script type="module">
+  import { createCompositor, inspectPixels } from '../../web/gfx/compositor.mjs';
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  async function verifyAudio({ memory, ring, expected, start }) {
+    const frames = expected.length / 2;
+    const total = 512;
+    const context = new OfflineAudioContext(2, total, 48000);
+    await context.audioWorklet.addModule('/web/gfx/audio_worklet.js');
+    const node = new AudioWorkletNode(context, 'wa-pcm-ring', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      processorOptions: { buffer: memory, byteOffset: ring },
+    });
+    node.connect(context.destination);
+    const output = await context.startRendering();
+    const channels = [output.getChannelData(0), output.getChannelData(1)].map(
+      samples => new Uint32Array(samples.buffer, samples.byteOffset, samples.length),
+    );
+    const expectedBits = new Uint32Array(expected.buffer, expected.byteOffset, expected.length);
+    let corrupted = 0;
+    for (let i = 0; i < total; ++i) {
+      const left = i < frames ? expectedBits[2 * i] : 0;
+      const right = i < frames ? expectedBits[2 * i + 1] : 0;
+      if (channels[0][i] !== left || channels[1][i] !== right) ++corrupted;
+    }
+    assert(corrupted === 0, `${corrupted} stereo frames differ from Wasm PCM or expected silence`);
+    const header = new Int32Array(memory, ring, 8);
+    const cursor = (start + frames) >>> 0;
+    assert((Atomics.load(header, 4) >>> 0) === cursor && (Atomics.load(header, 5) >>> 0) === cursor,
+           'Audio ring cursors did not wrap and drain together');
+    const underruns = Atomics.load(header, 6) >>> 0;
+    const overruns = Atomics.load(header, 7) >>> 0;
+    assert(underruns === total - frames && overruns === 0, 'Incorrect PCM ring counters');
+    return { frames, corrupted, silentFrames: total - frames, underruns, overruns };
+  }
+
+  async function run() {
+    assert(crossOriginIsolated, 'Expected a cross-origin-isolated page for shared Wasm memory');
+    const canvas = document.querySelector('#cube');
+    const worker = new Worker(new URL('./hal_selftest_worker.mjs', import.meta.url), { type: 'module' });
+    const audioReady = new Promise(resolve => worker.addEventListener('message', ({ data }) => {
+      if (data.type === 'hal-audio') resolve(data);
+    }));
+    const gfxReady = new Promise(resolve => worker.addEventListener('message', ({ data }) => {
+      if (data.type === 'hal-gfx') resolve(data);
+    }));
+    const compositor = createCompositor(canvas, worker);
+    try {
+      await compositor.ready;
+      const { depthBits } = await gfxReady;
+      const audio = await verifyAudio(await audioReady);
+      const resized = await compositor.resize(192, 160);
+      assert(resized.width === 192 && resized.height === 160 &&
+             (await compositor.readPixels()).length === 192 * 160 * 4, 'Worker canvas resize failed');
+      await compositor.resize(256, 256);
+      let first;
+      let last;
+      const checksums = [];
+      let telemetry;
+      for (let i = 0; i < 10; ++i) {
+        await new Promise(requestAnimationFrame);
+        telemetry = await compositor.render(i / 10);
+        checksums.push(telemetry.checksum);
+        if (i === 0) first = await compositor.readPixels();
+        if (i === 9) last = await compositor.readPixels();
+      }
+      const frame0 = inspectPixels(first);
+      const frame9 = inspectPixels(last, first);
+      for (const frame of [frame0, frame9]) {
+        assert(frame.nonBlack > 6000 && frame.colorful > 5500, 'Missing colorful cube pixels');
+        assert(frame.colors >= 5 && frame.warm > 1000 && frame.cool > 1000,
+               'Missing the checkerboard colors or per-face lighting');
+      }
+      assert(frame9.changed > 3500 && new Set(checksums).size > 1, 'Cube frames did not animate');
+      assert(telemetry.frames === 10 && Number.isFinite(telemetry.fps) && telemetry.fps > 0,
+             'Invalid render worker FPS telemetry');
+
+      return { frame0, frame9, frames: telemetry.frames, fps: telemetry.fps, checksums, depthBits,
+               audio };
+    } finally {
+      await compositor.close();
+    }
+  }
+
+  globalThis.halSelftest = run().then(result => {
+    document.querySelector('#status').textContent = 'Graphics and audio checks passed';
+    return { ok: true, ...result };
+  }, error => {
+    document.querySelector('#status').textContent = error.message;
+    return { ok: false, error: error.stack ?? String(error) };
+  });
+</script>
+</html>
