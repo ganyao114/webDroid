@@ -124,7 +124,12 @@ int32_t InvokeHost(wa_dbt& dbt, uint64_t pc, uint64_t sp, wa_host_call_ctx_t& co
     } restore{dbt, dbt.active_sp};
     dbt.active_sp = sp;
     ++dbt.stats.host_calls;
-    return function(&context, user);
+    context.ret1 = sp;
+    const auto status = function(&context, user);
+    // Keep the existing default for handlers that only return ret0 or fret0.
+    if (context.ret1 == sp)
+        context.ret1 = 0;
+    return status;
 }
 
 int32_t RunHost(wa_dbt& dbt, uint64_t pc, Arm32State& state) {
@@ -233,7 +238,8 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state) {
     }
 }
 
-int32_t Call(wa_dbt& dbt, uint64_t entry, std::span<const uint64_t> args, uint64_t& result) {
+int32_t Call(wa_dbt& dbt, uint64_t entry, std::span<const uint64_t> args,
+             std::span<const float> fp_args, uint64_t& result) {
     if (dbt.call_depth == kMaxCallDepth)
         return WA_ERR_OVERFLOW;
     auto status = EnsureStack(dbt);
@@ -256,16 +262,17 @@ int32_t Call(wa_dbt& dbt, uint64_t entry, std::span<const uint64_t> args, uint64
 
     if (dbt.arch == WA_ARCH_ARM32) {
         Arm32State state;
-        const auto register_args = std::min<size_t>(args.size(), 4);
-        for (size_t i = 0; i < register_args; ++i)
-            state.r[i] = static_cast<uint32_t>(args[i]);
-        if (args.size() > register_args) {
-            std::array<uint32_t, 2> stack_args{};
-            for (size_t i = register_args; i < args.size(); ++i)
-                stack_args[i - register_args] = static_cast<uint32_t>(args[i]);
+        std::array<uint32_t, 8> words;
+        std::copy(args.begin(), args.end(), words.begin());
+        std::transform(fp_args.begin(), fp_args.end(), words.begin() + args.size(),
+                       [](float value) { return std::bit_cast<uint32_t>(value); });
+        const auto count = args.size() + fp_args.size();
+        const auto register_args = std::min<size_t>(count, 4);
+        std::copy_n(words.begin(), register_args, state.r);
+        if (count > register_args) {
             sp -= 16;
-            status = wa_softmmu_write(dbt.mmu, sp, stack_args.data(),
-                                      (args.size() - register_args) * sizeof(uint32_t));
+            status = wa_softmmu_write(dbt.mmu, sp, words.data() + register_args,
+                                      (count - register_args) * sizeof(uint32_t));
             if (status != WA_OK)
                 return status;
         }
@@ -277,6 +284,8 @@ int32_t Call(wa_dbt& dbt, uint64_t entry, std::span<const uint64_t> args, uint64
     } else {
         Arm64State state;
         std::copy(args.begin(), args.end(), state.gprs);
+        for (size_t i = 0; i < fp_args.size(); ++i)
+            std::memcpy(state.q[i], &fp_args[i], sizeof(float));
         state.gprs[31] = sp;
         state.gprs[30] = WA_EXIT_SENTINEL_PC;
         state.pc = entry;
@@ -423,13 +432,24 @@ int32_t wa_dbt_find_symbol(const wa_dbt_t* dbt, const char* symbol_name, uint64_
 
 int32_t wa_dbt_call(wa_dbt_t* dbt, uint64_t entry_vaddr, const uint64_t* args, uint32_t arg_count,
                     uint64_t* out_ret) {
-    if (!dbt || !out_ret || arg_count > 6 || (arg_count && !args) ||
+    if (arg_count > 6)
+        return WA_ERR_INVALID;
+    return wa_dbt_call_f32(dbt, entry_vaddr, args, arg_count, nullptr, 0, out_ret);
+}
+
+int32_t wa_dbt_call_f32(wa_dbt_t* dbt, uint64_t entry_vaddr, const uint64_t* int_args,
+                        uint32_t int_count, const float* fp_args, uint32_t fp_count,
+                        uint64_t* out_ret) {
+    if (!dbt || !out_ret || int_count > 8 || fp_count > 8 ||
+        (int_count && !int_args) || (fp_count && !fp_args) ||
+        (dbt->arch == WA_ARCH_ARM32 && int_count + fp_count > 8) ||
         !ValidEntry(dbt->arch, entry_vaddr))
         return WA_ERR_INVALID;
     try {
         std::lock_guard lock(dbt->mutex);
         uint64_t result = 0;
-        const auto status = Call(*dbt, entry_vaddr, {args, arg_count}, result);
+        const auto status = Call(*dbt, entry_vaddr, {int_args, int_count}, {fp_args, fp_count},
+                                 result);
         if (status == WA_OK)
             *out_ret = result;
         return status;

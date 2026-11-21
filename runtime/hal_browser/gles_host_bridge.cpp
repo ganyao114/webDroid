@@ -8,7 +8,7 @@
 #include <tuple>
 #include <type_traits>
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(WA_HAL_NATIVE_GLES3)
 #include <GLES3/gl3.h>
 #endif
 
@@ -189,7 +189,7 @@ void audio_push(GuestCall& call) {
     }
 }
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(WA_HAL_NATIVE_GLES3)
 
 constexpr size_t shader_string_limit = 16 * 1024 * 1024;
 
@@ -565,7 +565,7 @@ struct Binding {
     wa_host_symbol_fn function;
 };
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(WA_HAL_NATIVE_GLES3)
 #define GL_SCALAR(name) {#name, invoke<Scalars<name>::run, true>}
 #define GL_COPY(name, handler) {#name, invoke<handler, true>}
 #else

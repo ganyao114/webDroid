@@ -94,6 +94,12 @@ int32_t wa_dbt_find_symbol(const wa_dbt_t* dbt, const char* symbol_name, uint64_
 int32_t wa_dbt_call(wa_dbt_t* dbt, uint64_t entry_vaddr, const uint64_t* args, uint32_t arg_count,
                     uint64_t* out_ret);
 
+// ARM32 softfp packs integer words followed by float bits (up to 8 words total).
+// ARM64 uses separate integer and scalar float registers (up to 8 of each).
+int32_t wa_dbt_call_f32(wa_dbt_t* dbt, uint64_t entry_vaddr, const uint64_t* int_args,
+                        uint32_t int_count, const float* fp_args, uint32_t fp_count,
+                        uint64_t* out_ret);
+
 // Compile a guest function/region into a standalone Wasm module using SwiftVM svm_wasm.
 int32_t wa_dbt_compile_wasm_unit(wa_dbt_t* dbt, uint64_t entry_vaddr, uint8_t** out_wasm_bytes,
                                  size_t* out_wasm_len);

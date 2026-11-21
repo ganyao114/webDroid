@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WasmAndroid NDK cube integration</title>
+<link rel="icon" href="data:,">
+<style>
+  body { margin: 24px; background: #151922; color: #e1e7f0; font: 16px system-ui; }
+  main { display: flex; flex-wrap: wrap; gap: 24px; }
+  figure { margin: 0; }
+  figcaption { margin-bottom: 8px; }
+  canvas { display: block; background: #000; }
+</style>
+<main>
+  <figure>
+    <figcaption>armeabi-v7a</figcaption>
+    <canvas id="armeabi-v7a" width="256" height="256" aria-label="ARMv7-A GLES3 cube"></canvas>
+  </figure>
+  <figure>
+    <figcaption>arm64-v8a</figcaption>
+    <canvas id="arm64-v8a" width="256" height="256" aria-label="ARM64 GLES3 cube"></canvas>
+  </figure>
+</main>
+<p id="status" role="status">Running the NDK cube checks…</p>
+<script type="importmap">
+{
+  "scopes": {
+    "/web/workers/jit_registry.mjs": {
+      "/web/workers/wasm_runtime.mjs": "./m1_jit_kernel.mjs"
+    }
+  }
+}
+</script>
+<script type="module">
+  import createSystem from '/build/android_system.mjs';
+  import { inspectPixels } from '../../web/gfx/compositor.mjs';
+  import { JitCodeRegistry, registryStats } from '../../web/workers/jit_registry.mjs';
+  import { WorkerClient } from '../../web/workers/worker_rpc.mjs';
+  import { allocateRegistry } from './m1_jit_kernel.mjs';
+
+  const workers = [];
+  const workerUrl = new URL('./m1_cube_worker.mjs', import.meta.url);
+  const abis = ['armeabi-v7a', 'arm64-v8a'];
+
+  function assert(condition, message) {
+    if (!condition) throw new Error(message);
+  }
+
+  async function verifyAudio({ memory, ring, expected, frames, start }) {
+    const total = 256;
+    const context = new OfflineAudioContext(2, total, 48000);
+    await context.audioWorklet.addModule('/web/gfx/audio_worklet.js');
+    const node = new AudioWorkletNode(context, 'wa-pcm-ring', {
+      numberOfInputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [2],
+      processorOptions: { buffer: memory, byteOffset: ring },
+    });
+    node.connect(context.destination);
+    const output = await context.startRendering();
+    const [left, right] = [0, 1].map(channel => {
+      const samples = output.getChannelData(channel);
+      return new Uint32Array(samples.buffer, samples.byteOffset, samples.length);
+    });
+    const pcm = new Uint32Array(expected.buffer, expected.byteOffset, frames * 2);
+    const first = new Float32Array(expected.buffer, expected.byteOffset, 2);
+    const phase = 0.25;
+    const firstLeft = 0.20 * Math.sin(phase) + 0.09 * Math.sin(phase * 1.25992105) +
+      0.06 * Math.sin(phase * 1.49830708);
+    assert(Math.abs(first[0] - firstLeft) < 1e-6 && first[0] !== first[1],
+      'Guest PCM did not use the requested phase and stereo channels');
+    let corrupted = 0;
+    for (let i = 0; i < total; ++i) {
+      if (left[i] !== (i < frames ? pcm[2 * i] : 0) ||
+          right[i] !== (i < frames ? pcm[2 * i + 1] : 0)) ++corrupted;
+    }
+    assert(corrupted === 0, `${corrupted} stereo frames differ from guest PCM or silence`);
+    const header = new Uint32Array(memory, ring, 8);
+    const cursor = (start + frames) >>> 0;
+    assert(Atomics.load(header, 4) === cursor && Atomics.load(header, 5) === cursor,
+      'AudioWorklet did not drain the wrapped ring');
+    const underruns = Atomics.load(header, 6);
+    const overruns = Atomics.load(header, 7);
+    assert(underruns === total - frames && overruns === 0, 'Unexpected PCM ring counters');
+    return { frames, corrupted, underruns, overruns };
+  }
+
+  function checksumRgba(rgba) {
+    let hash = 2166136261;
+    for (const byte of rgba) hash = Math.imul(hash ^ byte, 16777619);
+    return hash >>> 0;
+  }
+
+  async function verifyCube(abi) {
+    const worker = new WorkerClient(workerUrl, `m1-cube-${abi}`);
+    workers.push(worker);
+    const canvas = document.getElementById(abi).transferControlToOffscreen();
+    const { atLoad, elfBytes, missingSymbols } = await worker.request('init', { canvas, abi },
+      [canvas]);
+    let first;
+    let last;
+    const guestChecksums = [];
+    const checksums = [];
+    for (let i = 0; i < 10; ++i) {
+      await new Promise(requestAnimationFrame);
+      const { rgba, checksum } = await worker.request('render', { time: i / 10 });
+      if (i === 0) first = rgba;
+      if (i === 9) last = rgba;
+      guestChecksums.push(checksum);
+      checksums.push(checksumRgba(rgba));
+    }
+    const frame0 = inspectPixels(first);
+    const frame9 = inspectPixels(last, first);
+    for (const frame of [frame0, frame9]) {
+      assert(frame.nonBlack > 6000 && frame.colorful > 5500, `${abi} cube pixels are missing`);
+      assert(frame.warm > 1000 && frame.cool > 1000, `${abi} checkerboard colors are missing`);
+    }
+    assert(Math.max(frame0.colors, frame9.colors) >= 5, `${abi} cube face lighting is missing`);
+    assert(frame9.changed > 3500 && new Set(checksums).size === 10 &&
+      new Set(guestChecksums).size > 1, `${abi} frames did not animate`);
+
+    const afterRendering = await worker.request('stats');
+    const { mmu } = afterRendering;
+    assert(mmu.demand_file_faults > atLoad.mmu.demand_file_faults &&
+      mmu.demand_file_faults === afterRendering.pageReads && afterRendering.pageBytes < elfBytes &&
+      mmu.cow_faults > 0 && mmu.guard_faults === 0, `${abi} lazy OPFS paging counters are incorrect`);
+    const audio = await verifyAudio(await worker.request('audio'));
+    const bytes = await worker.request('compile');
+    assert(WebAssembly.validate(bytes), `${abi} emitted invalid Wasm`);
+    const stats = await worker.request('stats');
+    assert(stats.dbt.wasm_units_compiled === 1 && stats.dbt.wasm_bytes_emitted === bytes.length &&
+      stats.dbt.insns_executed > 0 && stats.dbt.host_calls > 0, `${abi} DBT counters are incorrect`);
+    return {
+      bytes,
+      report: { abi, elfBytes, missingSymbols, frame0, frame9, checksums, guestChecksums, audio,
+                atLoad, afterRendering, stats, unitBytes: bytes.length },
+    };
+  }
+
+  async function verifyJit(units) {
+    const wasm = await createSystem();
+    const arena = allocateRegistry(wasm);
+    async function publish() {
+      const registry = new JitCodeRegistry(wasm, arena.memory);
+      for (const [i, { bytes }] of units.entries()) {
+        const { slots } = await registry.compile({
+          bytes, bindings: [{ unitKey: BigInt(i + 1), exportName: 'run' }],
+        });
+        assert(slots.length === 1 && slots[0].tableSlot === i, 'JIT slot publication failed');
+      }
+      const stats = registryStats(arena.memory);
+      assert(stats.next_slot === units.length && stats.published_chunks === units.length,
+        'JIT registry did not publish both SwiftVM chunks');
+      return stats;
+    }
+    try {
+      const first = await publish();
+      arena.reset();
+      const cached = await publish();
+      assert(cached.idb_cache_hits === units.length && cached.idb_cache_misses === 0,
+        'IndexedDB did not serve both Wasm units to a fresh registry');
+      return { first, cached };
+    } finally {
+      arena.close();
+    }
+  }
+
+  globalThis.__waM1Shutdown = async () => {
+    await Promise.all(workers.splice(0).map(async worker => {
+      try {
+        await worker.request('shutdown');
+      } finally {
+        worker.close();
+      }
+    }));
+    return true;
+  };
+
+  async function run() {
+    assert(crossOriginIsolated, 'Expected COOP and COEP for shared memory');
+    const units = [];
+    for (const abi of abis) units.push(await verifyCube(abi));
+    const jit = await verifyJit(units);
+    await new Promise(requestAnimationFrame);
+    return { ok: true, guests: units.map(unit => unit.report), jit };
+  }
+
+  const status = document.querySelector('#status');
+  run().then(result => {
+    status.textContent = 'Both NDK guests passed graphics, audio, paging, and JIT cache checks';
+    globalThis.__waM1Result = result;
+  }, error => {
+    status.textContent = error.message;
+    globalThis.__waM1Result = { ok: false, error: error.stack ?? String(error) };
+  });
+</script>
+</html>

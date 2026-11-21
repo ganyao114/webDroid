@@ -43,22 +43,28 @@ int32_t Copy(wa_host_call_ctx_t* ctx, void*) {
     return WA_OK;
 }
 
-int32_t Set(wa_host_call_ctx_t* ctx, void*) {
-    const auto dst = ctx->args[0];
-    const auto bytes = ctx->args[2];
+int32_t Fill(wa_softmmu_t* mmu, uint64_t dst, uint64_t bytes, uint8_t value) {
     if (!ValidRange(dst, bytes))
         return WA_ERR_FAULT;
     Buffer buffer;
-    buffer.fill(static_cast<uint8_t>(ctx->args[1]));
+    buffer.fill(value);
     for (uint64_t done = 0; done < bytes;) {
         const auto chunk = static_cast<size_t>(std::min<uint64_t>(bytes - done, buffer.size()));
-        const auto status = wa_softmmu_write(ctx->mmu, dst + done, buffer.data(), chunk);
+        const auto status = wa_softmmu_write(mmu, dst + done, buffer.data(), chunk);
         if (status != WA_OK)
             return status;
         done += chunk;
     }
-    ctx->ret0 = dst;
     return WA_OK;
+}
+
+int32_t Set(wa_host_call_ctx_t* ctx, void*) {
+    ctx->ret0 = ctx->args[0];
+    return Fill(ctx->mmu, ctx->args[0], ctx->args[2], static_cast<uint8_t>(ctx->args[1]));
+}
+
+int32_t Clear(wa_host_call_ctx_t* ctx, void*) {
+    return Fill(ctx->mmu, ctx->args[0], ctx->args[1], 0);
 }
 
 size_t PageRemaining(uint64_t address) {
@@ -165,6 +171,17 @@ template <float (*Math)(float)> int32_t FloatMath(wa_host_call_ctx_t* ctx, void*
     ctx->fret0 = Math(static_cast<float>(ctx->fargs[0]));
     ctx->has_float_ret = 1;
     return WA_OK;
+}
+
+int32_t SinCos(wa_host_call_ctx_t* ctx, void*) {
+    const auto value = static_cast<float>(ctx->fargs[0]);
+    const auto sin = ::sinf(value);
+    const auto cos = ::cosf(value);
+    const size_t first_output = ctx->arch == WA_ARCH_ARM32 ? 1 : 0;
+    const auto status = wa_softmmu_write(ctx->mmu, ctx->args[first_output], &sin, sizeof(sin));
+    if (status != WA_OK)
+        return status;
+    return wa_softmmu_write(ctx->mmu, ctx->args[first_output + 1], &cos, sizeof(cos));
 }
 
 // Compare elements in guest memory and keep the array there during the sort.
@@ -343,6 +360,7 @@ void RegisterBuiltins(wa_dbt& dbt) {
         {"libc.so", "memcpy", Copy},
         {"libc.so", "memmove", Copy},
         {"libc.so", "memset", Set},
+        {"libc.so", "__aeabi_memclr8", Clear},
         {"libc.so", "strlen", StringLength},
         {"libc.so", "strcmp", StringCompare},
         {"libc.so", "malloc", Allocate},
@@ -353,6 +371,8 @@ void RegisterBuiltins(wa_dbt& dbt) {
         {"libc.so", "__stack_chk_fail", StackCheckFail},
         {"libm.so", "sinf", FloatMath<::sinf>},
         {"libm.so", "cosf", FloatMath<::cosf>},
+        {"libm.so", "tanf", FloatMath<::tanf>},
+        {"libm.so", "sincosf", SinCos},
         {"libm.so", "sqrtf", FloatMath<::sqrtf>},
     };
     dbt.hosts.reserve(std::size(shims));
