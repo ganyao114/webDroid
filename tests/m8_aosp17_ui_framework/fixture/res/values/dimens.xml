@@ -1,0 +1,7 @@
+<resources>
+    <dimen name="outer_padding">12dp</dimen>
+    <dimen name="card_height">124dp</dimen>
+    <dimen name="card_radius">14dp</dimen>
+    <dimen name="heading_size">18sp</dimen>
+    <dimen name="fixed_px">11px</dimen>
+</resources>

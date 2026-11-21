@@ -1,0 +1,149 @@
+package android.content.res;
+
+import android.os.Build;
+import android.util.DisplayMetrics;
+import android.util.SparseArray;
+import android.util.TypedValue;
+import java.io.IOException;
+
+/** Java ownership and value conversion for the upstream AssetManager2 JNI table. */
+public final class AssetManager implements AutoCloseable {
+    public static final int ACCESS_UNKNOWN = 0, ACCESS_RANDOM = 1;
+    public static final int ACCESS_STREAMING = 2, ACCESS_BUFFER = 3;
+    private long mObject = nativeCreate();
+    private ApkAssets[] assets = new ApkAssets[0];
+
+    public void setApkAssets(ApkAssets[] assets) { setApkAssets(assets, true); }
+
+    public void setApkAssets(ApkAssets[] assets, boolean invalidateCaches) {
+        ApkAssets[] copy = assets.clone();
+        nativeSetApkAssets(pointer(), copy, invalidateCaches, false);
+        this.assets = copy;
+    }
+
+    public ApkAssets[] getApkAssets() { return assets.clone(); }
+    public String[] getLocales() { return nativeGetLocales(pointer(), false); }
+    public SparseArray<String> getAssignedPackageIdentifiers() {
+        @SuppressWarnings("unchecked")
+        SparseArray<String> packages = (SparseArray<String>)
+                nativeGetAssignedPackageIdentifiers(pointer(), false, false);
+        return packages;
+    }
+
+    void configure(Configuration c, DisplayMetrics m) {
+        nativeSetConfiguration(pointer(), c.mcc, c.mnc, null, c.localeTags(), c.orientation,
+                c.touchscreen, m.densityDpi, c.keyboard, c.keyboardHidden, c.navigation,
+                m.widthPixels, m.heightPixels, c.smallestScreenWidthDp, c.screenWidthDp,
+                c.screenHeightDp, c.screenLayout, c.uiMode, c.colorMode, 0, Build.VERSION.SDK_INT,
+                0, false);
+    }
+
+    public XmlResourceParser openXmlResourceParser(String path) throws IOException {
+        return openXmlResourceParser(0, path);
+    }
+
+    public XmlResourceParser openXmlResourceParser(int cookie, String path) throws IOException {
+        return openXmlResourceParser(cookie, path, Resources.ID_NULL);
+    }
+
+    XmlResourceParser openXmlResourceParser(int cookie, String path, int resourceId)
+            throws IOException {
+        long xml = nativeOpenXmlAsset(pointer(), cookie, path);
+        try (XmlBlock block = new XmlBlock(null, xml, Flags.layoutReadwriteFlags())) {
+            return block.newParser(resourceId);
+        }
+    }
+
+    byte[] readNonAsset(int cookie, String path) throws IOException {
+        long handle = nativeOpenNonAsset(pointer(), cookie, path, ACCESS_BUFFER);
+        try {
+            long size = nativeAssetGetLength(handle);
+            if (size < 0 || size > Integer.MAX_VALUE) throw new IOException("Asset is too large");
+            byte[] bytes = new byte[(int) size];
+            int offset = 0;
+            while (offset < bytes.length) {
+                int count = nativeAssetRead(handle, bytes, offset, bytes.length - offset);
+                if (count <= 0) throw new IOException("Truncated asset " + path);
+                offset += count;
+            }
+            return bytes;
+        } finally {
+            nativeAssetDestroy(handle);
+        }
+    }
+
+    CharSequence pooledString(int cookie, int index) {
+        return cookie > 0 && cookie <= assets.length ? assets[cookie - 1].getStringFromPool(index) : null;
+    }
+
+    private boolean readValue(int cookie, TypedValue out) {
+        if (cookie < 0) return false;
+        out.string = out.type == TypedValue.TYPE_STRING ? pooledString(cookie, out.data) : null;
+        return true;
+    }
+
+    boolean getResourceValue(int id, int density, TypedValue out, boolean resolve) {
+        return readValue(nativeGetResourceValue(pointer(), id, (short) density, out, resolve), out);
+    }
+
+    boolean getThemeValue(long theme, int id, TypedValue out, boolean resolve) {
+        return readValue(nativeThemeGetAttributeValue(pointer(), theme, id, out, resolve), out);
+    }
+
+    int getResourceIdentifier(String name, String type, String pkg) {
+        return nativeGetResourceIdentifier(pointer(), name, type, pkg);
+    }
+    String resourceName(int id) { return nativeGetResourceName(pointer(), id); }
+    String resourceTypeName(int id) { return nativeGetResourceTypeName(pointer(), id); }
+    String resourceEntryName(int id) { return nativeGetResourceEntryName(pointer(), id); }
+    String resourcePackageName(int id) { return nativeGetResourcePackageName(pointer(), id); }
+    String[] resourceStrings(int id) { return nativeGetResourceStringArray(pointer(), id); }
+    int[] resourceInts(int id) { return nativeGetResourceIntArray(pointer(), id); }
+    int[] styleAttributes(int id) { return nativeGetStyleAttributes(pointer(), id); }
+
+    int[] resourceArray(int id) {
+        int size = nativeGetResourceArraySize(pointer(), id);
+        if (size < 0) return null;
+        int[] entries = new int[size * TypedArray.ENTRY_SIZE];
+        return nativeGetResourceArray(pointer(), id, entries) == size ? entries : null;
+    }
+
+    long createTheme() { return nativeThemeCreate(pointer()); }
+    void applyThemeStyle(long theme, int id, boolean force) {
+        nativeThemeApplyStyle(pointer(), theme, id, force);
+    }
+    void copyTheme(long dst, AssetManager src, long theme) {
+        nativeThemeCopy(pointer(), dst, src.pointer(), theme);
+    }
+
+    void applyStyle(long theme, int defaultAttr, int defaultStyle, XmlBlock.Parser parser,
+                    int[] attrs, int[] values, int[] indices) {
+        nativeApplyStyleWithArray(pointer(), theme, defaultAttr, defaultStyle,
+                parser == null ? 0 : parser.mParseState, attrs, values, indices);
+    }
+
+    void retrieveAttributes(XmlBlock.Parser parser, int[] attrs, int[] values, int[] indices) {
+        nativeRetrieveAttributes(pointer(), parser.mParseState, attrs, values, indices);
+    }
+
+    private long pointer() {
+        if (mObject == 0) throw new IllegalStateException("AssetManager is closed");
+        return mObject;
+    }
+
+    @Override public void close() {
+        if (mObject != 0) {
+            nativeDestroy(mObject);
+            mObject = 0;
+            assets = new ApkAssets[0];
+        }
+    }
+
+    void xmlBlockGone(int cookie) {
+        // The XmlBlock owns its parser and copied native XML buffer.
+    }
+
+    static native void releaseTheme(long theme);
+
+@native_declarations@
+}

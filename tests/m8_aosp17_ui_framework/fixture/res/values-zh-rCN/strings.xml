@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">界面测试</string>
+    <string name="ready">准备启动</string>
+    <string name="clicked">已点击磁贴</string>
+    <string name="footer">启动磁贴</string>
+</resources>

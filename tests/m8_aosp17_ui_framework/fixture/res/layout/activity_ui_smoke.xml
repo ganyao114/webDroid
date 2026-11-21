@@ -1,0 +1,23 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical" android:paddingHorizontal="@dimen/outer_padding"
+    android:paddingVertical="@dimen/outer_padding">
+    <include layout="@layout/header" android:id="@+id/headline"/>
+    <FrameLayout android:id="@+id/card" android:layout_width="match_parent"
+        android:layout_height="@dimen/card_height" android:layout_marginTop="8dp"
+        android:padding="8dp" android:background="@drawable/bg_card">
+        <ImageView android:id="@+id/star" android:layout_width="48dp" android:layout_height="48dp"
+            android:layout_gravity="end|top" android:src="@drawable/ic_star_vector"/>
+        <ImageView android:id="@+id/icon" android:layout_width="32dp" android:layout_height="32dp"
+            android:layout_gravity="end|bottom" android:src="@drawable/ic_adaptive_app"/>
+        <ImageView android:id="@+id/pixel" android:layout_width="12dp" android:layout_height="12dp"
+            android:layout_gravity="end|center_vertical" android:src="@drawable/pixel"
+            android:scaleType="fitXY"/>
+        <com.android.launcher3.fixture.TileView android:id="@+id/tile" android:layout_width="match_parent"
+            android:layout_height="match_parent" android:layout_marginEnd="56dp"
+            android:clickable="true" android:focusable="true"/>
+    </FrameLayout>
+    <include layout="@layout/footer"/>
+    <TextView android:id="@+id/hidden" android:layout_width="wrap_content"
+        android:layout_height="wrap_content" android:visibility="gone"/>
+</LinearLayout>
