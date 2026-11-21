@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SurfaceFlinger Launcher demo</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #191d39; }
+  #stage { position: absolute; inset: 0; overflow: hidden; isolation: isolate; }
+  #launcher, #surfaces { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #launcher { display: block; outline: none; }
+  #surfaces { pointer-events: none; }
+  #error { position: absolute; margin: 1rem; color: #ffd6d9; white-space: pre-wrap; font: 14px system-ui; }
+  #error:empty { display: none; }
+</style>
+</head>
+<body>
+<main id="stage">
+  <canvas id="launcher" aria-label="Android launcher. Swipe to change pages or open All Apps."></canvas>
+  <div id="surfaces"></div>
+  <output id="error" role="alert"></output>
+</main>
+<script type="module" src="./m7_sf_e2e.mjs"></script>
+</body>
+</html>
