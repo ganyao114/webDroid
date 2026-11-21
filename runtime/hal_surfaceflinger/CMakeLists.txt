@@ -1,0 +1,8 @@
+add_library(wa_hal_surfaceflinger STATIC scene.c canvas.c platform.c)
+target_include_directories(wa_hal_surfaceflinger PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../../include")
+target_compile_features(wa_hal_surfaceflinger PUBLIC c_std_11)
+if(EMSCRIPTEN)
+    target_compile_options(wa_hal_surfaceflinger PUBLIC -matomics -mbulk-memory -msimd128)
+else()
+    target_link_libraries(wa_hal_surfaceflinger PUBLIC m)
+endif()

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedded WebView</title>
+<style>
+  :root { color-scheme: dark; font: 13px system-ui, sans-serif; }
+  body { margin: 0; min-height: 100dvh; background: linear-gradient(142deg, #383c69, #252645); color: #f0efff; }
+  main { padding: 15px 16px; }
+  h1 { margin: 8px 0 11px; font-size: 17px; }
+  p { margin: 5px 0; color: #ccd1ec; }
+  .icon { display: inline-grid; width: 29px; height: 29px; place-items: center; border-radius: 9px;
+    background: #bbb6ff; color: #242448; font-weight: 750; }
+  #connection { color: #b8ecdd; }
+</style>
+</head>
+<body>
+<main>
+  <span class="icon" aria-hidden="true">↗</span>
+  <h1>Embedded WebView</h1>
+  <p id="connection">Connecting to Android…</p>
+  <p id="codec">Checking H.264…</p>
+</main>
+<script type="module">
+  import { installWebViewEndpoint } from '../../web/surfaceflinger/webview_iframe.mjs';
+  const endpoint = installWebViewEndpoint({ parentOrigin: location.origin, evaluate: source => (0, eval)(source) });
+  globalThis.Android = Object.freeze({ ping: value => endpoint.callAndroid('ping', value) });
+  globalThis.roundTrip = async () => {
+    const response = await Android.ping('桌面搜索');
+    document.querySelector('#connection').textContent = response === 'wasm:桌面搜索'
+      ? 'Android bridge connected' : 'Unexpected Android response';
+    return response;
+  };
+  globalThis.showCodec = status => {
+    document.querySelector('#codec').textContent = status === 1 ? 'WebCodecs: H.264 available'
+      : status === 3 ? 'WebCodecs: H.264 unavailable' : 'WebCodecs: decoder error';
+    return status;
+  };
+</script>
+</body>
+</html>
