@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.wasmandroid.pm.fixture"
+    split="feature.metrics"
+    android:versionCode="17"
+    android:versionCodeMajor="2"
+    android:isFeatureSplit="true">
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="36" />
+    <uses-split android:name="feature.shared" />
+    <application />
+</manifest>

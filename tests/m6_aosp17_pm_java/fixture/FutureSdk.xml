@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="org.wasmandroid.pm.future">
+    <uses-sdk android:minSdkVersion="99" android:targetSdkVersion="99" />
+    <application />
+</manifest>
