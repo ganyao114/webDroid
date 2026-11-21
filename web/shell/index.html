@@ -3,41 +3,225 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WasmAndroid</title>
+  <title>WasmAndroid Playground</title>
   <link rel="icon" href="data:,">
   <style>
-    :root { color-scheme: light dark; font: 16px system-ui, sans-serif; }
-    body { max-width: 42rem; margin: 4rem auto; padding: 0 1.5rem; }
-    h1 { font-size: 2rem; }
-    li { margin-block: .6rem; }
+    :root {
+      color-scheme: dark;
+      font: 16px/1.5 system-ui, sans-serif;
+      --bg: #101317;
+      --panel: #171c22;
+      --line: #303942;
+      --text: #edf3f6;
+      --muted: #aab8c3;
+      --accent: #73e8c0;
+      --mono: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+    }
+    main { max-width: 1190px; margin: auto; padding: 48px 32px; }
+    header { margin-bottom: 28px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(2.3rem, 6vw, 3.6rem); line-height: 1.08; letter-spacing: -.055em; }
+    h2 { font-size: 1.09rem; font-weight: 650; }
+    h3 { font-size: .95rem; font-weight: 650; }
+    .subtitle { margin-top: 8px; color: var(--muted); }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.7fr) minmax(260px, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .panel { border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
+    .stage { overflow: hidden; }
+    .stage-title, .stage-footer {
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 4px 12px;
+    }
+    .stage-title { border-bottom: 1px solid var(--line); }
+    .stage-footer { border-top: 1px solid var(--line); }
+    .stage-footer p, #runtime-status, #elf-status, #elf-mmu { color: var(--muted); font-size: .87rem; }
+    #runtime-status { overflow-wrap: anywhere; }
+    .view { display: grid; place-items: center; background: #000; }
+    canvas {
+      display: block;
+      width: 100%;
+      max-width: 530px;
+      height: auto;
+      aspect-ratio: 1;
+      cursor: grab;
+      touch-action: none;
+    }
+    canvas:active { cursor: grabbing; }
+    .controls { padding: 20px; }
+    label, legend, dt { color: var(--muted); font-size: .86rem; }
+    .guest-label { display: block; margin-top: 16px; }
+    select, button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #20282e;
+      color: var(--text);
+      font: inherit;
+      padding: 8px 12px;
+    }
+    select { width: 100%; margin-top: 4px; font-family: var(--mono); font-size: .9rem; }
+    button { cursor: pointer; }
+    button:hover { border-color: var(--accent); }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    fieldset { border: 0; margin: 14px 0 20px; padding: 0; }
+    .tiers {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      margin-top: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--bg);
+    }
+    .tiers label {
+      position: relative;
+      display: grid;
+      place-items: center;
+      min-height: 38px;
+      border-radius: 6px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .tiers input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .tiers label:has(:checked) { color: var(--accent); background: #1e382f; }
+    .tiers label:has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .metrics { margin: 0; }
+    .metrics > div {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      border-top: 1px solid var(--line);
+      padding: 9px 0;
+    }
+    .metrics dd { margin: 0; font: 600 .91rem var(--mono); }
+    .metrics .primary dd { color: var(--accent); }
+    .inspector { margin-top: 16px; padding: 20px; }
+    .drop-target {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px 20px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+      padding: 14px;
+      border: 1px dashed #4d5d68;
+      border-radius: 10px;
+      background: var(--bg);
+    }
+    .drop-target.dragging { border-color: var(--accent); background: #1e382f; }
+    #elf-status { margin-top: 8px; overflow-wrap: anywhere; }
+    #elf-result { margin-top: 14px; }
+    .elf-layout { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font: .81rem var(--mono); }
+    th, td { padding: 8px 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); }
+    #elf-needed { padding-left: 18px; margin: 6px 0; font: .81rem/1.75 var(--mono); }
+    #elf-mmu { margin-top: 10px; }
+    @media (max-width: 740px) {
+      main { padding: 28px 16px; }
+      .layout, .elf-layout { grid-template-columns: minmax(0, 1fr); }
+    }
   </style>
 </head>
 <body>
-  <main>
-    <h1>WasmAndroid</h1>
-    <p id="status" role="status">Starting the browser runtime…</p>
-    <ul id="vprocs"></ul>
+  <main id="playground">
+    <header>
+      <h1>WasmAndroid</h1>
+      <p class="subtitle">Android NDK playground</p>
+    </header>
+
+    <div class="layout">
+      <section class="panel stage" aria-labelledby="cube-title">
+        <div class="stage-title">
+          <h2 id="cube-title">GLES3 cube</h2>
+          <p id="runtime-status" role="status">Starting the runtime…</p>
+        </div>
+        <div class="view">
+          <canvas id="cube" width="512" height="512" tabindex="0"
+            aria-label="Live Android NDK cube" aria-describedby="cube-controls"></canvas>
+        </div>
+        <div class="stage-footer">
+          <p id="cube-controls">Drag or use the arrow keys to rotate.</p>
+        </div>
+      </section>
+
+      <section class="panel controls" aria-labelledby="runtime-title">
+        <h2 id="runtime-title">Runtime</h2>
+        <label class="guest-label" for="abi">Guest ABI</label>
+        <select id="abi">
+          <option value="armeabi-v7a">armeabi-v7a</option>
+          <option value="arm64-v8a" selected>arm64-v8a</option>
+        </select>
+        <fieldset>
+          <legend>Execution tier</legend>
+          <div class="tiers">
+            <label><input type="radio" name="tier" value="tier0">Tier-0 interpreter</label>
+            <label><input type="radio" name="tier" value="tier1" checked>Tier-1 Wasm JIT</label>
+          </div>
+        </fieldset>
+        <dl class="metrics">
+          <div class="primary"><dt>FPS</dt><dd data-metric="fps">—</dd></div>
+          <div class="primary"><dt>Frame time (µs)</dt><dd data-metric="time">—</dd></div>
+          <div><dt>Compiled Wasm units</dt><dd data-metric="units">—</dd></div>
+          <div><dt>Emitted Wasm bytes</dt><dd data-metric="bytes">—</dd></div>
+          <div><dt>IndexedDB cache hits</dt><dd data-metric="hits">—</dd></div>
+          <div><dt>SoftMMU demand-page faults</dt><dd data-metric="demand">—</dd></div>
+          <div><dt>SoftMMU COW faults</dt><dd data-metric="cow">—</dd></div>
+        </dl>
+      </section>
+    </div>
+
+    <section class="panel inspector" aria-labelledby="elf-title">
+      <h2 id="elf-title">ELF inspector</h2>
+      <div class="drop-target" id="elf-drop">
+        <p>Drop an Android <code>.so</code> library here.</p>
+        <button type="button" id="elf-choose">Choose library</button>
+        <input type="file" id="elf-file" accept=".so,application/octet-stream" hidden>
+      </div>
+      <p id="elf-status" role="status"></p>
+      <div id="elf-result" hidden>
+        <div class="elf-layout">
+          <div class="table-wrap">
+            <table aria-label="ELF program headers">
+              <thead>
+                <tr>
+                  <th scope="col">Segment</th><th scope="col">Flags</th><th scope="col">Address</th>
+                  <th scope="col">Offset</th><th scope="col">File bytes</th><th scope="col">Memory bytes</th>
+                </tr>
+              </thead>
+              <tbody id="elf-segments"></tbody>
+            </table>
+          </div>
+          <div>
+            <h3>DT_NEEDED</h3>
+            <ul id="elf-needed"></ul>
+          </div>
+        </div>
+        <p id="elf-mmu"></p>
+      </div>
+    </section>
   </main>
   <script type="module">
-    import { BrowserRuntime } from './runtime.mjs';
-    const status = document.querySelector('#status');
-    const list = document.querySelector('#vprocs');
-    let runtime;
-    try {
-      runtime = await BrowserRuntime.create({ moduleUrl: '/build/m0_selftest.wasm', poolSize: 4 });
-      const vprocs = await Promise.all([101, 202].map(pid => runtime.spawnVproc({ pid, threads: 2 })));
-      for (const { pid, identities } of vprocs) {
-        const row = document.createElement('li');
-        row.textContent = `vproc ${pid} · ${identities.length} worker threads`;
-        list.append(row);
-      }
-      status.textContent = 'Runtime ready.';
-      addEventListener('pagehide', () => runtime.close(), { once: true });
-    } catch (error) {
-      runtime?.close();
-      status.textContent = error.message;
-      console.error(error);
-    }
+    import { CubePlayground } from './runtime.mjs';
+    const playground = new CubePlayground(document.querySelector('#playground'));
+    void playground.start();
+    addEventListener('pagehide', () => playground.close(), { once: true });
   </script>
 </body>
 </html>

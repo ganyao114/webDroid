@@ -1,45 +1,10 @@
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { launchChrome } from '../../tools/chrome_harness/cdp_client.mjs';
-import { startServer, WORKTREE } from '../../tools/chrome_harness/serve.mjs';
-
-const wasmBuild = resolve(WORKTREE, '../wa-build-w4-wasm');
-const ndkBuild = resolve(WORKTREE, '../wa-build-w4-host/ndk');
-const fixture = 'tests/m1_chrome_ndk_cube';
-const page = `${fixture}/m1_cube_e2e.html`;
-const publicFiles = [
-  page,
-  `${fixture}/m1_cube_worker.mjs`,
-  `${fixture}/m1_jit_kernel.mjs`,
-  'web/gfx/audio_worklet.js',
-  'web/gfx/compositor.mjs',
-  'web/workers/jit_registry.mjs',
-  'web/workers/opfs_vfs.mjs',
-  'web/workers/wasm_runtime.mjs',
-  'web/workers/worker_rpc.mjs',
-];
-const artifacts = [
-  [wasmBuild, 'android_system.mjs'],
-  [wasmBuild, 'android_system.wasm'],
-  [ndkBuild, 'libndk_gles3_cube_armv7a.so'],
-  [ndkBuild, 'libndk_gles3_cube_arm64.so'],
-];
-
-async function stageFiles(root) {
-  const files = [
-    ...publicFiles.map(file => [join(WORKTREE, file), file]),
-    ...artifacts.map(([dir, name]) => [join(dir, name), `build/${name}`]),
-  ];
-  const results = await Promise.allSettled(files.map(async ([source, file]) => {
-    const destination = join(root, file);
-    await mkdir(dirname(destination), { recursive: true });
-    await copyFile(source, destination);
-  }));
-  const errors = results.filter(result => result.status === 'rejected');
-  if (errors.length) throw new Error(errors.map(({ reason }) => reason.message).join('\n'));
-}
+import { startServer } from '../../tools/chrome_harness/serve.mjs';
+import { page, stageM1Browser, wasmBuild } from './stage_m1_browser.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -57,7 +22,7 @@ const pageErrors = [];
 try {
   if (!Number.isInteger(timeout) || timeout <= 0) throw new RangeError('Invalid CDP timeout');
   staged = await mkdtemp(join(wasmBuild, 'm1-http-'));
-  await stageFiles(staged);
+  await stageM1Browser(staged);
   const [serving, launching] = await Promise.allSettled([
     startServer({ root: staged }),
     launchChrome({ buildDir: wasmBuild, chromePath: values.chrome, headless: !values.headed }),

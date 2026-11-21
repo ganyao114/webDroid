@@ -62,4 +62,9 @@ int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name
 bool ResolveImport(const wa_dbt& dbt, std::span<const std::string_view> needed,
                    std::string_view symbol, uint64_t& address);
 
+// Standalone Wasm units leave the architecture's GuestState in caller-owned memory.
+int32_t PrepareJitStack(wa_dbt& dbt, uint64_t& sp);
+int32_t DispatchHostStub(wa_dbt& dbt, uint64_t address, void* state);
+int32_t CompileWasmLocation(wa_dbt& dbt, uint64_t pc, uint8_t** out_bytes, size_t* out_length);
+
 } // namespace wa::dbt

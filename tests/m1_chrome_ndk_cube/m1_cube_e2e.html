@@ -22,21 +22,9 @@
   </figure>
 </main>
 <p id="status" role="status">Running the NDK cube checks…</p>
-<script type="importmap">
-{
-  "scopes": {
-    "/web/workers/jit_registry.mjs": {
-      "/web/workers/wasm_runtime.mjs": "./m1_jit_kernel.mjs"
-    }
-  }
-}
-</script>
 <script type="module">
-  import createSystem from '/build/android_system.mjs';
   import { inspectPixels } from '../../web/gfx/compositor.mjs';
-  import { JitCodeRegistry, registryStats } from '../../web/workers/jit_registry.mjs';
   import { WorkerClient } from '../../web/workers/worker_rpc.mjs';
-  import { allocateRegistry } from './m1_jit_kernel.mjs';
 
   const workers = [];
   const workerUrl = new URL('./m1_cube_worker.mjs', import.meta.url);
@@ -85,30 +73,17 @@
     return { frames, corrupted, underruns, overruns };
   }
 
-  function checksumRgba(rgba) {
-    let hash = 2166136261;
-    for (const byte of rgba) hash = Math.imul(hash ^ byte, 16777619);
-    return hash >>> 0;
-  }
-
   async function verifyCube(abi) {
     const worker = new WorkerClient(workerUrl, `m1-cube-${abi}`);
     workers.push(worker);
     const canvas = document.getElementById(abi).transferControlToOffscreen();
-    const { atLoad, elfBytes, missingSymbols } = await worker.request('init', { canvas, abi },
-      [canvas]);
-    let first;
-    let last;
-    const guestChecksums = [];
-    const checksums = [];
-    for (let i = 0; i < 10; ++i) {
-      await new Promise(requestAnimationFrame);
-      const { rgba, checksum } = await worker.request('render', { time: i / 10 });
-      if (i === 0) first = rgba;
-      if (i === 9) last = rgba;
-      guestChecksums.push(checksum);
-      checksums.push(checksumRgba(rgba));
-    }
+    const { atLoad, elfBytes } = await worker.request('init', { canvas, abi }, [canvas]);
+    assert(atLoad.mmu.demand_file_faults > 0 &&
+      atLoad.mmu.demand_file_faults === atLoad.pageReads && atLoad.pageBytes < elfBytes,
+      `${abi} load did not use lazy OPFS reads`);
+
+    const { first, last, checksums, guestChecksums, checksum_matches, rgba_matches,
+            afterRendering, timing, cached } = await worker.request('verify');
     const frame0 = inspectPixels(first);
     const frame9 = inspectPixels(last, first);
     for (const frame of [frame0, frame9]) {
@@ -118,51 +93,22 @@
     assert(Math.max(frame0.colors, frame9.colors) >= 5, `${abi} cube face lighting is missing`);
     assert(frame9.changed > 3500 && new Set(checksums).size === 10 &&
       new Set(guestChecksums).size > 1, `${abi} frames did not animate`);
+    assert(checksum_matches === 10 && rgba_matches === 10 && timing.tier0_fallbacks === 0,
+      `${abi} Tier-1 render parity or fallback assertion failed`);
 
-    const afterRendering = await worker.request('stats');
     const { mmu } = afterRendering;
     assert(mmu.demand_file_faults > atLoad.mmu.demand_file_faults &&
       mmu.demand_file_faults === afterRendering.pageReads && afterRendering.pageBytes < elfBytes &&
       mmu.cow_faults > 0 && mmu.guard_faults === 0, `${abi} lazy OPFS paging counters are incorrect`);
     const audio = await verifyAudio(await worker.request('audio'));
-    const bytes = await worker.request('compile');
-    assert(WebAssembly.validate(bytes), `${abi} emitted invalid Wasm`);
     const stats = await worker.request('stats');
-    assert(stats.dbt.wasm_units_compiled === 1 && stats.dbt.wasm_bytes_emitted === bytes.length &&
-      stats.dbt.insns_executed > 0 && stats.dbt.host_calls > 0, `${abi} DBT counters are incorrect`);
+    assert(afterRendering.dbt.wasm_units_compiled === timing.jit_units_executed &&
+      afterRendering.dbt.wasm_bytes_emitted > 0 && stats.dbt.insns_executed > 0 &&
+      stats.dbt.host_calls > 0, `${abi} DBT counters are incorrect`);
     return {
-      bytes,
-      report: { abi, elfBytes, missingSymbols, frame0, frame9, checksums, guestChecksums, audio,
-                atLoad, afterRendering, stats, unitBytes: bytes.length },
+      abi, elfBytes, frame0, frame9, checksums, guestChecksums, checksum_matches, rgba_matches,
+      audio, atLoad, afterRendering, stats, ...timing, jit_cache: cached,
     };
-  }
-
-  async function verifyJit(units) {
-    const wasm = await createSystem();
-    const arena = allocateRegistry(wasm);
-    async function publish() {
-      const registry = new JitCodeRegistry(wasm, arena.memory);
-      for (const [i, { bytes }] of units.entries()) {
-        const { slots } = await registry.compile({
-          bytes, bindings: [{ unitKey: BigInt(i + 1), exportName: 'run' }],
-        });
-        assert(slots.length === 1 && slots[0].tableSlot === i, 'JIT slot publication failed');
-      }
-      const stats = registryStats(arena.memory);
-      assert(stats.next_slot === units.length && stats.published_chunks === units.length,
-        'JIT registry did not publish both SwiftVM chunks');
-      return stats;
-    }
-    try {
-      const first = await publish();
-      arena.reset();
-      const cached = await publish();
-      assert(cached.idb_cache_hits === units.length && cached.idb_cache_misses === 0,
-        'IndexedDB did not serve both Wasm units to a fresh registry');
-      return { first, cached };
-    } finally {
-      arena.close();
-    }
   }
 
   globalThis.__waM1Shutdown = async () => {
@@ -178,16 +124,15 @@
 
   async function run() {
     assert(crossOriginIsolated, 'Expected COOP and COEP for shared memory');
-    const units = [];
-    for (const abi of abis) units.push(await verifyCube(abi));
-    const jit = await verifyJit(units);
+    const guests = [];
+    for (const abi of abis) guests.push(await verifyCube(abi));
     await new Promise(requestAnimationFrame);
-    return { ok: true, guests: units.map(unit => unit.report), jit };
+    return { ok: true, guests };
   }
 
   const status = document.querySelector('#status');
   run().then(result => {
-    status.textContent = 'Both NDK guests passed graphics, audio, paging, and JIT cache checks';
+    status.textContent = 'Both guest ABIs passed Tier-1 parity, audio, paging, and IndexedDB checks';
     globalThis.__waM1Result = result;
   }, error => {
     status.textContent = error.message;

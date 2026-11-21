@@ -34,6 +34,12 @@ constexpr size_t kStackSpan = kStackSize + WA_PAGE_SIZE;
 constexpr uint64_t kCallBudget = 10'000'000;
 constexpr unsigned kMaxCallDepth = 64;
 
+struct CallDepth {
+    explicit CallDepth(unsigned& depth) : depth(depth) { ++depth; }
+    ~CallDepth() { --depth; }
+    unsigned& depth;
+};
+
 uint64_t AlignDown(uint64_t address, uint64_t align) {
     return address & ~(align - 1);
 }
@@ -254,11 +260,7 @@ int32_t Call(wa_dbt& dbt, uint64_t entry, std::span<const uint64_t> args,
         ++dbt.stats.reverse_callbacks;
     else
         dbt.steps_left = kCallBudget;
-    struct CallDepth {
-        unsigned& depth;
-        ~CallDepth() { --depth; }
-    } frame{dbt.call_depth};
-    ++dbt.call_depth;
+    const CallDepth frame{dbt.call_depth};
 
     if (dbt.arch == WA_ARCH_ARM32) {
         Arm32State state;
@@ -295,8 +297,9 @@ int32_t Call(wa_dbt& dbt, uint64_t entry, std::span<const uint64_t> args,
     return status;
 }
 
-int32_t CompileUnit(wa_dbt& dbt, uint64_t entry, uint8_t** out_bytes, size_t* out_length) {
-    const auto address = dbt.arch == WA_ARCH_ARM32 ? entry & ~uint64_t{1} : entry;
+int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_length) {
+    const rt::arm32::Location location{key};
+    const auto address = dbt.arch == WA_ARCH_ARM32 ? location.Address() : key;
     const auto start = AlignDown(address, WA_PAGE_SIZE);
     std::array<wa::softmmu::PageWindow, 2> pages;
     auto access = wa::softmmu::GetUnitWindow(dbt.mmu, start, pages[0]);
@@ -304,9 +307,8 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t entry, uint8_t** out_bytes, size_t* ou
         return access.status;
     std::array<rt::frontend::BlockWindow, 2> windows{{{start, pages[0].bytes}, {}}};
     size_t count = 1;
-    const auto key = dbt.arch == WA_ARCH_ARM32 ? Arm32PC(entry) : entry;
     const auto target = wasm::KnownTargetInfo();
-    if (dbt.arch == WA_ARCH_ARM32 && (entry & 1) && start + WA_PAGE_SIZE - address == 2) {
+    if (dbt.arch == WA_ARCH_ARM32 && location.Thumb() && start + WA_PAGE_SIZE - address == 2) {
         const auto first = swift::arm32::DecodeOne(pages[0].bytes.last(2), key);
         if (first.error == swift::arm32::DecodeError::Truncated) {
             access = wa::softmmu::GetUnitWindow(dbt.mmu, start + WA_PAGE_SIZE, pages[1]);
@@ -380,6 +382,35 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t entry, uint8_t** out_bytes, size_t* ou
 }
 
 } // namespace
+
+int32_t wa::dbt::PrepareJitStack(wa_dbt& dbt, uint64_t& sp) {
+    std::lock_guard lock(dbt.mutex);
+    if (dbt.call_depth)
+        return WA_ERR_BUSY;
+    const auto status = EnsureStack(dbt);
+    if (status == WA_OK)
+        sp = dbt.stack_base + kStackSpan;
+    return status;
+}
+
+int32_t wa::dbt::DispatchHostStub(wa_dbt& dbt, uint64_t address, void* state) {
+    if (address < WA_HOST_STUB_BASE || address >= WA_HOST_STUB_LIMIT)
+        return WA_ERR_FAULT;
+    try {
+        std::lock_guard lock(dbt.mutex);
+        if (dbt.call_depth)
+            return WA_ERR_BUSY;
+        // Reverse callbacks inherit the JIT frame's stack through InvokeHost.
+        dbt.steps_left = kCallBudget;
+        const CallDepth frame{dbt.call_depth};
+        return dbt.arch == WA_ARCH_ARM32 ? RunHost(dbt, address, *static_cast<Arm32State*>(state))
+                                         : RunHost(dbt, address, *static_cast<Arm64State*>(state));
+    } catch (const std::bad_alloc&) {
+        return WA_ERR_NOMEM;
+    } catch (...) {
+        return WA_ERR_INTERNAL;
+    }
+}
 
 wa_dbt_t* wa_dbt_create(wa_guest_arch_t arch, wa_softmmu_t* mmu) {
     if (!mmu || (arch != WA_ARCH_ARM32 && arch != WA_ARCH_ARM64))
@@ -462,14 +493,25 @@ int32_t wa_dbt_call_f32(wa_dbt_t* dbt, uint64_t entry_vaddr, const uint64_t* int
 
 int32_t wa_dbt_compile_wasm_unit(wa_dbt_t* dbt, uint64_t entry_vaddr, uint8_t** out_wasm_bytes,
                                  size_t* out_wasm_len) {
-    if (!dbt || !out_wasm_bytes || !out_wasm_len || entry_vaddr >= WA_HOST_STUB_BASE ||
-        !ValidEntry(dbt->arch, entry_vaddr))
+    if (!dbt || entry_vaddr >= WA_HOST_STUB_BASE || !ValidEntry(dbt->arch, entry_vaddr))
         return WA_ERR_INVALID;
-    *out_wasm_bytes = nullptr;
-    *out_wasm_len = 0;
+    const auto pc = dbt->arch == WA_ARCH_ARM32 ? Arm32PC(entry_vaddr) : entry_vaddr;
+    return wa::dbt::CompileWasmLocation(*dbt, pc, out_wasm_bytes, out_wasm_len);
+}
+
+int32_t wa::dbt::CompileWasmLocation(wa_dbt& dbt, uint64_t pc, uint8_t** out_bytes,
+                                     size_t* out_length) {
+    const rt::arm32::Location location{pc};
+    const bool arm32 = dbt.arch == WA_ARCH_ARM32;
+    const auto address = arm32 ? location.Address() : pc;
+    const auto alignment = arm32 && location.Thumb() ? 2u : 4u;
+    if (!out_bytes || !out_length || address >= WA_HOST_STUB_BASE || address % alignment)
+        return WA_ERR_INVALID;
+    *out_bytes = nullptr;
+    *out_length = 0;
     try {
-        std::lock_guard lock(dbt->mutex);
-        return CompileUnit(*dbt, entry_vaddr, out_wasm_bytes, out_wasm_len);
+        std::lock_guard lock(dbt.mutex);
+        return CompileUnit(dbt, pc, out_bytes, out_length);
     } catch (const std::bad_alloc&) {
         return WA_ERR_NOMEM;
     } catch (...) {
