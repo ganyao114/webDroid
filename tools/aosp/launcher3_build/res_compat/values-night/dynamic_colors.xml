@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Before the framework role colors, use Launcher3 palette entries. -->
+    <color name="customColorSurfaceEffect0">@color/folder_background_dark</color>
+    <color name="customColorSurfaceEffect0Fallback">@color/folder_background_dark</color>
+    <color name="materialColorOnPrimary">@color/workspace_text_color_dark</color>
+    <color name="materialColorOnPrimaryFixed">@color/drop_target_hover_text_color_dark</color>
+    <color name="materialColorOnSecondaryFixedVariant">@color/folder_hint_text_color_dark</color>
+    <color name="materialColorOnSurface">@color/folder_text_color_dark</color>
+    <color name="materialColorOnSurfaceVariant">@color/folder_hint_text_color_dark</color>
+    <color name="materialColorOutline">@color/folder_hint_text_color_dark</color>
+    <color name="materialColorOutlineVariant">@color/popup_color_tertiary_dark</color>
+    <color name="materialColorPrimary">@color/preload_icon_accent_color_dark</color>
+    <color name="materialColorPrimaryFixed">@color/workspace_accent_color_dark</color>
+    <color name="materialColorPrimaryFixedDim">@color/popup_color_tertiary_dark</color>
+    <color name="materialColorSecondaryFixed">@color/workspace_accent_color_dark</color>
+    <color name="materialColorSurface">@color/popup_color_primary_dark</color>
+    <color name="materialColorSurfaceBright">@color/popup_shade_first_dark</color>
+    <color name="materialColorSurfaceContainer">@color/folder_background_dark</color>
+    <color name="materialColorSurfaceContainerHigh">@color/popup_color_secondary_dark</color>
+    <color name="materialColorSurfaceContainerHighest">@color/popup_color_tertiary_dark</color>
+    <color name="materialColorSurfaceContainerLow">@color/popup_shade_first_dark</color>
+    <color name="materialColorSurfaceContainerLowest">@color/popup_color_primary_dark</color>
+    <color name="materialColorSurfaceDim">@color/popup_color_secondary_dark</color>
+</resources>
