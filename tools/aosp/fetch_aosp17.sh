@@ -31,10 +31,14 @@ clone_full platform/system/incremental_delivery system/incremental_delivery &
 clone_full platform/system/libartpalette system/libartpalette &
 clone_full platform/external/zlib external/zlib &
 clone_full platform/external/fmtlib external/fmtlib &
+clone_full platform/external/lz4 external/lz4 &
+clone_full platform/libnativehelper libnativehelper &
+clone_sparse platform/system/unwinding system/unwinding libunwindstack/include &
+clone_sparse platform/libcore libcore ojluni/src/main/java/java/lang luni/src/main/java libart/src/main/java &
 clone_sparse platform/bionic bionic libc/kernel/uapi/linux/android libc/kernel/uapi/asm-generic libc/include/android libc/include/sys &
 clone_sparse platform/system/core system/core libcutils libutils include libprocessgroup libsystem &
 clone_sparse platform/frameworks/native frameworks/native libs/binder cmds/servicemanager include headers &
-clone_sparse platform/frameworks/base frameworks/base libs/androidfw &
+clone_sparse platform/frameworks/base frameworks/base libs/androidfw core/jni core/java/android/content/pm core/java/android/content/res core/java/com/android/internal/pm services/core/java/com/android/server/pm &
 clone_sparse platform/art art libartbase libdexfile compiler runtime &
 wait
 echo "Fetched minimal AOSP 17 ($TAG) components into $BASE"
