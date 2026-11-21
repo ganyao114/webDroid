@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:android="http://schemas.android.com/apk/res/android">
+    <attr name="disabledIconAlpha" format="float" />
+    <attr name="windowActionBar" format="boolean" />
+    <attr name="windowNoTitle" format="boolean" />
+    <attr name="actionBarSize" format="dimension" />
+    <attr name="preferenceTheme" format="reference" />
+    <attr name="preferenceFragmentCompatStyle" format="reference" />
+    <attr name="allowDividerAbove" format="boolean" />
+    <attr name="allowDividerBelow" format="boolean" />
+    <attr name="iconSpaceReserved" format="boolean" />
+    <attr name="colorAccent" format="color" />
+    <attr name="colorPrimary" format="color" />
+    <attr name="colorControlNormal" format="color" />
+    <attr name="elevationOverlayColor" format="color" />
+    <attr name="elevationOverlayEnabled" format="boolean" />
+    <attr name="preferenceCategoryStyle" format="reference" />
+    <attr name="preferenceCategoryTitleTextAppearance" format="reference" />
+    <attr name="preferenceScreenStyle" format="reference" />
+    <attr name="preferenceStyle" format="reference" />
+    <attr name="switchPreferenceStyle" format="reference" />
+    <attr name="loadingIconColor" format="color" />
+    <style name="Theme.MaterialComponents.DayNight" parent="@android:style/Theme.DeviceDefault.DayNight">
+        <item name="colorControlNormal">?android:attr/colorControlNormal</item>
+        <item name="actionBarSize">?android:attr/actionBarSize</item>
+    </style>
+    <style name="Widget.AppCompat.Button.Borderless" parent="@android:style/Widget.Material.Button.Borderless" />
+    <style name="Preference.Material" parent="" />
+    <style name="Preference.Category.Material" parent="@style/Preference.Material" />
+    <style name="Preference.PreferenceScreen.Material" parent="@style/Preference.Material" />
+    <style name="Preference.SwitchPreference.Material" parent="@style/Preference.Material" />
+    <style name="PreferenceFragment.Material" parent="" />
+    <style name="PreferenceThemeOverlay" parent="" />
+    <style name="PreferenceThemeOverlay.v14.Material" parent="@style/PreferenceThemeOverlay" />
+    <attr name="collapsedTitleTextAppearance" format="reference" />
+    <attr name="contentScrim" format="reference|color" />
+    <attr name="expandedTitleMarginEnd" format="dimension" />
+    <attr name="expandedTitleMarginStart" format="dimension" />
+    <attr name="expandedTitleTextAppearance" format="reference" />
+    <attr name="layout_behavior" format="string" />
+    <attr name="layout_collapseMode">
+        <enum name="pin" value="1" />
+    </attr>
+    <attr name="layout_scrollFlags">
+        <flag name="scroll" value="1" />
+        <flag name="exitUntilCollapsed" value="2" />
+        <flag name="snap" value="16" />
+    </attr>
+    <attr name="layout_constraintBottom_toBottomOf" format="reference">
+        <enum name="parent" value="0" />
+    </attr>
+    <attr name="layout_constraintEnd_toEndOf" format="reference">
+        <enum name="parent" value="0" />
+    </attr>
+    <attr name="layout_constraintEnd_toStartOf" format="reference" />
+    <attr name="layout_constraintStart_toEndOf" format="reference" />
+    <attr name="layout_constraintStart_toStartOf" format="reference">
+        <enum name="parent" value="0" />
+    </attr>
+    <attr name="layout_constraintTop_toBottomOf" format="reference" />
+    <attr name="layout_constraintTop_toTopOf" format="reference">
+        <enum name="parent" value="0" />
+    </attr>
+    <attr name="maxLines" format="integer" />
+    <attr name="scrimAnimationDuration" format="integer" />
+    <attr name="scrimVisibleHeightTrigger" format="dimension" />
+    <attr name="statusBarScrim" format="reference|color" />
+    <attr name="tint" format="reference|color" />
+    <attr name="titleCollapseMode">
+        <enum name="fade" value="1" />
+    </attr>
+    <attr name="toolbarId" format="reference" />
+    <attr name="clearTop" format="boolean" />
+    <attr name="finishPrimaryWithSecondary">
+        <enum name="never" value="0" />
+    </attr>
+    <attr name="finishSecondaryWithPrimary">
+        <enum name="always" value="1" />
+    </attr>
+    <attr name="primaryActivityName" format="string" />
+    <attr name="secondaryActivityName" format="string" />
+    <attr name="splitLayoutDirection">
+        <enum name="locale" value="3" />
+    </attr>
+    <attr name="splitMaxAspectRatioInPortrait">
+        <enum name="alwaysAllow" value="0" />
+    </attr>
+    <attr name="splitMinWidthDp" format="integer" />
+    <attr name="splitRatio" format="float|reference" />
+    <string name="appbar_scrolling_view_behavior" translatable="false">com.google.android.material.appbar.AppBarLayout$ScrollingViewBehavior</string>
+</resources>
