@@ -125,6 +125,9 @@
     }
     .drop-target.dragging { border-color: var(--accent); background: #1e382f; }
     #elf-status { margin-top: 8px; overflow-wrap: anywhere; }
+    #apk-result { margin: 14px 0 0; }
+    #apk-result dd { overflow-wrap: anywhere; text-align: right; }
+    #apk-dex { margin-top: 10px; color: var(--muted); font-size: .87rem; }
     #elf-result { margin-top: 14px; }
     .elf-layout { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 20px; }
     .table-wrap { overflow-x: auto; }
@@ -143,7 +146,7 @@
   <main id="playground">
     <header>
       <h1>WasmAndroid</h1>
-      <p class="subtitle">Android NDK playground</p>
+      <p class="subtitle">Android APK and NDK playground</p>
     </header>
 
     <div class="layout">
@@ -187,14 +190,25 @@
       </section>
     </div>
 
-    <section class="panel inspector" aria-labelledby="elf-title">
-      <h2 id="elf-title">ELF inspector</h2>
+    <section class="panel inspector" aria-labelledby="file-title">
+      <h2 id="file-title">Android files</h2>
       <div class="drop-target" id="elf-drop">
-        <p>Drop an Android <code>.so</code> library here.</p>
-        <button type="button" id="elf-choose">Choose library</button>
-        <input type="file" id="elf-file" accept=".so,application/octet-stream" hidden>
+        <p>Drop an <code>.apk</code> to run it or a <code>.so</code> to inspect it.</p>
+        <button type="button" id="elf-choose">Choose file</button>
+        <input type="file" id="elf-file" accept=".apk,.so,application/vnd.android.package-archive" hidden>
       </div>
       <p id="elf-status" role="status"></p>
+      <div id="apk-result" hidden>
+        <dl class="metrics">
+          <div><dt>Package</dt><dd data-apk="package"></dd></div>
+          <div><dt>Version</dt><dd data-apk="version"></dd></div>
+          <div><dt>Label (en-US)</dt><dd data-apk="en" lang="en-US"></dd></div>
+          <div><dt>Label (zh-CN)</dt><dd data-apk="zh" lang="zh-CN"></dd></div>
+          <div><dt>Launcher activity</dt><dd data-apk="launcher"></dd></div>
+          <div><dt>Native library</dt><dd data-apk="library"></dd></div>
+        </dl>
+        <p id="apk-dex" role="status"></p>
+      </div>
       <div id="elf-result" hidden>
         <div class="elf-layout">
           <div class="table-wrap">

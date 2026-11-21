@@ -1,4 +1,4 @@
-#include "system_entry.h"
+#include "system_internal.h"
 
 #include "../linker_ffi/dbt_internal.h"
 #include "../softmmu_opfs/softmmu_internal.h"
@@ -65,6 +65,7 @@ static_assert(sizeof(wa_system_jit_step_t) == 16 && offsetof(wa_system_jit_step_
 #endif
 
 struct wa_system_guest {
+    std::shared_ptr<void> backing;
     std::unique_ptr<wa_softmmu_t, decltype(&wa_softmmu_destroy)> mmu{nullptr, wa_softmmu_destroy};
     std::unique_ptr<wa_dbt_t, decltype(&wa_dbt_destroy)> dbt{nullptr, wa_dbt_destroy};
     std::unique_ptr<wa_system_jit_context_t> jit;
@@ -135,6 +136,10 @@ void ShutdownSurface(wa_system_guest_t& guest) {
 }
 
 } // namespace
+
+void wa::system::RetainGuestBacking(wa_system_guest_t* guest, std::shared_ptr<void> backing) {
+    guest->backing = std::move(backing);
+}
 
 int32_t wa_system_load(wa_guest_arch_t arch, uint32_t file_id, const uint8_t* elf, size_t elf_size,
                        wa_page_read_fn page_reader, void* reader_user, wa_system_guest_t** out) {

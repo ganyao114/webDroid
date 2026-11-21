@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WasmAndroid APK execution</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; }
+  body { margin: 0; background: #10151b; color: #eff7fa; }
+  main { max-width: 790px; margin: 5vh auto; padding: 0 24px; }
+  h1 { margin: 0; line-height: 1.1; letter-spacing: -.035em; }
+  .metadata { margin: 8px 0 24px; color: #a9bac8; }
+  .guests { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  figure { margin: 0; background: #19222d; border: 1px solid #303e4e; border-radius: 12px; overflow: hidden; }
+  canvas { display: block; width: 100%; max-height: 36vh; object-fit: contain; background: #000; }
+  figcaption { padding: 12px 15px; }
+  figcaption strong, figcaption span { display: block; }
+  figcaption span { color: #a9bac8; font-size: .85rem; }
+  #status[data-result="passed"] { color: #73e8c0; }
+  #status[data-result="failed"] { color: #ff9e9e; }
+</style>
+<main>
+  <h1 id="label">WasmAndroid APK execution</h1>
+  <p class="metadata" id="metadata"></p>
+  <div class="guests">
+    <figure>
+      <canvas id="armeabi-v7a" width="256" height="256" aria-label="Cube rendered by ARMv7-A"></canvas>
+      <figcaption><strong>armeabi-v7a</strong><span data-abi="armeabi-v7a"></span></figcaption>
+    </figure>
+    <figure>
+      <canvas id="arm64-v8a" width="256" height="256" aria-label="Cube rendered by ARM64"></canvas>
+      <figcaption><strong>arm64-v8a</strong><span data-abi="arm64-v8a"></span></figcaption>
+    </figure>
+  </div>
+  <p id="status" role="status">Loading wa_cube_app.apk…</p>
+</main>
+<script type="module">
+  import { inspectPixels } from '../../web/gfx/compositor.mjs';
+  import { WorkerClient } from '../../web/workers/worker_rpc.mjs';
+  import { abis, audioQuantumFrames, requireMatch, verifyPcm } from './verify_m6_apk.mjs';
+
+  const workers = [];
+  const workerUrl = new URL('./m6_apk_worker.mjs', import.meta.url);
+  const status = document.querySelector('#status');
+
+  async function verifyAudio(audio) {
+    const context = new OfflineAudioContext(2, audioQuantumFrames, 48000);
+    await context.audioWorklet.addModule(new URL('../../web/gfx/audio_worklet.js', import.meta.url));
+    const node = new AudioWorkletNode(context, 'wa-pcm-ring', {
+      numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2],
+      processorOptions: { buffer: audio.memory, byteOffset: audio.ring },
+    });
+    node.connect(context.destination);
+    const output = await context.startRendering();
+    return verifyPcm(audio, output.getChannelData(0), output.getChannelData(1));
+  }
+
+  async function verifyGuest(abi, bytes) {
+    const worker = new WorkerClient(workerUrl, `apk-${abi}`);
+    workers.push(worker);
+    const canvas = document.getElementById(abi).transferControlToOffscreen();
+    const metadata = await worker.request('open', { bytes, canvas }, [canvas]);
+    document.querySelector('#label').textContent = metadata.labelEn;
+    document.querySelector('#metadata').textContent =
+      `${metadata.labelZh} · ${metadata.packageName} · ${metadata.versionName} · ${metadata.launcherActivity}`;
+    const { dex } = await worker.request('compile');
+    await worker.request('load', { abi });
+    const { first, last, java, ...frames } = await worker.request('verify');
+    const frame0 = inspectPixels(first);
+    const frame9 = inspectPixels(last, first);
+    for (const frame of [frame0, frame9]) {
+      requireMatch(frame.nonBlack > 6000 && frame.colorful > 5500, `${abi} cube pixels are missing`);
+      requireMatch(frame.warm > 1000 && frame.cool > 1000, `${abi} checkerboard colors are missing`);
+    }
+    requireMatch(Math.max(frame0.colors, frame9.colors) >= 5 && frame9.changed > 3500,
+      `${abi} WebGL2 frames lack face lighting or animation`);
+    const audio = await verifyAudio(await worker.request('audio'));
+    document.querySelector(`[data-abi="${abi}"]`).textContent =
+      `${frames.rgba_matches}/10 RGBA frames · ${audio.bit_exact} stereo PCM frames`;
+    return { metadata, dex, java, ...frames, frame0, frame9, audio };
+  }
+
+  globalThis.__waM6Shutdown = async () => {
+    await Promise.all(workers.splice(0).map(async worker => {
+      try {
+        await worker.request('shutdown');
+      } finally {
+        worker.close();
+      }
+    }));
+    return true;
+  };
+
+  async function run() {
+    requireMatch(crossOriginIsolated, 'Expected COOP and COEP for shared Wasm memory');
+    const response = await fetch(new URL('../../build/wa_cube_app.apk', import.meta.url));
+    requireMatch(response.ok, `APK fetch returned ${response.status}`);
+    const bytes = await response.arrayBuffer();
+    const guests = [];
+    for (const abi of abis) guests.push(await verifyGuest(abi, bytes));
+    await new Promise(requestAnimationFrame);
+    return { ok: true, apkBytes: bytes.byteLength, guests };
+  }
+
+  run().then(report => {
+    status.textContent = 'ART compiled four Java helpers. Both ABIs passed Tier-1, OPFS, IndexedDB, and AudioWorklet checks.';
+    status.dataset.result = 'passed';
+    globalThis.__waM6Result = report;
+  }, error => {
+    status.textContent = error.message;
+    status.dataset.result = 'failed';
+    globalThis.__waM6Result = { ok: false, error: error.stack ?? String(error) };
+  });
+</script>
+</html>

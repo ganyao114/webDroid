@@ -116,6 +116,7 @@ export class BrowserRuntime {
 }
 
 const cubeWorkerUrl = new URL('../../tests/m1_chrome_ndk_cube/m1_cube_worker.mjs', import.meta.url);
+const apkWorkerUrl = new URL('../../tests/m6_apk_chrome_e2e/m6_apk_worker.mjs', import.meta.url);
 const byteFormatter = new Intl.NumberFormat();
 
 function orientCanvas(canvas, rotate) {
@@ -146,6 +147,9 @@ export class CubePlayground {
   #worker;
   #inspector;
   #inspection = 0;
+  #loading = 0;
+  #apkFile;
+  #frame = 0;
   #raf = 0;
   #drawing;
   #closed = false;
@@ -165,6 +169,7 @@ export class CubePlayground {
     this.file = root.querySelector('#elf-file');
     this.fileStatus = root.querySelector('#elf-status');
     this.dropTarget = root.querySelector('#elf-drop');
+    this.apkDex = root.querySelector('#apk-dex');
 
     this.abi.addEventListener('change', () => void this.#loadCube());
     for (const input of root.querySelectorAll('[name="tier"]')) {
@@ -177,7 +182,7 @@ export class CubePlayground {
     this.file.addEventListener('change', () => {
       const [file] = this.file.files;
       this.file.value = '';
-      if (file) void this.#inspect(file);
+      if (file) void this.#openFile(file);
     });
     this.dropTarget.addEventListener('dragover', event => {
       event.preventDefault();
@@ -191,7 +196,7 @@ export class CubePlayground {
       event.preventDefault();
       this.dropTarget.classList.remove('dragging');
       const [file] = event.dataTransfer.files;
-      if (file) void this.#inspect(file);
+      if (file) void this.#openFile(file);
     });
   }
 
@@ -220,15 +225,29 @@ export class CubePlayground {
     return this.#loadCube();
   }
 
+  async #stopWorker(worker) {
+    try {
+      await worker.request('shutdown');
+    } catch {
+      // A worker which failed initialization still needs to be terminated.
+    } finally {
+      worker.close();
+    }
+  }
+
   async #loadCube() {
     if (this.#closed) return;
     if (!crossOriginIsolated) {
       this.status.textContent = 'Shared memory requires the chrome_harness server.';
       return;
     }
+    const id = ++this.#loading;
+    const stale = () => this.#closed || id !== this.#loading;
+    const file = this.#apkFile;
+    let worker;
     this.abi.disabled = true;
     this.#ready = false;
-    this.status.textContent = `Loading ${this.abi.value}…`;
+    this.status.textContent = `Loading ${file?.name ?? this.abi.value}…`;
     cancelAnimationFrame(this.#raf);
     this.#raf = 0;
     this.#resetTiming();
@@ -237,14 +256,10 @@ export class CubePlayground {
     const previous = this.#worker;
     this.#worker = undefined;
     try {
-      if (previous) {
-        try {
-          await previous.request('shutdown');
-        } finally {
-          previous.close();
-        }
-      }
-      if (this.#closed) return;
+      if (previous) await this.#stopWorker(previous);
+      if (stale()) return;
+      const bytes = file ? await file.arrayBuffer() : undefined;
+      if (stale()) return;
       const oldCanvas = this.root.querySelector('#cube');
       const canvas = oldCanvas.cloneNode(false);
       oldCanvas.replaceWith(canvas);
@@ -253,23 +268,58 @@ export class CubePlayground {
         this.#y += dy;
       });
       const offscreen = canvas.transferControlToOffscreen();
-      const worker = new WorkerClient(cubeWorkerUrl, `cube-${this.abi.value}`);
+      worker = new WorkerClient(file ? apkWorkerUrl : cubeWorkerUrl, `cube-${this.abi.value}`);
       this.#worker = worker;
-      const { atLoad } = await worker.request('init', { abi: this.abi.value, canvas: offscreen },
-        [offscreen]);
-      if (this.#worker !== worker) return;
+      const result = file
+        ? await this.#initApk(worker, offscreen, bytes, stale)
+        : await worker.request('init', { abi: this.abi.value, canvas: offscreen }, [offscreen]);
+      if (stale()) return;
+      const { atLoad } = result;
       this.#updateStats(atLoad);
       this.#started = performance.now();
+      this.#frame = 0;
       this.#ready = true;
       this.status.textContent = this.#tier() === 'tier1' ? 'Compiling Tier-1 Wasm units…' : 'Rendering…';
       this.#schedule();
     } catch (error) {
-      this.#worker?.close();
+      if (stale()) return;
       this.#worker = undefined;
       this.status.textContent = error.message.split('\n')[0];
+      if (worker) await this.#stopWorker(worker);
     } finally {
-      this.abi.disabled = false;
+      if (!stale()) this.abi.disabled = false;
     }
+  }
+
+  async #initApk(worker, canvas, bytes, stale) {
+    const info = await worker.request('open', { canvas, bytes }, [canvas, bytes]);
+    if (stale()) return;
+    this.#showApk(info);
+    const available = new Set(Object.keys(info.librarySizes).filter(abi => info.librarySizes[abi]));
+    for (const option of this.abi.options) option.disabled = !available.has(option.value);
+    if (available.size && !available.has(this.abi.value)) this.abi.value = available.values().next().value;
+    this.apkDex.textContent = 'Compiling classes.dex with ART…';
+    try {
+      const { dex } = await worker.request('compile');
+      if (stale()) return;
+      this.apkDex.textContent = `ART compiled ${dex.methods} Java methods to ${byteFormatter.format(dex.bytes)} Wasm bytes. ` +
+        `SSA instructions ${dex.instructionsBefore} → ${dex.instructionsAfterFolding} → ${dex.instructionsAfterDce}.`;
+    } catch (error) {
+      if (!stale()) this.apkDex.textContent = error.message.split('\n')[0];
+      throw error;
+    }
+    return worker.request('load', { abi: this.abi.value });
+  }
+
+  #showApk(info) {
+    const metadata = {
+      package: info.packageName, version: `${info.versionName || '—'} (${info.versionCode})`,
+      en: info.labelEn, zh: info.labelZh, launcher: info.launcherActivity, library: info.nativeLibrary,
+    };
+    for (const [field, value] of Object.entries(metadata)) {
+      this.root.querySelector(`[data-apk="${field}"]`).textContent = value || '—';
+    }
+    this.root.querySelector('#apk-result').hidden = false;
   }
 
   #schedule() {
@@ -288,7 +338,7 @@ export class CubePlayground {
     let rendered = false;
     try {
       const { us, stats } = await worker.request('render', {
-        tier, time: (stamp - this.#started) / 1000,
+        tier, time: (stamp - this.#started) / 1000, frame: this.#frame++,
         x: this.#x, y: this.#y, telemetry,
       });
       rendered = true;
@@ -317,6 +367,18 @@ export class CubePlayground {
       if (this.#drawing === worker) this.#drawing = undefined;
       if (this.#worker === worker && (rendered || this.#tier() !== tier)) this.#schedule();
     }
+  }
+
+  #openFile(file) {
+    if (!file.name.toLowerCase().endsWith('.apk')) return this.#inspect(file);
+    ++this.#inspection;
+    this.#inspector?.close();
+    this.#inspector = undefined;
+    this.root.querySelector('#elf-result').hidden = true;
+    this.root.querySelector('#apk-result').hidden = true;
+    this.fileStatus.textContent = file.name;
+    this.#apkFile = file;
+    return this.#loadCube();
   }
 
   async #inspect(file) {
@@ -379,6 +441,6 @@ export class CubePlayground {
     cancelAnimationFrame(this.#raf);
     const worker = this.#worker;
     this.#worker = undefined;
-    if (worker) void worker.request('shutdown').then(() => worker.close(), () => worker.close());
+    if (worker) void this.#stopWorker(worker);
   }
 }
