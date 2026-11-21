@@ -15,12 +15,6 @@
 #include "optimizing/nodes.h"
 #include "runtime_globals.h"
 #include "standalone_runtime.h"
-
-#ifdef ART_PAGE_SIZE_AGNOSTIC
-// Unoptimized HGraph builds retain references to the ART quick-code page-size accessor.
-// The standalone Wasm backend uses explicit checks and never enables implicit null checks.
-art::PageSize art::gPageSize;
-#endif
 #endif
 
 namespace wa::interp {
