@@ -1,0 +1,21 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AOSP 17 Binder E2E</title>
+<pre id="result" aria-live="polite">Running AOSP 17 Binder tests…</pre>
+<script type="module">
+  import { runBinder } from './binder_worker.mjs';
+
+  let result;
+  try {
+    if (!crossOriginIsolated) throw new Error('Shared WebAssembly memory requires cross-origin isolation');
+    const [module, ring] = await Promise.all([
+      WebAssembly.compileStreaming(fetch('/build/test_aosp17_binder.wasm')),
+      WebAssembly.compileStreaming(fetch('/build/m4_binder_ring.wasm')),
+    ]);
+    result = await runBinder(new URL('/build/test_aosp17_binder.mjs', location.href).href, module, ring);
+  } catch (error) {
+    result = { ok: false, error: error.stack || String(error) };
+  }
+  document.querySelector('#result').textContent = JSON.stringify(result, null, 2);
+  globalThis.__waBinderResult = result;
+</script>
