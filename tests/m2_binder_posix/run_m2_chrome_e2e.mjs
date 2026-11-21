@@ -1,7 +1,6 @@
 import { copyFile, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { Worker as NodeWorker } from 'node:worker_threads';
 
 import { launchChrome } from '../../tools/chrome_harness/cdp_client.mjs';
 import { startServer, WORKTREE } from '../../tools/chrome_harness/serve.mjs';
@@ -15,16 +14,14 @@ const { values } = parseArgs({
     node: { type: 'boolean' },
   },
 });
-const build = resolve(values['build-dir'] ?? resolve(WORKTREE, '../wa-build-w7-wasm'));
-const artifact = join(build, 'm2_binder.wasm');
+const build = resolve(values['build-dir'] ?? resolve(WORKTREE, 'build-m2-wasm'));
+const artifact = join(build, 'm2_posix.wasm');
 const fixture = 'tests/m2_binder_posix';
 const page = `${fixture}/m2_e2e.html`;
 
 async function stage(root) {
-  const sources = [page, `${fixture}/m2_worker.mjs`, ...[
-    'binder_transport.mjs', 'wasm_runtime.mjs', 'worker_rpc.mjs',
-  ].map(name => `web/workers/${name}`)];
-  const files = [...sources.map(file => [join(WORKTREE, file), file]), [artifact, 'build/m2_binder.wasm']];
+  const sources = [page, `${fixture}/m2_worker.mjs`, 'web/workers/wasm_runtime.mjs'];
+  const files = [...sources.map(file => [join(WORKTREE, file), file]), [artifact, 'build/m2_posix.wasm']];
   const copies = await Promise.allSettled(files.map(async ([source, file]) => {
     const target = join(root, file);
     await mkdir(dirname(target), { recursive: true });
@@ -78,13 +75,6 @@ async function chromeTest() {
 }
 
 async function nodeSmoke() {
-  class BrowserWorker extends NodeWorker {
-    constructor(url, options) { super(new URL(url), options); }
-    addEventListener(event, handler) {
-      this.on(event, data => handler(event === 'message' ? { data } : data));
-    }
-  }
-  globalThis.Worker = BrowserWorker;
   const response = new Response(await readFile(artifact), {
     headers: { 'Content-Type': 'application/wasm' },
   });

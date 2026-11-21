@@ -1,6 +1,7 @@
 #include "apk_loader.h"
 
 #include "apk_dex.h"
+#include "apk_manifest.h"
 #include "system_internal.h"
 #include "wasmandroid/libkern.h"
 
@@ -13,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <exception>
 #include <map>
@@ -31,7 +33,8 @@ using android::ResXMLTree;
 
 constexpr char kArchiveName[] = "APK in memory";
 constexpr char kAndroid[] = "http://schemas.android.com/apk/res/android";
-constexpr std::array kAbis{"armeabi-v7a", "arm64-v8a"};
+constexpr std::array kAbis{"armeabi-v7a", "arm64-v8a", "x86", "x86_64", "riscv64", "armeabi"};
+constexpr auto kRunnableAbis = std::span(kAbis).first<2>();
 
 struct Archive {
     explicit Archive(std::span<const uint8_t> input) : bytes(input.begin(), input.end()) {}
@@ -160,6 +163,39 @@ class MemoryApkProvider final : public android::AssetsProvider {
     const std::string name_ = kArchiveName;
 };
 
+android::ApkAssetsPtr OpenAssets(std::span<const uint8_t> bytes,
+                                std::shared_ptr<Archive>& archive) {
+    archive = std::make_shared<Archive>(bytes);
+    ZipArchiveHandle zip = nullptr;
+    const auto status =
+        OpenArchiveFromMemory(archive->bytes.data(), archive->bytes.size(), kArchiveName, &zip);
+    archive->zip.reset(zip);
+    if (status != kSuccess)
+        return nullptr;
+    return android::ApkAssets::Load(std::make_unique<MemoryApkProvider>(archive));
+}
+
+int32_t EmbeddedAbis(ZipArchiveHandle zip, int32_t& mask) {
+    void* cookie = nullptr;
+    if (StartIteration(zip, &cookie, "lib/", ".so") != kSuccess)
+        return WA_ERR_INVALID;
+    const std::unique_ptr<void, decltype(&EndIteration)> iteration(cookie, EndIteration);
+    ZipEntry64 entry{};
+    std::string_view path;
+    int32_t status;
+    while ((status = Next(cookie, &entry, &path)) == kSuccess) {
+        path.remove_prefix(4);
+        const auto slash = path.find('/');
+        if (slash == path.npos || path.find('/', slash + 1) != path.npos ||
+            !entry.uncompressed_length)
+            continue;
+        const auto abi = std::ranges::find(kAbis, path.substr(0, slash));
+        if (abi != kAbis.end())
+            mask |= 1 << (abi - kAbis.begin());
+    }
+    return status == kIterationEnd ? WA_OK : WA_ERR_INVALID;
+}
+
 std::string ResourceString(const AssetManager2& manager, uint32_t id) {
     auto value = manager.GetResource(id);
     if (!value || !manager.ResolveReference(*value) || value->type != Res_value::TYPE_STRING)
@@ -193,11 +229,18 @@ struct Manifest {
     std::string package;
     std::string version;
     uint32_t version_code = 0;
+    uint32_t version_major = 0;
     std::string launcher;
+    std::string home;
+    std::vector<std::string> activities;
     std::string library;
     std::string english;
     std::string chinese;
 };
+
+bool IsActivity(std::u16string_view tag) {
+    return tag == u"activity" || tag == u"activity-alias";
+}
 
 bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
     android::ApkAssetsCookie cookie = android::kInvalidCookie;
@@ -211,19 +254,27 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
     std::vector<std::u16string_view> parents;
     std::string activity, activity_library, application_library, literal_label;
     uint32_t label_id = 0;
-    bool main = false, launcher_category = false, launchable = false;
+    bool main = false, launcher_category = false, home_category = false;
+    bool launchable = false, home = false;
     for (auto event = xml->next(); event != ResXMLTree::END_DOCUMENT; event = xml->next()) {
         if (event == ResXMLTree::BAD_DOCUMENT)
             return false;
         if (event == ResXMLTree::END_TAG) {
             if (parents.empty())
                 return false;
-            if (parents.size() == 4 && parents.back() == u"intent-filter") {
+            if (parents.size() == 4 && parents[1] == u"application" && IsActivity(parents[2]) &&
+                parents.back() == u"intent-filter") {
                 launchable |= main && launcher_category;
-            } else if (parents.size() == 3 && parents.back() == u"activity" &&
-                       launchable && manifest.launcher.empty() && !activity.empty()) {
-                manifest.launcher = std::move(activity);
-                manifest.library = std::move(activity_library);
+                home |= main && home_category;
+            } else if (parents.size() == 3 && parents[1] == u"application" &&
+                       IsActivity(parents.back()) && !activity.empty()) {
+                manifest.activities.push_back(wa::system::ActivityClassName(manifest.package, activity));
+                if (launchable && manifest.launcher.empty()) {
+                    manifest.launcher = activity;
+                    manifest.library = std::move(activity_library);
+                }
+                if (home && manifest.home.empty())
+                    manifest.home = activity;
             }
             parents.pop_back();
             continue;
@@ -242,12 +293,16 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
                 return false;
             manifest.package = AttributeString(*xml, manager, nullptr, "package");
             manifest.version = attr("versionName");
-            const auto code = xml->indexOfAttribute(kAndroid, "versionCode");
-            if (code >= 0) {
+            const auto versionCode = [&](const char* key) -> uint32_t {
+                const auto code = xml->indexOfAttribute(kAndroid, key);
+                if (code < 0)
+                    return 0;
                 const auto type = xml->getAttributeDataType(code);
-                if (type == Res_value::TYPE_INT_DEC || type == Res_value::TYPE_INT_HEX)
-                    manifest.version_code = xml->getAttributeData(code);
-            }
+                return (type == Res_value::TYPE_INT_DEC || type == Res_value::TYPE_INT_HEX)
+                    ? xml->getAttributeData(code) : 0;
+            };
+            manifest.version_code = versionCode("versionCode");
+            manifest.version_major = versionCode("versionCodeMajor");
         } else if (depth == 1 && tag == u"application") {
             const auto label = xml->indexOfAttribute(kAndroid, "label");
             if (label >= 0 && xml->getAttributeDataType(label) == Res_value::TYPE_REFERENCE)
@@ -255,22 +310,25 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
             else
                 literal_label = attr("label");
         } else if (depth >= 2 && parents[1] == u"application") {
-            if (depth == 2 && tag == u"activity") {
+            if (depth == 2 && IsActivity(tag)) {
                 activity = attr("name");
                 activity_library.clear();
-                launchable = false;
+                launchable = home = false;
             } else if (tag == u"meta-data" &&
-                       (depth == 2 || (depth == 3 && parents[2] == u"activity")) &&
+                       (depth == 2 || (depth == 3 && IsActivity(parents[2]))) &&
                        attr("name") == "android.app.lib_name") {
                 const auto library = attr("value");
                 (depth == 2 ? application_library : activity_library) = library;
-            } else if (depth == 3 && parents[2] == u"activity" && tag == u"intent-filter") {
-                main = launcher_category = false;
-            } else if (depth == 4 && parents[2] == u"activity" && parents[3] == u"intent-filter") {
+            } else if (depth == 3 && IsActivity(parents[2]) && tag == u"intent-filter") {
+                main = launcher_category = home_category = false;
+            } else if (depth == 4 && IsActivity(parents[2]) && parents[3] == u"intent-filter") {
                 if (tag == u"action")
                     main |= attr("name") == "android.intent.action.MAIN";
-                if (tag == u"category")
-                    launcher_category |= attr("name") == "android.intent.category.LAUNCHER";
+                if (tag == u"category") {
+                    const auto category = attr("name");
+                    launcher_category |= category == "android.intent.category.LAUNCHER";
+                    home_category |= category == "android.intent.category.HOME";
+                }
             }
         }
         parents.push_back(tag);
@@ -288,6 +346,8 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
         return label_id ? ResourceString(manager, label_id) : literal_label;
     };
     manifest.english = resolve("en-US");
+    if (manifest.english.empty())
+        manifest.english = resolve("");
     manifest.chinese = resolve("zh-CN");
     return true;
 }
@@ -295,11 +355,7 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
 std::string LauncherDescriptor(const Manifest& manifest) {
     if (manifest.launcher.empty())
         return {};
-    std::string name = manifest.launcher;
-    if (name.front() == '.')
-        name.insert(0, manifest.package);
-    else if (!name.contains('.'))
-        name.insert(0, manifest.package + '.');
+    auto name = wa::system::ActivityClassName(manifest.package, manifest.launcher);
     std::replace(name.begin(), name.end(), '.', '/');
     return 'L' + name + ';';
 }
@@ -329,12 +385,48 @@ struct NativeBacking {
 
 } // namespace
 
+std::string wa::system::ActivityClassName(std::string_view package, std::string_view name) {
+    if (name.empty())
+        return {};
+    if (name.front() == '.')
+        return std::string(package).append(name);
+    if (!name.contains('.'))
+        return std::string(package).append(".").append(name);
+    return std::string(name);
+}
+
+int32_t wa::system::ReadApkManifest(std::span<const uint8_t> bytes, ApkManifest& out) {
+    if (bytes.empty() || !std::in_range<ptrdiff_t>(bytes.size()))
+        return WA_ERR_INVALID;
+    try {
+        std::shared_ptr<Archive> archive;
+        const auto assets = OpenAssets(bytes, archive);
+        AssetManager2 manager;
+        Manifest manifest;
+        int32_t abi_mask = 0;
+        if (!assets || !manager.SetApkAssets({assets}) || !ParseManifest(manager, manifest) ||
+            EmbeddedAbis(archive->zip.get(), abi_mask) != WA_OK)
+            return WA_ERR_INVALID;
+        const auto version = std::bit_cast<int64_t>(
+            uint64_t{manifest.version_major} << 32 | manifest.version_code);
+        out = {manifest.package, manifest.english.empty() ? manifest.package : manifest.english,
+               version, ActivityClassName(manifest.package, manifest.launcher),
+               ActivityClassName(manifest.package, manifest.home), std::move(manifest.activities),
+               abi_mask};
+        return WA_OK;
+    } catch (const std::bad_alloc&) {
+        return WA_ERR_NOMEM;
+    } catch (const std::exception&) {
+        return WA_ERR_INVALID;
+    }
+}
+
 struct wa_system_apk {
     std::shared_ptr<Archive> archive;
     std::unique_ptr<Asset> dex;
     Manifest manifest;
     wa_system_apk_info_t info{};
-    std::array<std::optional<ZipEntry64>, kAbis.size()> native;
+    std::array<std::optional<ZipEntry64>, kRunnableAbis.size()> native;
     std::vector<uint8_t> wasm;
     wa_system_apk_dex_stats_t dex_stats{};
     int32_t backing_fd = -1;
@@ -350,13 +442,7 @@ wa_system_apk_t* wa_system_open_apk(const uint8_t* apk_bytes, size_t apk_len) {
         return nullptr;
     try {
         auto apk = std::make_unique<wa_system_apk_t>();
-        apk->archive = std::make_shared<Archive>(std::span(apk_bytes, apk_len));
-        ZipArchiveHandle zip = nullptr;
-        const auto status = OpenArchiveFromMemory(apk->archive->bytes.data(), apk_len, kArchiveName, &zip);
-        apk->archive->zip.reset(zip);
-        if (status != kSuccess)
-            return nullptr;
-        const auto assets = android::ApkAssets::Load(std::make_unique<MemoryApkProvider>(apk->archive));
+        const auto assets = OpenAssets({apk_bytes, apk_len}, apk->archive);
         AssetManager2 manager;
         if (!assets || !manager.SetApkAssets({assets}) || !ParseManifest(manager, apk->manifest))
             return nullptr;
@@ -364,10 +450,11 @@ wa_system_apk_t* wa_system_open_apk(const uint8_t* apk_bytes, size_t apk_len) {
 
         const auto& m = apk->manifest;
         if (LibraryNameValid(m.library)) {
-            for (size_t i = 0; i < kAbis.size(); ++i) {
-                const auto path = std::string("lib/") + kAbis[i] + "/lib" + m.library + ".so";
+            for (size_t i = 0; i < kRunnableAbis.size(); ++i) {
+                const auto path = std::string("lib/") + kRunnableAbis[i] + "/lib" + m.library + ".so";
                 ZipEntry64 entry{};
-                if (FindEntry(zip, path, &entry) == kSuccess && entry.uncompressed_length &&
+                if (FindEntry(apk->archive->zip.get(), path, &entry) == kSuccess &&
+                    entry.uncompressed_length &&
                     std::in_range<ptrdiff_t>(entry.uncompressed_length) &&
                     (entry.method == kCompressDeflated || !apk->archive->Stored(entry).empty()))
                     apk->native[i] = entry;
@@ -435,10 +522,10 @@ int32_t wa_system_apk_set_backing_file(wa_system_apk_t* apk, int32_t fd) {
 wa_system_guest_t* wa_system_apk_load_native(const wa_system_apk_t* apk, const char* abi) {
     if (!apk || !abi)
         return nullptr;
-    const auto it = std::ranges::find(kAbis, std::string_view(abi));
-    if (it == kAbis.end())
+    const auto it = std::ranges::find(kRunnableAbis, std::string_view(abi));
+    if (it == kRunnableAbis.end())
         return nullptr;
-    const auto index = static_cast<size_t>(it - kAbis.begin());
+    const auto index = static_cast<size_t>(it - kRunnableAbis.begin());
     if (!apk->native[index])
         return nullptr;
     const auto& entry = *apk->native[index];

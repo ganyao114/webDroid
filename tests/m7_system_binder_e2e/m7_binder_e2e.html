@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>WasmAndroid system Binder verification</title>
+<h1>WasmAndroid system Binder verification</h1>
+<pre id="result">Running…</pre>
+<script type="module">
+  import { runBinderE2e } from './m7_binder_worker.mjs';
+
+  async function apk(name) {
+    const response = await fetch('/build/' + name);
+    if (!response.ok) throw new Error(`Could not load ${name}: HTTP ${response.status}`);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
+  let result;
+  try {
+    if (!crossOriginIsolated) throw new Error('The Binder ring requires COOP and COEP');
+    const [module, ring, cube, home] = await Promise.all([
+      WebAssembly.compileStreaming(fetch('/build/android_system.wasm')),
+      WebAssembly.compileStreaming(fetch('/build/wa_system_binder_ring.wasm')),
+      apk('wa_cube_app.apk'), apk('wa_home_launcher.apk'),
+    ]);
+    const glue = new URL('/build/android_system.mjs', location.href).href;
+    result = await runBinderE2e({ glue, module, ring, cube, home });
+  } catch (error) {
+    result = { ok: false, error: error.stack ?? String(error) };
+  }
+  globalThis.__waM7Result = result;
+  document.querySelector('#result').textContent = JSON.stringify(result, null, 2);
+</script>
+</html>

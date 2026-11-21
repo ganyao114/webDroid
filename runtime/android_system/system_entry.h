@@ -1,5 +1,6 @@
 #pragma once
 
+#include "binder_service_entry.h"
 #include "wasmandroid/softmmu_linker.h"
 
 #ifdef __cplusplus
