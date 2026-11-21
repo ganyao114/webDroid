@@ -1,0 +1,7 @@
+add_library(wa_softmmu STATIC softmmu.cpp)
+target_include_directories(wa_softmmu PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../../include")
+target_compile_features(wa_softmmu PUBLIC cxx_std_20)
+if(EMSCRIPTEN)
+    target_compile_options(wa_softmmu PRIVATE -O3 -msimd128 -matomics -mbulk-memory -fwasm-exceptions)
+    target_link_options(wa_softmmu INTERFACE -msimd128 -matomics -mbulk-memory -fwasm-exceptions)
+endif()

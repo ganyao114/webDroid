@@ -1,0 +1,87 @@
+--- a/allocate.cpp
++++ b/allocate.cpp
+@@ -699,4 +699,4 @@
+     }
+-    if (needs_predicate ||
+-        (linked && (!a.helpers.empty() || (a.mmu_imports && !options.stateless_mmu_callbacks))))
++    if (needs_predicate || (linked && !a.helpers.empty()) ||
++        (a.mmu_imports && !options.stateless_mmu_callbacks))
+         a.predicate = a.AddLocal(I32);
+--- a/emit_control.cpp
++++ b/emit_control.cpp
+@@ -6,3 +6,4 @@
+     Get(0);
+-    if (Linked()) {
++    if (Linked() || SoftMMU()) {
++        // Standalone SoftMMU also receives a run context before the CPU state.
+         I32(abi::ContextBytes);
+@@ -46,2 +47,6 @@
+             Set(allocation.pc);
++        }
++        if (SoftMMU() && options.flags_offset != UINT32_MAX) {
++            UniformLoad(options.flags_offset, Type::U64);
++            Set(allocation.flags);
+         }
+@@ -236,2 +241,8 @@
+         I32(static_cast<u32>(reason));
++        B(0x0f);
++    } else if (SoftMMU() && reason == ExitValue(NativeExit::MemoryFault)) {
++        Get(0);
++        I32(static_cast<u32>(reason));
++        HostStore32(abi::ExitSubcode);
++        I64(0);
+         B(0x0f);
+--- a/emit_memory.cpp
++++ b/emit_memory.cpp
+@@ -14,2 +14,18 @@
+     const bool wasm32 = options.address_mode == AddressMode::Wasm32;
++    if (SoftMMU() && !Linked() && options.guest_isa == GuestISA::Arm64) {
++        // Check the full AArch64 address before the i32 IOTLB lookup.
++        ReadI64(argument);
++        Tee(T(8));
++        I64(UINT32_MAX);
++        B(0x56);  // i64.gt_u
++        Block(0x04);
++        Get(0);
++        Get(T(8));
++        Store(64, abi::HostMemory, abi::FaultAddress);
++        Exit(ExitValue(NativeExit::MemoryFault), true);
++        B(0x0b);
++        Get(T(8));
++        B(0xa7);
++        return;
++    }
+     if (SoftMMU() || (wasm32 && !options.checked_memory)) {
+--- a/emit_softmmu.cpp
++++ b/emit_softmmu.cpp
+@@ -332,16 +332,17 @@
+     Reload();
+-    if (Linked()) {
+-        Get(0);
+-        HostLoad32(abi::ExitSubcode);
+-        Tee(allocation.predicate);
+-        Block(0x04);
+-        if (has_fault_location) {
+-            I64(guest_pc);
+-            Set(allocation.pc);
+-        }
+-        Flush();
++    Get(0);
++    HostLoad32(abi::ExitSubcode);
++    Tee(allocation.predicate);
++    Block(0x04);
++    if (has_fault_location) {
++        I64(guest_pc);
++        Set(allocation.pc);
++    }
++    Flush();
++    if (Linked())
+         Get(allocation.predicate);
+-        B(0x0f);
+-        B(0x0b);
+-    }
++    else
++        I64(0);
++    B(0x0f);
++    B(0x0b);
+ }
