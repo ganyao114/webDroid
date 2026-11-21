@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AOSP 17 Fixture</string>
+    <string name="greeting">Hello from Android 17!</string>
+</resources>
