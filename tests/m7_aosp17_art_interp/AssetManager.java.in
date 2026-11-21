@@ -1,0 +1,36 @@
+package android.content.res;
+
+import android.util.SparseArray;
+import java.io.IOException;
+
+public final class AssetManager implements AutoCloseable {
+    private long mObject = nativeCreate();
+
+    public void setApkAssets(ApkAssets[] assets) {
+        nativeSetApkAssets(mObject, assets, false, false);
+    }
+
+    public SparseArray<?> getAssignedPackageIdentifiers() {
+        return nativeGetAssignedPackageIdentifiers(mObject, false, false);
+    }
+
+    public XmlResourceParser openXmlResourceParser(int cookie, String path) throws IOException {
+        long xml = nativeOpenXmlAsset(mObject, cookie, path);
+        try (XmlBlock block = new XmlBlock(null, xml, Flags.layoutReadwriteFlags())) {
+            return block.newParser();
+        }
+    }
+
+    @Override
+    public void close() {
+        long ptr = mObject;
+        mObject = 0;
+        if (ptr != 0) nativeDestroy(ptr);
+    }
+
+    void xmlBlockGone(int id) {
+        throw new IllegalStateException("AssetManager does not cache XmlBlocks in this runtime");
+    }
+
+@native_declarations@
+}
