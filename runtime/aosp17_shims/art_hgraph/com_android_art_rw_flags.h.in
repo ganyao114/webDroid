@@ -1,0 +1,6 @@
+#pragma once
+
+namespace com::android::art::rw::flags {
+inline constexpr bool enable_profile_code_rw() { return false; }
+inline constexpr bool packed_switch_simplification() { return false; }
+}  // namespace com::android::art::rw::flags

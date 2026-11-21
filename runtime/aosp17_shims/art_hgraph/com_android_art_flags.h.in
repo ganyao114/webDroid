@@ -1,0 +1,10 @@
+#pragma once
+
+#define COM_ANDROID_ART_FLAGS_VIRTUAL_THREAD_IMPL_V1 false
+
+namespace com::android::art::flags {
+inline constexpr bool virtual_thread_impl_v1() {
+  return COM_ANDROID_ART_FLAGS_VIRTUAL_THREAD_IMPL_V1;
+}
+inline constexpr bool weak_const_string() { return false; }
+}  // namespace com::android::art::flags
