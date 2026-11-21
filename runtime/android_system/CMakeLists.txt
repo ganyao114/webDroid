@@ -5,10 +5,17 @@ set(AOSP17_SOURCE_DIR "${wa_default_aosp17}" CACHE PATH "Read-only AOSP android-
 if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
     include(../../cmake/Aosp17Core.cmake)
     include(../../cmake/Aosp17ArtHGraph.cmake)
-    # Compile these translation units with AOSP's headers, independently of SwiftVM's fmt.
+    include(BinderRuntime.cmake)
+    # Compile AOSP translation units independently of SwiftVM's fmt.
     add_library(wa_android_system_apk OBJECT apk_loader.cpp apk_dex.cpp)
     target_include_directories(wa_android_system_apk PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
     target_link_libraries(wa_android_system_apk PRIVATE aosp17_libandroidfw aosp17_art_hgraph)
+    add_library(wa_android_system_binder OBJECT binder_service_entry.cpp)
+    target_link_libraries(wa_android_system_binder PRIVATE
+        aosp17_servicemanager aosp17_libbinder aosp17_libandroidfw)
+    aosp17_servicemanager_generate_aidl(wa_android_system_binder PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/aidl" android/wasm
+        PackageRecord IPackageManagerLite ActivityState IActivityManagerLite)
 endif()
 
 if(EMSCRIPTEN)
@@ -22,7 +29,7 @@ if(EMSCRIPTEN)
         -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker
         -sUSE_WEBGL2=1 -sFULL_ES3=1 -sOFFSCREENCANVAS_SUPPORT=1 -sSHARED_MEMORY=1
         -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=1048576
-        -sABORTING_MALLOC=0 -sFILESYSTEM=0
+        -sABORTING_MALLOC=0
         -sEXPORTED_RUNTIME_METHODS=HEAPU8,wasmMemory
     )
     set(exports
@@ -38,7 +45,9 @@ if(EMSCRIPTEN)
         _wa_jit_registry_publish
     )
     if(TARGET wa_android_system_apk)
-        target_link_libraries(android_system PRIVATE wa_android_system_apk)
+        target_link_libraries(android_system PRIVATE wa_android_system_apk wa_android_system_binder)
+        # Accept caller-owned vproc memory through the Emscripten loader.
+        target_link_options(android_system PRIVATE -sIMPORTED_MEMORY=1)
         # Android's liblog supplies these C symbols in the unified runtime. The
         # HAL's NDK routes still use wa_android_log for guest console output.
         target_compile_definitions(wa_hal_browser PRIVATE
@@ -47,6 +56,15 @@ if(EMSCRIPTEN)
             _wa_system_open_apk _wa_system_close_apk _wa_system_apk_info
             _wa_system_apk_compile_dex _wa_system_apk_dex_stats
             _wa_system_apk_load_native _wa_system_apk_set_backing_file)
+        list(APPEND exports
+            _wa_system_binder_attach _wa_system_servicemanager_start _wa_system_servicemanager_pump
+            _wa_system_server_start _wa_system_server_pump
+            _wa_system_client_install_apk _wa_system_client_query_launcher
+            _wa_system_client_resolve_home_activity _wa_system_client_get_package_info
+            _wa_system_client_start_activity _wa_system_client_start_home_activity
+            _wa_system_client_get_top_activity _wa_system_client_finish_top_activity)
+    else()
+        target_link_options(android_system PRIVATE -sFILESYSTEM=0)
     endif()
     list(JOIN exports "," exports)
     target_link_options(android_system PRIVATE "-sEXPORTED_FUNCTIONS=${exports}")
@@ -56,10 +74,11 @@ else()
     target_link_libraries(wa_android_system PUBLIC wa_libkern wa_linker_ffi
         PRIVATE wa_hal_browser svm_wasm svm_arm32_numeric svm_arm64_numeric)
     if(TARGET wa_android_system_apk)
-        target_link_libraries(wa_android_system PRIVATE wa_android_system_apk)
+        target_link_libraries(wa_android_system PRIVATE wa_android_system_apk wa_android_system_binder)
     endif()
 endif()
 
 if(BUILD_TESTING AND TARGET wa_android_system_apk)
     add_subdirectory(../../tests/m6_apk_chrome_e2e "${CMAKE_BINARY_DIR}/tests/m6_apk_chrome_e2e")
+    add_subdirectory(../../tests/m7_system_binder_e2e "${CMAKE_BINARY_DIR}/tests/m7_system_binder_e2e")
 endif()

@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>WasmAndroid M2 Binder verification</title>
-<h1>WasmAndroid M2 Binder verification</h1>
+<title>WasmAndroid M2 POSIX verification</title>
+<h1>WasmAndroid M2 POSIX verification</h1>
 <pre id="result">Running…</pre>
 <script type="module">
   import { runM2 } from './m2_worker.mjs';
@@ -10,7 +10,7 @@
   let result;
   try {
     if (!crossOriginIsolated) throw new Error('The E2E needs cross-origin isolation for SharedArrayBuffer');
-    const wasm = new URL('/build/m2_binder.wasm', location.href);
+    const wasm = new URL('/build/m2_posix.wasm', location.href);
     const module = await WebAssembly.compileStreaming(fetch(wasm));
     result = await runM2(module);
     const streams = performance.getEntriesByName(wasm.href, 'resource').length;

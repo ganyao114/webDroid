@@ -1,9 +1,8 @@
-#include "binder_fixture.h"
 #include "platform.h"
 #include "wasmandroid/libkern.h"
 
 #include <algorithm>
-#include <barrier>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -21,8 +20,6 @@
 
 namespace {
 
-using namespace m2;
-
 uint64_t address(const void* pointer) {
     return reinterpret_cast<uintptr_t>(pointer);
 }
@@ -30,121 +27,6 @@ uint64_t address(const void* pointer) {
 int64_t call(uint32_t id, uint64_t a = 0, uint64_t b = 0, uint64_t c = 0, uint64_t d = 0,
              uint64_t e = 0, uint64_t f = 0) {
     return wa_syscall(id, a, b, c, d, e, f);
-}
-
-void testParcel() {
-    Parcel parcel;
-    CHECK(parcel.writeInt32(0x12345678) == WA_OK);
-    CHECK(parcel.writeInt64(0x0102030405060708) == WA_OK);
-    CHECK(parcel.writeFloat(1.5F) == WA_OK);
-    CHECK(parcel.writeCString("AB") == WA_OK);
-    CHECK(parcel.writeString16(u"\u1234\U0001f642") == WA_OK);
-    const uint8_t bytes[] = {0xde, 0, 0x81};
-    CHECK(parcel.writeByteArray(bytes) == WA_OK);
-    CHECK(parcel.writeStrongBinder(BinderHandle{2, 0xabcdef}) == WA_OK);
-    CHECK(parcel.writeString16(nullptr) == WA_OK && parcel.writeByteArray(nullptr) == WA_OK);
-    CHECK(parcel.writeInterfaceToken(u"I") == WA_OK);
-    const uint8_t expected[] = {
-        0x78, 0x56, 0x34, 0x12, 8,   7,    6,    5,    4,    3,    2,    1,    0,
-        0,    0xc0, 0x3f, 'A',  'B', 0,    0,    3,    0,    0,    0,    0x34, 0x12,
-        0x3d, 0xd8, 0x42, 0xde, 0,   0,    3,    0,    0,    0,    0xde, 0,    0x81,
-        0,    2,    0,    0,    0,   0xef, 0xcd, 0xab, 0,    0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0,   0,    0,    0x80, 0xff, 0xff, 0xff, 0xff, 'T',
-        'S',  'Y',  'S',  1,    0,   0,    0,    'I',  0,    0,    0,
-    };
-    CHECK(std::ranges::equal(parcel.data(), expected));
-    CHECK(parcel.setDataPosition(0) == WA_OK && parcel.setDataPosition(1) == WA_ERR_INVALID);
-    int32_t small;
-    int64_t wide;
-    float real;
-    std::string cstring;
-    std::u16string text;
-    std::vector<uint8_t> payload;
-    BinderHandle handle;
-    bool is_null;
-    CHECK(parcel.readInt32(small) == WA_OK && small == 0x12345678);
-    CHECK(parcel.readInt64(wide) == WA_OK && wide == 0x0102030405060708);
-    CHECK(parcel.readFloat(real) == WA_OK && real == 1.5F);
-    CHECK(parcel.readCString(cstring) == WA_OK && cstring == "AB");
-    CHECK(parcel.readString16(text, &is_null) == WA_OK && !is_null && text == u"\u1234\U0001f642");
-    CHECK(parcel.readByteArray(payload) == WA_OK && std::ranges::equal(bytes, payload));
-    CHECK(parcel.readStrongBinder(handle) == WA_OK && (handle == BinderHandle{2, 0xabcdef}));
-    CHECK(parcel.readString16(text, &is_null) == WA_OK && is_null && text.empty());
-    CHECK(parcel.readByteArray(payload, &is_null) == WA_OK && is_null && payload.empty());
-    CHECK(!parcel.enforceInterface(u"Wrong") && parcel.enforceInterface(u"I") &&
-          !parcel.dataAvail());
-    CHECK(parcel.readInt32(small) == WA_ERR_INVALID);
-    Parcel malformed;
-    const uint8_t bad_string[] = {1, 0, 0, 0, 'x', 0, 1, 0};
-    CHECK(malformed.setData(bad_string) == WA_OK && malformed.readString16(text) == WA_ERR_INVALID);
-    CHECK(malformed.dataPosition() == 0);
-    std::vector<uint8_t> oversized(WA_BINDER_MAX_PAYLOAD);
-    CHECK(malformed.writeByteArray(oversized) == WA_ERR_OVERFLOW && malformed.dataPosition() == 0);
-
-    Parcel appended;
-    CHECK(appended.writeInt32(1234) == WA_OK && appended.writeByteArray(appended.data()) == WA_OK);
-    CHECK(appended.setDataPosition(4) == WA_OK && appended.readByteArray(payload) == WA_OK);
-    CHECK(std::ranges::equal(payload, appended.data().first(4)));
-}
-
-void testBinder() {
-    std::vector<uint64_t> ring(kRingBytes / sizeof(uint64_t));
-    BinderProcess manager(1, ring.data(), kRingBytes);
-    BinderProcess service(2, ring.data(), kRingBytes);
-    BinderProcess client(3, ring.data(), kRingBytes);
-    CHECK(ServiceManager::publish(service) == WA_ERR_INVALID);
-    CHECK(ServiceManager::publish(manager) == WA_OK &&
-          ServiceManager::publish(manager) == WA_ERR_EXIST);
-    std::atomic_bool stop = false;
-    auto serve = [&](BinderProcess& process) {
-        CHECK(process.attachThread() == WA_OK);
-        CHECK(process.serve(stop) == WA_OK);
-    };
-    std::jthread manager_worker([&] { serve(manager); });
-    auto calc = std::make_shared<Calc>();
-    std::jthread first_server([&] {
-        CHECK(service.attachThread() == WA_OK);
-        CHECK(service.registerBinder(calc) == WA_OK);
-        CHECK(service.registerBinder(calc) == WA_ERR_EXIST);
-        CHECK(defaultServiceManager()->addService(kServiceName, calc->handle()) == WA_OK);
-    });
-    first_server.join();
-    std::jthread server([&] { serve(service); });
-    std::jthread second_server([&] { serve(service); });
-    CHECK(client.attachThread() == WA_OK);
-    auto remote = lookupService();
-    CHECK(remote);
-    auto callback = std::make_shared<Callback>();
-    CHECK(client.registerBinder(callback) == WA_OK);
-    Parcel wrong, reply;
-    CHECK(wrong.writeInterfaceToken(u"android.test.Incorrect") == WA_OK);
-    CHECK(remote->transact(kCalculate, wrong, &reply) == WA_ERR_INVALID);
-    CHECK(remote->transact(UINT32_MAX, wrong, &reply) == WA_ERR_NOSYS);
-    BpBinder missing(client, {2, UINT32_MAX});
-    CHECK(missing.transact(kCalculate, wrong, &reply) == WA_ERR_NOENT);
-
-    constexpr int32_t workers = 8;
-    std::barrier start(workers);
-    std::vector<std::jthread> clients;
-    std::atomic<int32_t> complete = 0;
-    for (int32_t i = 0; i < workers; ++i) {
-        clients.emplace_back([&, i] {
-            CHECK(client.attachThread() == WA_OK);
-            start.arrive_and_wait();
-            for (int32_t index = i; index < kCalls; index += workers) {
-                Parcel request, response;
-                CHECK(makeRequest(request, index, callback));
-                CHECK(remote->transact(kCalculate, request, &response) == WA_OK);
-                CHECK(exactReply(response, index, callback));
-                ++complete;
-            }
-        });
-    }
-    clients.clear();
-    CHECK(complete == kCalls && doSyncCall(*remote, callback));
-    CHECK(callback->complete() && calc->calls() == kCalls + 1);
-    stop.store(true);
-    std::printf("PASS %d exact Parcel RPCs with callbacks across three vprocs\n", kCalls);
 }
 
 void testTimeRandomAndName() {
@@ -327,8 +209,6 @@ void testMemory() {
 } // namespace
 
 int main() {
-    testParcel();
-    testBinder();
     testTimeRandomAndName();
     testVectorAndPipe();
     testFile();
