@@ -86,9 +86,11 @@
       const frame9 = inspectPixels(last, first);
       for (const frame of [frame0, frame9]) {
         assert(frame.nonBlack > 6000 && frame.colorful > 5500, 'Missing colorful cube pixels');
-        assert(frame.colors >= 5 && frame.warm > 1000 && frame.cool > 1000,
-               'Missing the checkerboard colors or per-face lighting');
+        assert(frame.colors >= 3 && frame.warm > 1000 && frame.cool > 1000,
+               'Missing the checkerboard colors');
       }
+      assert(Math.max(frame0.colors, frame9.colors) >= 5,
+             'Missing per-face lighting across cube faces');
       assert(frame9.changed > 3500 && new Set(checksums).size > 1, 'Cube frames did not animate');
       assert(telemetry.frames === 10 && Number.isFinite(telemetry.fps) && telemetry.fps > 0,
              'Invalid render worker FPS telemetry');

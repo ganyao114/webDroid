@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 const demo = '/demos/ndk_gles3_cube';
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const scratch = dirname(repo);
-const build = join(scratch, 'wa-build-w3-wasm');
+const build = resolve(process.env.WA_HAL_BUILD_DIR ?? join(repo, 'build-hal-wasm'));
 const emscripten = resolve(process.env.WA_EMSCRIPTEN ?? join(scratch, 'emsdk/upstream/emscripten'));
 const chrome = process.env.CHROME_BIN ?? (process.platform === 'darwin'
   ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
