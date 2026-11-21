@@ -1,0 +1,3 @@
+# The boot chunk calls tightSum through the method table in the full chunk.
+LBenchmarkApp;->fib(I)I
+LBenchmarkApp;->profileEntry(I)I

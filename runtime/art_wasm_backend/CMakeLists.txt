@@ -1,0 +1,31 @@
+cmake_minimum_required(VERSION 3.20)
+
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    project(WasmAndroidArtWasm LANGUAGES C CXX)
+endif()
+
+get_filename_component(wa_root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+if(NOT TARGET wa_softmmu)
+    add_subdirectory("${wa_root}/runtime/softmmu_opfs" art_softmmu)
+endif()
+if(NOT TARGET wa_linker_ffi)
+    add_subdirectory("${wa_root}/runtime/linker_ffi" art_linker_ffi)
+endif()
+if(NOT TARGET wa_jni_dbt)
+    add_subdirectory("${wa_root}/tools/ffi_gen" art_ffi_gen)
+endif()
+
+add_library(wa_art_wasm STATIC dex_reader.cpp dalvik_ir.cpp codegen_wasm.cpp shadow_gc.cpp
+    jni_bridge.cpp)
+target_include_directories(wa_art_wasm PUBLIC "${wa_root}/include")
+target_compile_features(wa_art_wasm PUBLIC cxx_std_20)
+target_link_libraries(wa_art_wasm PRIVATE wa_jni_dbt wa_linker_ffi)
+set_target_properties(wa_art_wasm PROPERTIES POSITION_INDEPENDENT_CODE ON)
+if(EMSCRIPTEN)
+    target_compile_options(wa_art_wasm PRIVATE
+        -O3 -msimd128 -matomics -mbulk-memory -fwasm-exceptions)
+    target_link_options(wa_art_wasm INTERFACE -msimd128 -matomics -mbulk-memory -fwasm-exceptions)
+elseif(NOT CMAKE_CROSSCOMPILING)
+    add_executable(dex2wasm dex2wasm_main.cpp)
+    target_link_libraries(dex2wasm PRIVATE wa_art_wasm)
+endif()
