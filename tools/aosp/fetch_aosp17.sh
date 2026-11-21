@@ -34,11 +34,12 @@ clone_full platform/external/fmtlib external/fmtlib &
 clone_full platform/external/lz4 external/lz4 &
 clone_full platform/libnativehelper libnativehelper &
 clone_sparse platform/system/unwinding system/unwinding libunwindstack/include &
-clone_sparse platform/libcore libcore ojluni/src/main/java/java/lang luni/src/main/java libart/src/main/java &
+clone_sparse platform/libcore libcore ojluni/src/main/java/java/lang ojluni/src/main/java/java/util ojluni/src/main/java/java/io ojluni/src/main/java/java/nio ojluni/src/main/java/java/math ojluni/src/main/java/java/text luni/src/main/java libart/src/main/java &
 clone_sparse platform/bionic bionic libc/kernel/uapi/linux/android libc/kernel/uapi/asm-generic libc/include/android libc/include/sys &
 clone_sparse platform/system/core system/core libcutils libutils include libprocessgroup libsystem &
 clone_sparse platform/frameworks/native frameworks/native libs/binder cmds/servicemanager include headers &
-clone_sparse platform/frameworks/base frameworks/base libs/androidfw core/jni core/java/android/content/pm core/java/android/content/res core/java/com/android/internal/pm services/core/java/com/android/server/pm &
+clone_sparse platform/frameworks/base frameworks/base libs/androidfw core/jni core/java/android/app core/java/android/content core/java/android/graphics core/java/android/os core/java/android/util core/java/android/view core/java/android/widget core/java/android/text core/java/android/animation core/java/android/database core/java/com/android/internal/pm core/java/com/android/internal/util services/core/java/com/android/server/pm &
+clone_full platform/frameworks/libs/systemui frameworks/libs/systemui &
 clone_sparse platform/art art libartbase libdexfile compiler runtime &
 clone_full platform/packages/apps/Launcher3 packages/apps/Launcher3 &
 wait
