@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>AOSP 17 ServiceManager E2E</title>
+<pre id="result" aria-live="polite">Running AOSP 17 ServiceManager tests…</pre>
+<script type="module">
+  import { runServiceManager } from './m5_sm_worker.mjs';
+
+  let result;
+  try {
+    if (!crossOriginIsolated) throw new Error('Shared WebAssembly memory requires cross-origin isolation');
+    const module = await WebAssembly.compileStreaming(fetch('/build/test_aosp17_servicemanager.wasm'));
+    const js = new URL('/build/test_aosp17_servicemanager.mjs', location.href).href;
+    result = await runServiceManager(js, module);
+  } catch (error) {
+    result = { ok: false, error: error.stack || String(error) };
+  }
+  document.querySelector('#result').textContent = JSON.stringify(result, null, 2);
+  globalThis.__waServiceManagerResult = result;
+</script>
+</html>
