@@ -1,5 +1,6 @@
 #include "jni_bridge.h"
 
+#include <algorithm>
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
@@ -30,18 +31,6 @@ std::string EncodeUtf8(std::u16string_view text, bool modified) {
   return result;
 }
 
-Value Normalize(Value value, char type) {
-  switch (type) {
-    case 'L': case '[': return Value::Ref(value.ref());
-    case 'J': case 'D': return Value::Bits(value.bits());
-    case 'Z': return Value::Int(value.i() & 1);
-    case 'B': return Value::Int(static_cast<int8_t>(value.i()));
-    case 'C': return Value::Int(static_cast<uint16_t>(value.i()));
-    case 'S': return Value::Int(static_cast<int16_t>(value.i()));
-    default: return Value::Int(value.i());
-  }
-}
-
 Runtime::Runtime(Options opts)
     : options(std::move(opts)), linker(*this), jni(std::make_unique<JniBridge>(*this)) {
   InstallBootClasses();
@@ -50,9 +39,6 @@ Runtime::Runtime(Options opts)
 Runtime::~Runtime() = default;
 
 Value Runtime::Invoke(Method& method, Object* receiver, std::span<const Value> args) {
-  RootScope pinned(*this);
-  pinned.Hold(receiver);
-  pinned.values.insert(pinned.values.end(), args.begin(), args.end());
   if (args.size() + 1 != method.shorty.size()) {
     Fail("Ljava/lang/VerifyError;", "Wrong argument count for " + method.QualifiedName());
   }
@@ -63,10 +49,20 @@ Value Runtime::Invoke(Method& method, Object* receiver, std::span<const Value> a
     ~CallDepth() { --depth; }
   } depth(call_depth);
 
-  if (method.IsStatic()) linker.Initialize(*method.owner);
-  else NonNull(receiver);
+  const bool initializing = method.IsStatic() && method.owner->init_state != InitState::Initialized;
+  const bool synchronized = (method.flags & (art::kAccSynchronized | art::kAccDeclaredSynchronized)) != 0;
+  if (!method.IsStatic()) NonNull(receiver);
+  const bool promoting = method.stats.invocations + 1 == options.hotness_threshold && options.install_wasm;
+  if (method.code && !method.compiled && !promoting && !initializing && !synchronized) {
+    ++method.stats.invocations;
+    ++method.stats.interpreted;
+    return Interpret(method, receiver, args);
+  }
+
+  RootScope pinned(*this, args, receiver);
+  if (initializing) linker.Initialize(*method.owner);
   Object* monitor = nullptr;
-  if ((method.flags & (art::kAccSynchronized | art::kAccDeclaredSynchronized)) != 0) {
+  if (synchronized) {
     monitor = pinned.Hold(method.IsStatic() ? ClassObject(*method.owner) : receiver);
     ++monitor->monitor_depth;
   }
@@ -91,8 +87,7 @@ Value Runtime::Invoke(Method& method, Object* receiver, std::span<const Value> a
 }
 
 Object* Runtime::NewObject(Class& cls, Method& constructor, std::span<const Value> args) {
-  RootScope pinned(*this);
-  pinned.values.insert(pinned.values.end(), args.begin(), args.end());
+  RootScope pinned(*this, args);
   linker.Initialize(cls);
   if ((cls.flags & (art::kAccInterface | art::kAccAbstract)) != 0 || cls.IsArray() || cls.IsPrimitive()) {
     Fail("Ljava/lang/InstantiationError;", cls.descriptor);
@@ -116,7 +111,8 @@ Object* Runtime::NewArray(Class& cls, int32_t length) {
 }
 
 Object* Runtime::NewString(std::u16string text) {
-  Object* string = heap.Allocate(*this, linker.Resolve("Ljava/lang/String;"));
+  if (!string_class) string_class = &linker.Resolve("Ljava/lang/String;");
+  Object* string = heap.Allocate(*this, *string_class);
   string->text = std::move(text);
   return string;
 }
@@ -126,9 +122,14 @@ Object* Runtime::Intern(Object* string) {
   return it->second;
 }
 
-Object* Runtime::Intern(std::u16string text) {
+Object* Runtime::InternLiteral(std::u16string text) {
   const auto it = interned.find(text);
-  return it == interned.end() ? Intern(NewString(std::move(text))) : it->second;
+  Object* string = it == interned.end() ? Intern(NewString(std::move(text))) : it->second;
+  if (!string->dex_literal) {
+    dex_literals.push_back(string);
+    string->dex_literal = true;
+  }
+  return string;
 }
 
 Object* Runtime::ClassObject(Class& cls) {
@@ -137,11 +138,6 @@ Object* Runtime::ClassObject(Class& cls) {
     cls.mirror->represented_class = &cls;
   }
   return cls.mirror;
-}
-
-Object& Runtime::NonNull(Object* object) {
-  if (!object) Fail("Ljava/lang/NullPointerException;");
-  return *object;
 }
 
 Value& Runtime::ArrayElement(Object& array, int32_t index) {
@@ -249,8 +245,11 @@ GcStats Vm::HeapStats() const { return runtime_->heap.Stats(); }
 MethodStats Vm::GetMethodStats(std::string_view owner, std::string_view name, std::string_view signature) {
   return runtime_->linker.FindMethod(runtime_->linker.Resolve(owner), name, signature, true).stats;
 }
-size_t Vm::ExecutedOpcodeCount() const { return runtime_->executed_opcodes.count(); }
+size_t Vm::ExecutedOpcodeCount() const { return std::ranges::count(runtime_->executed_opcodes, 1); }
 uint64_t Vm::NativeCalls(std::string_view owner) const { return runtime_->jni->Calls(owner); }
+bool Vm::HasClass(std::string_view descriptor) const { return runtime_->linker.HasClass(descriptor); }
+void Vm::SetGcPaused(bool paused) { runtime_->gc_paused = paused; }
+void Vm::SetInlineCachesEnabled(bool enabled) { runtime_->inline_caches = enabled; }
 
 ScopedHandleScope::ScopedHandleScope(Vm& vm) : roots_(std::make_unique<RootScope>(*vm.runtime_)) {}
 ScopedHandleScope::~ScopedHandleScope() = default;

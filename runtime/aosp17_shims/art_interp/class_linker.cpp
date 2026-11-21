@@ -51,7 +51,11 @@ void ClassLinker::LoadDexFile(std::string location, std::vector<uint8_t> bytes) 
   decltype(classes_) pending;
   for (const art::ClassAccessor accessor : unit.dex->GetClasses()) {
     std::string descriptor(accessor.GetDescriptorView());
-    if (classes_.contains(descriptor) || pending.contains(descriptor)) {
+    const auto loaded = classes_.find(descriptor);
+    // Boot classes are the parent namespace. Framework DEX may include definitions
+    // for its own build profile, but references link to the installed boot class.
+    if (loaded != classes_.end() && !loaded->second.dex) continue;
+    if (loaded != classes_.end() || pending.contains(descriptor)) {
       throw std::runtime_error("Duplicate DEX class " + descriptor + " from " + location);
     }
     Class& cls = pending[descriptor];
@@ -79,6 +83,7 @@ Class& ClassLinker::Define(std::string_view name, std::string_view super, uint32
   if (!added) throw std::logic_error("Duplicate boot class " + std::string(name));
   Class& cls = it->second;
   cls.descriptor = name;
+  cls.kind = name.front();
   cls.superclass_descriptor = super;
   cls.flags = flags;
   cls.interface_descriptors.assign(interfaces.begin(), interfaces.end());
@@ -88,7 +93,7 @@ Class& ClassLinker::Define(std::string_view name, std::string_view super, uint32
 Field& ClassLinker::AddField(Class& cls, std::string_view name, std::string_view type,
                             bool is_static, Value initial) {
   auto [it, added] = cls.fields.emplace(MemberKey(name, type),
-      Field{&cls, std::string(name), std::string(type), is_static, 0, initial});
+      Field{&cls, std::string(name), std::string(type), type.front(), is_static, 0, initial});
   if (!added) throw std::logic_error("Duplicate field " + cls.descriptor + "->" + std::string(name));
   cls.field_order.push_back(&it->second);
   return it->second;
@@ -116,6 +121,13 @@ Class& ClassLinker::Resolve(std::string_view descriptor) {
   }
   Link(it->second);
   return it->second;
+}
+
+bool ClassLinker::HasClass(std::string_view descriptor) const {
+  const size_t component = descriptor.find_first_not_of('[');
+  if (component == std::string_view::npos || component > 255) return false;
+  descriptor.remove_prefix(component);
+  return (component == 0 || descriptor != "V") && classes_.contains(descriptor);
 }
 
 void ClassLinker::LoadMembers(Class& cls) {
@@ -223,7 +235,7 @@ void ClassLinker::InitializeConstants(Class& cls) {
       case Encoded::kBoolean: field->value = Value::Int(literal.z); break;
       case Encoded::kNull: field->value = {}; break;
       case Encoded::kString:
-        field->value = Value::Ref(runtime_.Intern(DecodeUtf8(dex.GetStringData(art::dex::StringIndex(literal.i)))));
+        field->value = Value::Ref(runtime_.InternLiteral(DecodeUtf8(dex.GetStringData(art::dex::StringIndex(literal.i)))));
         break;
       case Encoded::kType:
         field->value = Value::Ref(runtime_.ClassObject(Resolve(dex.GetTypeDescriptorView(art::dex::TypeIndex(literal.i)))));

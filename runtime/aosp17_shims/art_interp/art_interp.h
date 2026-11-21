@@ -105,6 +105,13 @@ class Vm {
   static size_t SupportedOpcodeCount();
   uint64_t NativeCalls(std::string_view owner) const;
 
+  // Looks up a DEX descriptor in the VM's class namespace.
+  bool HasClass(std::string_view descriptor) const;
+  // Defers allocation-triggered collections. Explicit Collect() remains available.
+  void SetGcPaused(bool paused);
+  // Switches resolution caches off or on for the same loaded methods.
+  void SetInlineCachesEnabled(bool enabled);
+
  private:
   friend class ScopedHandleScope;
   std::unique_ptr<Runtime> runtime_;
