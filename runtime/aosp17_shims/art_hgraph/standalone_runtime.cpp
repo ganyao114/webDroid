@@ -16,6 +16,7 @@
 // methods. This backend uses explicit checks and never calls those methods.
 #ifdef ART_PAGE_SIZE_AGNOSTIC
 const size_t art::PageSize::value_ = art::GetPageSizeSlow();
+art::PageSize art::gPageSize ALWAYS_HIDDEN;
 #endif
 
 namespace wa::hgraph {
