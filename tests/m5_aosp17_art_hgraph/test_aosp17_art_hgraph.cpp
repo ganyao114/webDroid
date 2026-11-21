@@ -1,4 +1,6 @@
 #include "code_generator_wasm_hgraph.h"
+#include "standalone_runtime.h"
+#include "wasmandroid/art_wasm.h"
 
 #include "arch/instruction_set.h"
 #include "base/calloc_arena_pool.h"
@@ -22,11 +24,25 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <set>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
 
 namespace {
+
+static_assert(offsetof(wa_art_thread_t, ref_stack) == wa::hgraph::kRefStack);
+static_assert(offsetof(wa_art_thread_t, ref_top) == wa::hgraph::kRefTop);
+static_assert(offsetof(wa_art_thread_t, suspend_flag) == wa::hgraph::kSuspendFlag);
+static_assert(offsetof(wa_art_thread_t, pending_exception) == wa::hgraph::kPendingException);
+static_assert(offsetof(wa_art_thread_t, ref_capacity) == wa::hgraph::kRefCapacity);
+using wa::hgraph::JavaException;
+static_assert(static_cast<uint32_t>(JavaException::NullPointer) == WA_ART_NULL_POINTER);
+static_assert(static_cast<uint32_t>(JavaException::Arithmetic) == WA_ART_ARITHMETIC);
+static_assert(static_cast<uint32_t>(JavaException::ArrayBounds) == WA_ART_ARRAY_BOUNDS);
+static_assert(static_cast<uint32_t>(JavaException::ClassCast) == WA_ART_CLASS_CAST);
+static_assert(static_cast<uint32_t>(JavaException::StackOverflow) == WA_ART_STACK_OVERFLOW);
+static_assert(static_cast<uint32_t>(JavaException::NoSuchMethod) == WA_ART_NO_SUCH_METHOD);
 
 void Require(bool condition, std::string_view message) {
   if (!condition) {
@@ -116,19 +132,93 @@ void CheckOptimizations(std::string_view method,
   }
 }
 
-void Run(const char* dex_path, const char* output) {
+void WriteWasm(const char* output, std::span<const uint8_t> wasm) {
+  std::ofstream file(output, std::ios::binary | std::ios::trunc);
+  file.write(reinterpret_cast<const char*>(wasm.data()), wasm.size());
+  file.close();
+  Require(static_cast<bool>(file), "Could not write the emitted WebAssembly module");
+}
+
+void RunObjects(const art::DexFile& dex, const char* output) {
+  art::CallocArenaPool pool;
+  art::ArenaAllocator allocator(&pool);
+  art::ArenaStack stack(&pool);
+  const art::CompilerOptions compiler_options;
+  const wa::hgraph::ScopedObjectCompilation objects(dex);
+  std::vector<wa::hgraph::WasmMethod> methods;
+  std::set<std::string_view> nodes;
+  size_t reference_loop_phis = 0;
+  size_t catch_phis = 0;
+  for (const art::ClassAccessor cls : dex.GetClasses()) {
+    for (const auto& method : cls.GetMethods()) {
+      if (method.GetCodeItem() == nullptr) {
+        continue;  // Abstract declarations remain available for virtual resolution.
+      }
+      const uint32_t index = method.GetIndex();
+      const auto flags = method.GetAccessFlags();
+      const auto kind = method.GetInvokeType(cls.GetClassDef().access_flags_);
+      const std::string name = dex.PrettyMethod(index);
+      const art::DexCompilationUnit unit({}, nullptr, dex, method.GetCodeItem(),
+                                         cls.GetClassDefIndex(), index, flags, nullptr, {});
+      auto* graph = new (&allocator) art::HGraph(&allocator, &stack, nullptr, dex, index,
+                                                art::InstructionSet::kNone, kind);
+      const art::CodeItemDebugInfoAccessor debug_code(dex, method.GetCodeItem(), index);
+      art::HGraphBuilder builder(graph, &unit, debug_code,
+                                 art::DataType::FromShorty(unit.GetShorty()[0]));
+      const auto result = builder.BuildGraph();
+      Require(result == art::kAnalysisSuccess && graph->IsInSsaForm(),
+              name + " failed HGraphBuilder (analysis result " + std::to_string(result) + ")");
+      CheckGraph(*graph, name, "after SSA");
+      art::HConstantFolding(graph, compiler_options).Run();
+      CheckGraph(*graph, name, "after constant folding");
+      art::HDeadCodeElimination(
+          graph, nullptr, art::HDeadCodeElimination::kDeadCodeEliminationPassName).Run();
+      CheckGraph(*graph, name, "after dead code elimination");
+      for (const auto* block : graph->GetReversePostOrder()) {
+        for (const auto* phi = block->GetFirstPhi(); phi != nullptr; phi = phi->GetNext()) {
+          reference_loop_phis += block->IsLoopHeader() &&
+                                 phi->GetType() == art::DataType::Type::kReference;
+          catch_phis += block->IsCatchBlock();
+        }
+        for (const auto* inst = block->GetFirstInstruction(); inst != nullptr; inst = inst->GetNext()) {
+          nodes.insert(inst->DebugName());
+        }
+      }
+      const bool exported = cls.GetDescriptorView() == "LHGraphObjectsProbe;" &&
+                            kind == art::kStatic && (flags & art::kAccPublic) != 0;
+      methods.push_back({graph, exported ? dex.GetMethodName(index) : std::string_view{}});
+    }
+  }
+  for (const auto* node : {"NewInstance", "NewArray", "ArrayLength", "ArrayGet", "ArraySet",
+                           "InstanceFieldGet", "InstanceFieldSet", "StaticFieldGet",
+                           "StaticFieldSet", "InvokeStaticOrDirect", "InvokeVirtual",
+                           "InvokeInterface", "LoadString", "CheckCast", "InstanceOf",
+                           "NullCheck", "BoundsCheck", "Throw", "LoadException", "TryBoundary"}) {
+    Require(nodes.contains(node), std::string("Expected optimized HGraph node ") + node);
+  }
+  Require(reference_loop_phis != 0 && catch_phis != 0, "Expected reference loop and catch phis");
+  WriteWasm(output, wa::hgraph::CodeGeneratorWasm::CompileObjects(methods));
+  std::cout << "ART verified DEX and checked " << methods.size() << " optimized object SSA graphs, "
+            << reference_loop_phis << " reference loop phis and " << catch_phis << " catch phis\n";
+}
+
+void Run(const char* dex_path, const char* output, bool objects) {
   std::ifstream input(dex_path, std::ios::binary);
   Require(input.is_open(), "Could not open classes.dex");
   const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(input),
                                    std::istreambuf_iterator<char>()};
   std::string error;
-  const std::string location = "HGraphProbe/classes.dex";
+  const std::string location = objects ? "HGraphObjectsProbe/classes.dex" : "HGraphProbe/classes.dex";
   art::ArtDexFileLoader loader(bytes.data(), bytes.size(), location);
   auto dex = loader.OpenOne(0, 0, nullptr, /*verify=*/false, /*verify_checksum=*/false, &error);
   Require(dex != nullptr, error);
   const bool verified = art::dex::Verify(dex.get(), location.c_str(), /*verify_checksum=*/true,
                                          &error);
   Require(verified, error);
+  if (objects) {
+    RunObjects(*dex, output);
+    return;
+  }
   Require(dex->NumClassDefs() == 1, "Expected one probe class");
 
   art::CallocArenaPool pool;
@@ -185,23 +275,20 @@ void Run(const char* dex_path, const char* output) {
     }
     methods.push_back({graph, name});
   }
-  const auto wasm = wa::hgraph::CodeGeneratorWasm::Compile(methods);
-  std::ofstream file(output, std::ios::binary | std::ios::trunc);
-  file.write(reinterpret_cast<const char*>(wasm.data()), wasm.size());
-  file.close();
-  Require(static_cast<bool>(file), "Could not write the emitted WebAssembly module");
+  WriteWasm(output, wa::hgraph::CodeGeneratorWasm::Compile(methods));
   std::cout << "ART verified DEX and checked " << methods.size() << " optimized SSA graphs\n";
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-  if (argc != 3) {
-    std::cerr << "Usage: test_aosp17_art_hgraph classes.dex hgraph_probe.wasm\n";
+  const bool objects = argc == 4 && std::string_view(argv[3]) == "--objects";
+  if (argc != 3 && !objects) {
+    std::cerr << "Usage: test_aosp17_art_hgraph classes.dex output.wasm [--objects]\n";
     return 2;
   }
   try {
-    Run(argv[1], argv[2]);
+    Run(argv[1], argv[2], objects);
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

@@ -57,11 +57,15 @@ def builder(source):
   if (dex_compilation_unit_ == nullptr ||
       graph_->GetMethodIdx() != dex_compilation_unit_->GetDexMethodIndex() ||
       &graph_->GetDexFile() != dex_compilation_unit_->GetDexFile() ||
-      graph_->GetInvokeType() != kStatic || graph_->GetArtMethod() != nullptr ||
+      graph_->GetArtMethod() != nullptr ||
       !wa::hgraph::IsStandaloneMethod(*dex_compilation_unit_) ||
       graph_->IsDebuggable() || graph_->IsCompilingOsr() || graph_->IsCompilingBaseline() ||
-      graph_->GetProfilingInfo() != nullptr || !code_item_accessor_.HasCodeItem() ||
-      code_item_accessor_.TriesSize() != 0) {
+      graph_->GetProfilingInfo() != nullptr || !code_item_accessor_.HasCodeItem()) {
+    return kAnalysisSkipped;
+  }
+  if ((graph_->GetInvokeType() == kStatic) != dex_compilation_unit_->IsStatic() ||
+      (!wa::hgraph::IsObjectCompilation(graph_->GetDexFile()) &&
+       (graph_->GetInvokeType() != kStatic || code_item_accessor_.TriesSize() != 0))) {
     return kAnalysisSkipped;
   }
   DCHECK(code_item_accessor_.HasCodeItem());""")
@@ -96,43 +100,148 @@ def instruction_builder(source):
     source = replace_range(source, "      // Note: There may be no Thread for gtests.",
                            "      if (!ProcessDexInstruction(")
     source = replace_range(source, "      DCHECK(Thread::Current()", "\n    }")
-    source = replace_range(source, "// Does the method being compiled need any constructor barriers",
-                           "template <DataType::Type kType>\nALWAYS_INLINE inline void HInstructionBuilder::BuildMove")
-    source = replace_range(source, "    // Only <init>", "    if (graph_->IsDebuggable()")
-    source = replace(source, "    DCHECK(!RequiresConstructorBarrier(dex_compilation_unit_));\n", "")
+    # Substitute managed method resolution. Keep ART's argument setup, receiver
+    # null checks, environments and move-result handling.
+    source = replace_range(source, "// Try to resolve a method using the class linker.",
+                           "bool HInstructionBuilder::BuildInvoke(")
+    source = replace_range(source, "  MethodReference resolved_method_reference(nullptr, 0u);",
+                           "  HInvoke* invoke = nullptr;\n  if (invoke_type == kDirect",
+                           '#include "dex_invoke.inc"\n\n')
+    source = replace_range(source, "    // For sharpening, we create another MethodReference,",
+                           "    invoke = new (allocator_) HInvokeStaticOrDirect(allocator_", """\
+    if (invoke_type == kSuper) {
+      method_reference.index = resolved;
+    }
+    const bool recursive = graph_->GetMethodIdx() == resolved;
+    HInvokeStaticOrDirect::DispatchInfo dispatch_info = {
+        recursive ? MethodLoadKind::kRecursive : MethodLoadKind::kRuntimeCall,
+        recursive ? CodePtrLocation::kCallSelf : CodePtrLocation::kCallArtMethod,
+        0u};
+""")
+    source = replace_range(source,
+                           "    if (kIsDebugBuild) {\n"
+                           "      ScopedObjectAccess soa(Thread::Current());\n"
+                           "      DCHECK(resolved_method->GetDeclaringClass()->IsInterface());",
+                           "    invoke = new (allocator_) HInvokeInterface(",
+                           "    constexpr MethodLoadKind load_kind = MethodLoadKind::kRuntimeCall;\n")
+    start = source.index("bool HInstructionBuilder::BuildInvoke(")
+    end = source.index("\n}", start)
+    source = (source[:start] +
+              replace(source[start:end], "!graph_->IsDebuggable());",
+                      "/*enable_intrinsic_opt=*/false);", 3) +
+              source[end:])
+    source = replace_range(source, "// This function initializes `VarHandleOptimizations`",
+                           "HNewInstance* HInstructionBuilder::BuildNewInstance")
+    source = replace_range(source, "static bool IsInImage(ObjPtr<mirror::Class>",
+                           "bool HInstructionBuilder::SetupInvokeArguments")
+    source = replace_range(source,
+                           "  ScopedObjectAccess soa(Thread::Current());\n\n"
+                           "  HLoadClass* load_class = BuildLoadClass(type_index, dex_pc);",
+                           "  HNewInstance* new_instance", """\
+  HInstruction* cls = BuildLoadClass(type_index, dex_pc);
+  constexpr QuickEntrypointEnum entrypoint = kQuickAllocObjectWithChecks;
+  constexpr bool finalizable = false;
 
-    # Substitute method resolution only. Keep ART's argument setup, environments
-    # and move-result handling for the same HInvokeStaticOrDirect instruction.
-    source = replace_range(source, "static InvokeType GetInvokeTypeFromOpCode",
-                           "bool HInstructionBuilder::SetupInvokeArguments",
-                           '#include "static_invoke.inc"\n\n')
+""")
+    source = replace_range(source, "  if (allocation->IsNewInstance()) {",
+                           "  // JLS 17.4.5", """\
+  if (allocation->IsNewInstance() && allocation->AsNewInstance()->IsStringAlloc()) {
+    return;
+  }
+
+""")
     source = replace_range(source, "  if (invoke->IsInvokePolymorphic()) {",
                            "  return true;\n}", "")
     source = replace_range(source, "  if (invoke->IsInvokePolymorphic()) {",
                            "  return true;\n}", "")
     source = replace_range(source, "bool HInstructionBuilder::BuildSimpleIntrinsic",
-                           "void HInstructionBuilder::BuildCheckedDivRem")
-    source = replace_range(source, "void HInstructionBuilder::BuildArrayAccess",
-                           "bool HInstructionBuilder::ProcessDexInstruction")
+                           "static DataType::Type GetFieldAccessType")
+    source = replace_range(source, "  ScopedObjectAccess soa(Thread::Current());\n"
+                           "  ArtField* resolved_field = ResolveField(field_index, /* is_static= */ false",
+                           "  DataType::Type field_type = GetFieldAccessType(*dex_file_, field_index);",
+                           """\
+  const auto field = wa::hgraph::ResolveField(*dex_file_, field_index, /*is_static=*/false);
+  if (!field.owner.IsValid()) {
+    return false;
+  }
+  HInstruction* object = LoadNullCheckedLocal(obj_reg, dex_pc);
+
+""")
+    for access in ("set", "get"):
+        source = replace_range(source, f"    HInstruction* field_{access} = nullptr;",
+                               f"field_{access} = new (allocator_) HInstanceField",
+                               "    auto* ")
+        source = replace(source, f"dex_pc);\n    }}\n    AppendInstruction(field_{access});",
+                         f"dex_pc);\n    AppendInstruction(field_{access});")
+    source = replace_range(source,
+                           "ArtField* HInstructionBuilder::ResolveField(",
+                           "void HInstructionBuilder::BuildStaticFieldAccess")
+    source = replace_range(source, "  ScopedObjectAccess soa(Thread::Current());\n"
+                           "  ArtField* resolved_field = ResolveField(field_index, /* is_static= */ true",
+                           "  if (is_put) {\n    // We need to keep the class alive", """\
+  const auto field = wa::hgraph::ResolveField(*dex_file_, field_index, /*is_static=*/true);
+  const DataType::Type field_type = GetFieldAccessType(*dex_file_, field_index);
+  if (!field.owner.IsValid()) {
+    BuildUnresolvedStaticFieldAccess(instruction, dex_pc, is_put, field_type);
+    return;
+  }
+  HInstruction* cls = BuildLoadClass(field.owner, dex_pc);
+
+""")
+    # Field nodes compare offsets in optimizer passes. Use a unique offset
+    # per resolved field identity. The Wasm emitter accesses fields by DEX ID.
+    for original, replacement in (
+        ("resolved_field,", "/*resolved_field=*/nullptr,"),
+        ("resolved_field->GetOffset(),", "MemberOffset(field.index * sizeof(uint64_t)),"),
+        ("resolved_field->IsVolatile(),", "field.is_volatile,"),
+        ("class_def_index,\n", "field.class_def_index,\n"),
+    ):
+        source = replace(source, original, replacement, 4)
+
+    source = replace_range(source, "  HSharpening::ProcessLoadString(load_string,",
+                           "  AppendInstruction(load_string);")
+    source = replace_range(source, "  ScopedObjectAccess soa(Thread::Current());\n"
+                           "  const DexFile& dex_file = *dex_compilation_unit_->GetDexFile();\n"
+                           "  Handle<mirror::Class> klass = ResolveClass(soa, type_index);",
+                           "  HLoadClass* load_class = new (allocator_) HLoadClass(", """\
+  const DexFile* actual_dex_file = dex_file_;
+  Handle<mirror::Class> klass;
+  const bool is_referrers_class = false;
+  const bool needs_access_check = false;
+""")
+    source = replace_range(source, "  HLoadClass::LoadKind load_kind = HSharpening",
+                           "  AppendInstruction(load_class);")
+    source = replace_range(source, "Handle<mirror::Class> HInstructionBuilder::ResolveClass(",
+                           "void HInstructionBuilder::BuildTypeCheck(bool")
+    source = replace_range(source, "  ScopedObjectAccess soa(Thread::Current());\n"
+                           "  const DexFile& dex_file = *dex_compilation_unit_->GetDexFile();",
+                           "  DCHECK(class_or_null != nullptr);", """\
+  Handle<mirror::Class> klass;
+  constexpr TypeCheckKind check_kind = TypeCheckKind::kUnresolvedCheck;
+  HInstruction* class_or_null = BuildLoadClass(type_index, dex_pc);
+  HIntConstant* bitstring_path_to_root = nullptr;
+  HIntConstant* bitstring_mask = nullptr;
+""")
+    source = replace_range(source, "    // We emit a CheckCast followed by a BoundType.",
+                           "    AppendInstruction(\n        new (allocator_) HCheckCast", """\
+    // The Wasm runtime checks the cast without changing the reference value.
+""")
+    source = replace(source, "    AppendInstruction(new (allocator_) HBoundType(object, dex_pc));\n",
+                     "")
+    source = replace(source, """\
+  } else {
+    DCHECK_EQ(instruction.Opcode(), Instruction::CHECK_CAST);
+    UpdateLocal(reference, current_block_->GetLastInstruction());
+""", "")
     source = replace_range(source, "ObjPtr<mirror::Class> HInstructionBuilder::LookupResolvedType",
                            "}  // namespace art")
 
-    # Retain upstream decoding of all primitive instructions. Fail through the
-    # existing diagnostic path for bytecodes that depend on the runtime.
-    for first, after in (("MOVE_OBJECT:", "RETURN_VOID:"), ("RETURN_OBJECT:", "RETURN_WIDE:"),
-                         ("INVOKE_POLYMORPHIC:", "NEG_INT:"), ("NEW_INSTANCE:", "MOVE_RESULT:"),
-                         ("IGET:", "UNUSED_3E")):
+    # Keep upstream opcode decoding and IR construction for the operations
+    # above. Bytecodes that require the managed runtime fail as unsupported.
+    for first, after in (("INVOKE_POLYMORPHIC:", "NEG_INT:"),
+                         ("CONST_CLASS:", "MOVE_EXCEPTION:"),
+                         ("MONITOR_ENTER:", "SPARSE_SWITCH:")):
         source = replace_range(source, f"    case Instruction::{first}", f"    case Instruction::{after}")
-    for suffix in ("", "_RANGE"):
-        for kind in ("DIRECT", "INTERFACE", "SUPER"):
-            source = replace(source, f"    case Instruction::INVOKE_{kind}{suffix}:\n", "")
-        source = replace(source,
-                         f"    case Instruction::INVOKE_STATIC{suffix}:\n"
-                         f"    case Instruction::INVOKE_VIRTUAL{suffix}: {{",
-                         f"    case Instruction::INVOKE_STATIC{suffix}: {{")
-    source = replace(source,
-                     "    case Instruction::MOVE_RESULT_WIDE:\n    case Instruction::MOVE_RESULT_OBJECT: {",
-                     "    case Instruction::MOVE_RESULT_WIDE: {")
     source = replace_range(source, "    case Instruction::UNUSED_3E",
                            '      VLOG(compiler) << "Did not compile "', "    default: {\n")
     return replace(source, "code_generator_->GetCompilerOptions()",
@@ -215,8 +324,13 @@ def graph(source):
     source = replace(source, "Is64BitInstructionSet(instruction_set_) ?",
                      "(instruction_set_ != InstructionSet::kNone &&\n"
                      "         Is64BitInstructionSet(instruction_set_)) ?")
-    source = replace_body(source, "HNullConstant* HGraph::GetNullConstant()",
-                          '  wa::hgraph::RequiresArtRuntime("reference constants");')
+    source = replace(source, "    cached_null_constant_->SetReferenceTypeInfo(GetInexactObjectRti());\n", "")
+    source = replace(source, """\
+  if (kIsDebugBuild) {
+    ScopedObjectAccess soa(Thread::Current());
+    DCHECK(cached_null_constant_->GetReferenceTypeInfo().IsValid());
+  }
+""", "")
     return replace_body(source, "std::ostream& HGraph::Dump(", """\
   CHECK(codegen == nullptr);
   for (HBasicBlock* block : GetReversePostOrder()) {
@@ -236,19 +350,43 @@ def ssa_builder(source):
     for header in ("mirror/class-inl.h", "reference_type_propagation.h",
                    "scoped_thread_state_change-inl.h"):
         source = replace(source, f'#include "{header}"\n', "")
-    source = replace_range(source, "static HArrayGet* FindFloatOrDoubleEquivalentOfArrayGet(",
-                           "bool SsaBuilder::HasAliasInEnvironments(")
-    source = replace_range(source, "HArrayGet* SsaBuilder::GetFloatOrDoubleEquivalentOfArrayGet(",
-                           "HInstruction* SsaBuilder::GetFloatOrDoubleEquivalent(")
-    source = replace(source,
-                     "  if (value->IsArrayGet()) {\n"
-                     "    return GetFloatOrDoubleEquivalentOfArrayGet(value->AsArrayGet());\n"
-                     "  } else if (value->IsLongConstant()) {",
-                     "  CHECK(!value->IsArrayGet());\n  if (value->IsLongConstant()) {")
+    source = replace(source, '#include "nodes.h"\n',
+                     '#include "nodes.h"\n#include "standalone_runtime.h"\n')
+    source = replace_range(source, "static DataType::Type GetPrimitiveArrayComponentType(",
+                           "bool SsaBuilder::FixAmbiguousArrayOps()")
+    source = replace(source, "  {\n    ScopedObjectAccess soa(Thread::Current());\n",
+                     "  {\n")
+    source = replace(source, """\
+      ScopedObjectAccess soa(Thread::Current());
+      DCHECK(DataType::IsIntOrLongType(GetPrimitiveArrayComponentType(aget->GetArray())));
+""", """\
+      DCHECK(DataType::IsIntOrLongType(
+          wa::hgraph::ArrayComponentType(aget->GetArray(), aget, aget->GetType())));
+""")
+    source = replace(source, "      HArrayGet* aget_float = FindFloatOrDoubleEquivalentOfArrayGet(aget_int);\n",
+                     "")
+    for op in ("aget_int", "aset"):
+        if op == "aget_int":
+            hint = """\
+      HArrayGet* aget_float = FindFloatOrDoubleEquivalentOfArrayGet(aget_int);
+      const DataType::Type hint = (aget_float == nullptr) ? aget_int->GetType() : aget_float->GetType();
+"""
+        else:
+            hint = "      const DataType::Type hint = DataType::Kind(aset->GetValue()->GetType());\n"
+        source = replace(source, f"""\
+      HInstruction* array = {op}->GetArray();
+      if (!array->GetReferenceTypeInfo().IsValid() ||
+          !array->GetReferenceTypeInfo().IsPrimitiveArrayClass()) {{
+""", hint + f"""\
+      DataType::Type array_type = wa::hgraph::ArrayComponentType({op}->GetArray(), {op}, hint);
+      if (array_type == DataType::Type::kVoid) {{
+""")
+    source = replace(source, "      DataType::Type array_type = GetPrimitiveArrayComponentType(array);\n",
+                     "", 2)
     return replace_range(source, "  // Compute type of reference type instructions.",
-                         "  // Mark dead phis.", """\
-  // The standalone builder admits only primitive values and has no class metadata.
-  CHECK(ambiguous_agets_.empty() && ambiguous_asets_.empty());
+                         "  // HInstructionBuilder duplicated", """\
+  // Managed reference handles are unavailable. FixAmbiguousArrayOps resolves
+  // primitive array descriptors directly from DEX-backed graph definitions.
 
 """)
 

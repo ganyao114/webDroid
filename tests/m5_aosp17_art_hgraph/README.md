@@ -11,17 +11,17 @@ add this test directory to a CMake project to build the probe as well.
 Run these commands from the worker worktree.
 
 ```sh
-cmake -S tests/m5_aosp17_art_hgraph -B ../wa-build-w14-host -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build ../wa-build-w14-host
-ctest --test-dir ../wa-build-w14-host -V
+cmake -S tests/m5_aosp17_art_hgraph -B ../wa-build-w16-host -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build ../wa-build-w16-host
+ctest --test-dir ../wa-build-w16-host -V
 
 export EM_CONFIG="$PWD/../emsdk/.emscripten"
-export EM_CACHE="$PWD/../wa-build-w14-wasm/em-cache"
+export EM_CACHE="$PWD/../wa-build-w16-wasm/em-cache"
 ../emsdk/upstream/emscripten/emcmake cmake \
-    -S tests/m5_aosp17_art_hgraph -B ../wa-build-w14-wasm -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -S tests/m5_aosp17_art_hgraph -B ../wa-build-w16-wasm -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CROSSCOMPILING_EMULATOR=/opt/homebrew/bin/node
-cmake --build ../wa-build-w14-wasm
-ctest --test-dir ../wa-build-w14-wasm -V
+cmake --build ../wa-build-w16-wasm
+ctest --test-dir ../wa-build-w16-wasm -V
 ```
 
 CMake uses `/usr/bin/javac`, SDK 36 `d8` and `android.jar`, and Node from
@@ -33,31 +33,49 @@ The probe checks DEX with `ArtDexFileLoader` and `dex::Verify`.
 `HGraphBuilder` runs ART's block builder, instruction builder, dominator and
 loop analysis, `SsaBuilder`, and phi elimination. The test runs
 `HConstantFolding`, `HDeadCodeElimination`, `InstructionSimplifier` and
-`HControlFlowSimplifier`, with `GraphChecker` after each stage. It checks
+`HControlFlowSimplifier` on the scalar graph, with `GraphChecker` after each stage. It checks
 `folded` for pass-by-pass instruction and block reductions. It also checks
 loop phis, recursive and helper invokes, rotates, and an upstream-generated
-`HSelect`. The Node harness validates and runs every exported method.
+`HSelect`. The scalar Node harness runs all 98 cases.
 
-The host executable writes `hgraph_probe.wasm` directly. In the Emscripten
-test, the ART loader, SSA pipeline and emitter run in
-`test_aosp17_art_hgraph.wasm`. The JS harness moves the verified input and
-emitted module through that instance's filesystem.
+`HGraphObjectsProbe.java` goes through the same DEX verifier and SSA builder,
+then runs `HConstantFolding`, `HDeadCodeElimination` and `GraphChecker`.
+The build emits `hgraph_objects.wasm`. CTest recompiles it and exercises fields,
+constructors, polymorphic calls, arrays, casts, strings, typed catches and
+exception propagation out of a callee. The stress test collects a 16 KiB heap
+using the production `shadow_gc.cpp`. It checks the exact live count while a
+compiled loop's linked list and reference array are still rooted, verifies their
+fields and links, then collects again after the frame returns.
 
-## Standalone compiler scope
+The host executable writes the emitted modules directly. In the Emscripten
+tests, the ART loader, SSA pipeline and emitter run in
+`test_aosp17_art_hgraph.wasm`. The Node harness runs the emitted modules and
+uses `wa_hgraph_shadow_wasm.wasm` for the collector.
 
-The build compiles ART's primitive graph construction and optimization
-implementations from the read-only checkout and from generated copies under
-`aosp17-art-hgraph/upstream` in the build directory. The generated copies
-isolate the class linker, reference type analysis, managed thread state and
-native code generator. `static_invoke.inc` resolves calls through the DEX
-class data and passes real `HInvokeStaticOrDirect` instructions to ART's
-argument and environment setup.
+## Standalone compiler API
 
-The standalone builder accepts type-valid primitive static methods in classes
-with `java.lang.Object` as their superclass and with zero interfaces and class
-initializers. Calls resolve to static methods in the same class. Every call
-target needs a graph in the same Wasm module. The backend expects UTF-8 export
-names supplied by its caller. Integer division by zero traps in Wasm.
+`CodeGeneratorWasm::Compile` takes the existing scalar graphs and produces an
+import-free module. Scalar division by zero traps in Wasm.
+
+For object graphs, create a `wa::hgraph::ScopedObjectCompilation` for the
+verified DEX while calling upstream `HGraphBuilder`. Pass the checked SSA
+graphs to `CodeGeneratorWasm::CompileObjects`. The generated copies of ART
+under `aosp17-art-hgraph/upstream` resolve types and members from the DEX in
+place of the managed class linker. ART still builds the nodes, environments,
+phis and exception edges.
+
+Each exported function takes a `wa_art_thread_t` address, then the receiver
+for an instance method, then the Java arguments. Use UTF-8 export names and an
+empty name for an internal function. Bind `env.memory` to an attached shadow
+heap, supply a `funcref` table with at least one slot per DEX method ID, and
+bind `env.rt_*` to the corresponding heap helpers. The module installs its
+functions at the original method IDs. Give `env.java_exception` an `i32`
+parameter for the thrown reference. An exception that leaves the module also
+publishes its reference in `pending_exception` for the caller to consume.
+
+Object compilation targets a single DEX with preinitialized classes and the
+shadow runtime's built-in constructors and exception hierarchy. Static storage
+starts from DEX encoded values and remains shared by calls using the same heap.
 
 `CodeGeneratorWasm` visits the optimized ART instructions. A structured
 `loop` and `br_table` dispatch basic blocks. Each edge copies phi inputs
