@@ -39,6 +39,14 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     }
 
     private final Context context;
+    public static final int IMPORTANT_FOR_ACCESSIBILITY_AUTO = 0, IMPORTANT_FOR_ACCESSIBILITY_YES = 1,
+            IMPORTANT_FOR_ACCESSIBILITY_NO = 2, IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS = 4;
+    private int accessibilityImportance;
+    private float elevation;
+    private float pivotX = Float.NaN, pivotY = Float.NaN;
+    private ViewOutlineProvider outlineProvider;
+    private int[] drawableState;
+    private boolean hapticFeedbackEnabled = true, defaultFocusHighlightEnabled = true;
     private int id = NO_ID, visibility = VISIBLE, layoutDirection = LAYOUT_DIRECTION_INHERIT;
     private int left, top, right, bottom, measuredWidth, measuredHeight;
     private int paddingLeft, paddingTop, paddingRight, paddingBottom, paddingStart, paddingEnd;
@@ -90,6 +98,7 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
             minimumHeight = a.getDimensionPixelSize(11, 0);
             clickable = a.getBoolean(12, false);
             enabled = a.getBoolean(13, true);
+            drawableState = null;
             focusable = a.getBoolean(14, false);
             contentDescription = a.getText(15);
             alpha = a.getFloat(16, 1f);
@@ -128,6 +137,7 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
         return root;
     }
     public boolean isAttachedToWindow() { return root != null; }
+    public android.os.IBinder getWindowToken() { return root == null ? null : root.getWindowToken(); }
     void attach(ViewRootImpl root) {
         this.root = root;
         onAttachedToWindow();
@@ -141,6 +151,54 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     protected void onAttachedToWindow() {}
     protected void onDetachedFromWindow() {}
     protected void onFinishInflate() {}
+    public void requestApplyInsets() { if (root != null) root.requestApplyInsets(); }
+    public WindowInsets dispatchApplyWindowInsets(WindowInsets insets) { return onApplyWindowInsets(insets); }
+    public WindowInsets onApplyWindowInsets(WindowInsets insets) { return insets; }
+    public void setImportantForAccessibility(int mode) { accessibilityImportance = mode; }
+    public int getImportantForAccessibility() { return accessibilityImportance; }
+    public void setElevation(float value) { if (elevation != value) { elevation = value; invalidate(); } }
+    public float getElevation() { return elevation; }
+    public void setOutlineProvider(ViewOutlineProvider provider) { outlineProvider = provider; invalidateOutline(); }
+    public ViewOutlineProvider getOutlineProvider() { return outlineProvider; }
+    public void invalidateOutline() { invalidate(); }
+    public void setHapticFeedbackEnabled(boolean enabled) { hapticFeedbackEnabled = enabled; }
+    public boolean isHapticFeedbackEnabled() { return hapticFeedbackEnabled; }
+    public void setDefaultFocusHighlightEnabled(boolean enabled) { defaultFocusHighlightEnabled = enabled; }
+    public boolean getDefaultFocusHighlightEnabled() { return defaultFocusHighlightEnabled; }
+    public void onVisibilityAggregated(boolean visible) {}
+    public void onInitializeAccessibilityEvent(android.view.accessibility.AccessibilityEvent event) {
+        event.setClassName(getClass().getName());
+        event.setPackageName(context.getPackageName());
+    }
+    public void announceForAccessibility(CharSequence message) {
+        var manager = context.getSystemService(android.view.accessibility.AccessibilityManager.class);
+        if (manager == null || !manager.isEnabled()) return;
+        var event = android.view.accessibility.AccessibilityEvent.obtain(16384);
+        event.getText().add(message);
+        onInitializeAccessibilityEvent(event);
+        manager.sendAccessibilityEvent(event);
+    }
+    public void sendAccessibilityEventUnchecked(android.view.accessibility.AccessibilityEvent event) {
+        var manager = context.getSystemService(android.view.accessibility.AccessibilityManager.class);
+        if (manager != null) manager.sendAccessibilityEvent(event);
+    }
+    public void getLocationInWindow(int[] location) {
+        if (location == null || location.length < 2) throw new IllegalArgumentException("location");
+        float x = 0, y = 0;
+        for (View view = this; view != null;) {
+            float px = view.getPivotX(), py = view.getPivotY();
+            float sx = (x - px) * view.getScaleX(), sy = (y - py) * view.getScaleY();
+            double radians = Math.toRadians(view.getRotation());
+            float cos = (float) Math.cos(radians), sin = (float) Math.sin(radians);
+            x = view.getX() + px + sx * cos - sy * sin;
+            y = view.getY() + py + sx * sin + sy * cos;
+            ViewParent owner = view.getParent();
+            view = owner instanceof View ? (View) owner : null;
+            if (view != null) { x -= view.getScrollX(); y -= view.getScrollY(); }
+        }
+        location[0] = org.wasmandroid.ui.NativeMath.round(x);
+        location[1] = org.wasmandroid.ui.NativeMath.round(y);
+    }
 
     public ViewGroup.LayoutParams getLayoutParams() { return layoutParams; }
     public void setLayoutParams(ViewGroup.LayoutParams params) {
@@ -243,16 +301,23 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     public void setY(float y) { setTranslationY(y - top); }
     public float getTranslationX() { return translationX; }
     public float getTranslationY() { return translationY; }
-    public void setTranslationX(float x) { translationX = x; invalidate(); }
-    public void setTranslationY(float y) { translationY = y; invalidate(); }
+    public void setTranslationX(float x) { if (translationX != x) { translationX = x; invalidate(); } }
+    public void setTranslationY(float y) { if (translationY != y) { translationY = y; invalidate(); } }
     public float getScaleX() { return scaleX; }
     public float getScaleY() { return scaleY; }
-    public void setScaleX(float scale) { scaleX = scale; invalidate(); }
-    public void setScaleY(float scale) { scaleY = scale; invalidate(); }
+    public void setScaleX(float scale) { if (scaleX != scale) { scaleX = scale; invalidate(); } }
+    public void setScaleY(float scale) { if (scaleY != scale) { scaleY = scale; invalidate(); } }
+    public float getPivotX() { return Float.isNaN(pivotX) ? getWidth() * 0.5f : pivotX; }
+    public float getPivotY() { return Float.isNaN(pivotY) ? getHeight() * 0.5f : pivotY; }
+    public void setPivotX(float x) { pivotX = x; invalidate(); }
+    public void setPivotY(float y) { pivotY = y; invalidate(); }
     public float getRotation() { return rotation; }
     public void setRotation(float rotation) { this.rotation = rotation; invalidate(); }
     public float getAlpha() { return alpha; }
-    public void setAlpha(float alpha) { this.alpha = Math.max(0, Math.min(1, alpha)); invalidate(); }
+    public void setAlpha(float alpha) {
+        float value = Math.max(0, Math.min(1, alpha));
+        if (this.alpha != value) { this.alpha = value; invalidate(); }
+    }
     public void getHitRect(Rect out) { out.set(left, top, right, bottom); }
     public void getDrawingRect(Rect out) { out.set(scrollX, scrollY, scrollX + getWidth(), scrollY + getHeight()); }
     public int getBaseline() { return -1; }
@@ -433,16 +498,18 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
         if (parent != null) parent.clearChildFocus(this);
     }
     public int[] getDrawableState() {
-        int[] result = new int[5 + (enabled ? 1 : 0)];
+        if (drawableState != null) return drawableState;
+        int[] result = new int[(enabled ? 1 : 0) + (pressed ? 1 : 0)
+                + (selected ? 1 : 0) + (focused ? 1 : 0) + (activated ? 1 : 0)];
         int i = 0;
         if (enabled) result[i++] = android.R.attr.state_enabled;
         if (pressed) result[i++] = android.R.attr.state_pressed;
         if (selected) result[i++] = android.R.attr.state_selected;
         if (focused) result[i++] = android.R.attr.state_focused;
         if (activated) result[i] = android.R.attr.state_activated;
-        return result;
+        return drawableState = result;
     }
-    public void refreshDrawableState() { drawableStateChanged(); invalidate(); }
+    public void refreshDrawableState() { drawableState = null; drawableStateChanged(); invalidate(); }
     protected void drawableStateChanged() { if (background != null && background.isStateful()) background.setState(getDrawableState()); }
 
     public boolean performClick() {
@@ -478,7 +545,11 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
         }
         return true;
     }
-    private void cancelPress() { removeCallbacks(longPress); setPressed(false); }
+    public void cancelLongPress() { removeCallbacks(longPress); }
+    protected boolean awakenScrollBars() { return awakenScrollBars(ViewConfiguration.getScrollDefaultDelay()); }
+    protected boolean awakenScrollBars(int delay) { return awakenScrollBars(delay, true); }
+    protected boolean awakenScrollBars(int delay, boolean invalidate) { return false; }
+    private void cancelPress() { cancelLongPress(); setPressed(false); }
     public boolean dispatchGenericMotionEvent(MotionEvent event) { return onGenericMotionEvent(event); }
     public boolean onGenericMotionEvent(MotionEvent event) { return false; }
     public boolean dispatchKeyEvent(KeyEvent event) {

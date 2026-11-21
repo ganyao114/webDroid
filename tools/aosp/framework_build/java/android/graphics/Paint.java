@@ -18,6 +18,7 @@ public class Paint {
     public static class FontMetricsInt {
         public int top, ascent, descent, bottom, leading;
     }
+    private float[] fontMetricValues;
 
     private int color, flags;
     private float strokeWidth, strokeMiter, textSize, textScaleX, textSkewX;
@@ -109,7 +110,8 @@ public class Paint {
     }
     public FontMetrics getFontMetrics() { FontMetrics result = new FontMetrics(); getFontMetrics(result); return result; }
     public float getFontMetrics(FontMetrics out) {
-        float[] m = new float[2];
+        if (fontMetricValues == null) fontMetricValues = new float[2];
+        float[] m = fontMetricValues;
         nativeMeasure("", textSize, weight(), face(), m);
         if (out != null) {
             out.ascent = out.top = -m[0]; out.descent = out.bottom = m[1]; out.leading = 0;

@@ -24,17 +24,22 @@ struct State {
     uint32_t presented_layer = 0;
     uint32_t staged_layer = 0;
     bool transaction = false;
+    bool needs_draw = true;
     int32_t result = WA_SF_OK;
     uint64_t uptime_ns = 0;
     uint64_t last_frame_ns = 0;
     uint64_t interval_ns = 16'666'667;
     PackageCallbacks packages;
+    FrameDecorator decorate_frame;
+    SystemBars system_bars;
 
     // Bitmap IDs stay live for both packet slots and the open recording.
     uint32_t next_image_id = 0x80000000u;
     std::vector<Image> images;
     std::vector<uint32_t> recording_images;
     std::array<std::vector<uint32_t>, 2> published_images;
+    std::vector<jfloat> path_coordinates;
+    std::vector<wa_path_verb_t> path_verbs;
 
     std::string ime_text;
     uint32_t ime_action = 0;

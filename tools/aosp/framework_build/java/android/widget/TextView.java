@@ -6,21 +6,27 @@ import android.content.res.TypedArray;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
+import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.View;
 import java.util.ArrayList;
 
 public class TextView extends View {
     public enum BufferType { NORMAL, SPANNABLE, EDITABLE }
+    public interface OnEditorActionListener { boolean onEditorAction(TextView view, int actionId, KeyEvent event); }
     private static final int[] TEXT_ATTRS = {android.R.attr.text, android.R.attr.textSize, android.R.attr.textColor,
             android.R.attr.gravity, android.R.attr.singleLine, android.R.attr.maxLines, android.R.attr.minLines,
             android.R.attr.fontFamily, android.R.attr.textStyle, android.R.attr.hint, android.R.attr.textColorHint,
             android.R.attr.includeFontPadding, android.R.attr.textAppearance, android.R.attr.lineSpacingExtra,
             android.R.attr.lineSpacingMultiplier};
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint.FontMetrics fontMetrics = new Paint.FontMetrics();
     private final ArrayList<String> lines = new ArrayList<>();
     private CharSequence text = "", hint;
     private ColorStateList colors = ColorStateList.valueOf(Color.BLACK);
@@ -28,6 +34,9 @@ public class TextView extends View {
     private int gravity = Gravity.START | Gravity.TOP, maxLines = Integer.MAX_VALUE, minLines;
     private boolean singleLine, includeFontPadding = true;
     private float lineSpacingExtra, lineSpacingMultiplier = 1;
+    private int drawablePadding;
+    private Drawable start, top, end, bottom;
+    private TextUtils.TruncateAt ellipsize;
     public TextView(Context context) { this(context, null); }
     public TextView(Context context, AttributeSet attrs) { this(context, attrs, android.R.attr.textViewStyle); }
     public TextView(Context context, AttributeSet attrs, int defStyleAttr) { this(context, attrs, defStyleAttr, 0); }
@@ -114,14 +123,39 @@ public class TextView extends View {
     public boolean getIncludeFontPadding() { return includeFontPadding; }
     public void setLineSpacing(float extra, float multiplier) { lineSpacingExtra = extra; lineSpacingMultiplier = multiplier; requestLayout(); }
     public int getLineHeight() { return (int) (paint.getFontSpacing() * lineSpacingMultiplier + lineSpacingExtra + 0.5f); }
-    public int getCompoundPaddingLeft() { return getPaddingLeft(); }
-    public int getCompoundPaddingTop() { return getPaddingTop(); }
-    public int getCompoundPaddingRight() { return getPaddingRight(); }
-    public int getCompoundPaddingBottom() { return getPaddingBottom(); }
+    public void setEllipsize(TextUtils.TruncateAt where) { ellipsize = where; requestLayout(); invalidate(); }
+    public TextUtils.TruncateAt getEllipsize() { return ellipsize; }
+    public void setCompoundDrawablePadding(int padding) {
+        if (padding != drawablePadding) { drawablePadding = padding; requestLayout(); invalidate(); }
+    }
+    public int getCompoundDrawablePadding() { return drawablePadding; }
+    public void setCompoundDrawablesRelative(Drawable start, Drawable top, Drawable end, Drawable bottom) {
+        if (this.start != null) this.start.setCallback(null);
+        if (this.top != null) this.top.setCallback(null);
+        if (this.end != null) this.end.setCallback(null);
+        if (this.bottom != null) this.bottom.setCallback(null);
+        this.start = start; this.top = top; this.end = end; this.bottom = bottom;
+        if (start != null) start.setCallback(this);
+        if (top != null) top.setCallback(this);
+        if (end != null) end.setCallback(this);
+        if (bottom != null) bottom.setCallback(this);
+        requestLayout();
+        invalidate();
+    }
+    private Drawable leftDrawable() { return getLayoutDirection() == LAYOUT_DIRECTION_RTL ? end : start; }
+    private Drawable rightDrawable() { return getLayoutDirection() == LAYOUT_DIRECTION_RTL ? start : end; }
+    private int drawableWidth(Drawable drawable) { return drawable == null ? 0 : drawable.getBounds().width() + drawablePadding; }
+    private int drawableHeight(Drawable drawable) {
+        return drawable == null ? 0 : drawable.getBounds().height() + (text.length() == 0 && hint == null ? 0 : drawablePadding);
+    }
+    public int getCompoundPaddingLeft() { return getPaddingLeft() + drawableWidth(leftDrawable()); }
+    public int getCompoundPaddingTop() { return getPaddingTop() + drawableHeight(top); }
+    public int getCompoundPaddingRight() { return getPaddingRight() + drawableWidth(rightDrawable()); }
+    public int getCompoundPaddingBottom() { return getPaddingBottom() + drawableHeight(bottom); }
 
     private String shownText() {
         String source = text.length() == 0 && hint != null ? hint.toString() : text.toString();
-        if (singleLine) {
+        if (singleLine && (source.indexOf('\n') >= 0 || source.indexOf('\r') >= 0)) {
             StringBuilder result = new StringBuilder(source.length());
             for (int i = 0; i < source.length(); ++i) {
                 char c = source.charAt(i);
@@ -134,11 +168,20 @@ public class TextView extends View {
     private void wrap(String source, float width) {
         lines.clear();
         int count = source.length(), start = 0;
-        while (start <= count && lines.size() < getMaxLines()) {
+        while (count > 0 && start <= count && lines.size() < getMaxLines()) {
             int lineEnd = start;
             while (lineEnd < count && source.charAt(lineEnd) != '\n') lineEnd++;
             if (singleLine || start == lineEnd || paint.measureText(source, start, lineEnd) <= width) {
-                lines.add(source.substring(start, lineEnd));
+                String value = source.substring(start, lineEnd);
+                if (ellipsize == TextUtils.TruncateAt.END && singleLine && paint.measureText(value) > width) {
+                    int end = value.length();
+                    while (end > 0 && paint.measureText(value.substring(0, end) + "…") > width) {
+                        --end;
+                        if (end > 0 && Character.isLowSurrogate(value.charAt(end))) --end;
+                    }
+                    value = end == 0 ? "…" : value.substring(0, end) + "…";
+                }
+                lines.add(value);
                 start = lineEnd + 1;
                 continue;
             }
@@ -162,22 +205,38 @@ public class TextView extends View {
         int vp = getCompoundPaddingTop() + getCompoundPaddingBottom();
         wrap(source, Float.POSITIVE_INFINITY);
         float maxWidth = 0;
-        for (String line : lines) maxWidth = Math.max(maxWidth, paint.measureText(line));
+        for (int i = 0; i < lines.size(); i++) maxWidth = Math.max(maxWidth, paint.measureText(lines.get(i)));
+        if (top != null) maxWidth = Math.max(maxWidth, top.getBounds().width());
+        if (bottom != null) maxWidth = Math.max(maxWidth, bottom.getBounds().width());
         int width = resolveSizeAndState(Math.max(getSuggestedMinimumWidth(), hp + (int) (maxWidth + 0.999f)), w, 0);
         wrap(source, Math.max(0, (width & MEASURED_SIZE_MASK) - hp));
         int desiredHeight = Math.max(getSuggestedMinimumHeight(), vp + getLineHeight() * Math.max(minLines, lines.size()));
         setMeasuredDimension(width, resolveSizeAndState(desiredHeight, h, 0));
     }
-    private float baseline() {
+    private float paragraphTop() {
         int height = getHeight() == 0 ? getMeasuredHeight() : getHeight();
         float rest = height - getCompoundPaddingTop() - getCompoundPaddingBottom() - lines.size() * getLineHeight();
         int vertical = gravity & Gravity.VERTICAL_GRAVITY_MASK;
         float shift = vertical == Gravity.BOTTOM ? rest : vertical == Gravity.CENTER_VERTICAL ? rest * 0.5f : 0;
-        Paint.FontMetrics metrics = paint.getFontMetrics();
-        return getCompoundPaddingTop() + Math.max(0, shift) - (includeFontPadding ? metrics.top : metrics.ascent);
+        return getCompoundPaddingTop() + Math.max(0, shift);
+    }
+    private float baseline() {
+        paint.getFontMetrics(fontMetrics);
+        return paragraphTop() - (includeFontPadding ? fontMetrics.top : fontMetrics.ascent);
     }
     @Override public int getBaseline() { return org.wasmandroid.ui.NativeMath.round(baseline()); }
     @Override protected void onDraw(Canvas canvas) {
+        float textTop = paragraphTop();
+        float textHeight = lines.size() * getLineHeight();
+        Drawable left = leftDrawable(), right = rightDrawable();
+        if (left != null) drawCompound(canvas, left, getPaddingLeft(), (getHeight() - left.getBounds().height()) * 0.5f);
+        if (right != null) drawCompound(canvas, right, getWidth() - getPaddingRight() - right.getBounds().width(),
+                (getHeight() - right.getBounds().height()) * 0.5f);
+        if (top != null) drawCompound(canvas, top, (getWidth() - top.getBounds().width()) * 0.5f,
+                textTop - drawableHeight(top));
+        if (bottom != null) drawCompound(canvas, bottom, (getWidth() - bottom.getBounds().width()) * 0.5f,
+                textTop + textHeight + drawablePadding);
+        if (lines.isEmpty()) return;
         paint.setColor(text.length() == 0 && hint != null ? getCurrentHintTextColor() : getCurrentTextColor());
         float x;
         switch (Gravity.getAbsoluteGravity(gravity, getLayoutDirection()) & Gravity.HORIZONTAL_GRAVITY_MASK) {
@@ -192,7 +251,18 @@ public class TextView extends View {
         try {
             canvas.clipRect(getCompoundPaddingLeft(), getCompoundPaddingTop(), getWidth() - getCompoundPaddingRight(),
                     getHeight() - getCompoundPaddingBottom());
-            for (String line : lines) { canvas.drawText(line, x, y, paint); y += getLineHeight(); }
+            int lineHeight = getLineHeight();
+            for (int i = 0; i < lines.size(); i++) { canvas.drawText(lines.get(i), x, y, paint); y += lineHeight; }
+        } finally {
+            canvas.restoreToCount(state);
+        }
+    }
+    private static void drawCompound(Canvas canvas, Drawable drawable, float x, float y) {
+        Rect bounds = drawable.getBounds();
+        int state = canvas.save();
+        try {
+            canvas.translate(x - bounds.left, y - bounds.top);
+            drawable.draw(canvas);
         } finally {
             canvas.restoreToCount(state);
         }

@@ -14,10 +14,15 @@ import android.util.AttributeSet;
 public abstract class Context {
     public static final String LAYOUT_INFLATER_SERVICE = "layout_inflater";
     public static final String LAUNCHER_APPS_SERVICE = "launcherapps";
+    public static final String INPUT_METHOD_SERVICE = "input_method";
+    public static final String WINDOW_SERVICE = "window";
+    public static final String WALLPAPER_SERVICE = "wallpaper";
+    public static final String ACCESSIBILITY_SERVICE = "accessibility";
     public static final int CONTEXT_INCLUDE_CODE = 1, CONTEXT_IGNORE_SECURITY = 2;
     public abstract AssetManager getAssets();
     public abstract Resources getResources();
     public abstract PackageManager getPackageManager();
+    public abstract ContentResolver getContentResolver();
     public abstract String getPackageName();
     public String getOpPackageName() { return getPackageName(); }
     public abstract ApplicationInfo getApplicationInfo();
@@ -45,6 +50,10 @@ public abstract class Context {
     public String getSystemServiceName(Class<?> type) {
         if (type == android.view.LayoutInflater.class) return LAYOUT_INFLATER_SERVICE;
         if (type == android.content.pm.LauncherApps.class) return LAUNCHER_APPS_SERVICE;
+        if (type == android.view.inputmethod.InputMethodManager.class) return INPUT_METHOD_SERVICE;
+        if (type == android.view.WindowManager.class) return WINDOW_SERVICE;
+        if (type == android.app.WallpaperManager.class) return WALLPAPER_SERVICE;
+        if (type == android.view.accessibility.AccessibilityManager.class) return ACCESSIBILITY_SERVICE;
         return null;
     }
     public final TypedArray obtainStyledAttributes(int[] attrs) { return getTheme().obtainStyledAttributes(attrs); }

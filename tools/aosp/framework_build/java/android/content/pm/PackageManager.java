@@ -121,7 +121,13 @@ public class PackageManager {
         ResolveInfo resolve = resolveActivity(intent, 0);
         return resolve == null ? null : intent.setClassName(pkg, resolve.activityInfo.name).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
     }
-    public Drawable getDefaultActivityIcon() { return new ColorDrawable(0xff8b9299); }
+    public Drawable getDefaultActivityIcon() {
+        try {
+            return context.getDrawable(android.R.drawable.sym_def_app_icon);
+        } catch (Resources.NotFoundException unavailable) {
+            return new ColorDrawable(0xff8b9299);
+        }
+    }
 
     public Drawable getDrawable(String pkg, int resId, ApplicationInfo optional) {
         return getDrawableForDensity(pkg, resId, 0, optional);

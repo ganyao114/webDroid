@@ -18,7 +18,29 @@ struct ApkManifest {
     int32_t abi_mask;
 };
 
+struct ApkIntentFilter {
+    std::vector<std::string> actions, categories, schemes, mime_types;
+    bool restricted_uri = false;
+};
+
+struct ApkComponent {
+    std::string name, label;
+    uint32_t icon = 0;
+    bool enabled = true;
+    bool exported = false;
+    std::vector<ApkIntentFilter> filters;
+};
+
+struct LauncherPackage {
+    std::string package, label;
+    uint32_t icon = 0;
+    bool enabled = true;
+    std::vector<ApkComponent> activities;
+};
+
 std::string ActivityClassName(std::string_view package, std::string_view name);
 int32_t ReadApkManifest(std::span<const uint8_t> bytes, ApkManifest& out);
+int32_t ReadLauncherPackage(std::span<const uint8_t> bytes, const char* locale, int density,
+                            LauncherPackage& out, std::vector<uint8_t>* dex = nullptr);
 
 } // namespace wa::system

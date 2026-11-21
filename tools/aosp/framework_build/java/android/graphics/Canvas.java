@@ -2,6 +2,7 @@ package android.graphics;
 
 /** A recording canvas for the currently traversed SurfaceFlinger layer. */
 public class Canvas {
+    public boolean clipPath(Path path) { return path.clip(this); }
     private static final int SAVE = 1, RESTORE = 2, TRANSLATE = 3, SCALE = 4, ROTATE = 5;
     private static final int CLIP_RECT = 6, CLIP_ROUND_RECT = 7, DRAW_COLOR = 8;
     private static final int RECT = 9, ROUND_RECT = 10, CIRCLE = 11, LINE = 12;

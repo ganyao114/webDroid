@@ -468,6 +468,10 @@ void InstallThrowable(Runtime& vm) {
   define("Ljava/io/IOException;", exception);
   define("Ljava/io/FileNotFoundException;", "Ljava/io/IOException;");
   define("Ljava/io/UnsupportedEncodingException;", "Ljava/io/IOException;");
+  define("Ljava/lang/InterruptedException;", exception);
+  define("Ljava/util/concurrent/ExecutionException;", exception);
+  define("Ljava/util/concurrent/TimeoutException;", exception);
+  define("Ljava/util/concurrent/RejectedExecutionException;", runtime);
   define("Ljava/lang/ReflectiveOperationException;", exception);
   define("Ljava/lang/ClassNotFoundException;", "Ljava/lang/ReflectiveOperationException;");
   define("Ljava/lang/NoSuchMethodException;", "Ljava/lang/ReflectiveOperationException;");
@@ -492,6 +496,7 @@ void InstallThrowable(Runtime& vm) {
       "Ljava/lang/UnsupportedOperationException;", "Ljava/lang/NegativeArraySizeException;",
       "Ljava/util/NoSuchElementException;", "Ljava/util/ConcurrentModificationException;"}) define(type, runtime);
   define(bad_argument, runtime);
+  define("Ljava/util/concurrent/CancellationException;", "Ljava/lang/IllegalStateException;");
   define("Ljava/lang/NumberFormatException;", bad_argument);
   define("Ljava/util/regex/PatternSyntaxException;", bad_argument);
   define("Ljava/nio/charset/UnsupportedCharsetException;", bad_argument);
@@ -943,6 +948,18 @@ void InstallStrings(Runtime& vm) {
   add("isBlank", "()Z", [](Runtime&, Object* self, Values) {
     return Value::Int(std::ranges::all_of(self->text, IsWhitespace));
   });
+  add("strip", "()Ljava/lang/String;", [](Runtime& vm, Object* self, Values) {
+    const auto first = std::find_if_not(self->text.begin(), self->text.end(), IsWhitespace);
+    const auto last = std::find_if_not(self->text.rbegin(), self->text.rend(), IsWhitespace).base();
+    if (first == self->text.begin() && last == self->text.end()) return Value::Ref(self);
+    return StringValue(vm, first < last ? std::u16string(first, last) : std::u16string{});
+  });
+  add("codePointAt", "(I)I", [](Runtime& vm, Object* self, Values a) {
+    if (a[0].i() < 0 || static_cast<size_t>(a[0].i()) >= self->text.size())
+      vm.Fail("Ljava/lang/StringIndexOutOfBoundsException;");
+    size_t offset = a[0].i();
+    return Value::Int(ReadCodePoint(self->text, offset));
+  });
   add("charAt", "(I)C", [](Runtime& vm, Object* self, Values a) {
     const int32_t i = a[0].i();
     if (i < 0 || static_cast<size_t>(i) >= self->text.size()) vm.Fail("Ljava/lang/StringIndexOutOfBoundsException;");
@@ -951,6 +968,9 @@ void InstallStrings(Runtime& vm) {
   add("equals", "(Ljava/lang/Object;)Z", [](Runtime&, Object* self, Values a) {
     Object* other = a[0].ref();
     return Value::Int(other && self->type == other->type && self->text == other->text);
+  });
+  add("contentEquals", "(Ljava/lang/CharSequence;)Z", [](Runtime& vm, Object* self, Values a) {
+    return Value::Int(self->text == JavaText(vm, &vm.NonNull(a[0].ref())));
   });
   const Builtin compare = [](Runtime& vm, Object* self, Values a) {
     const Object& other = vm.NonNull(a[0].ref());
@@ -1615,6 +1635,59 @@ void InstallNumbers(Runtime& vm) {
   cl.AddMethod(*classes['Z'], "parseBoolean", "(Ljava/lang/String;)Z", art::kAccStatic,
       [](Runtime&, Object*, Values a) { return Value::Int(a[0].ref() && CompareText(a[0].ref()->text, u"true", true) == 0); });
   auto& character = *classes['C'];
+  const Builtin character_type = [](Runtime& vm, Object*, Values a) {
+    auto& normalizer = vm.linker.Resolve("Ljava/text/Normalizer;");
+    auto& type = vm.linker.FindMethod(normalizer, "characterType", "(I)I", true);
+    return vm.Invoke(type, nullptr, a);
+  };
+  cl.AddMethod(character, "getType", "(I)I", art::kAccStatic, character_type);
+  cl.AddMethod(character, "getType", "(C)I", art::kAccStatic, character_type);
+  cl.AddMethod(character, "charCount", "(I)I", art::kAccStatic,
+      [](Runtime&, Object*, Values a) { return Value::Int(a[0].i() >= 0x10000 ? 2 : 1); });
+  for (bool high : {true, false}) {
+    cl.AddMethod(character, high ? "isHighSurrogate" : "isLowSurrogate", "(C)Z", art::kAccStatic,
+        [high](Runtime&, Object*, Values a) {
+          return Value::Int((a[0].i() & 0xfc00) == (high ? 0xd800 : 0xdc00));
+        });
+  }
+  cl.AddMethod(character, "codePointAt", "(Ljava/lang/CharSequence;I)I", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        auto* source = &vm.NonNull(a[0].ref());
+        const int index = a[1].i();
+        if (source->type == vm.string_class) {
+          if (index < 0 || static_cast<size_t>(index) >= source->text.size())
+            vm.Fail("Ljava/lang/IndexOutOfBoundsException;");
+          size_t offset = index;
+          return Value::Int(ReadCodePoint(source->text, offset));
+        }
+        const int first = CallVirtual(vm, source, "charAt", "(I)C", a.subspan(1)).i();
+        if ((first & 0xfc00) == 0xd800 && index + 1 < CallVirtual(vm, source, "length", "()I").i()) {
+          const int second = CallVirtual(vm, source, "charAt", "(I)C", std::array{Value::Int(index + 1)}).i();
+          if ((second & 0xfc00) == 0xdc00)
+            return Value::Int(0x10000 + ((first - 0xd800) << 10) + second - 0xdc00);
+        }
+        return Value::Int(first);
+      });
+  cl.AddMethod(character, "codePointBefore", "(Ljava/lang/CharSequence;I)I", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        auto* source = &vm.NonNull(a[0].ref());
+        const int index = a[1].i();
+        if (index <= 0) vm.Fail("Ljava/lang/IndexOutOfBoundsException;");
+        const auto char_at = [&](int at) -> int {
+          if (source->type != vm.string_class)
+            return CallVirtual(vm, source, "charAt", "(I)C", std::array{Value::Int(at)}).i();
+          if (static_cast<size_t>(at) >= source->text.size())
+            vm.Fail("Ljava/lang/IndexOutOfBoundsException;");
+          return source->text[at];
+        };
+        const int last = char_at(index - 1);
+        if ((last & 0xfc00) == 0xdc00 && index > 1) {
+          const int first = char_at(index - 2);
+          if ((first & 0xfc00) == 0xd800)
+            return Value::Int(0x10000 + ((first - 0xd800) << 10) + last - 0xdc00);
+        }
+        return Value::Int(last);
+      });
   for (auto sig : {"(I)Z", "(C)Z"}) {
     cl.AddMethod(character, "isWhitespace", sig, art::kAccStatic,
         [](Runtime&, Object*, Values a) { return Value::Int(IsWhitespace(a[0].i())); });
@@ -1735,6 +1808,52 @@ void InstallEnumAndReferences(Runtime& vm) {
       [](Runtime&, Object* self, Values a) { return Value::Int(self->weak_referent == a[0].ref()); });
 }
 
+void InstallUnicodeScript(ClassLinker& cl) {
+  constexpr auto descriptor = "Ljava/lang/Character$UnicodeScript;";
+  auto& script = cl.Define(descriptor, "Ljava/lang/Enum;", art::kAccEnum | art::kAccFinal);
+  enum Script { Common, Latin, Han, Hiragana, Katakana, Hangul, Unknown };
+  for (const auto* name : {"COMMON", "LATIN", "HAN", "HIRAGANA", "KATAKANA", "HANGUL", "UNKNOWN"})
+    cl.AddField(script, name, descriptor, true);
+  cl.AddMethod(script, "<clinit>", "()V", art::kAccStatic, [&script](Runtime& vm, Object*, Values) {
+    auto& constructor = vm.linker.FindMethod(*script.super, "<init>", "(Ljava/lang/String;I)V", false);
+    for (size_t i = 0; i < script.field_order.size(); ++i) {
+      auto* field = script.field_order[i];
+      field->value = Value::Ref(vm.NewObject(script, constructor,
+          std::array{StringValue(vm, field->name), Value::Int(i)}));
+    }
+    return Value{};
+  });
+  cl.AddMethod(script, "of", "(I)Ljava/lang/Character$UnicodeScript;", art::kAccStatic,
+      [&script](Runtime& vm, Object*, Values args) {
+        const int cp = args[0].i();
+        if (cp < 0 || cp > 0x10ffff) vm.Fail("Ljava/lang/IllegalArgumentException;", "Invalid code point");
+        const auto between = [cp](int first, int last) { return first <= cp && cp <= last; };
+        Script kind = Unknown;
+        if (between(0x3400, 0x4dbf) || between(0x4e00, 0x9fff) || between(0xf900, 0xfaff) ||
+            between(0x20000, 0x2ffff) || between(0x30000, 0x323af) || cp == 0x3005 || cp == 0x3007)
+          kind = Han;
+        else if (between('A', 'Z') || between('a', 'z') || between(0xc0, 0x24f))
+          kind = Latin;
+        else if (between(0x3041, 0x3096))
+          kind = Hiragana;
+        else if (between(0x30a1, 0x30fa))
+          kind = Katakana;
+        else if (between(0x1100, 0x11ff) || between(0xac00, 0xd7a3))
+          kind = Hangul;
+        else if (cp <= 0xbf)
+          kind = Common;
+        return script.field_order[kind]->value;
+      });
+  cl.AddMethod(script, "values", "()[Ljava/lang/Character$UnicodeScript;", art::kAccStatic,
+      [&script](Runtime& vm, Object*, Values) {
+        auto* result = vm.NewArray(vm.linker.Resolve("[Ljava/lang/Character$UnicodeScript;"),
+                                   script.field_order.size());
+        for (size_t i = 0; i < script.field_order.size(); ++i)
+          result->elements[i] = script.field_order[i]->value;
+        return Value::Ref(result);
+      });
+}
+
 }  // namespace
 
 void Runtime::InstallBootClasses() {
@@ -1743,6 +1862,7 @@ void Runtime::InstallBootClasses() {
   InstallStrings(*this);
   InstallNumbers(*this);
   InstallEnumAndReferences(*this);
+  InstallUnicodeScript(linker);
   InstallCollections(*this);
   InstallPlatform(*this);
 }

@@ -1,9 +1,9 @@
 #include "art_sf_entry.h"
 
 #include "art_interp.h"
+#include "mounted_apk.h"
 
 #include <array>
-#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -11,41 +11,18 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
-#include <unistd.h>
+
+namespace wa::system {
+interp::Vm* LauncherVm();
+}
 
 namespace {
 
 using wa::interp::Value;
 using wa::interp::Vm;
+using wa::system::MountedApk;
 
 constexpr char kApkAssets[] = "Landroid/content/res/ApkAssets;";
-constexpr char kMountPath[] = "/tmp/wa-art-XXXXXX";
-
-struct MountedApk {
-    ~MountedApk() {
-        if (created) unlink(path);
-    }
-
-    void Write(const uint8_t* bytes, size_t size) {
-        const int fd = mkstemp(path);
-        if (fd < 0) throw std::runtime_error("Cannot create APK backing file");
-        created = true;
-        while (size != 0) {
-            const auto count = write(fd, bytes, size);
-            if (count < 0 && errno == EINTR) continue;
-            if (count <= 0) {
-                close(fd);
-                throw std::runtime_error("Cannot write APK backing file");
-            }
-            bytes += count;
-            size -= count;
-        }
-        if (close(fd) != 0) throw std::runtime_error("Cannot close APK backing file");
-    }
-
-    char path[sizeof(kMountPath)] = "/tmp/wa-art-XXXXXX";
-    bool created = false;
-};
 
 struct ArtSession {
     explicit ArtSession(uint32_t interval) : vm(wa::interp::Options{.gc_interval = interval}) {}
@@ -138,18 +115,17 @@ int32_t wa_system_art_mount_apk(const uint8_t* bytes, size_t len, char* path, si
         if (!bytes || !len || len > static_cast<size_t>(std::numeric_limits<ssize_t>::max())) {
             return WA_ERR_INVALID;
         }
-        if (cap < sizeof(kMountPath)) return WA_ERR_OVERFLOW;
+        if (cap < sizeof(MountedApk::kPath)) return WA_ERR_OVERFLOW;
         auto& session = ActiveArt();
         session.vm.RegisterResourceNatives();
-        auto mounted = std::make_unique<MountedApk>();
-        mounted->Write(bytes, len);
+        auto mounted = std::make_unique<MountedApk>(std::span(bytes, len));
         wa::interp::ScopedHandleScope roots(session.vm);
-        const auto arg = roots.Hold(Value::Ref(session.vm.NewString(mounted->path)));
+        const auto arg = roots.Hold(Value::Ref(session.vm.NewString(mounted->path())));
         auto* assets = roots.Hold(session.vm.CallStatic(kApkAssets, "loadFromPath",
             "(Ljava/lang/String;)Landroid/content/res/ApkAssets;", std::array{arg}).ref());
         session.vm.CallVirtual(assets, "close", "()V");
         session.mounts.push_back(std::move(mounted));
-        CopyText(session.mounts.back()->path, path, cap);
+        CopyText(session.mounts.back()->path(), path, cap);
         return WA_OK;
     });
 }
@@ -202,7 +178,13 @@ int32_t wa_system_art_stats_json(char* out, size_t cap) {
 }
 
 int32_t wa_system_art_gc_collect(void) {
-    return ArtCall([] { ActiveArt().vm.Collect(); return WA_OK; });
+    return ArtCall([] {
+        auto* launcher = wa::system::LauncherVm();
+        if (!art && !launcher) return WA_ERR_INVALID;
+        if (art) art->vm.Collect();
+        if (launcher) launcher->Collect();
+        return WA_OK;
+    });
 }
 
 int32_t wa_system_art_set_gc_paused(int32_t paused) {

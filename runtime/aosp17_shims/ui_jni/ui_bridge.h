@@ -57,6 +57,15 @@ struct ActivityConfig {
     std::string framework_resource_apk;
 };
 
+struct SystemBars {
+    uint32_t appearance = 0;
+    uint32_t status_color = 0;
+    uint32_t navigation_color = 0;
+};
+
+using FrameDecorator =
+    std::function<int32_t(wa_sf_t*, const wa_sf_vsync_state_t&, const SystemBars&)>;
+
 namespace detail {
 struct State;
 }
@@ -73,6 +82,7 @@ class UiBridge {
     void RegisterNatives(interp::Vm& vm);
     void BindSurfaceFlinger(wa_sf_t* sf, uint32_t layer_id);
     void SetPackageCallbacks(PackageCallbacks callbacks);
+    void SetFrameDecorator(FrameDecorator decorator);
 
     void LaunchActivity(interp::Vm& vm, const ActivityConfig& config);
     void PauseActivity(interp::Vm& vm);

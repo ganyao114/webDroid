@@ -90,6 +90,7 @@ class Vm {
                    std::span<const Value> args = {});
   Value CallVirtual(Object* receiver, std::string_view name, std::string_view signature,
                     std::span<const Value> args = {});
+  Value ReadField(Object* receiver, std::string_view name, std::string_view descriptor);
   Object* NewObject(std::string_view type, std::string_view constructor = "()V",
                     std::span<const Value> args = {});
   Object* NewString(std::string_view modified_utf8);
@@ -98,6 +99,7 @@ class Vm {
   void ClearException();
 
   GcStats Collect();
+  void CollectIfNeeded();
   GcStats HeapStats() const;
   MethodStats GetMethodStats(std::string_view owner, std::string_view name,
                              std::string_view signature);

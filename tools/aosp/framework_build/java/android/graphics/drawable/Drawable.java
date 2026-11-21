@@ -1,5 +1,6 @@
 package android.graphics.drawable;
 
+import android.content.res.ColorStateList;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
 import android.graphics.Canvas;
@@ -22,6 +23,7 @@ public abstract class Drawable {
     private int[] state = new int[0];
     private int level, alpha = 255;
     private ColorFilter colorFilter;
+    private ColorStateList tint;
     private boolean visible = true;
 
     public abstract void draw(Canvas canvas);
@@ -48,6 +50,16 @@ public abstract class Drawable {
     public void setColorFilter(ColorFilter filter) { colorFilter = filter; invalidateSelf(); }
     public ColorFilter getColorFilter() { return colorFilter; }
     public void clearColorFilter() { setColorFilter(null); }
+    public void setTint(int color) { setTintList(ColorStateList.valueOf(color)); }
+    public void setTintList(ColorStateList colors) {
+        tint = colors;
+        invalidateSelf();
+    }
+    protected final int tinted(int color) {
+        if (tint == null) return color;
+        int overlay = tint.getColorForState(state, tint.getDefaultColor());
+        return (overlay & 0xffffff) | (((overlay >>> 24) * (color >>> 24) + 127) / 255 << 24);
+    }
     public int getOpacity() { return -3; }
     public int getIntrinsicWidth() { return -1; }
     public int getIntrinsicHeight() { return -1; }
@@ -115,6 +127,7 @@ public abstract class Drawable {
         switch (xml.getName()) {
             case "vector": return VectorDrawable.inflateVector(res, xml, theme);
             case "adaptive-icon": return AdaptiveIconDrawable.inflateIcon(res, xml, theme);
+            case "inset": return InsetDrawable.inflateInset(res, xml, theme);
             case "layer-list": return LayerDrawable.inflateLayers(res, xml, theme);
             case "shape": return GradientDrawable.inflateShape(res, xml, theme);
             case "color": {
@@ -132,6 +145,7 @@ public abstract class Drawable {
                 return drawable;
             }
             case "selector": return StateListDrawable.inflateSelector(res, xml, theme);
+            case "ripple": return RippleDrawable.inflateRipple(res, xml, theme);
             default: throw new XmlPullParserException("Unsupported drawable tag " + xml.getName());
         }
     }

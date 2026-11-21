@@ -38,27 +38,9 @@ Runtime::Runtime(Options opts)
 
 Runtime::~Runtime() = default;
 
-Value Runtime::Invoke(Method& method, Object* receiver, std::span<const Value> args) {
-  if (args.size() + 1 != method.shorty.size()) {
-    Fail("Ljava/lang/VerifyError;", "Wrong argument count for " + method.QualifiedName());
-  }
-  if (call_depth >= 384) Fail("Ljava/lang/StackOverflowError;");
-  struct CallDepth {
-    size_t& depth;
-    explicit CallDepth(size_t& depth) : depth(depth) { ++depth; }
-    ~CallDepth() { --depth; }
-  } depth(call_depth);
-
+Value Runtime::InvokeSlow(Method& method, Object* receiver, std::span<const Value> args) {
   const bool initializing = method.IsStatic() && method.owner->init_state != InitState::Initialized;
   const bool synchronized = (method.flags & (art::kAccSynchronized | art::kAccDeclaredSynchronized)) != 0;
-  if (!method.IsStatic()) NonNull(receiver);
-  const bool promoting = method.stats.invocations + 1 == options.hotness_threshold && options.install_wasm;
-  if (method.code && !method.compiled && !promoting && !initializing && !synchronized) {
-    ++method.stats.invocations;
-    ++method.stats.interpreted;
-    return Interpret(method, receiver, args);
-  }
-
   RootScope pinned(*this, args, receiver);
   if (initializing) linker.Initialize(*method.owner);
   Object* monitor = nullptr;
@@ -224,6 +206,12 @@ Value Vm::CallVirtual(Object* receiver, std::string_view name, std::string_view 
                           receiver, args);
 }
 
+Value Vm::ReadField(Object* receiver, std::string_view name, std::string_view descriptor) {
+  auto& object = runtime_->NonNull(receiver);
+  const auto& field = runtime_->linker.FindField(*object.type, name, descriptor, false);
+  return object.fields[field.slot];
+}
+
 Object* Vm::NewObject(std::string_view type, std::string_view constructor,
                       std::span<const Value> args) {
   Class& cls = runtime_->linker.Resolve(type);
@@ -241,6 +229,10 @@ std::string Vm::StringUtf8(const Object* string) const {
 std::string Vm::ExceptionSummary() const { return runtime_->ExceptionSummary(); }
 void Vm::ClearException() { runtime_->exception = nullptr; }
 GcStats Vm::Collect() { return runtime_->heap.Collect(*runtime_); }
+void Vm::CollectIfNeeded() {
+  if (!runtime_->gc_paused && runtime_->heap.ShouldCollect(runtime_->options.gc_interval))
+    Collect();
+}
 GcStats Vm::HeapStats() const { return runtime_->heap.Stats(); }
 MethodStats Vm::GetMethodStats(std::string_view owner, std::string_view name, std::string_view signature) {
   return runtime_->linker.FindMethod(runtime_->linker.Resolve(owner), name, signature, true).stats;

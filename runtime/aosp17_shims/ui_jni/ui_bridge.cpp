@@ -64,21 +64,30 @@ jobject CreateView(JNIEnv* env, jclass, jstring name, jobject context, jobject a
             Throw(env, "android/view/InflateException", "XML tag must name a View subclass");
             return nullptr;
         }
+        jclass missing_method = env->FindClass("java/lang/NoSuchMethodError");
+        if (!missing_method)
+            return nullptr;
         jmethodID ctor = env->GetMethodID(
             type, "<init>", "(Landroid/content/Context;Landroid/util/AttributeSet;)V");
         if (ctor) {
             const jvalue args[] = {{.l = context}, {.l = attrs}};
             return env->NewObjectA(type, ctor, args);
         }
+        auto failure = env->ExceptionOccurred();
+        if (failure && !env->IsInstanceOf(failure, missing_method))
+            return nullptr;
         env->ExceptionClear();
         ctor = env->GetMethodID(type, "<init>", "(Landroid/content/Context;)V");
         if (ctor) {
             const jvalue arg{.l = context};
             return env->NewObjectA(type, ctor, &arg);
         }
+        failure = env->ExceptionOccurred();
+        if (failure && !env->IsInstanceOf(failure, missing_method))
+            return nullptr;
         env->ExceptionClear();
         Throw(env, "android/view/InflateException",
-              "A View needs a Context or Context/AttributeSet constructor");
+              ("A View needs a Context or Context/AttributeSet constructor: " + Utf8(env, name)).c_str());
         return nullptr;
     });
 }
@@ -98,6 +107,24 @@ jobject CreateActivity(JNIEnv* env, jclass, jstring name) {
         jmethodID ctor = env->GetMethodID(type, "<init>", "()V");
         return ctor ? env->NewObjectA(type, ctor, nullptr) : nullptr;
     });
+}
+
+void SetSystemBars(JNIEnv* env, jclass, jint appearance, jint status, jint navigation) {
+    if (auto* state = GetState(env))
+        state->system_bars = {static_cast<uint32_t>(appearance), static_cast<uint32_t>(status),
+                              static_cast<uint32_t>(navigation)};
+}
+
+void BeginDraw(JNIEnv* env, jclass) {
+    auto* state = GetState(env);
+    if (!state || !state->transaction || state->canvas) {
+        Throw(env, "java/lang/IllegalStateException", "Draw needs an active frame");
+        return;
+    }
+    state->canvas = wa_canvas_begin(state->sf, state->layer_id);
+    state->needs_draw = true;
+    if (!state->canvas)
+        state->result = WA_SF_STATE;
 }
 
 std::optional<std::string> StringOrNull(JNIEnv* env, jstring input) {
@@ -342,8 +369,11 @@ std::string Utf8(JNIEnv* env, jstring text) {
         return {};
     }
     const auto size = env->GetStringLength(text);
-    std::vector<jchar> chars(size);
-    env->GetStringRegion(text, 0, size, chars.data());
+    std::array<jchar, 128> local;
+    std::vector<jchar> overflow;
+    if (size > static_cast<jsize>(local.size())) overflow.resize(size);
+    jchar* chars = overflow.empty() ? local.data() : overflow.data();
+    env->GetStringRegion(text, 0, size, chars);
     if (env->ExceptionCheck())
         return {};
     std::string result;
@@ -387,11 +417,13 @@ State* GetState(JNIEnv* env) {
 }
 
 wa_canvas_t* RecordingCanvas(JNIEnv* env, State& state) {
+    if (state.result != WA_SF_OK)
+        return nullptr;
     if (!state.canvas) {
         Throw(env, "java/lang/IllegalStateException", "Canvas drawing requires an open host frame");
         return nullptr;
     }
-    return state.result == WA_SF_OK ? state.canvas : nullptr;
+    return state.canvas;
 }
 
 void State::CollectImages() {
@@ -433,6 +465,7 @@ int32_t State::Commit() {
     transaction = false;
     if (status == WA_SF_OK) {
         presented_layer = staged_layer;
+        needs_draw = presented_layer == 0;
         published_images[1] = std::move(published_images[0]);
         published_images[0] = std::move(recording_images);
     }
@@ -475,6 +508,9 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     Register(vm, "android/app/UiRuntime",
              Method<detail::CreateActivity>(vm, "nativeCreateActivity",
                                             "(Ljava/lang/String;)Landroid/app/Activity;"));
+    Register(vm, "android/view/Window",
+             Method<detail::SetSystemBars>(vm, "nativeSetSystemBars", "(III)V"));
+    Register(vm, "android/view/ViewRootImpl", Method<detail::BeginDraw>(vm, "nativeBeginDraw", "()V"));
     Register(
         vm, "android/icu/util/ULocale",
         Method<detail::LikelyScript>(vm, "likelyScript", "(Ljava/lang/String;)Ljava/lang/String;"));
@@ -527,10 +563,15 @@ void UiBridge::BindSurfaceFlinger(wa_sf_t* sf, uint32_t layer_id) {
     }
     state_->sf = sf;
     state_->layer_id = layer_id;
+    state_->needs_draw = true;
 }
 
 void UiBridge::SetPackageCallbacks(PackageCallbacks callbacks) {
     state_->packages = std::move(callbacks);
+}
+
+void UiBridge::SetFrameDecorator(FrameDecorator decorator) {
+    state_->decorate_frame = std::move(decorator);
 }
 
 void UiBridge::LaunchActivity(interp::Vm& vm, const ActivityConfig& config) {
@@ -542,6 +583,8 @@ void UiBridge::LaunchActivity(interp::Vm& vm, const ActivityConfig& config) {
         throw std::invalid_argument("Invalid APK path or display configuration");
     }
     state.Abort();
+    state.needs_draw = true;
+    state.system_bars = {};
     state.ime_text.clear();
     state.ime_action = 0;
     interp::ScopedHandleScope roots(vm);
@@ -621,6 +664,7 @@ int32_t UiBridge::DoFrame(interp::Vm& vm, const wa_sf_vsync_state_t& tick) {
     }
     wa_sf_layer_desc_t layer{};
     layer.layer_id = state.layer_id;
+    layer.z_order = state.decorate_frame ? 1 : 0;
     layer.width = tick.viewport_w;
     layer.height = tick.viewport_h;
     layer.scale_x = layer.scale_y = layer.alpha = 1;
@@ -634,22 +678,18 @@ int32_t UiBridge::DoFrame(interp::Vm& vm, const wa_sf_vsync_state_t& tick) {
         return status;
     }
     state.result = WA_SF_OK;
-    state.canvas = wa_canvas_begin(state.sf, state.layer_id);
-    if (!state.canvas) {
-        state.Abort();
-        return WA_SF_STATE;
-    }
     int outcome;
     try {
         const Value arguments[] = {Value::Long(tick.frame_time_ns), Value::Int(tick.viewport_w),
-                                   Value::Int(tick.viewport_h), Value::Int(tick.density_dpi)};
-        outcome = vm.CallStatic(detail::kRuntime, "doFrame", "(JIII)I", arguments).i();
+                                   Value::Int(tick.viewport_h), Value::Int(tick.density_dpi),
+                                   Value::Int(state.needs_draw)};
+        outcome = vm.CallStatic(detail::kRuntime, "doFrame", "(JIIIZ)I", arguments).i();
     } catch (...) {
         state.Abort();
         throw;
     }
     // The guest can enter pause or finish from a frame callback.
-    if (outcome != 2) {
+    if (outcome == 0 || outcome == 1) {
         state.Abort();
         if (outcome == 1 || !state.presented_layer)
             return WA_SF_OK;
@@ -664,11 +704,26 @@ int32_t UiBridge::DoFrame(interp::Vm& vm, const wa_sf_vsync_state_t& tick) {
         state.staged_layer = 0;
         return state.Commit();
     }
-    status = wa_canvas_end(state.canvas);
-    state.canvas = nullptr;
-    if (status != WA_SF_OK || state.result != WA_SF_OK) {
+    if (outcome == 2) {
+        if (state.result == WA_SF_OK)
+            state.result = wa_canvas_end(state.canvas);
+        state.canvas = nullptr;
+        if (state.result != WA_SF_OK) {
+            const auto failure = state.result;
+            state.Abort();
+            return failure;
+        }
+    }
+    try {
+        if (outcome == 3) state.recording_images = state.published_images[0];
+        if (state.decorate_frame) status = state.decorate_frame(state.sf, tick, state.system_bars);
+    } catch (...) {
         state.Abort();
-        return state.result != WA_SF_OK ? state.result : status;
+        throw;
+    }
+    if (status != WA_SF_OK) {
+        state.Abort();
+        return status;
     }
     state.staged_layer = state.layer_id;
     return state.Commit();

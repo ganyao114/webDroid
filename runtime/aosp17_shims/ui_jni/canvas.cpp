@@ -71,21 +71,22 @@ void DrawPath(JNIEnv* env, jclass, jfloatArray data, jint count, jint fill, jint
             state->result = WA_SF_FULL;
             return;
         }
-        std::vector<jfloat> commands(count * 7);
+        auto& commands = state->path_coordinates;
+        commands.resize(count * 7);
         env->GetFloatArrayRegion(data, 0, commands.size(), commands.data());
         if (env->ExceptionCheck())
             return;
-        std::vector<wa_path_verb_t> verbs;
-        verbs.reserve(count);
+        auto& verbs = state->path_verbs;
+        verbs.resize(count);
         for (jint i = 0; i < count; ++i) {
             const jfloat* at = &commands[i * 7];
             if (!std::isfinite(at[0]) || at[0] < WA_PATH_MOVE || at[0] > WA_PATH_CLOSE) {
                 state->result = WA_SF_INVALID;
                 return;
             }
-            wa_path_verb_t verb{static_cast<uint32_t>(at[0]), {}};
+            auto& verb = verbs[i];
+            verb.command = static_cast<uint32_t>(at[0]);
             std::copy_n(at + 1, 6, verb.points);
-            verbs.push_back(verb);
         }
         wa_paint_t paint{static_cast<uint32_t>(color), style == 1 ? WA_PAINT_STROKE : WA_PAINT_FILL,
                          stroke_width};

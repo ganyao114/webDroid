@@ -242,7 +242,8 @@ bool IsActivity(std::u16string_view tag) {
     return tag == u"activity" || tag == u"activity-alias";
 }
 
-bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
+bool ParseManifest(AssetManager2& manager, Manifest& manifest,
+                   wa::system::LauncherPackage* indexed = nullptr) {
     android::ApkAssetsCookie cookie = android::kInvalidCookie;
     auto asset = manager.OpenNonAsset("AndroidManifest.xml", Asset::ACCESS_BUFFER, &cookie);
     if (!asset || cookie == android::kInvalidCookie)
@@ -256,6 +257,8 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
     uint32_t label_id = 0;
     bool main = false, launcher_category = false, home_category = false;
     bool launchable = false, home = false;
+    wa::system::ApkComponent component;
+    std::optional<bool> exported;
     for (auto event = xml->next(); event != ResXMLTree::END_DOCUMENT; event = xml->next()) {
         if (event == ResXMLTree::BAD_DOCUMENT)
             return false;
@@ -268,7 +271,14 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
                 home |= main && home_category;
             } else if (parents.size() == 3 && parents[1] == u"application" &&
                        IsActivity(parents.back()) && !activity.empty()) {
-                manifest.activities.push_back(wa::system::ActivityClassName(manifest.package, activity));
+                const auto name = wa::system::ActivityClassName(manifest.package, activity);
+                manifest.activities.push_back(name);
+                if (indexed) {
+                    component.name = name;
+                    component.exported = exported.value_or(!component.filters.empty());
+                    component.enabled &= indexed->enabled;
+                    indexed->activities.push_back(std::move(component));
+                }
                 if (launchable && manifest.launcher.empty()) {
                     manifest.launcher = activity;
                     manifest.library = std::move(activity_library);
@@ -287,6 +297,11 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
             return false;
         const std::u16string_view tag(name, length);
         const auto attr = [&](const char* key) { return AttributeString(*xml, manager, kAndroid, key); };
+        const auto typed = [&](const char* key, uint8_t type, uint32_t fallback) -> uint32_t {
+            const auto index = xml->indexOfAttribute(kAndroid, key);
+            return index >= 0 && xml->getAttributeDataType(index) == type
+                ? xml->getAttributeData(index) : fallback;
+        };
         const auto depth = parents.size();
         if (depth == 0) {
             if (tag != u"manifest" || !manifest.package.empty())
@@ -309,11 +324,23 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
                 label_id = xml->getAttributeData(label);
             else
                 literal_label = attr("label");
+            if (indexed) {
+                indexed->icon = typed("icon", Res_value::TYPE_REFERENCE, 0);
+                indexed->enabled = typed("enabled", Res_value::TYPE_INT_BOOLEAN, 1) != 0;
+            }
         } else if (depth >= 2 && parents[1] == u"application") {
             if (depth == 2 && IsActivity(tag)) {
                 activity = attr("name");
                 activity_library.clear();
                 launchable = home = false;
+                if (indexed) {
+                    component = {};
+                    component.icon = typed("icon", Res_value::TYPE_REFERENCE, indexed->icon);
+                    component.label = attr("label");
+                    component.enabled = typed("enabled", Res_value::TYPE_INT_BOOLEAN, 1) != 0;
+                    const auto value = typed("exported", Res_value::TYPE_INT_BOOLEAN, 2);
+                    exported = value == 2 ? std::nullopt : std::optional(value != 0);
+                }
             } else if (tag == u"meta-data" &&
                        (depth == 2 || (depth == 3 && IsActivity(parents[2]))) &&
                        attr("name") == "android.app.lib_name") {
@@ -321,13 +348,35 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
                 (depth == 2 ? application_library : activity_library) = library;
             } else if (depth == 3 && IsActivity(parents[2]) && tag == u"intent-filter") {
                 main = launcher_category = home_category = false;
+                if (indexed)
+                    component.filters.emplace_back();
             } else if (depth == 4 && IsActivity(parents[2]) && parents[3] == u"intent-filter") {
-                if (tag == u"action")
-                    main |= attr("name") == "android.intent.action.MAIN";
+                if (tag == u"action") {
+                    const auto action = attr("name");
+                    main |= action == "android.intent.action.MAIN";
+                    if (indexed && !action.empty())
+                        component.filters.back().actions.push_back(action);
+                }
                 if (tag == u"category") {
                     const auto category = attr("name");
                     launcher_category |= category == "android.intent.category.LAUNCHER";
                     home_category |= category == "android.intent.category.HOME";
+                    if (indexed && !category.empty())
+                        component.filters.back().categories.push_back(category);
+                }
+                if (tag == u"data" && indexed) {
+                    auto& filter = component.filters.back();
+                    auto scheme = attr("scheme");
+                    auto mime = attr("mimeType");
+                    if (!scheme.empty())
+                        filter.schemes.push_back(std::move(scheme));
+                    if (!mime.empty())
+                        filter.mime_types.push_back(std::move(mime));
+                    for (const char* key : {"host", "port", "path", "pathPrefix", "pathPattern",
+                                            "pathAdvancedPattern", "pathSuffix", "ssp", "sspPrefix",
+                                            "sspPattern", "sspAdvancedPattern", "sspSuffix"}) {
+                        filter.restricted_uri |= xml->indexOfAttribute(kAndroid, key) >= 0;
+                    }
                 }
             }
         }
@@ -337,6 +386,17 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest) {
         return false;
     if (manifest.library.empty())
         manifest.library = std::move(application_library);
+    if (indexed) {
+        indexed->package = manifest.package;
+        indexed->label = label_id ? ResourceString(manager, label_id) : literal_label;
+        if (indexed->label.empty())
+            indexed->label = indexed->package;
+        for (auto& entry : indexed->activities) {
+            if (entry.label.empty())
+                entry.label = indexed->label;
+        }
+        return true;
+    }
 
     const auto resolve = [&](const char* locale) {
         android::ResTable_config configuration{};
@@ -419,6 +479,39 @@ int32_t wa::system::ReadApkManifest(std::span<const uint8_t> bytes, ApkManifest&
     } catch (const std::exception&) {
         return WA_ERR_INVALID;
     }
+}
+
+int32_t wa::system::ReadLauncherPackage(std::span<const uint8_t> bytes, const char* locale,
+                                        int density, LauncherPackage& out,
+                                        std::vector<uint8_t>* dex) {
+    if (bytes.empty() || !std::in_range<ptrdiff_t>(bytes.size()))
+        return WA_ERR_INVALID;
+    std::shared_ptr<Archive> archive;
+    const auto assets = OpenAssets(bytes, archive);
+    AssetManager2 manager;
+    if (!assets || !manager.SetApkAssets({assets}))
+        return WA_ERR_INVALID;
+    android::ResTable_config configuration{};
+    configuration.size = sizeof(configuration);
+    configuration.setBcp47Locale(locale);
+    configuration.density = density;
+    configuration.sdkVersion = 37;
+    manager.SetConfigurations({configuration});
+    Manifest manifest;
+    LauncherPackage indexed;
+    if (!ParseManifest(manager, manifest, &indexed))
+        return WA_ERR_INVALID;
+    if (dex) {
+        const auto asset = manager.OpenNonAsset("classes.dex", Asset::ACCESS_BUFFER);
+        if (!asset || !asset->getLength())
+            return WA_ERR_INVALID;
+        const auto* data = static_cast<const uint8_t*>(asset->getBuffer(true));
+        if (!data)
+            return WA_ERR_INVALID;
+        dex->assign(data, data + asset->getLength());
+    }
+    out = std::move(indexed);
+    return WA_OK;
 }
 
 struct wa_system_apk {
