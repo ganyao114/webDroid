@@ -1114,14 +1114,158 @@ void InstallStrings(Runtime& vm) {
       });
   cl.AddMethod(str, "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", art::kAccStatic, Format);
   cl.AddMethod(str, "format", "(Ljava/util/Locale;Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;", art::kAccStatic, Format);
-  auto& locale = cl.Define("Ljava/util/Locale;", kObject, art::kAccFinal, {"Ljava/io/Serializable;"});
-  for (auto name : {"ROOT", "US", "ENGLISH"}) cl.AddField(locale, name, locale.descriptor, true);
-  cl.AddMethod(locale, "<clinit>", "()V", art::kAccStatic, [&locale](Runtime& vm, Object*, Values) {
-    for (Field* field : locale.field_order) field->value = Value::Ref(vm.heap.Allocate(vm, locale));
+  auto& locale = cl.Define("Ljava/util/Locale;", kObject, art::kAccFinal,
+      {"Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
+  for (auto field : {"language", "country", "script", "variant"}) {
+    cl.AddField(locale, field, kString, false);
+  }
+  for (auto name : {"ROOT", "US", "ENGLISH", "UK", "CHINESE", "CHINA", "TAIWAN",
+                    "SIMPLIFIED_CHINESE", "TRADITIONAL_CHINESE", "JAPANESE", "JAPAN",
+                    "KOREAN", "KOREA", "FRENCH", "FRANCE", "GERMAN", "GERMANY", "defaultLocale"}) {
+    cl.AddField(locale, name, locale.descriptor, true);
+  }
+  const auto set_locale = [&locale](Runtime& vm, Object& obj, std::u16string_view lang,
+                                    std::u16string_view country, std::u16string_view script = {},
+                                    std::u16string_view variant = {}) {
+    std::u16string lower(lang), upper(country);
+    for (char16_t& c : lower) if (c >= 'A' && c <= 'Z') c = static_cast<char16_t>(c + 32);
+    for (char16_t& c : upper) if (c >= 'a' && c <= 'z') c = static_cast<char16_t>(c - 32);
+    auto set = [&](std::string_view name, std::u16string_view v) {
+      obj.fields[locale.fields.at(MemberKey(name, kString)).slot] =
+          Value::Ref(vm.InternLiteral(std::u16string(v)));
+    };
+    set("language", lower);
+    set("country", upper);
+    set("script", script);
+    set("variant", variant);
+  };
+  const auto get_locale_field = [&locale](const Object& obj, std::string_view name) -> std::u16string_view {
+    Object* s = obj.fields[locale.fields.at(MemberKey(name, kString)).slot].ref();
+    return s ? std::u16string_view(s->text) : std::u16string_view{};
+  };
+  const auto make_locale = [&locale, set_locale](Runtime& vm, std::u16string_view lang,
+                                                 std::u16string_view country) {
+    Object* obj = vm.heap.Allocate(vm, locale);
+    set_locale(vm, *obj, lang, country);
+    return obj;
+  };
+  cl.AddMethod(locale, "<clinit>", "()V", art::kAccStatic, [&locale, make_locale](Runtime& vm, Object*, Values) {
+    auto put = [&](std::string_view name, Object* obj) {
+      locale.fields.at(MemberKey(name, locale.descriptor)).value = Value::Ref(obj);
+    };
+    put("ROOT", make_locale(vm, u"", u""));
+    put("ENGLISH", make_locale(vm, u"en", u""));
+    Object* us = make_locale(vm, u"en", u"US");
+    put("US", us);
+    put("defaultLocale", us);
+    put("UK", make_locale(vm, u"en", u"GB"));
+    put("CHINESE", make_locale(vm, u"zh", u""));
+    Object* cn = make_locale(vm, u"zh", u"CN");
+    put("CHINA", cn);
+    put("SIMPLIFIED_CHINESE", cn);
+    Object* tw = make_locale(vm, u"zh", u"TW");
+    put("TAIWAN", tw);
+    put("TRADITIONAL_CHINESE", tw);
+    put("JAPANESE", make_locale(vm, u"ja", u""));
+    put("JAPAN", make_locale(vm, u"ja", u"JP"));
+    put("KOREAN", make_locale(vm, u"ko", u""));
+    put("KOREA", make_locale(vm, u"ko", u"KR"));
+    put("FRENCH", make_locale(vm, u"fr", u""));
+    put("FRANCE", make_locale(vm, u"fr", u"FR"));
+    put("GERMAN", make_locale(vm, u"de", u""));
+    put("GERMANY", make_locale(vm, u"de", u"DE"));
     return Value{};
   });
+  cl.AddMethod(locale, "<init>", "(Ljava/lang/String;)V", 0, [set_locale](Runtime& vm, Object* self, Values a) {
+    set_locale(vm, *self, vm.NonNull(a[0].ref()).text, u"");
+    return Value{};
+  });
+  cl.AddMethod(locale, "<init>", "(Ljava/lang/String;Ljava/lang/String;)V", 0,
+      [set_locale](Runtime& vm, Object* self, Values a) {
+        set_locale(vm, *self, vm.NonNull(a[0].ref()).text, vm.NonNull(a[1].ref()).text);
+        return Value{};
+      });
+  cl.AddMethod(locale, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", 0,
+      [set_locale](Runtime& vm, Object* self, Values a) {
+        set_locale(vm, *self, vm.NonNull(a[0].ref()).text, vm.NonNull(a[1].ref()).text, u"",
+                   vm.NonNull(a[2].ref()).text);
+        return Value{};
+      });
+  for (auto [method, field] : std::array<std::pair<std::string_view, std::string_view>, 4>{{
+      {"getLanguage", "language"}, {"getCountry", "country"},
+      {"getScript", "script"}, {"getVariant", "variant"}}}) {
+    cl.AddMethod(locale, method, "()Ljava/lang/String;", 0, [&locale, field](Runtime&, Object* self, Values) {
+      return self->fields[locale.fields.at(MemberKey(field, kString)).slot];
+    });
+  }
   cl.AddMethod(locale, "getDefault", "()Ljava/util/Locale;", art::kAccStatic, [&locale](Runtime&, Object*, Values) {
-    return locale.fields.at(MemberKey("US", locale.descriptor)).value;
+    return locale.fields.at(MemberKey("defaultLocale", locale.descriptor)).value;
+  });
+  cl.AddMethod(locale, "setDefault", "(Ljava/util/Locale;)V", art::kAccStatic, [&locale](Runtime& vm, Object*, Values a) {
+    locale.fields.at(MemberKey("defaultLocale", locale.descriptor)).value = Value::Ref(&vm.NonNull(a[0].ref()));
+    return Value{};
+  });
+  cl.AddMethod(locale, "forLanguageTag", "(Ljava/lang/String;)Ljava/util/Locale;", art::kAccStatic,
+      [&locale, set_locale](Runtime& vm, Object*, Values a) {
+        std::u16string tag = vm.NonNull(a[0].ref()).text;
+        std::vector<std::u16string> parts;
+        size_t pos = 0;
+        while (pos <= tag.size()) {
+          size_t next = tag.find(u'-', pos);
+          if (next == std::u16string::npos) next = tag.size();
+          parts.push_back(tag.substr(pos, next - pos));
+          if (next == tag.size()) break;
+          pos = next + 1;
+        }
+        std::u16string lang = parts.empty() ? u"" : parts[0];
+        if (lang == u"und") lang.clear();
+        std::u16string script, region, variant;
+        size_t idx = 1;
+        if (idx < parts.size() && parts[idx].size() == 4) {
+          script = parts[idx++];
+        }
+        if (idx < parts.size() && (parts[idx].size() == 2 || parts[idx].size() == 3)) {
+          region = parts[idx++];
+        }
+        if (idx < parts.size()) variant = parts[idx];
+        Object* obj = vm.heap.Allocate(vm, locale);
+        set_locale(vm, *obj, lang, region, script, variant);
+        return Value::Ref(obj);
+      });
+  cl.AddMethod(locale, "toLanguageTag", "()Ljava/lang/String;", 0,
+      [get_locale_field](Runtime& vm, Object* self, Values) {
+        std::u16string out(get_locale_field(*self, "language"));
+        if (out.empty()) out = u"und";
+        if (auto s = get_locale_field(*self, "script"); !s.empty()) { out.push_back(u'-'); out += s; }
+        if (auto c = get_locale_field(*self, "country"); !c.empty()) { out.push_back(u'-'); out += c; }
+        if (auto v = get_locale_field(*self, "variant"); !v.empty()) { out.push_back(u'-'); out += v; }
+        return StringValue(vm, std::move(out));
+      });
+  cl.AddMethod(locale, "toString", "()Ljava/lang/String;", 0,
+      [get_locale_field](Runtime& vm, Object* self, Values) {
+        std::u16string out(get_locale_field(*self, "language"));
+        if (auto c = get_locale_field(*self, "country"); !c.empty()) { out.push_back(u'_'); out += c; }
+        if (auto v = get_locale_field(*self, "variant"); !v.empty()) { out.push_back(u'_'); out += v; }
+        return StringValue(vm, std::move(out));
+      });
+  cl.AddMethod(locale, "equals", "(Ljava/lang/Object;)Z", 0,
+      [&locale, get_locale_field](Runtime&, Object* self, Values a) {
+        Object* other = a[0].ref();
+        if (!other || other->type != &locale) return Value::Int(0);
+        return Value::Int(get_locale_field(*self, "language") == get_locale_field(*other, "language") &&
+                          get_locale_field(*self, "country") == get_locale_field(*other, "country") &&
+                          get_locale_field(*self, "script") == get_locale_field(*other, "script") &&
+                          get_locale_field(*self, "variant") == get_locale_field(*other, "variant"));
+      });
+  cl.AddMethod(locale, "hashCode", "()I", 0, [get_locale_field](Runtime&, Object* self, Values) {
+    int32_t h = 0;
+    for (auto f : {"language", "country", "script", "variant"}) {
+      for (char16_t c : get_locale_field(*self, f)) h = h * 31 + c;
+    }
+    return Value::Int(h);
+  });
+  cl.AddMethod(locale, "clone", "()Ljava/lang/Object;", 0, [](Runtime&, Object* self, Values) {
+    return Value::Ref(self);
   });
 
   auto& appendable = cl.Define("Ljava/lang/Appendable;", kObject, kInterface);

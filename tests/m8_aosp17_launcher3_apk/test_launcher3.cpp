@@ -370,23 +370,20 @@ void InstallSdkCalls(Runtime& runtime) {
     auto& linker = runtime.linker;
     constexpr std::string_view object = "Ljava/lang/Object;";
     const auto statik = art::kAccStatic;
-    auto& math = linker.Resolve("Ljava/lang/Math;");
-    linker.AddMethod(math, "pow", "(DD)D", statik,
-            [](Runtime&, Object*, std::span<const Value> args) {
-                return Value::Double(std::pow(args[0].d(), args[1].d()));
-            });
     auto& floating = linker.Resolve("Ljava/lang/Float;");
-    linker.AddMethod(floating, "compare", "(FF)I", statik,
-            [](Runtime&, Object*, std::span<const Value> args) {
-                const float left = args[0].f();
-                const float right = args[1].f();
-                if (left < right) return Value::Int(-1);
-                if (left > right) return Value::Int(1);
-                const auto bits = [](float number) {
-                    return std::isnan(number) ? 0x7fc00000 : std::bit_cast<int32_t>(number);
-                };
-                return Value::Int((bits(left) > bits(right)) - (bits(left) < bits(right)));
-            });
+    if (!floating.methods.contains(wa::interp::MemberKey("compare", "(FF)I"))) {
+        linker.AddMethod(floating, "compare", "(FF)I", statik,
+                [](Runtime&, Object*, std::span<const Value> args) {
+                    const float left = args[0].f();
+                    const float right = args[1].f();
+                    if (left < right) return Value::Int(-1);
+                    if (left > right) return Value::Int(1);
+                    const auto bits = [](float number) {
+                        return std::isnan(number) ? 0x7fc00000 : std::bit_cast<int32_t>(number);
+                    };
+                    return Value::Int((bits(left) > bits(right)) - (bits(left) < bits(right)));
+                });
+    }
     auto& interpolator = linker.Define("Landroid/animation/TimeInterpolator;", object,
                                       art::kAccInterface | art::kAccAbstract);
     linker.AddMethod(interpolator, "getInterpolation", "(F)F", art::kAccPublic | art::kAccAbstract);
@@ -531,9 +528,12 @@ void CheckCore(Runtime& runtime) {
             "Default aconfig value for enable_twoline_allapps");
     auto& key = runtime.linker.FindField(flags, "FLAG_ENABLE_TWOLINE_ALLAPPS", "Ljava/lang/String;", true);
     Require(key.value.ref()->text == u"com.android.launcher3.enable_twoline_allapps", "Aconfig flag key");
-    Require(runtime.executed_opcodes.count() > 30, "Interpreter executed the Launcher3 DEX bodies");
+    const size_t opcodes = static_cast<size_t>(std::count_if(
+        runtime.executed_opcodes.begin(), runtime.executed_opcodes.end(),
+        [](uint8_t seen) { return seen != 0; }));
+    Require(opcodes > 30, "Interpreter executed the Launcher3 DEX bodies");
     std::printf("aosp17_art_interp executed grid, array, model, interpolator, settings and flag methods "
-                "(%zu distinct Dalvik opcodes)\n", runtime.executed_opcodes.count());
+                "(%zu distinct Dalvik opcodes)\n", opcodes);
 }
 
 }  // namespace
