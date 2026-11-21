@@ -1,0 +1,19 @@
+<resources>
+    <attr name="tileAccent" format="color|reference"/>
+    <style name="SmokeTheme">
+        <item name="tileAccent">@color/accent</item>
+        <item name="android:windowBackground">@color/screen</item>
+    </style>
+    <style name="SmokeHeadline">
+        <item name="android:textColor">@color/heading</item>
+        <item name="android:textSize">@dimen/heading_size</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+    <bool name="show_tile">true</bool>
+    <integer name="columns">4</integer>
+    <string-array name="page_labels">
+        <item>@string/app_name</item>
+        <item>@string/footer</item>
+    </string-array>
+</resources>

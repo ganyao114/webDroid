@@ -1,0 +1,8 @@
+<resources>
+    <color name="screen">#ff10223c</color>
+    <color name="card">#ff29466b</color>
+    <color name="heading">#fff6faff</color>
+    <color name="accent">#ffedab4c</color>
+    <color name="icon_background">#ff2459a5</color>
+    <color name="tile_text">#ffeef6fc</color>
+</resources>
