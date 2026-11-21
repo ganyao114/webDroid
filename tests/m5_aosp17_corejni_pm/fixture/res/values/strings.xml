@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Wasm Android Cube</string>
+    <string name="styled_title">Cube <b>GLES3</b></string>
+</resources>
