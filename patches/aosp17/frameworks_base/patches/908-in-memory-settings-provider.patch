@@ -1,0 +1,2940 @@
+--- a/frameworks/base/core/java/android/provider/Settings.java
++++ b/frameworks/base/core/java/android/provider/Settings.java
+@@ -16,47 +16,31 @@
+ 
+ package android.provider;
+ 
+-import static android.app.Flags.systemTermsOfAddressEnabled;
+-import static android.app.supervision.flags.Flags.FLAG_ENABLE_SUPERVISION_SETTINGS_UI_UPDATES;
+-
+ import android.Manifest;
+-import android.annotation.CallbackExecutor;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.IntRange;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.PermissionMethod;
+-import android.annotation.PermissionName;
+-import android.annotation.RequiresPermission;
+ import android.annotation.SdkConstant;
+ import android.annotation.SdkConstant.SdkConstantType;
+-import android.annotation.SpecialUsers.CanBeCURRENT;
+-import android.annotation.SpecialUsers.CannotBeSpecialUser;
+ import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+ import android.annotation.UserIdInt;
+ import android.app.Activity;
+-import android.app.ActivityThread;
+-import android.app.AppOpsManager;
+ import android.app.Application;
+ import android.app.AutomaticZenRule;
+-import android.app.GrammaticalInflectionManager;
+ import android.app.NotificationChannel;
+ import android.app.NotificationManager;
+ import android.app.SearchManager;
+ import android.app.WallpaperManager;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.AttributionSource;
+ import android.content.ComponentName;
+ import android.content.ContentResolver;
+ import android.content.ContentValues;
+ import android.content.Context;
+-import android.content.IContentProvider;
+ import android.content.Intent;
+ import android.content.pm.ActivityInfo;
+-import android.content.pm.ApplicationInfo;
+ import android.content.pm.PackageManager;
+ import android.content.pm.ResolveInfo;
+ import android.content.res.Configuration;
+@@ -64,11 +48,9 @@
+ import android.database.ContentObserver;
+ import android.database.Cursor;
+ import android.database.SQLException;
+-import android.location.ILocationManager;
+ import android.location.LocationManager;
+ import android.media.AudioManager;
+ import android.net.ConnectivityManager;
+-import android.net.NetworkScoreManager;
+ import android.net.Uri;
+ import android.net.wifi.SoftApConfiguration;
+ import android.net.wifi.WifiManager;
+@@ -79,19 +61,10 @@
+ import android.os.Build.VERSION_CODES;
+ import android.os.Bundle;
+ import android.os.DropBoxManager;
+-import android.os.IBinder;
+ import android.os.LocaleList;
+ import android.os.PowerManager;
+-import android.os.PowerManager.AutoPowerSaveModeTriggers;
+-import android.os.Process;
+-import android.os.RemoteCallback;
+-import android.os.RemoteException;
+ import android.os.ResultReceiver;
+-import android.os.ServiceManager;
+-import android.os.UserHandle;
+-import android.ravenwood.annotation.RavenwoodKeepPartialClass;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.service.voice.VisualQueryDetectedResult;
+ import android.speech.tts.TextToSpeech;
+ import android.telephony.TelephonyManager;
+ import android.text.TextUtils;
+@@ -99,19 +72,12 @@
+ import android.util.ArrayMap;
+ import android.util.ArraySet;
+ import android.util.Log;
+-import android.util.MemoryIntArray;
+-import android.util.Slog;
+ import android.view.Display;
+ import android.view.MotionEvent;
+ import android.view.ViewConfiguration;
+ import android.view.Window;
+ import android.view.WindowManager.LayoutParams;
+-import android.widget.Editor;
+-
+-import com.android.internal.annotations.GuardedBy;
+-import com.android.internal.util.Preconditions;
+-
+-import java.io.IOException;
++
+ import java.lang.annotation.ElementType;
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -126,17 +92,11 @@
+ import java.util.Map;
+ import java.util.Objects;
+ import java.util.Set;
+-import java.util.concurrent.Executor;
+-import java.util.function.Consumer;
+ 
+ /**
+  * The Settings provider contains global system-level device preferences.
+  */
+-@RavenwoodKeepWholeClass(comment = """
+-With the default ContentResolver instance, all the get methods will just return the default values.
+-All the put methods will throw an exception. If you want to simulate writing to the settings
+-provider, consider using TestableSettingsProvider, which is configured by TestableContext.
+-        """, conditional = true, bug = 457840588)
++@RavenwoodKeepWholeClass
+ public final class Settings {
+     /** @hide */
+     public static final boolean DEFAULT_OVERRIDEABLE_BY_RESTORE = false;
+@@ -686,7 +646,7 @@
+      * <p>
+      * Output: Nothing.
+      */
+-    @FlaggedApi("com.android.media.flags.enable_privileged_routing_for_media_routing_control")
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_REQUEST_MEDIA_ROUTING_CONTROL =
+             "android.settings.REQUEST_MEDIA_ROUTING_CONTROL";
+@@ -833,7 +793,7 @@
+      * <p>
+      * Output: Nothing.
+      */
+-    @FlaggedApi(Flags.FLAG_EXPOSE_VPN_APP_EXCLUSION_SETTINGS)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_VPN_APP_EXCLUSION_SETTINGS =
+             "android.settings.VPN_APP_EXCLUSION_SETTINGS";
+@@ -1284,7 +1244,7 @@
+      * <p>
+      * Output: Nothing.
+      */
+-    @FlaggedApi(Flags.FLAG_SYSTEM_REGIONAL_PREFERENCES_API_ENABLED)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_REGION_SETTINGS =
+             "android.settings.REGION_SETTINGS";
+@@ -1296,7 +1256,7 @@
+      * <p>
+      * Output: Nothing.
+      */
+-    @FlaggedApi(Flags.FLAG_SYSTEM_REGIONAL_PREFERENCES_API_ENABLED)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_FIRST_DAY_OF_WEEK_SETTINGS =
+             "android.settings.FIRST_DAY_OF_WEEK_SETTINGS";
+@@ -1308,7 +1268,7 @@
+      * <p>
+      * Output: Nothing.
+      */
+-    @FlaggedApi(Flags.FLAG_SYSTEM_REGIONAL_PREFERENCES_API_ENABLED)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_TEMPERATURE_UNIT_SETTINGS =
+             "android.settings.TEMPERATURE_UNIT_SETTINGS";
+@@ -1320,7 +1280,7 @@
+      * <p>
+      * Output: Nothing.
+      */
+-    @FlaggedApi(Flags.FLAG_SYSTEM_REGIONAL_PREFERENCES_API_ENABLED)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_MEASUREMENT_SYSTEM_SETTINGS =
+             "android.settings.MEASUREMENT_SYSTEM_SETTINGS";
+@@ -1810,7 +1770,7 @@
+      * <p>
+      * Output: Nothing.
+      */
+-    @FlaggedApi(Flags.FLAG_EXPOSE_SYSTEM_UPDATE_SETTINGS)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SYSTEM_UPDATE_SETTINGS =
+             "android.settings.SYSTEM_UPDATE_SETTINGS";
+@@ -2437,7 +2397,7 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(android.nfc.Flags.FLAG_NFC_ACTION_MANAGE_SERVICES_SETTINGS)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     @SystemApi
+     public static final String ACTION_MANAGE_OTHER_NFC_SERVICES_SETTINGS =
+@@ -2493,7 +2453,6 @@
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_NOTIFICATION_BUNDLES
+             = "android.settings.NOTIFICATION_BUNDLES";
+-
+ 
+     /**
+      * Activity Action: Show notification summarization settings screen
+@@ -2914,7 +2873,7 @@
+      * ComponentName)} and only use this action to start an activity if they return {@code false}.
+      */
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+-    @FlaggedApi(android.credentials.flags.Flags.FLAG_NEW_SETTINGS_INTENTS)
++
+     public static final String ACTION_CREDENTIAL_PROVIDER =
+             "android.settings.CREDENTIAL_PROVIDER";
+ 
+@@ -2950,7 +2909,6 @@
+     public static final String ACTION_STORAGE_VOLUME_ACCESS_SETTINGS =
+             "android.settings.STORAGE_VOLUME_ACCESS_SETTINGS";
+ 
+-
+     /**
+      * Activity Action: Show screen that let user select enable (or disable) Content Capture.
+      * <p>
+@@ -3017,7 +2975,7 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(FLAG_ENABLE_SUPERVISION_SETTINGS_UI_UPDATES)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String MANAGE_SUPERVISION_APP_SETTINGS =
+             "android.settings.MANAGE_SUPERVISION_APP_SETTINGS";
+@@ -3116,7 +3074,7 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(android.Manifest.permission.LAUNCH_PERMISSION_SETTINGS)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_APP_PERMISSIONS_SETTINGS =
+             "android.settings.APP_PERMISSIONS_SETTINGS";
+@@ -3128,7 +3086,7 @@
+      * <p>
+      * Output: Nothing.
+      */
+-    @FlaggedApi(android.app.supervision.flags.Flags.FLAG_ENABLE_SUPERVISION_SETTINGS_UI_UPDATES)
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SUPERVISION_SETTINGS =
+             "android.settings.SUPERVISION_SETTINGS";
+@@ -3145,7 +3103,7 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi("android.service.personalcontext.enable_personal_context_service")
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_PERSONAL_CONTEXT_SETTINGS =
+             "android.settings.PERSONAL_CONTEXT_SETTINGS";
+@@ -3159,7 +3117,7 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi("android.app.contentrestriction.flags.enable_content_restriction_api")
++
+     @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SHOW_RESTRICTED_CONTENT =
+             "android.settings.SHOW_RESTRICTED_CONTENT";
+@@ -3552,729 +3510,67 @@
+         }
+     }
+ 
+-    @RavenwoodKeepPartialClass(comment = "GenerationTracker not used on Ravenwood")
+-    private static final class GenerationTracker {
+-        @NonNull private final Key mKey;
+-        @NonNull private final MemoryIntArray mArray;
+-        @NonNull private final Consumer<Key> mErrorHandler;
+-        private final int mIndex;
+-        private int mCurrentGeneration;
+-
+-        GenerationTracker(@NonNull Key key, @NonNull MemoryIntArray array, int index,
+-                int generation, @NonNull Consumer<Key> errorHandler) {
+-            mKey = key;
+-            mArray = array;
+-            mIndex = index;
+-            mErrorHandler = errorHandler;
+-            mCurrentGeneration = generation;
++    // Thread-safe.
++    private static final class NameValueCache {
++        private final Uri mUri;
++        // The embedded resolver's settings are local to its application context.
++        private final Map<ContentResolver, Map<String, String>> mValues = new HashMap<>();
++        private final Map<ContentResolver, Map<String, String>> mDefaults = new HashMap<>();
++
++        NameValueCache(Uri uri) {
++            mUri = uri;
+         }
+ 
+-        // This method also updates the obsolete generation code stored locally
+-        public boolean isGenerationChanged() {
+-            final int currentGeneration = readCurrentGeneration();
+-            if (currentGeneration >= 0) {
+-                if (currentGeneration == mCurrentGeneration) {
+-                    return false;
+-                }
+-                mCurrentGeneration = currentGeneration;
++        String getStringForUser(ContentResolver resolver, String name, int userId) {
++            if (userId != 0 && userId != -2) return null;
++            synchronized (this) {
++                Map<String, String> values = mValues.get(resolver);
++                return values == null ? null : values.get(name);
+             }
++        }
++
++        boolean putStringForUser(ContentResolver resolver, String name, String value, String tag,
++                boolean makeDefault, int userId, boolean overrideableByRestore) {
++            if (userId != 0 && userId != -2) return false;
++            Objects.requireNonNull(resolver);
++            synchronized (this) {
++                store(mValues, resolver, name, value);
++                if (makeDefault) store(mDefaults, resolver, name, value);
++            }
++            resolver.notifyChange(NameValueTable.getUriFor(mUri, name), null);
+             return true;
+         }
+ 
+-        public int getCurrentGeneration() {
+-            return mCurrentGeneration;
++        private static void store(Map<ContentResolver, Map<String, String>> table,
++                ContentResolver resolver, String name, String value) {
++            Map<String, String> entries = table.get(resolver);
++            if (entries == null) {
++                entries = new HashMap<>();
++                table.put(resolver, entries);
++            }
++            if (value == null) entries.remove(name);
++            else entries.put(name, value);
+         }
+ 
+-        private int readCurrentGeneration() {
+-            try {
+-                return mArray.get(mIndex);
+-            } catch (IOException e) {
+-                Log.e(TAG, "Error getting current generation", e);
+-                mErrorHandler.accept(mKey);
+-            }
+-            return -1;
+-        }
+-
+-        public void destroy() {
+-            maybeCloseGenerationArray(mArray);
+-        }
+-
+-        @Override
+-        protected void finalize() throws Throwable {
+-            try {
+-                destroy();
+-            } finally {
+-                super.finalize();
+-            }
+-        }
+-
+-        @RavenwoodKeepWholeClass(comment = "GenerationTracker not used, but we still generate keys")
+-        private static final class Key {
+-            private final String mName;
+-            private final int mDeviceId;
+-
+-            Key(String name, int deviceId) {
+-                mName = name;
+-                mDeviceId = deviceId;
+-            }
+-
+-            @Override
+-            public boolean equals(Object o) {
+-                if (this == o) return true;
+-                if (!(o instanceof Key key)) return false;
+-                return mDeviceId == key.mDeviceId && Objects.equals(mName, key.mName);
+-            }
+-
+-            @Override
+-            public int hashCode() {
+-                return Objects.hash(mName, mDeviceId);
+-            }
+-        }
+-    }
+-
+-    private static void maybeCloseGenerationArray(@Nullable MemoryIntArray array) {
+-        if (array == null) {
+-            return;
+-        }
+-        try {
+-            // If this process is the system server process, the MemoryIntArray received from Parcel
+-            // is the same object as the one kept inside SettingsProvider, so skipping the close().
+-            if (!Settings.isInSystemServer() && !array.isClosed()) {
+-                array.close();
+-            }
+-        } catch (IOException e) {
+-            Log.e(TAG, "Error closing the generation tracking array", e);
+-        }
+-    }
+-
+-    private static final class ContentProviderHolder {
+-        private final Object mLock = new Object();
+-
+-        private final Uri mUri;
+-        @GuardedBy("mLock")
+-        @UnsupportedAppUsage
+-        private IContentProvider mContentProvider;
+-
+-        public ContentProviderHolder(Uri uri) {
+-            mUri = uri;
+-        }
+-
+-        public IContentProvider getProvider(ContentResolver contentResolver) {
+-            synchronized (mLock) {
+-                if (mContentProvider == null) {
+-                    mContentProvider = contentResolver
+-                            .acquireProvider(mUri.getAuthority());
+-                }
+-                return mContentProvider;
+-            }
+-        }
+-
+-        public void clearProviderForTest() {
+-            synchronized (mLock) {
+-                mContentProvider = null;
+-            }
+-        }
+-    }
+-
+-    // Thread-safe.
+-    private static class NameValueCache {
+-        private static final boolean DEBUG = false;
+-
+-        private static final String[] SELECT_VALUE_PROJECTION = new String[] {
+-                Settings.NameValueTable.VALUE
+-        };
+-
+-        private static final String NAME_EQ_PLACEHOLDER = "name=?";
+-
+-        // Cached values of queried settings.
+-        // Key is composed by the setting's name and deviceId, value is the setting's value.
+-        // Must synchronize on 'this' to access mValues and mValuesVersion.
+-        private final ArrayMap<GenerationTracker.Key, String> mValues = new ArrayMap<>();
+-
+-        // Cached values for queried prefixes.
+-        // Key is the prefix, value is all of the settings under the prefix, mapped from a setting's
+-        // name to a setting's value. The name string doesn't include the prefix.
+-        // Must synchronize on 'this' to access.
+-        private final ArrayMap<String, ArrayMap<String, String>> mPrefixToValues = new ArrayMap<>();
+-
+-        private final Uri mUri;
+-        @UnsupportedAppUsage
+-        private final ContentProviderHolder mProviderHolder;
+-
+-        // The method we'll call (or null, to not use) on the provider
+-        // for the fast path of retrieving settings.
+-        private final String mCallGetCommand;
+-        private final String mCallSetCommand;
+-        private final String mCallDeleteCommand;
+-        private final String mCallListCommand;
+-        private final String mCallSetAllCommand;
+-
+-        private final ArraySet<String> mReadableFields;
+-        private final ArraySet<String> mAllFields;
+-        private final ArrayMap<String, Integer> mReadableFieldsWithMaxTargetSdk;
+-        private final ArrayMap<String, String> mReadableFieldsWithRedactedValue;
+-
+-        // Mapping of key to generation trackers for queried settings.
+-        // Key is composed by the setting's name and deviceId, value is the generation tracker.
+-        // Must synchronize on 'this' to access mGenerationTrackers.
+-        @GuardedBy("this")
+-        private final ArrayMap<GenerationTracker.Key, GenerationTracker> mGenerationTrackers =
+-                new ArrayMap<>();
+-
+-        private final Consumer<GenerationTracker.Key> mGenerationTrackerErrorHandler = (key) -> {
+-            synchronized (NameValueCache.this) {
+-                Log.e(TAG, "Error accessing generation tracker - removing");
+-                final GenerationTracker tracker = mGenerationTrackers.get(key);
+-                if (tracker != null) {
+-                    tracker.destroy();
+-                    mGenerationTrackers.remove(key);
+-                }
+-                mValues.remove(key);
+-            }
+-        };
+-
+-        <T extends NameValueTable> NameValueCache(Uri uri, String getCommand,
+-                String setCommand, String deleteCommand, ContentProviderHolder providerHolder,
+-                Class<T> callerClass) {
+-            this(uri, getCommand, setCommand, deleteCommand, null, null, providerHolder,
+-                    callerClass);
+-        }
+-
+-        private <T extends NameValueTable> NameValueCache(Uri uri, String getCommand,
+-                String setCommand, String deleteCommand, String listCommand, String setAllCommand,
+-                ContentProviderHolder providerHolder, Class<T> callerClass) {
+-            mUri = uri;
+-            mCallGetCommand = getCommand;
+-            mCallSetCommand = setCommand;
+-            mCallDeleteCommand = deleteCommand;
+-            mCallListCommand = listCommand;
+-            mCallSetAllCommand = setAllCommand;
+-            mProviderHolder = providerHolder;
+-            mReadableFields = new ArraySet<>();
+-            mAllFields = new ArraySet<>();
+-            mReadableFieldsWithMaxTargetSdk = new ArrayMap<>();
+-            mReadableFieldsWithRedactedValue = new ArrayMap<>();
+-            getPublicSettingsForClass(callerClass, mAllFields, mReadableFields,
+-                    mReadableFieldsWithMaxTargetSdk, mReadableFieldsWithRedactedValue);
+-        }
+-
+-        public boolean putStringForUser(ContentResolver cr, String name, String value,
+-                String tag, boolean makeDefault, final @CanBeCURRENT @UserIdInt int userId,
+-                boolean overrideableByRestore) {
+-            try {
+-                Bundle arg = new Bundle();
+-                arg.putString(Settings.NameValueTable.VALUE, value);
+-                arg.putInt(CALL_METHOD_USER_KEY, userId);
+-                if (tag != null) {
+-                    arg.putString(CALL_METHOD_TAG_KEY, tag);
+-                }
+-                if (makeDefault) {
+-                    arg.putBoolean(CALL_METHOD_MAKE_DEFAULT_KEY, true);
+-                }
+-                if (overrideableByRestore) {
+-                    arg.putBoolean(CALL_METHOD_OVERRIDEABLE_BY_RESTORE_KEY, true);
+-                }
+-                IContentProvider cp = mProviderHolder.getProvider(cr);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't set key " + name + " in " + mUri + " because cp is null");
+-                    return false;
+-                }
+-                cp.call(cr.getAttributionSource(),
+-                        mProviderHolder.mUri.getAuthority(), mCallSetCommand, name, arg);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't set key " + name + " in " + mUri, e);
+-                return false;
+-            }
+-            return true;
+-        }
+-
+-        public @SetAllResult int setStringsForPrefix(ContentResolver cr, String prefix,
+-                HashMap<String, String> keyValues) {
+-            if (mCallSetAllCommand == null) {
+-                // This NameValueCache does not support atomically setting multiple flags
+-                return SET_ALL_RESULT_FAILURE;
+-            }
+-            try {
+-                Bundle args = new Bundle();
+-                args.putString(CALL_METHOD_PREFIX_KEY, prefix);
+-                args.putSerializable(CALL_METHOD_FLAGS_KEY, keyValues);
+-                IContentProvider cp = mProviderHolder.getProvider(cr);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't set strings for prefix " + prefix + " because cp is null");
+-                    return SET_ALL_RESULT_FAILURE;
+-                }
+-                Bundle bundle = cp.call(cr.getAttributionSource(),
+-                        mProviderHolder.mUri.getAuthority(),
+-                        mCallSetAllCommand, null, args);
+-                return bundle.getInt(KEY_CONFIG_SET_ALL_RETURN);
+-            } catch (RemoteException e) {
+-                // Not supported by the remote side
+-                return SET_ALL_RESULT_FAILURE;
+-            }
+-        }
+-
+-        public boolean deleteStringForUser(ContentResolver cr, String name, final int userHandle) {
+-            try {
+-                Bundle arg = new Bundle();
+-                arg.putInt(CALL_METHOD_USER_KEY, userHandle);
+-                IContentProvider cp = mProviderHolder.getProvider(cr);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't delete key " + name + " because cp is null");
+-                    return false;
+-                }
+-                cp.call(cr.getAttributionSource(),
+-                        mProviderHolder.mUri.getAuthority(), mCallDeleteCommand, name, arg);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't delete key " + name + " in " + mUri, e);
+-                return false;
+-            }
+-            return true;
+-        }
+-
+-        @UnsupportedAppUsage
+-        public String getStringForUser(ContentResolver cr, String name,
+-                final @CanBeCURRENT @UserIdInt int userId) {
+-            final boolean isSelf = (userId == UserHandle.myUserId());
+-            final AttributionSource attributionSource = cr.getAttributionSource();
+-            final int deviceId = android.permission.flags.Flags.deviceAwarePermissionApisEnabled()
+-                    && attributionSource != null
+-                    ? attributionSource.getDeviceId() : Context.DEVICE_ID_DEFAULT;
+-            final GenerationTracker.Key key = new GenerationTracker.Key(name, deviceId);
+-            final boolean useCache = isSelf && !isInSystemServer();
+-            boolean needsGenerationTracker = false;
+-
+-            // Check if there is a redacted value for this setting
+-            if (!mReadableFieldsWithRedactedValue.isEmpty()) {
+-                boolean isSystemCaller =
+-                        Settings.isInSystemServer()
+-                                || UserHandle.getAppId(Binder.getCallingUid())
+-                                    < Process.FIRST_APPLICATION_UID;
+-                if (!isSystemCaller) {
+-                    String redactedValue = mReadableFieldsWithRedactedValue.get(name);
+-                    if (redactedValue != null && !redactedValue.isEmpty()
+-                            && Flags.enableRedactedValueForReadable()) {
+-                        return redactedValue;
+-                    }
++        void reset(ContentResolver resolver, int userId) {
++            if (userId != 0 && userId != -2) return;
++            Set<String> changed;
++            synchronized (this) {
++                Map<String, String> old = mValues.remove(resolver);
++                if (old == null) return;
++                changed = new HashSet<>(old.keySet());
++                Map<String, String> defaults = mDefaults.get(resolver);
++                if (defaults != null) {
++                    mValues.put(resolver, new HashMap<>(defaults));
++                    changed.addAll(defaults.keySet());
+                 }
+             }
+-
+-            if (useCache) {
+-                synchronized (NameValueCache.this) {
+-                    final GenerationTracker generationTracker = mGenerationTrackers.get(key);
+-                    if (generationTracker != null) {
+-                        if (generationTracker.isGenerationChanged()) {
+-                            if (DEBUG) {
+-                                Log.i(TAG, "Generation changed for setting:" + name
+-                                        + " type:" + mUri.getPath()
+-                                        + " in package:" + cr.getPackageName()
+-                                        + " and user:" + userId);
+-                            }
+-                            // When a generation number changes, remove cached value, remove the old
+-                            // generation tracker and request a new one
+-                            mValues.remove(key);
+-                            generationTracker.destroy();
+-                            mGenerationTrackers.remove(key);
+-                        } else if (mValues.containsKey(key)) {
+-                            if (DEBUG) {
+-                                Log.i(TAG, "Cache hit for setting:" + name);
+-                            }
+-                            return mValues.get(key);
+-                        }
+-                    }
+-                }
+-                if (DEBUG) {
+-                    Log.i(TAG, "Cache miss for setting:" + name + " for user:" + userId);
+-                }
+-                // Generation tracker doesn't exist or the value isn't cached
+-                needsGenerationTracker = true;
+-            } else {
+-                if (DEBUG || LOCAL_LOGV) {
+-                    Log.v(TAG, "get setting for user " + userId
+-                            + " by user " + UserHandle.myUserId() + " so skipping cache");
+-                }
+-            }
+-
+-            // Check if the target settings key is readable. Reject if the caller is not system and
+-            // is trying to access a settings key defined in the Settings.Secure, Settings.System or
+-            // Settings.Global and is not annotated as @Readable.
+-            // Notice that a key string that is not defined in any of the Settings.* classes will
+-            // still be regarded as readable.
+-            if (!isCallerExemptFromReadableRestriction() && mAllFields.contains(name)) {
+-                if (!mReadableFields.contains(name)) {
+-                    throw new SecurityException(
+-                            "Settings key: <" + name + "> is not readable. From S+, settings keys "
+-                                    + "annotated with @hide are restricted to system_server and "
+-                                    + "system apps only, unless they are annotated with @Readable."
+-                    );
+-                } else {
+-                    // When the target settings key has @Readable annotation, if the caller app's
+-                    // target sdk is higher than the maxTargetSdk of the annotation, reject access.
+-                    if (mReadableFieldsWithMaxTargetSdk.containsKey(name)) {
+-                        final int maxTargetSdk = mReadableFieldsWithMaxTargetSdk.get(name);
+-                        final Application application = ActivityThread.currentApplication();
+-                        final boolean targetSdkCheckOk = application != null
+-                                && application.getApplicationInfo() != null
+-                                && application.getApplicationInfo().targetSdkVersion
+-                                <= maxTargetSdk;
+-                        if (!targetSdkCheckOk) {
+-                            throw new SecurityException(
+-                                    "Settings key: <" + name + "> is only readable to apps with "
+-                                            + "targetSdkVersion lower than or equal to: "
+-                                            + maxTargetSdk
+-                            );
+-                        }
+-                    }
+-                }
+-            }
+-
+-            IContentProvider cp = mProviderHolder.getProvider(cr);
+-            if (cp == null) {
+-                Log.w(TAG, "Can't get key " + name + " because cp is null");
+-                return null;  // Return null, but don't cache it.
+-            }
+-
+-            // Try the fast path first, not using query().  If this
+-            // fails (alternate Settings provider that doesn't support
+-            // this interface?) then we fall back to the query/table
+-            // interface.
+-            if (mCallGetCommand != null) {
+-                try {
+-                    Bundle args = new Bundle();
+-                    if (!isSelf) {
+-                        args.putInt(CALL_METHOD_USER_KEY, userId);
+-                    }
+-                    if (needsGenerationTracker) {
+-                        args.putString(CALL_METHOD_TRACK_GENERATION_KEY, null);
+-                        if (DEBUG) {
+-                            Log.i(TAG, "Requested generation tracker for setting:" + name
+-                                    + " type:" + mUri.getPath()
+-                                    + " in package:" + cr.getPackageName()
+-                                    + " and user:" + userId);
+-                        }
+-                    }
+-                    Bundle b;
+-                    // If we're in system server and in a binder transaction we need to clear the
+-                    // calling uid. This works around code in system server that did not call
+-                    // clearCallingIdentity, previously this wasn't needed because reading settings
+-                    // did not do permission checking but thats no longer the case.
+-                    // Long term this should be removed and callers should properly call
+-                    // clearCallingIdentity or use a ContentResolver from the caller as needed.
+-                    if (Settings.isInSystemServer() && Binder.getCallingUid() != Process.myUid()) {
+-                        final long token = Binder.clearCallingIdentity();
+-                        try {
+-                            b = cp.call(cr.getAttributionSource(),
+-                                    mProviderHolder.mUri.getAuthority(), mCallGetCommand, name,
+-                                    args);
+-                        } finally {
+-                            Binder.restoreCallingIdentity(token);
+-                        }
+-                    } else {
+-                        b = cp.call(cr.getAttributionSource(),
+-                                mProviderHolder.mUri.getAuthority(), mCallGetCommand, name, args);
+-                    }
+-                    if (b != null) {
+-                        String value = b.getString(Settings.NameValueTable.VALUE);
+-                        // Don't update our cache for reads of other users' data
+-                        if (isSelf) {
+-                            synchronized (NameValueCache.this) {
+-                                if (needsGenerationTracker) {
+-                                    MemoryIntArray array = b.getParcelable(
+-                                            CALL_METHOD_TRACK_GENERATION_KEY, android.util.MemoryIntArray.class);
+-                                    final int index = b.getInt(
+-                                            CALL_METHOD_GENERATION_INDEX_KEY, -1);
+-                                    if (array != null && index >= 0) {
+-                                        final int generation = b.getInt(
+-                                                CALL_METHOD_GENERATION_KEY, 0);
+-                                        if (DEBUG) {
+-                                            Log.i(TAG, "Received generation tracker for setting:"
+-                                                    + name
+-                                                    + " type:" + mUri.getPath()
+-                                                    + " in package:" + cr.getPackageName()
+-                                                    + " and user:" + userId
+-                                                    + " with index:" + index);
+-                                        }
+-                                        // Always make sure to close any pre-existing tracker before
+-                                        // replacing it, to prevent memory leaks
+-                                        var oldTracker = mGenerationTrackers.get(key);
+-                                        if (oldTracker != null) {
+-                                            oldTracker.destroy();
+-                                        }
+-                                        mGenerationTrackers.put(key, new GenerationTracker(key,
+-                                                array, index, generation,
+-                                                mGenerationTrackerErrorHandler));
+-                                    } else {
+-                                        maybeCloseGenerationArray(array);
+-                                    }
+-                                }
+-                                GenerationTracker tracker = mGenerationTrackers.get(key);
+-                                if (tracker != null && !tracker.isGenerationChanged()) {
+-                                    if (DEBUG) {
+-                                        Log.i(TAG, "Updating cache for setting:" + name);
+-                                    }
+-                                    mValues.put(key, value);
+-                                }
+-                            }
+-                        } else {
+-                            if (DEBUG || LOCAL_LOGV) {
+-                                Log.i(TAG, "call-query of user " + userId
+-                                        + " by " + UserHandle.myUserId()
+-                                        + (isInSystemServer() ? " in system_server" : "")
+-                                        + " so not updating cache");
+-                            }
+-                        }
+-                        return value;
+-                    }
+-                    // If the response Bundle is null, we fall through
+-                    // to the query interface below.
+-                } catch (RemoteException e) {
+-                    // Not supported by the remote side?  Fall through
+-                    // to query().
+-                }
+-            }
+-
+-            Cursor c = null;
+-            try {
+-                Bundle queryArgs = ContentResolver.createSqlQueryBundle(
+-                        NAME_EQ_PLACEHOLDER, new String[]{name}, null);
+-                // Same workaround as above.
+-                if (Settings.isInSystemServer() && Binder.getCallingUid() != Process.myUid()) {
+-                    final long token = Binder.clearCallingIdentity();
+-                    try {
+-                        c = cp.query(cr.getAttributionSource(), mUri,
+-                                SELECT_VALUE_PROJECTION, queryArgs, null);
+-                    } finally {
+-                        Binder.restoreCallingIdentity(token);
+-                    }
+-                } else {
+-                    c = cp.query(cr.getAttributionSource(), mUri,
+-                            SELECT_VALUE_PROJECTION, queryArgs, null);
+-                }
+-                if (c == null) {
+-                    Log.w(TAG, "Can't get key " + name + " from " + mUri);
+-                    return null;
+-                }
+-
+-                String value = c.moveToNext() ? c.getString(0) : null;
+-                synchronized (NameValueCache.this) {
+-                    GenerationTracker tracker = mGenerationTrackers.get(key);
+-                    if (tracker != null && !tracker.isGenerationChanged()) {
+-                        if (DEBUG) {
+-                            Log.i(TAG, "Updating cache for setting:" + name + " using query");
+-                        }
+-                        mValues.put(key, value);
+-                    }
+-                }
+-                return value;
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't get key " + name + " from " + mUri, e);
+-                return null;  // Return null, but don't cache it.
+-            } finally {
+-                if (c != null) c.close();
+-            }
++            for (String name : changed) resolver.notifyChange(NameValueTable.getUriFor(mUri, name), null);
+         }
+ 
+-        private static boolean isCallerExemptFromReadableRestriction() {
+-            if (Settings.isInSystemServer()) {
+-                return true;
+-            }
+-            if (UserHandle.getAppId(Binder.getCallingUid()) < Process.FIRST_APPLICATION_UID) {
+-                return true;
+-            }
+-            final Application application = ActivityThread.currentApplication();
+-            if (application == null || application.getApplicationInfo() == null) {
+-                return false;
+-            }
+-            final ApplicationInfo applicationInfo = application.getApplicationInfo();
+-            final boolean isTestOnly =
+-                    (applicationInfo.flags & ApplicationInfo.FLAG_TEST_ONLY) != 0;
+-            return isTestOnly || applicationInfo.isSystemApp() || applicationInfo.isPrivilegedApp()
+-                    || applicationInfo.isSignedWithPlatformKey();
+-        }
+-
+-        private Map<String, String> getStringsForPrefixStripPrefix(
+-                ContentResolver cr, String prefix, List<String> names) {
+-            final GenerationTracker.Key trackerKey = new GenerationTracker.Key(prefix,
+-                    Context.DEVICE_ID_DEFAULT);
+-            String namespace = prefix.substring(0, prefix.length() - 1);
+-            ArrayMap<String, String> keyValues = new ArrayMap<>();
+-            int substringLength = prefix.length();
+-            int currentGeneration = -1;
+-            boolean needsGenerationTracker = false;
+-            synchronized (NameValueCache.this) {
+-                final GenerationTracker generationTracker = mGenerationTrackers.get(trackerKey);
+-                if (generationTracker != null) {
+-                    if (generationTracker.isGenerationChanged()) {
+-                        if (DEBUG) {
+-                            Log.i(TAG, "Generation changed for prefix:" + prefix
+-                                    + " type:" + mUri.getPath()
+-                                    + " in package:" + cr.getPackageName());
+-                        }
+-                        // When a generation number changes, remove cached values, remove the old
+-                        // generation tracker and request a new one
+-                        generationTracker.destroy();
+-                        mGenerationTrackers.remove(trackerKey);
+-                        mPrefixToValues.remove(prefix);
+-                        needsGenerationTracker = true;
+-                    } else {
+-                        final ArrayMap<String, String> cachedSettings = mPrefixToValues.get(prefix);
+-                        if (cachedSettings != null) {
+-                            if (!names.isEmpty()) {
+-                                for (String name : names) {
+-                                    // The cache can contain "null" values, need to use containsKey.
+-                                    if (cachedSettings.containsKey(name)) {
+-                                        keyValues.put(
+-                                                name,
+-                                                cachedSettings.get(name));
+-                                    }
+-                                }
+-                            } else {
+-                                keyValues.putAll(cachedSettings);
+-                                // Remove the hack added for the legacy behavior.
+-                                keyValues.remove("");
+-                            }
+-                            return keyValues;
+-                        }
+-                    }
+-                    currentGeneration = generationTracker.getCurrentGeneration();
+-                } else {
+-                    needsGenerationTracker = true;
+-                }
+-            }
+-            if (mCallListCommand == null) {
+-                // No list command specified, return empty map
+-                return keyValues;
+-            }
+-            if (DEBUG) {
+-                Log.i(TAG, "Cache miss for prefix:" + prefix);
+-            }
+-            IContentProvider cp = mProviderHolder.getProvider(cr);
+-            if (cp == null) {
+-                Log.w(TAG, "Can't get strings for prefix " + prefix + " because cp is null");
+-                return keyValues;
+-            }
+-
+-            try {
+-                Bundle args = new Bundle();
+-                args.putString(Settings.CALL_METHOD_PREFIX_KEY, prefix);
+-                if (needsGenerationTracker) {
+-                    args.putString(CALL_METHOD_TRACK_GENERATION_KEY, null);
+-                    if (DEBUG) {
+-                        Log.i(TAG, "Requested generation tracker for prefix:" + prefix
+-                                + " type: " + mUri.getPath()
+-                                + " in package:" + cr.getPackageName());
+-                    }
+-                }
+-
+-                Bundle b;
+-                // If we're in system server and the caller did not call
+-                // clearCallingIdentity, the read would fail due to mismatched AttributionSources.
+-                if (Settings.isInSystemServer() && Binder.getCallingUid() != Process.myUid()) {
+-                    final long token = Binder.clearCallingIdentity();
+-                    try {
+-                        // Fetch all flags for the namespace at once for caching purposes
+-                        b = cp.call(cr.getAttributionSource(),
+-                                mProviderHolder.mUri.getAuthority(), mCallListCommand, null, args);
+-                    } finally {
+-                        Binder.restoreCallingIdentity(token);
+-                    }
+-                } else {
+-                    // Fetch all flags for the namespace at once for caching purposes
+-                    b = cp.call(cr.getAttributionSource(),
+-                            mProviderHolder.mUri.getAuthority(), mCallListCommand, null, args);
+-                }
+-                if (b == null) {
+-                    // Invalid response, return an empty map
+-                    return keyValues;
+-                }
+-
+-                // All flags for the namespace
+-                HashMap<String, String> flagsToValues =
+-                        (HashMap) b.getSerializable(Settings.NameValueTable.VALUE, java.util.HashMap.class);
+-                if (flagsToValues == null) {
+-                    return keyValues;
+-                }
+-                // Only the flags requested by the caller
+-                if (!names.isEmpty()) {
+-                    for (String name : names) {
+-                        // flagsToValues can contain "null" values, need to use containsKey.
+-                        final String key = Config.createCompositeName(namespace, name);
+-                        if (flagsToValues.containsKey(key)) {
+-                            keyValues.put(
+-                                    name,
+-                                    flagsToValues.get(key));
+-                        }
+-                    }
+-                } else {
+-                    for (Map.Entry<String, String> flag : flagsToValues.entrySet()) {
+-                        keyValues.put(
+-                                flag.getKey().substring(substringLength),
+-                                flag.getValue());
+-                    }
+-                }
+-
+-                synchronized (NameValueCache.this) {
+-                    if (needsGenerationTracker) {
+-                        MemoryIntArray array = b.getParcelable(
+-                                CALL_METHOD_TRACK_GENERATION_KEY, android.util.MemoryIntArray.class);
+-                        final int index = b.getInt(
+-                                CALL_METHOD_GENERATION_INDEX_KEY, -1);
+-                        if (array != null && index >= 0) {
+-                            final int generation = b.getInt(
+-                                    CALL_METHOD_GENERATION_KEY, 0);
+-                            if (DEBUG) {
+-                                Log.i(TAG, "Received generation tracker for prefix:" + prefix
+-                                        + " type:" + mUri.getPath()
+-                                        + " in package:" + cr.getPackageName()
+-                                        + " with index:" + index);
+-                            }
+-                            // Always make sure to close any pre-existing tracker before
+-                            // replacing it, to prevent memory leaks
+-                            var oldTracker = mGenerationTrackers.get(trackerKey);
+-                            if (oldTracker != null) {
+-                                oldTracker.destroy();
+-                            }
+-                            mGenerationTrackers.put(trackerKey,
+-                                    new GenerationTracker(trackerKey, array, index, generation,
+-                                            mGenerationTrackerErrorHandler));
+-                            currentGeneration = generation;
+-                        } else {
+-                            maybeCloseGenerationArray(array);
+-                        }
+-                    }
+-                    GenerationTracker tracker = mGenerationTrackers.get(trackerKey);
+-                    if (tracker != null && currentGeneration == tracker.getCurrentGeneration()) {
+-                        if (DEBUG) {
+-                            Log.i(TAG, "Updating cache for prefix:" + prefix);
+-                        }
+-                        // Cache the complete list of flags for the namespace for bulk queries.
+-                        // In this cached list, the setting's name doesn't include the prefix.
+-                        ArrayMap<String, String> namesToValues =
+-                                new ArrayMap<>(flagsToValues.size() + 1);
+-                        for (Map.Entry<String, String> flag : flagsToValues.entrySet()) {
+-                            namesToValues.put(
+-                                    flag.getKey().substring(substringLength),
+-                                    flag.getValue());
+-                        }
+-                        // Legacy behavior, we return <"", null> when queried with name = ""
+-                        namesToValues.put("", null);
+-                        mPrefixToValues.put(prefix, namesToValues);
+-                    }
+-                }
+-                return keyValues;
+-            } catch (RemoteException e) {
+-                // Not supported by the remote side, return an empty map
+-                return keyValues;
+-            }
+-        }
+-
+-        public void clearGenerationTrackerForTest() {
+-            synchronized (NameValueCache.this) {
+-                for (int i = 0; i < mGenerationTrackers.size(); i++) {
+-                    mGenerationTrackers.valueAt(i).destroy();
+-                }
+-                mGenerationTrackers.clear();
+-                mValues.clear();
+-            }
++        synchronized void clearGenerationTrackerForTest() {
++            mValues.clear();
++            mDefaults.clear();
+         }
+     }
+ 
+@@ -4292,10 +3588,7 @@
+      * @return true if the specified context can draw on top of other apps, false otherwise
+      */
+     public static boolean canDrawOverlays(Context context) {
+-        return Settings.isCallingPackageAllowedToDrawOverlays(context, Process.myUid(),
+-                context.getOpPackageName(), false) || context.checkSelfPermission(
+-                Manifest.permission.SYSTEM_APPLICATION_OVERLAY)
+-                == PackageManager.PERMISSION_GRANTED;
++        return false;
+     }
+ 
+     /**
+@@ -4424,18 +3717,8 @@
+         public static final Uri CONTENT_URI =
+             Uri.parse("content://" + AUTHORITY + "/system");
+ 
+-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-        private static final ContentProviderHolder sProviderHolder =
+-                new ContentProviderHolder(CONTENT_URI);
+-
+         @UnsupportedAppUsage
+-        private static final NameValueCache sNameValueCache = new NameValueCache(
+-                CONTENT_URI,
+-                CALL_METHOD_GET_SYSTEM,
+-                CALL_METHOD_PUT_SYSTEM,
+-                CALL_METHOD_DELETE_SYSTEM,
+-                sProviderHolder,
+-                System.class);
++        private static final NameValueCache sNameValueCache = new NameValueCache(CONTENT_URI);
+ 
+         @UnsupportedAppUsage
+         private static final HashSet<String> MOVED_TO_SECURE;
+@@ -4557,7 +3840,6 @@
+ 
+         /** @hide */
+         public static void clearProviderForTest() {
+-            sProviderHolder.clearProviderForTest();
+             sNameValueCache.clearGenerationTrackerForTest();
+         }
+ 
+@@ -4576,13 +3858,13 @@
+          * @return the corresponding value, or null if not present
+          */
+         public static String getString(ContentResolver resolver, String name) {
+-            return getStringForUser(resolver, name, resolver.getUserId());
++            return getStringForUser(resolver, name, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage
+         public static String getStringForUser(ContentResolver resolver, String name,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             if (MOVED_TO_SECURE.contains(name)) {
+                 Log.w(TAG, "Setting " + name + " has moved from android.provider.Settings.System"
+                         + " to android.provider.Settings.Secure, returning read-only value.");
+@@ -4605,7 +3887,7 @@
+          * @return true if the value was set, false on database errors
+          */
+         public static boolean putString(ContentResolver resolver, String name, String value) {
+-            return putStringForUser(resolver, name, value, resolver.getUserId());
++            return putStringForUser(resolver, name, value, 0);
+         }
+ 
+         /**
+@@ -4620,11 +3902,11 @@
+          *
+          * @hide
+          */
+-        @RequiresPermission(Manifest.permission.MODIFY_SETTINGS_OVERRIDEABLE_BY_RESTORE)
++
+         @SystemApi
+         public static boolean putString(@NonNull ContentResolver resolver,
+                 @NonNull String name, @Nullable String value, boolean overrideableByRestore) {
+-            return putStringForUser(resolver, name, value, resolver.getUserId(),
++            return putStringForUser(resolver, name, value, 0,
+                    overrideableByRestore);
+         }
+ 
+@@ -4640,31 +3922,31 @@
+          *
+          * @hide
+          */
+-        @RequiresPermission(Manifest.permission.MODIFY_SETTINGS_OVERRIDEABLE_BY_RESTORE)
++
+         @SystemApi
+-        @FlaggedApi(Flags.FLAG_SYSTEM_SETTINGS_DEFAULT)
++
+         public static boolean putString(@NonNull ContentResolver resolver, @NonNull String name,
+                 @Nullable String value, boolean makeDefault, boolean overrideableByRestore) {
+             return putStringForUser(resolver, name, value, /* tag= */ null,
+-                    makeDefault, resolver.getUserId(), overrideableByRestore);
++                    makeDefault, 0, overrideableByRestore);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage
+         public static boolean putStringForUser(ContentResolver resolver, String name, String value,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             return putStringForUser(resolver, name, value, userId,
+                     DEFAULT_OVERRIDEABLE_BY_RESTORE);
+         }
+ 
+         private static boolean putStringForUser(ContentResolver resolver, String name, String value,
+-                @CanBeCURRENT @UserIdInt int userId, boolean overrideableByRestore) {
++                @UserIdInt int userId, boolean overrideableByRestore) {
+             return putStringForUser(resolver, name, value, /* tag= */ null,
+                     /* makeDefault= */ false, userId, overrideableByRestore);
+         }
+ 
+         private static boolean putStringForUser(ContentResolver resolver, String name, String value,
+-                String tag, boolean makeDefault, @CanBeCURRENT @UserIdInt int userId,
++                String tag, boolean makeDefault, @UserIdInt int userId,
+                 boolean overrideableByRestore) {
+             if (LOCAL_LOGV) {
+                 Log.v(TAG, "System.putString(name=" + name + ", value=" + value + ") for "
+@@ -4698,11 +3980,11 @@
+          * @hide
+          */
+         @SystemApi
+-        @FlaggedApi(Flags.FLAG_SYSTEM_SETTINGS_DEFAULT)
++
+         public static void resetToDefaults(@NonNull ContentResolver resolver,
+                 @Nullable String tag) {
+             resetToDefaultsAsUser(resolver, tag, RESET_MODE_PACKAGE_DEFAULTS,
+-                    resolver.getUserId());
++                    0);
+         }
+ 
+         /**
+@@ -4724,25 +4006,8 @@
+          */
+         public static void resetToDefaultsAsUser(@NonNull ContentResolver resolver,
+                 @Nullable String tag, @ResetMode int mode,
+-                @IntRange(from = 0) @CannotBeSpecialUser @UserIdInt int userId) {
+-            try {
+-                Bundle arg = new Bundle();
+-                arg.putInt(CALL_METHOD_USER_KEY, userId);
+-                if (tag != null) {
+-                    arg.putString(CALL_METHOD_TAG_KEY, tag);
+-                }
+-                arg.putInt(CALL_METHOD_RESET_MODE_KEY, mode);
+-                IContentProvider cp = sProviderHolder.getProvider(resolver);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't reset to defaults for " + CONTENT_URI
+-                        + " because cp is null");
+-                    return;
+-                }
+-                cp.call(resolver.getAttributionSource(),
+-                        sProviderHolder.mUri.getAuthority(), CALL_METHOD_RESET_SYSTEM, null, arg);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't reset do defaults for " + CONTENT_URI, e);
+-            }
++                @IntRange(from = 0) @UserIdInt int userId) {
++            sNameValueCache.reset(resolver, userId);
+         }
+ 
+         /**
+@@ -4780,13 +4045,13 @@
+          * or not a valid integer.
+          */
+         public static int getInt(ContentResolver cr, String name, int def) {
+-            return getIntForUser(cr, name, def, cr.getUserId());
++            return getIntForUser(cr, name, def, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage
+         public static int getIntForUser(ContentResolver cr, String name, int def,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             String v = getStringForUser(cr, name, userId);
+             return parseIntSettingWithDefault(v, def);
+         }
+@@ -4811,13 +4076,13 @@
+          */
+         public static int getInt(ContentResolver cr, String name)
+                 throws SettingNotFoundException {
+-            return getIntForUser(cr, name, cr.getUserId());
++            return getIntForUser(cr, name, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage
+         public static int getIntForUser(ContentResolver cr, String name,
+-                @CanBeCURRENT @UserIdInt int userId)
++                @UserIdInt int userId)
+                 throws SettingNotFoundException {
+             String v = getStringForUser(cr, name, userId);
+             return parseIntSetting(v, name);
+@@ -4837,13 +4102,13 @@
+          * @return true if the value was set, false on database errors
+          */
+         public static boolean putInt(ContentResolver cr, String name, int value) {
+-            return putIntForUser(cr, name, value, cr.getUserId());
++            return putIntForUser(cr, name, value, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage
+         public static boolean putIntForUser(ContentResolver cr, String name, int value,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             return putStringForUser(cr, name, Integer.toString(value), userId);
+         }
+ 
+@@ -4862,12 +4127,12 @@
+          * or not a valid {@code long}.
+          */
+         public static long getLong(ContentResolver cr, String name, long def) {
+-            return getLongForUser(cr, name, def, cr.getUserId());
++            return getLongForUser(cr, name, def, 0);
+         }
+ 
+         /** @hide */
+         public static long getLongForUser(ContentResolver cr, String name, long def,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             String v = getStringForUser(cr, name, userId);
+             return parseLongSettingWithDefault(v, def);
+         }
+@@ -4891,12 +4156,12 @@
+          */
+         public static long getLong(ContentResolver cr, String name)
+                 throws SettingNotFoundException {
+-            return getLongForUser(cr, name, cr.getUserId());
++            return getLongForUser(cr, name, 0);
+         }
+ 
+         /** @hide */
+         public static long getLongForUser(ContentResolver cr, String name,
+-                @CanBeCURRENT @UserIdInt int userId)
++                @UserIdInt int userId)
+                 throws SettingNotFoundException {
+             String v = getStringForUser(cr, name, userId);
+             return parseLongSetting(v, name);
+@@ -4916,12 +4181,12 @@
+          * @return true if the value was set, false on database errors
+          */
+         public static boolean putLong(ContentResolver cr, String name, long value) {
+-            return putLongForUser(cr, name, value, cr.getUserId());
++            return putLongForUser(cr, name, value, 0);
+         }
+ 
+         /** @hide */
+         public static boolean putLongForUser(ContentResolver cr, String name, long value,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             return putStringForUser(cr, name, Long.toString(value), userId);
+         }
+ 
+@@ -4940,12 +4205,12 @@
+          * or not a valid float.
+          */
+         public static float getFloat(ContentResolver cr, String name, float def) {
+-            return getFloatForUser(cr, name, def, cr.getUserId());
++            return getFloatForUser(cr, name, def, 0);
+         }
+ 
+         /** @hide */
+         public static float getFloatForUser(ContentResolver cr, String name, float def,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             String v = getStringForUser(cr, name, userId);
+             return parseFloatSettingWithDefault(v, def);
+         }
+@@ -4970,12 +4235,12 @@
+          */
+         public static float getFloat(ContentResolver cr, String name)
+                 throws SettingNotFoundException {
+-            return getFloatForUser(cr, name, cr.getUserId());
++            return getFloatForUser(cr, name, 0);
+         }
+ 
+         /** @hide */
+         public static float getFloatForUser(ContentResolver cr, String name,
+-                @CanBeCURRENT @UserIdInt int userId)
++                @UserIdInt int userId)
+                 throws SettingNotFoundException {
+             String v = getStringForUser(cr, name, userId);
+             return parseFloatSetting(v, name);
+@@ -4995,12 +4260,12 @@
+          * @return true if the value was set, false on database errors
+          */
+         public static boolean putFloat(ContentResolver cr, String name, float value) {
+-            return putFloatForUser(cr, name, value, cr.getUserId());
++            return putFloatForUser(cr, name, value, 0);
+         }
+ 
+         /** @hide */
+         public static boolean putFloatForUser(ContentResolver cr, String name, float value,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             return putStringForUser(cr, name, Float.toString(value), userId);
+         }
+ 
+@@ -5013,7 +4278,7 @@
+          * @param outConfig Where to place the configuration settings.
+          */
+         public static void getConfiguration(ContentResolver cr, Configuration outConfig) {
+-            adjustConfigurationForUser(cr, outConfig, cr.getUserId(),
++            adjustConfigurationForUser(cr, outConfig, 0,
+                     false /* updateSettingsIfEmpty */);
+         }
+ 
+@@ -5028,13 +4293,6 @@
+             }
+             outConfig.fontWeightAdjustment = Settings.Secure.getIntForUser(
+                     cr, Settings.Secure.FONT_WEIGHT_ADJUSTMENT, DEFAULT_FONT_WEIGHT, userHandle);
+-            if (systemTermsOfAddressEnabled()) {
+-                GrammaticalInflectionManager manager =
+-                        ActivityThread.currentApplication().getApplicationContext()
+-                                .getSystemService(GrammaticalInflectionManager.class);
+-                outConfig.setGrammaticalGender(
+-                        manager.peekSystemGrammaticalGenderByUserId(userHandle));
+-            }
+ 
+             final String localeValue =
+                     Settings.System.getStringForUser(cr, SYSTEM_LOCALES, userHandle);
+@@ -5082,7 +4340,7 @@
+          * @return true if the values were set, false on database errors
+          */
+         public static boolean putConfiguration(ContentResolver cr, Configuration config) {
+-            return putConfigurationForUser(cr, config, cr.getUserId());
++            return putConfigurationForUser(cr, config, 0);
+         }
+ 
+         /** @hide */
+@@ -5107,7 +4365,7 @@
+         /** @deprecated - Do not use */
+         @Deprecated
+         public static boolean getShowGTalkServiceStatus(ContentResolver cr) {
+-            return getShowGTalkServiceStatusForUser(cr, cr.getUserId());
++            return getShowGTalkServiceStatusForUser(cr, 0);
+         }
+ 
+         /**
+@@ -5123,7 +4381,7 @@
+         /** @deprecated - Do not use */
+         @Deprecated
+         public static void setShowGTalkServiceStatus(ContentResolver cr, boolean flag) {
+-            setShowGTalkServiceStatusForUser(cr, flag, cr.getUserId());
++            setShowGTalkServiceStatusForUser(cr, flag, 0);
+         }
+ 
+         /**
+@@ -5206,7 +4464,6 @@
+         public static final String WEAR_ACCESSIBILITY_GESTURE_ENABLED_DURING_OOBE =
+                 "wear_accessibility_gesture_enabled_during_oobe";
+ 
+-
+         /**
+          * If the text-to-speech pre-warm is enabled.
+          * Set to 1 for true and 0 for false.
+@@ -5447,7 +4704,6 @@
+          */
+         @Readable
+         public static final String SYSTEM_LOCALES = "system_locales";
+-
+ 
+         /**
+          * Name of an application package to be debugged.
+@@ -7372,9 +6628,8 @@
+          * @return true if the calling app can write to system settings, false otherwise
+          */
+         public static boolean canWrite(Context context) {
+-            return isCallingPackageAllowedToWriteSettings(context, Process.myUid(),
+-                    context.getOpPackageName(), false);
+-        }
++        return context != null;
++    }
+     }
+ 
+     /**
+@@ -7394,19 +6649,9 @@
+         public static final Uri CONTENT_URI =
+             Uri.parse("content://" + AUTHORITY + "/secure");
+ 
+-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-        private static final ContentProviderHolder sProviderHolder =
+-                new ContentProviderHolder(CONTENT_URI);
+-
+         // Populated lazily, guarded by class object:
+         @UnsupportedAppUsage
+-        private static final NameValueCache sNameValueCache = new NameValueCache(
+-                CONTENT_URI,
+-                CALL_METHOD_GET_SECURE,
+-                CALL_METHOD_PUT_SECURE,
+-                CALL_METHOD_DELETE_SECURE,
+-                sProviderHolder,
+-                Secure.class);
++        private static final NameValueCache sNameValueCache = new NameValueCache(CONTENT_URI);
+ 
+         @UnsupportedAppUsage
+         private static final HashSet<String> MOVED_TO_LOCK_SETTINGS;
+@@ -7540,7 +6785,6 @@
+ 
+         /** @hide */
+         public static void clearProviderForTest() {
+-            sProviderHolder.clearProviderForTest();
+             sNameValueCache.clearGenerationTrackerForTest();
+         }
+ 
+@@ -7559,42 +6803,18 @@
+          * @return the corresponding value, or null if not present
+          */
+         public static String getString(ContentResolver resolver, String name) {
+-            return getStringForUser(resolver, name, resolver.getUserId());
++            return getStringForUser(resolver, name, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage
+         public static String getStringForUser(ContentResolver resolver, String name,
+-                @CanBeCURRENT @UserIdInt int userId) {
+-            if (MOVED_TO_GLOBAL.contains(name)) {
+-                Log.w(TAG, "Setting " + name + " has moved from android.provider.Settings.Secure"
+-                        + " to android.provider.Settings.Global.");
+-                return Global.getStringForUser(resolver, name, userId);
+-            }
+-
+-            if (MOVED_TO_LOCK_SETTINGS.contains(name) && Process.myUid() != Process.SYSTEM_UID) {
+-                // No context; use the ActivityThread's context as an approximation for
+-                // determining the target API level.
+-                Application application = ActivityThread.currentApplication();
+-
+-                boolean isPreMnc = application != null
+-                    && application.getApplicationInfo() != null
+-                    && application.getApplicationInfo().targetSdkVersion
+-                    <= VERSION_CODES.LOLLIPOP_MR1;
+-                if (isPreMnc) {
+-                    // Old apps used to get the three deprecated LOCK_PATTERN_* settings from
+-                    // ILockSettings.getString().  For security reasons, we now just return a
+-                    // stubbed-out value.  Note: the only one of these three settings actually known
+-                    // to have been used was LOCK_PATTERN_ENABLED, and ILockSettings.getString()
+-                    // already always returned "0" for that starting in Android 11.
+-                    return "0";
+-                }
+-                throw new SecurityException("Settings.Secure." + name + " is deprecated and no" +
+-                        " longer accessible. See API documentation for potential replacements.");
+-            }
+-
+-            return sNameValueCache.getStringForUser(resolver, name, userId);
++                @UserIdInt int userId) {
++        if (MOVED_TO_GLOBAL.contains(name)) {
++            return Global.getStringForUser(resolver, name, userId);
+         }
++        return sNameValueCache.getStringForUser(resolver, name, userId);
++    }
+ 
+         /**
+          * Store a name/value pair into the database. Values written by this method will be
+@@ -7607,11 +6827,11 @@
+          *
+          * @hide
+          */
+-        @RequiresPermission(Manifest.permission.MODIFY_SETTINGS_OVERRIDEABLE_BY_RESTORE)
++
+         public static boolean putString(ContentResolver resolver, String name,
+                 String value, boolean overrideableByRestore) {
+             return putStringForUser(resolver, name, value, /* tag */ null, /* makeDefault */ false,
+-                    resolver.getUserId(), overrideableByRestore);
++                    0, overrideableByRestore);
+         }
+ 
+         /**
+@@ -7622,13 +6842,13 @@
+          * @return true if the value was set, false on database errors
+          */
+         public static boolean putString(ContentResolver resolver, String name, String value) {
+-            return putStringForUser(resolver, name, value, resolver.getUserId());
++            return putStringForUser(resolver, name, value, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage
+         public static boolean putStringForUser(ContentResolver resolver, String name, String value,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             return putStringForUser(resolver, name, value, null, false, userId,
+                     DEFAULT_OVERRIDEABLE_BY_RESTORE);
+         }
+@@ -7637,7 +6857,7 @@
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+         public static boolean putStringForUser(@NonNull ContentResolver resolver,
+                 @NonNull String name, @Nullable String value, @Nullable String tag,
+-                boolean makeDefault, @CanBeCURRENT @UserIdInt int userId,
++                boolean makeDefault, @UserIdInt int userId,
+                 boolean overrideableByRestore) {
+             if (LOCAL_LOGV) {
+                 Log.v(TAG, "Secure.putString(name=" + name + ", value=" + value + ") for "
+@@ -7694,12 +6914,12 @@
+          * @hide
+          */
+         @SystemApi
+-        @RequiresPermission(Manifest.permission.WRITE_SECURE_SETTINGS)
++
+         public static boolean putString(@NonNull ContentResolver resolver,
+                 @NonNull String name, @Nullable String value, @Nullable String tag,
+                 boolean makeDefault) {
+             return putStringForUser(resolver, name, value, tag, makeDefault,
+-                    resolver.getUserId(), DEFAULT_OVERRIDEABLE_BY_RESTORE);
++                    0, DEFAULT_OVERRIDEABLE_BY_RESTORE);
+         }
+ 
+         /**
+@@ -7716,11 +6936,11 @@
+          * @hide
+          */
+         @SystemApi
+-        @RequiresPermission(Manifest.permission.WRITE_SECURE_SETTINGS)
++
+         public static void resetToDefaults(@NonNull ContentResolver resolver,
+                 @Nullable String tag) {
+             resetToDefaultsAsUser(resolver, tag, RESET_MODE_PACKAGE_DEFAULTS,
+-                    resolver.getUserId());
++                    0);
+         }
+ 
+         /**
+@@ -7743,25 +6963,8 @@
+          */
+         public static void resetToDefaultsAsUser(@NonNull ContentResolver resolver,
+                 @Nullable String tag, @ResetMode int mode,
+-                @IntRange(from = 0) @CannotBeSpecialUser @UserIdInt int userId) {
+-            try {
+-                Bundle arg = new Bundle();
+-                arg.putInt(CALL_METHOD_USER_KEY, userId);
+-                if (tag != null) {
+-                    arg.putString(CALL_METHOD_TAG_KEY, tag);
+-                }
+-                arg.putInt(CALL_METHOD_RESET_MODE_KEY, mode);
+-                IContentProvider cp = sProviderHolder.getProvider(resolver);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't reset to defaults for " + CONTENT_URI
+-                        + " because cp is null");
+-                    return;
+-                }
+-                cp.call(resolver.getAttributionSource(),
+-                        sProviderHolder.mUri.getAuthority(), CALL_METHOD_RESET_SECURE, null, arg);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't reset do defaults for " + CONTENT_URI, e);
+-            }
++                @IntRange(from = 0) @UserIdInt int userId) {
++            sNameValueCache.reset(resolver, userId);
+         }
+ 
+         /**
+@@ -7794,13 +6997,13 @@
+          * or not a valid integer.
+          */
+         public static int getInt(ContentResolver cr, String name, int def) {
+-            return getIntForUser(cr, name, def, cr.getUserId());
++            return getIntForUser(cr, name, def, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage
+         public static int getIntForUser(ContentResolver cr, String name, int def,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             String v = getStringForUser(cr, name, userId);
+             return parseIntSettingWithDefault(v, def);
+         }
+@@ -7825,12 +7028,12 @@
+          */
+         public static int getInt(ContentResolver cr, String name)
+                 throws SettingNotFoundException {
+-            return getIntForUser(cr, name, cr.getUserId());
++            return getIntForUser(cr, name, 0);
+         }
+ 
+         /** @hide */
+         public static int getIntForUser(ContentResolver cr, String name,
+-                @CanBeCURRENT @UserIdInt int userId)
++                @UserIdInt int userId)
+                 throws SettingNotFoundException {
+             String v = getStringForUser(cr, name, userId);
+             return parseIntSetting(v, name);
+@@ -7850,13 +7053,13 @@
+          * @return true if the value was set, false on database errors
+          */
+         public static boolean putInt(ContentResolver cr, String name, int value) {
+-            return putIntForUser(cr, name, value, cr.getUserId());
++            return putIntForUser(cr, name, value, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage
+         public static boolean putIntForUser(ContentResolver cr, String name, int value,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             return putStringForUser(cr, name, Integer.toString(value), userId);
+         }
+ 
+@@ -7875,13 +7078,13 @@
+          * or not a valid {@code long}.
+          */
+         public static long getLong(ContentResolver cr, String name, long def) {
+-            return getLongForUser(cr, name, def, cr.getUserId());
++            return getLongForUser(cr, name, def, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+         public static long getLongForUser(ContentResolver cr, String name, long def,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             String v = getStringForUser(cr, name, userId);
+             return parseLongSettingWithDefault(v, def);
+         }
+@@ -7905,12 +7108,12 @@
+          */
+         public static long getLong(ContentResolver cr, String name)
+                 throws SettingNotFoundException {
+-            return getLongForUser(cr, name, cr.getUserId());
++            return getLongForUser(cr, name, 0);
+         }
+ 
+         /** @hide */
+         public static long getLongForUser(ContentResolver cr, String name,
+-                @CanBeCURRENT @UserIdInt int userId)
++                @UserIdInt int userId)
+                 throws SettingNotFoundException {
+             String v = getStringForUser(cr, name, userId);
+             return parseLongSetting(v, name);
+@@ -7930,13 +7133,13 @@
+          * @return true if the value was set, false on database errors
+          */
+         public static boolean putLong(ContentResolver cr, String name, long value) {
+-            return putLongForUser(cr, name, value, cr.getUserId());
++            return putLongForUser(cr, name, value, 0);
+         }
+ 
+         /** @hide */
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+         public static boolean putLongForUser(ContentResolver cr, String name, long value,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             return putStringForUser(cr, name, Long.toString(value), userId);
+         }
+ 
+@@ -7955,12 +7158,12 @@
+          * or not a valid float.
+          */
+         public static float getFloat(ContentResolver cr, String name, float def) {
+-            return getFloatForUser(cr, name, def, cr.getUserId());
++            return getFloatForUser(cr, name, def, 0);
+         }
+ 
+         /** @hide */
+         public static float getFloatForUser(ContentResolver cr, String name, float def,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             String v = getStringForUser(cr, name, userId);
+             return parseFloatSettingWithDefault(v, def);
+         }
+@@ -7985,12 +7188,12 @@
+          */
+         public static float getFloat(ContentResolver cr, String name)
+                 throws SettingNotFoundException {
+-            return getFloatForUser(cr, name, cr.getUserId());
++            return getFloatForUser(cr, name, 0);
+         }
+ 
+         /** @hide */
+         public static float getFloatForUser(ContentResolver cr, String name,
+-                @CanBeCURRENT @UserIdInt int userId)
++                @UserIdInt int userId)
+                 throws SettingNotFoundException {
+             String v = getStringForUser(cr, name, userId);
+             return parseFloatSetting(v, name);
+@@ -8010,12 +7213,12 @@
+          * @return true if the value was set, false on database errors
+          */
+         public static boolean putFloat(ContentResolver cr, String name, float value) {
+-            return putFloatForUser(cr, name, value, cr.getUserId());
++            return putFloatForUser(cr, name, value, 0);
+         }
+ 
+         /** @hide */
+         public static boolean putFloatForUser(ContentResolver cr, String name, float value,
+-                @CanBeCURRENT @UserIdInt int userId) {
++                @UserIdInt int userId) {
+             return putStringForUser(cr, name, Float.toString(value), userId);
+         }
+ 
+@@ -8222,7 +7425,6 @@
+         @SystemApi
+         @Readable
+         public static final String ODI_CAPTIONS_ENABLED = "odi_captions_enabled";
+-
+ 
+         /**
+          * Setting to indicate live caption button show or hide in the volume
+@@ -8397,7 +7599,6 @@
+          */
+         public static final String READ_SCREEN_CONTEXT_REQUEST_DENIED_COUNT =
+                 "read_screen_context_request_denied_count";
+-
+ 
+         /**
+          * The currently selected credential service(s) flattened ComponentName.
+@@ -9598,7 +8799,6 @@
+          */
+         public static final String ACCESSIBILITY_ALLOW_DIAGONAL_SCROLLING =
+                 "accessibility_allow_diagonal_scrolling";
+-
+ 
+         /**
+          * Setting that specifies what mode the soft keyboard is in (default or hidden). Can be
+@@ -9964,7 +9164,6 @@
+         public static final String ACCESSIBILITY_INTERACTIVE_UI_TIMEOUT_MS =
+                 "accessibility_interactive_ui_timeout_ms";
+ 
+-
+         /**
+          * Setting that specifies whether Reduce Bright Colors, or brightness dimming by color
+          * adjustment, is enabled.
+@@ -11388,7 +10587,6 @@
+          */
+         public static final String DOCK_SETUP_STATE = "dock_setup_state";
+ 
+-
+         /**
+          * Default, indicates that the user has not yet started the hub mode tutorial.
+          *
+@@ -11608,7 +10806,7 @@
+          */
+         @TestApi
+         @Readable
+-        @RequiresPermission(Manifest.permission.WRITE_SECURE_SETTINGS)
++
+         public static final String SYNC_PARENT_SOUNDS = "sync_parent_sounds";
+ 
+         /**
+@@ -12018,7 +11216,6 @@
+         public static final String FACE_UNLOCK_DIVERSITY_REQUIRED =
+                 "face_unlock_diversity_required";
+ 
+-
+         /**
+          * Whether or not face unlock is allowed for apps (through BiometricPrompt).
+          * @hide
+@@ -12123,7 +11320,7 @@
+          * Whether or not fingerprint virtual sensors are enabled.
+          * @hide
+          */
+-        @FlaggedApi("com.android.server.biometrics.face_vhal_feature")
++
+         public static final String BIOMETRIC_FINGERPRINT_VIRTUAL_ENABLED =
+                 "biometric_fingerprint_virtual_enabled";
+ 
+@@ -12131,7 +11328,7 @@
+          * Whether or not face virtual sensors are enabled.
+          * @hide
+          */
+-        @FlaggedApi("com.android.server.biometrics.face_vhal_feature")
++
+         public static final String BIOMETRIC_FACE_VIRTUAL_ENABLED =
+                 "biometric_face_virtual_enabled";
+ 
+@@ -12421,7 +11618,6 @@
+         public static final String CONTENT_SAFETY_UNBIND_TIMEOUT_MS =
+                 "content_safety_unbind_timeout_ms";
+ 
+-
+         /**
+          * Timeout that represents maximum idle time before which a callback should be populated.
+          *
+@@ -12430,7 +11626,6 @@
+         public static final String CONTENT_SAFETY_IDLE_TIMEOUT_MS =
+                 "content_safety_idle_timeout_ms";
+ 
+-
+         /**
+          * Timeout that represents maximum idle time before which a callback should be populated.
+          *
+@@ -12438,7 +11633,6 @@
+          */
+         public static final String CONTENT_SAFETY_SETTINGS_IDLE_TIMEOUT_MS =
+                 "content_safety_settings_idle_timeout_ms";
+-
+ 
+         /**
+          * Timeout that represents maximum idle time before which a callback should be populated.
+@@ -12886,7 +12080,6 @@
+          */
+         @Readable
+         public static final String BACKUP_MANAGER_CONSTANTS = "backup_manager_constants";
+-
+ 
+         /**
+          * Local transport parameters so we can configure it for tests.
+@@ -13171,7 +12364,7 @@
+          * No VALIDATOR as this setting will not be backed up.
+          * @hide
+          */
+-        @FlaggedApi(android.service.chooser.Flags.FLAG_TAP_TO_SHARE)
++
+         @TestApi
+         @Readable
+         @SuppressLint("NoSettingsProvider")
+@@ -13184,7 +12377,7 @@
+          * No VALIDATOR as this setting will not be backed up.
+          * @hide
+          */
+-        @FlaggedApi(android.service.chooser.Flags.FLAG_TAP_TO_SHARE)
++
+         @TestApi
+         @Readable
+         @SuppressLint("NoSettingsProvider")
+@@ -13569,7 +12762,7 @@
+          */
+         @TestApi
+         @Readable
+-        @FlaggedApi(android.view.accessibility.Flags.FLAG_FORCE_INVERT_COLOR)
++
+         @SuppressLint("NoSettingsProvider")
+         public static final String ACCESSIBILITY_FORCE_INVERT_COLOR_ENABLED =
+                 "accessibility_force_invert_color_enabled";
+@@ -13696,7 +12889,6 @@
+          */
+         @Readable
+         public static final String GAME_DASHBOARD_ALWAYS_ON = "game_dashboard_always_on";
+-
+ 
+         /**
+          * For this device state, no specific auto-rotation lock setting should be applied.
+@@ -14001,7 +13193,6 @@
+         @Retention(RetentionPolicy.SOURCE)
+         public @interface PrivateSpaceAutoLockOption {
+         }
+-
+ 
+         /**
+          *  Store auto lock value for private space.
+@@ -14098,39 +13289,6 @@
+         }
+ 
+         /**
+-         * Helper method for determining if a location provider is enabled.
+-         *
+-         * @param cr the content resolver to use
+-         * @param provider the location provider to query
+-         * @return true if the provider is enabled
+-         *
+-         * @deprecated use {@link LocationManager#isProviderEnabled(String)}
+-         */
+-        @Deprecated
+-        public static boolean isLocationProviderEnabled(ContentResolver cr, String provider) {
+-            IBinder binder = ServiceManager.getService(Context.LOCATION_SERVICE);
+-            ILocationManager lm = Objects.requireNonNull(ILocationManager.Stub.asInterface(binder));
+-            try {
+-                return lm.isProviderEnabledForUser(provider, cr.getUserId());
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-
+-        /**
+-         * Thread-safe method for enabling or disabling a single location provider. This will have
+-         * no effect on Android Q and above.
+-         * @param cr the content resolver to use
+-         * @param provider the location provider to enable or disable
+-         * @param enabled true if the provider should be enabled
+-         * @deprecated This API is deprecated
+-         */
+-        @Deprecated
+-        public static void setLocationProviderEnabled(ContentResolver cr,
+-                String provider, boolean enabled) {
+-        }
+-
+-        /**
+          * List of system components that support restore in a  V-> U OS downgrade but do not have
+          * RestoreAnyVersion set to true. Value set before system restore.
+          * This setting is not B&Rd
+@@ -14221,7 +13379,7 @@
+          * @hide
+          */
+         @Readable
+-        @FlaggedApi(com.android.text.flags.Flags.FLAG_SPLIT_SHOW_PASSWORDS_TO_TOUCH_AND_PHYSICAL)
++
+         public static final String TEXT_SHOW_PASSWORD_TOUCH = "show_password_touch";
+ 
+         /**
+@@ -14230,7 +13388,7 @@
+          * @hide
+          */
+         @Readable
+-        @FlaggedApi(com.android.text.flags.Flags.FLAG_SPLIT_SHOW_PASSWORDS_TO_TOUCH_AND_PHYSICAL)
++
+         public static final String TEXT_SHOW_PASSWORD_PHYSICAL = "show_password_physical";
+ 
+         /**
+@@ -14239,7 +13397,7 @@
+          * @hide
+          */
+         @Readable
+-        @FlaggedApi(android.service.personalcontext.Flags.FLAG_ENABLE_PERSONAL_CONTEXT_SERVICE)
++
+         public static final String PERSONAL_CONTEXT_ENABLED = "personal_context_enabled";
+ 
+         /**
+@@ -14251,7 +13409,7 @@
+          * @hide
+          */
+         @Readable
+-        @FlaggedApi(android.service.personalcontext.Flags.FLAG_ENABLE_PERSONAL_CONTEXT_SERVICE)
++
+         public static final String PERSONAL_CONTEXT_MODE_ENABLED_DEFAULT =
+                 "personal_context_mode_enabled_default";
+ 
+@@ -14269,7 +13427,7 @@
+          *
+          * @hide
+          */
+-        @FlaggedApi("com.android.server.notification.favorites_incoming_call_lights")
++
+         public static final String LIGHT_ANIMATION_FAVORITE_CALLS_ENABLED =
+                 "light_animation_favorite_calls_enabled";
+     }
+@@ -14398,7 +13556,6 @@
+          * @hide
+          */
+         public static final String RADIO_UWB = "uwb";
+-
+ 
+         /**
+          * A comma separated list of radios that need to be disabled when satellite mode is on.
+@@ -15531,7 +14688,6 @@
+         @SystemApi
+         @Readable
+         public static final String OTA_DISABLE_AUTOMATIC_UPDATE = "ota_disable_automatic_update";
+-
+ 
+         /**
+          * Whether to boot with 16K page size compatible kernel
+@@ -16738,7 +15894,6 @@
+         @Readable
+         public static final String CONNECTIVITY_CHANGE_DELAY = "connectivity_change_delay";
+ 
+-
+         /**
+          * Network sampling interval, in seconds. We'll generate link information
+          * about bytes/packets sent and error rates based on data sampled in this interval
+@@ -17031,7 +16186,6 @@
+           */
+         @Readable
+         public static final String PRIVATE_DNS_DEFAULT_MODE = "private_dns_default_mode";
+-
+ 
+         /** @hide */
+         @Readable
+@@ -18714,7 +17868,6 @@
+          */
+         public static final String DEVICE_CONFIG_SYNC_DISABLED = "device_config_sync_disabled";
+ 
+-
+         /**
+          * An allow list of packages for which the user has granted the permission to communicate
+          * across profiles.
+@@ -18916,7 +18069,7 @@
+         @Deprecated
+         @Readable
+         public static final String ENHANCED_4G_MODE_ENABLED =
+-                Telephony.SimInfo.COLUMN_ENHANCED_4G_MODE_ENABLED;
++                "volte_vt_enabled";
+ 
+         /**
+          * Whether VT (Video Telephony over IMS) is enabled
+@@ -18928,7 +18081,7 @@
+          */
+         @Deprecated
+         @Readable
+-        public static final String VT_IMS_ENABLED = Telephony.SimInfo.COLUMN_VT_IMS_ENABLED;
++        public static final String VT_IMS_ENABLED = "vt_ims_enabled";
+ 
+         /**
+          * Whether WFC is enabled
+@@ -18941,7 +18094,7 @@
+          */
+         @Deprecated
+         @Readable
+-        public static final String WFC_IMS_ENABLED = Telephony.SimInfo.COLUMN_WFC_IMS_ENABLED;
++        public static final String WFC_IMS_ENABLED = "wfc_ims_enabled";
+ 
+         /**
+          * WFC mode on home/non-roaming network.
+@@ -18953,7 +18106,7 @@
+          */
+         @Deprecated
+         @Readable
+-        public static final String WFC_IMS_MODE = Telephony.SimInfo.COLUMN_WFC_IMS_MODE;
++        public static final String WFC_IMS_MODE = "wfc_ims_mode";
+ 
+         /**
+          * WFC mode on roaming network.
+@@ -18967,7 +18120,7 @@
+         @Deprecated
+         @Readable
+         public static final String WFC_IMS_ROAMING_MODE =
+-                Telephony.SimInfo.COLUMN_WFC_IMS_ROAMING_MODE;
++                "wfc_ims_roaming_mode";
+ 
+         /**
+          * Whether WFC roaming is enabled
+@@ -18981,7 +18134,7 @@
+         @Deprecated
+         @Readable
+         public static final String WFC_IMS_ROAMING_ENABLED =
+-                Telephony.SimInfo.COLUMN_WFC_IMS_ROAMING_ENABLED;
++                "wfc_ims_roaming_enabled";
+ 
+         /**
+          * Whether user can enable/disable LTE as a preferred network. A carrier might control
+@@ -18992,7 +18145,6 @@
+          */
+         @Readable
+         public static final String LTE_SERVICE_FORCED = "lte_service_forced";
+-
+ 
+         /**
+          * Specifies the behaviour the lid triggers when closed
+@@ -19339,7 +18491,6 @@
+          */
+         public static final String FORCE_NON_DEBUGGABLE_FINAL_BUILD_FOR_COMPAT =
+                 "force_non_debuggable_final_build_for_compat";
+-
+ 
+         /**
+          * Current version of signed configuration applied.
+@@ -19588,19 +18739,9 @@
+         public static final String[] LEGACY_RESTORE_SETTINGS = {
+         };
+ 
+-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-        private static final ContentProviderHolder sProviderHolder =
+-                new ContentProviderHolder(CONTENT_URI);
+-
+         // Populated lazily, guarded by class object:
+         @UnsupportedAppUsage
+-        private static final NameValueCache sNameValueCache = new NameValueCache(
+-                    CONTENT_URI,
+-                    CALL_METHOD_GET_GLOBAL,
+-                    CALL_METHOD_PUT_GLOBAL,
+-                    CALL_METHOD_DELETE_GLOBAL,
+-                    sProviderHolder,
+-                    Global.class);
++        private static final NameValueCache sNameValueCache = new NameValueCache(CONTENT_URI);
+ 
+         // Certain settings have been moved from global to the per-user secure namespace
+         @UnsupportedAppUsage
+@@ -19636,7 +18777,6 @@
+ 
+         /** @hide */
+         public static void clearProviderForTest() {
+-            sProviderHolder.clearProviderForTest();
+             sNameValueCache.clearGenerationTrackerForTest();
+         }
+ 
+@@ -19646,12 +18786,6 @@
+                 ArrayMap<String, String> readableKeysWithRedactedValue) {
+             getPublicSettingsForClass(Global.class, allKeys, readableKeys,
+                     readableKeysWithMaxTargetSdk, readableKeysWithRedactedValue);
+-            // Add Global.Wearable keys on watches.
+-            if (ActivityThread.currentApplication().getApplicationContext().getPackageManager()
+-                    .hasSystemFeature(PackageManager.FEATURE_WATCH)) {
+-                getPublicSettingsForClass(Global.Wearable.class, allKeys, readableKeys,
+-                        readableKeysWithMaxTargetSdk, readableKeysWithRedactedValue);
+-            }
+         }
+ 
+         /**
+@@ -19661,7 +18795,7 @@
+          * @return the corresponding value, or null if not present
+          */
+         public static String getString(ContentResolver resolver, String name) {
+-            return getStringForUser(resolver, name, resolver.getUserId());
++            return getStringForUser(resolver, name, 0);
+         }
+ 
+         /** @hide */
+@@ -19690,7 +18824,7 @@
+          */
+         public static boolean putString(ContentResolver resolver,
+                 String name, String value) {
+-            return putStringForUser(resolver, name, value, null, false, resolver.getUserId(),
++            return putStringForUser(resolver, name, value, null, false, 0,
+                     DEFAULT_OVERRIDEABLE_BY_RESTORE);
+         }
+ 
+@@ -19707,12 +18841,12 @@
+          *
+          * @hide
+          */
+-        @RequiresPermission(Manifest.permission.MODIFY_SETTINGS_OVERRIDEABLE_BY_RESTORE)
++
+         public static boolean putString(@NonNull ContentResolver resolver,
+                 @NonNull String name, @Nullable String value, @Nullable String tag,
+                 boolean makeDefault, boolean overrideableByRestore) {
+             return putStringForUser(resolver, name, value, tag, makeDefault,
+-                    resolver.getUserId(), overrideableByRestore);
++                    0, overrideableByRestore);
+         }
+ 
+         /**
+@@ -19756,12 +18890,12 @@
+          * @hide
+          */
+         @SystemApi
+-        @RequiresPermission(Manifest.permission.WRITE_SECURE_SETTINGS)
++
+         public static boolean putString(@NonNull ContentResolver resolver,
+                 @NonNull String name, @Nullable String value, @Nullable String tag,
+                 boolean makeDefault) {
+             return putStringForUser(resolver, name, value, tag, makeDefault,
+-                    resolver.getUserId(), DEFAULT_OVERRIDEABLE_BY_RESTORE);
++                    0, DEFAULT_OVERRIDEABLE_BY_RESTORE);
+         }
+ 
+         /**
+@@ -19778,11 +18912,11 @@
+          * @hide
+          */
+         @SystemApi
+-        @RequiresPermission(Manifest.permission.WRITE_SECURE_SETTINGS)
++
+         public static void resetToDefaults(@NonNull ContentResolver resolver,
+                 @Nullable String tag) {
+             resetToDefaultsAsUser(resolver, tag, RESET_MODE_PACKAGE_DEFAULTS,
+-                    resolver.getUserId());
++                    0);
+         }
+ 
+         /**
+@@ -19804,24 +18938,7 @@
+          */
+         public static void resetToDefaultsAsUser(@NonNull ContentResolver resolver,
+                 @Nullable String tag, @ResetMode int mode, @IntRange(from = 0) int userHandle) {
+-            try {
+-                Bundle arg = new Bundle();
+-                arg.putInt(CALL_METHOD_USER_KEY, userHandle);
+-                if (tag != null) {
+-                    arg.putString(CALL_METHOD_TAG_KEY, tag);
+-                }
+-                arg.putInt(CALL_METHOD_RESET_MODE_KEY, mode);
+-                IContentProvider cp = sProviderHolder.getProvider(resolver);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't reset to defaults for " + CONTENT_URI
+-                        + " because cp is null");
+-                    return;
+-                }
+-                cp.call(resolver.getAttributionSource(),
+-                        sProviderHolder.mUri.getAuthority(), CALL_METHOD_RESET_GLOBAL, null, arg);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't reset do defaults for " + CONTENT_URI, e);
+-            }
++            sNameValueCache.reset(resolver, userHandle);
+         }
+ 
+         /** @hide */
+@@ -20889,7 +20006,6 @@
+             public static final int AUTO_TIME_OFF = 2;
+             /** @hide */
+             public static final int INVALID_AUTO_TIME_STATE = 3;
+-
+ 
+             /**
+              * Whether automatic time zone is enabled on the watch.
+@@ -21070,7 +20186,6 @@
+              */
+             public static final String MOBILE_SIGNAL_DETECTOR = "mobile_signal_detector";
+ 
+-
+             /**
+              * Whether ambient is currently enabled.
+              * @hide
+@@ -22047,7 +21162,6 @@
+             @Readable
+             public static final String RAISE_TO_TALK_ENABLED = "raise_to_talk_enabled";
+ 
+-
+             /**
+              * Whether Raise-to-Talk is actually enabled based on both the user setting and the
+              * device's mode.
+@@ -22097,7 +21211,6 @@
+              * @hide
+              */
+             public static final int RAISE_TO_TALK_GESTURE_SENSITIVITY_HIGH = 2;
+-
+ 
+             /**
+              * Raise-to-Talk voice sensitivity setting, which can be one of the following:
+@@ -22157,560 +21270,6 @@
+              */
+             @Readable
+             public static final String WEAR_SATELLITE_MODE_ENABLED = "wear_satellite_mode_enabled";
+-        }
+-    }
+-
+-    /**
+-     * Configuration system settings, containing settings which are applied identically for all
+-     * defined users. Only Android can read these and only a specific configuration service can
+-     * write these.
+-     *
+-     * @hide
+-     */
+-    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-    public static final class Config extends NameValueTable {
+-
+-        /**
+-         * The modes that can be used when disabling syncs to the 'config' settings.
+-         * @hide
+-         */
+-        @IntDef(prefix = "SYNC_DISABLED_MODE_",
+-                value = { SYNC_DISABLED_MODE_NONE, SYNC_DISABLED_MODE_PERSISTENT,
+-                        SYNC_DISABLED_MODE_UNTIL_REBOOT })
+-        @Retention(RetentionPolicy.SOURCE)
+-        @Target({ElementType.TYPE_PARAMETER, ElementType.TYPE_USE})
+-        public @interface SyncDisabledMode {}
+-
+-        /**
+-         * Sync is not disabled.
+-         *
+-         * @deprecated use the constant in DeviceConfig
+-         *
+-         * @hide
+-         */
+-        @Deprecated
+-        public static final int SYNC_DISABLED_MODE_NONE = DeviceConfig.SYNC_DISABLED_MODE_NONE;
+-
+-        /**
+-         * Disabling of Config bulk update / syncing is persistent, i.e. it survives a device
+-         * reboot.
+-         *
+-         * @deprecated use the constant in DeviceConfig
+-         *
+-         * @hide
+-         */
+-        @Deprecated
+-        public static final int SYNC_DISABLED_MODE_PERSISTENT =
+-                DeviceConfig.SYNC_DISABLED_MODE_PERSISTENT;
+-
+-        /**
+-         * Disabling of Config bulk update / syncing is not persistent, i.e. it will not survive a
+-         * device reboot.
+-         *
+-         * @deprecated use the constant in DeviceConfig
+-         *
+-         * @hide
+-         */
+-        @Deprecated
+-        public static final int SYNC_DISABLED_MODE_UNTIL_REBOOT =
+-                DeviceConfig.SYNC_DISABLED_MODE_UNTIL_REBOOT;
+-
+-        /**
+-         * The content:// style URL for the config table.
+-         *
+-         * @hide
+-         */
+-        public static final Uri CONTENT_URI = Uri.parse("content://" + AUTHORITY + "/config");
+-
+-        private static final ContentProviderHolder sProviderHolder =
+-                new ContentProviderHolder(CONTENT_URI);
+-
+-        // Populated lazily, guarded by class object:
+-        private static final NameValueCache sNameValueCache = new NameValueCache(
+-                CONTENT_URI,
+-                CALL_METHOD_GET_CONFIG,
+-                CALL_METHOD_PUT_CONFIG,
+-                CALL_METHOD_DELETE_CONFIG,
+-                CALL_METHOD_LIST_CONFIG,
+-                CALL_METHOD_SET_ALL_CONFIG,
+-                sProviderHolder,
+-                Config.class);
+-
+-        // Should never be invoked
+-        private Config() {
+-        }
+-
+-        /**
+-         * Look up a name in the database.
+-         * @param name to look up in the table
+-         * @return the corresponding value, or null if not present
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @Nullable
+-        @RequiresPermission(Manifest.permission.READ_DEVICE_CONFIG)
+-        public static String getString(@NonNull String name) {
+-            ContentResolver resolver = getContentResolver();
+-            return sNameValueCache.getStringForUser(resolver, name, resolver.getUserId());
+-        }
+-
+-        /**
+-         * Look up a list of names in the database, within the specified namespace.
+-         *
+-         * @param namespace to which the names belong
+-         * @param names to look up in the table
+-         * @return a non null, but possibly empty, map from name to value for any of the names that
+-         *         were found during lookup.
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @NonNull
+-        @RequiresPermission(Manifest.permission.READ_DEVICE_CONFIG)
+-        public static Map<String, String> getStrings(@NonNull String namespace,
+-                @NonNull List<String> names) {
+-            return getStrings(getContentResolver(), namespace, names);
+-        }
+-
+-        /**
+-         * Return all stored flags.
+-         *
+-         * The keys take the form {@code namespace/flag}, and the values are the flag values.
+-         *
+-         * Note: this API is _not_ performant, and may make a large number of
+-         * Binder calls. It is intended for use in testing and debugging, and
+-         * should not be used in performance-sensitive code.
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @NonNull
+-        public static Map<String, String> getAllStrings() {
+-            HashMap<String, String> allFlags = new HashMap<String, String>();
+-            try {
+-                ContentResolver resolver = getContentResolver();
+-                Bundle arg = new Bundle();
+-                arg.putInt(Settings.CALL_METHOD_USER_KEY, resolver.getUserId());
+-                IContentProvider cp = sProviderHolder.getProvider(resolver);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't get all strings because cp is null");
+-                    return allFlags;
+-                }
+-
+-                if (Flags.reduceBinderTransactionSizeForGetAllProperties()) {
+-                    Bundle b = cp.call(resolver.getAttributionSource(),
+-                            sProviderHolder.mUri.getAuthority(),
+-                                CALL_METHOD_LIST_NAMESPACES_CONFIG, null, arg);
+-                    if (b != null) {
+-                        HashSet<String> namespaces =
+-                                (HashSet) b.getSerializable(Settings.NameValueTable.VALUE,
+-                                                java.util.HashSet.class);
+-                        for (String namespace : namespaces) {
+-                            Map<String, String> keyValues =
+-                                    getStrings(namespace, new ArrayList());
+-                            for (String key : keyValues.keySet()) {
+-                                allFlags.put(namespace + "/" + key, keyValues.get(key));
+-                            }
+-                        }
+-                    }
+-                } else {
+-                    Bundle b = cp.call(resolver.getAttributionSource(),
+-                            sProviderHolder.mUri.getAuthority(),
+-                            CALL_METHOD_LIST_CONFIG, null, arg);
+-                    if (b != null) {
+-                        Map<String, String> flagsToValues =
+-                                (HashMap) b.getSerializable(Settings.NameValueTable.VALUE,
+-                                                java.util.HashMap.class);
+-                        allFlags.putAll(flagsToValues);
+-                    }
+-                }
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't query configuration table for " + CONTENT_URI, e);
+-            }
+-            return allFlags;
+-        }
+-
+-        /**
+-         * Look up a list of names in the database, within the specified namespace.
+-         *
+-         * @param resolver to access the database with
+-         * @param namespace to which the names belong
+-         * @param names to look up in the table
+-         * @return a non null, but possibly empty, map from name to value for any of the names that
+-         *         were found during lookup.
+-         *
+-         * @hide
+-         */
+-        @RequiresPermission(Manifest.permission.READ_DEVICE_CONFIG)
+-        public static Map<String, String> getStrings(@NonNull ContentResolver resolver,
+-                @NonNull String namespace, @NonNull List<String> names) {
+-            String prefix = createPrefix(namespace);
+-
+-            return sNameValueCache.getStringsForPrefixStripPrefix(resolver, prefix, names);
+-        }
+-
+-        /**
+-         * Store a name/value pair into the database within the specified namespace.
+-         * <p>
+-         * Also the method takes an argument whether to make the value the default for this setting.
+-         * If the system already specified a default value, then the one passed in here will
+-         * <strong>not</strong> be set as the default.
+-         * </p>
+-         *
+-         * @param namespace to store the name/value pair in.
+-         * @param name to store.
+-         * @param value to associate with the name.
+-         * @param makeDefault whether to make the value the default one.
+-         * @return true if the value was set, false on database errors.
+-         *
+-         * @see #resetToDefaults(ContentResolver, int, String)
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @RequiresPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
+-        public static boolean putString(@NonNull String namespace,
+-                @NonNull String name, @Nullable String value, boolean makeDefault) {
+-            ContentResolver resolver = getContentResolver();
+-            return sNameValueCache.putStringForUser(resolver, createCompositeName(namespace, name),
+-                    value, null, makeDefault, resolver.getUserId(),
+-                    DEFAULT_OVERRIDEABLE_BY_RESTORE);
+-        }
+-
+-        /**
+-         * Clear all name/value pairs for the provided namespace and save new name/value pairs in
+-         * their place.
+-         *
+-         * @param namespace to which the names should be set.
+-         * @param keyValues map of key names (without the prefix) to values.
+-         * @return true if the name/value pairs were set, false if setting was blocked
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @RequiresPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
+-        public static boolean setStrings(@NonNull String namespace,
+-                @NonNull Map<String, String> keyValues)
+-                throws DeviceConfig.BadConfigException {
+-            return setStrings(getContentResolver(), namespace, keyValues);
+-        }
+-
+-        /**
+-         * Clear all name/value pairs for the provided namespace and save new name/value pairs in
+-         * their place.
+-         *
+-         * @param resolver to access the database with.
+-         * @param namespace to which the names should be set.
+-         * @param keyValues map of key names (without the prefix) to values.
+-         * @return true if the name/value pairs were set, false if setting was blocked
+-         *
+-         * @hide
+-         */
+-        @RequiresPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
+-        public static boolean setStrings(@NonNull ContentResolver resolver,
+-                @NonNull String namespace, @NonNull Map<String, String> keyValues)
+-                throws DeviceConfig.BadConfigException {
+-            HashMap<String, String> compositeKeyValueMap = new HashMap<>(keyValues.keySet().size());
+-            for (Map.Entry<String, String> entry : keyValues.entrySet()) {
+-                compositeKeyValueMap.put(
+-                        createCompositeName(namespace, entry.getKey()), entry.getValue());
+-            }
+-            int result = sNameValueCache.setStringsForPrefix(
+-                    resolver, createPrefix(namespace), compositeKeyValueMap);
+-            if (result == SET_ALL_RESULT_SUCCESS) {
+-                return true;
+-            } else if (result == SET_ALL_RESULT_DISABLED) {
+-                return false;
+-            }
+-            // If can't set given configuration that means it's bad
+-            throw new DeviceConfig.BadConfigException();
+-        }
+-
+-        /**
+-         * Delete a name/value pair from the database for the specified namespace.
+-         *
+-         * @param namespace to delete the name/value pair from.
+-         * @param name to delete.
+-         * @return true if the value was deleted, false on database errors. If the name/value pair
+-         * did not exist, return True.
+-         *
+-         * @see #resetToDefaults(ContentResolver, int, String)
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @RequiresPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
+-        public static boolean deleteString(@NonNull String namespace,
+-                @NonNull String name) {
+-            ContentResolver resolver = getContentResolver();
+-            return sNameValueCache.deleteStringForUser(resolver,
+-                    createCompositeName(namespace, name), resolver.getUserId());
+-        }
+-
+-        /**
+-         * Reset the values to their defaults.
+-         * <p>
+-         * The method accepts an optional prefix parameter. If provided, only pairs with a name that
+-         * starts with the exact prefix will be reset. Otherwise all will be reset.
+-         *
+-         * @param resetMode The reset mode to use.
+-         * @param namespace Optionally, to limit which which namespace is reset.
+-         *
+-         * @see #putString(ContentResolver, String, String, String, boolean)
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @RequiresPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
+-        public static void resetToDefaults(@ResetMode int resetMode,
+-                @Nullable String namespace) {
+-            try {
+-                ContentResolver resolver = getContentResolver();
+-                Bundle arg = new Bundle();
+-                arg.putInt(CALL_METHOD_USER_KEY, resolver.getUserId());
+-                arg.putInt(CALL_METHOD_RESET_MODE_KEY, resetMode);
+-                if (namespace != null) {
+-                    arg.putString(Settings.CALL_METHOD_PREFIX_KEY, createPrefix(namespace));
+-                }
+-                IContentProvider cp = sProviderHolder.getProvider(resolver);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't reset to defaults for " + CONTENT_URI
+-                        + " because cp is null");
+-                    return;
+-                }
+-                cp.call(resolver.getAttributionSource(),
+-                        sProviderHolder.mUri.getAuthority(), CALL_METHOD_RESET_CONFIG, null, arg);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't reset to defaults for " + CONTENT_URI, e);
+-            }
+-        }
+-
+-        /**
+-         * Bridge method between {@link DeviceConfig#setSyncDisabledMode(int)} and the
+-         * {@link com.android.providers.settings.SettingsProvider} implementation.
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @SuppressLint("AndroidFrameworkRequiresPermission")
+-        @RequiresPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
+-        public static void setSyncDisabledMode(@SyncDisabledMode int disableSyncMode) {
+-            try {
+-                ContentResolver resolver = getContentResolver();
+-                Bundle args = new Bundle();
+-                args.putInt(CALL_METHOD_SYNC_DISABLED_MODE_KEY, disableSyncMode);
+-                IContentProvider cp = sProviderHolder.getProvider(resolver);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't set sync disabled mode for " + CONTENT_URI
+-                        + " because cp is null");
+-                    return;
+-                }
+-                cp.call(resolver.getAttributionSource(), sProviderHolder.mUri.getAuthority(),
+-                        CALL_METHOD_SET_SYNC_DISABLED_MODE_CONFIG, null, args);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't set sync disabled mode " + CONTENT_URI, e);
+-            }
+-        }
+-
+-        /**
+-         * Bridge method between {@link DeviceConfig#getSyncDisabledMode()} and the
+-         * {@link com.android.providers.settings.SettingsProvider} implementation.
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @SuppressLint("AndroidFrameworkRequiresPermission")
+-        @RequiresPermission(Manifest.permission.WRITE_DEVICE_CONFIG)
+-        public static int getSyncDisabledMode() {
+-            try {
+-                ContentResolver resolver = getContentResolver();
+-                Bundle args = Bundle.EMPTY;
+-                IContentProvider cp = sProviderHolder.getProvider(resolver);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't query sync disabled mode for " + CONTENT_URI
+-                        + " because cp is null");
+-                    return -1;
+-                }
+-                Bundle bundle = cp.call(resolver.getAttributionSource(),
+-                        sProviderHolder.mUri.getAuthority(),
+-                        CALL_METHOD_GET_SYNC_DISABLED_MODE_CONFIG,
+-                        null, args);
+-                return bundle.getInt(KEY_CONFIG_GET_SYNC_DISABLED_MODE_RETURN);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't query sync disabled mode " + CONTENT_URI, e);
+-            }
+-            return -1;
+-        }
+-
+-        /**
+-         * Setter callback for monitoring Config table.
+-         *
+-         * @param executor the {@link Executor} on which to invoke the callback
+-         * @param callback callback to set
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @RequiresPermission(Manifest.permission.MONITOR_DEVICE_CONFIG_ACCESS)
+-        public static void setMonitorCallback(
+-                @NonNull ContentResolver resolver,
+-                @NonNull @CallbackExecutor Executor executor,
+-                @NonNull DeviceConfig.MonitorCallback callback) {
+-            setMonitorCallbackAsUser(executor, resolver, resolver.getUserId(), callback);
+-        }
+-
+-        /**
+-         * Clear callback for monitoring Config table.
+-         * this may only be used to clear callback function registered by
+-         * {@link Config#setMonitorCallback}
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        @RequiresPermission(Manifest.permission.MONITOR_DEVICE_CONFIG_ACCESS)
+-        public static void clearMonitorCallback(@NonNull ContentResolver resolver) {
+-            try {
+-                Bundle arg = new Bundle();
+-                arg.putInt(CALL_METHOD_USER_KEY, resolver.getUserId());
+-                IContentProvider cp = sProviderHolder.getProvider(resolver);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't clear config monitor callback because cp is null");
+-                    return;
+-                }
+-                cp.call(resolver.getAttributionSource(),
+-                        sProviderHolder.mUri.getAuthority(),
+-                        CALL_METHOD_UNREGISTER_MONITOR_CALLBACK_CONFIG, null, arg);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't clear config monitor callback", e);
+-            }
+-        }
+-
+-
+-        /**
+-         * Register a content observer.
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        public static void registerContentObserver(@Nullable String namespace,
+-                boolean notifyForDescendants, @NonNull ContentObserver observer) {
+-            ActivityThread.currentApplication().getContentResolver()
+-                    .registerContentObserver(createNamespaceUri(namespace),
+-                         notifyForDescendants, observer);
+-        }
+-
+-        /**
+-         * Unregister a content observer.
+-         * this may only be used with content observers registered through
+-         * {@link Config#registerContentObserver}
+-         *
+-         * @hide
+-         */
+-        @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-        public static void unregisterContentObserver(@NonNull ContentObserver observer) {
+-            ActivityThread.currentApplication().getContentResolver()
+-              .unregisterContentObserver(observer);
+-        }
+-
+-        /**
+-         * Determine whether the calling process of an IPC <em>or you</em> have been
+-         * granted a particular permission.  This is the same as
+-         * {@link #checkCallingPermission}, except it grants your own permissions
+-         * if you are not currently processing an IPC.  Use with care!
+-         *
+-         * @param permission The name of the permission being checked.
+-         *
+-         * @return {@link PackageManager#PERMISSION_GRANTED} if the calling
+-         * pid/uid is allowed that permission, or
+-         * {@link PackageManager#PERMISSION_DENIED} if it is not.
+-         *
+-         * @see PackageManager#checkPermission(String, String)
+-         * @see #checkPermission
+-         * @see #checkCallingPermission
+-         * @hide
+-         */
+-        @PermissionMethod(orSelf = true)
+-        @PackageManager.PermissionResult
+-        public static int checkCallingOrSelfPermission(@NonNull @PermissionName String permission) {
+-            return ActivityThread.currentApplication()
+-               .getApplicationContext().checkCallingOrSelfPermission(permission);
+-        }
+-
+-        private static void setMonitorCallbackAsUser(
+-                @NonNull @CallbackExecutor Executor executor,
+-                @NonNull ContentResolver resolver, @UserIdInt int userHandle,
+-                @NonNull DeviceConfig.MonitorCallback callback) {
+-            try {
+-                Bundle arg = new Bundle();
+-                arg.putInt(CALL_METHOD_USER_KEY, userHandle);
+-                arg.putParcelable(CALL_METHOD_MONITOR_CALLBACK_KEY,
+-                        new RemoteCallback(result -> {
+-                            handleMonitorCallback(result, executor, callback);
+-                        }));
+-                IContentProvider cp = sProviderHolder.getProvider(resolver);
+-                if (cp == null) {
+-                    Log.w(TAG, "Can't set config monitor callback because cp is null");
+-                    return;
+-                }
+-                cp.call(resolver.getAttributionSource(),
+-                        sProviderHolder.mUri.getAuthority(),
+-                        CALL_METHOD_REGISTER_MONITOR_CALLBACK_CONFIG, null, arg);
+-            } catch (RemoteException e) {
+-                Log.w(TAG, "Can't set config monitor callback", e);
+-            }
+-        }
+-
+-        /** @hide */
+-        public static void clearProviderForTest() {
+-            sProviderHolder.clearProviderForTest();
+-            sNameValueCache.clearGenerationTrackerForTest();
+-        }
+-
+-        private static void handleMonitorCallback(
+-                Bundle result,
+-                @NonNull @CallbackExecutor Executor executor,
+-                DeviceConfig.MonitorCallback monitorCallback) {
+-            String callbackType = result.getString(EXTRA_MONITOR_CALLBACK_TYPE, "");
+-            switch (callbackType) {
+-                case EXTRA_NAMESPACE_UPDATED_CALLBACK:
+-                    String updatedNamespace = result.getString(EXTRA_NAMESPACE);
+-                    if (updatedNamespace != null) {
+-                        executor.execute(() -> monitorCallback.onNamespaceUpdate(updatedNamespace));
+-                    }
+-                    break;
+-                case EXTRA_ACCESS_CALLBACK:
+-                    String callingPackage = result.getString(EXTRA_CALLING_PACKAGE, null);
+-                    String namespace = result.getString(EXTRA_NAMESPACE, null);
+-                    if (namespace != null && callingPackage != null) {
+-                        executor.execute(() ->
+-                                monitorCallback.onDeviceConfigAccess(callingPackage, namespace));
+-                    }
+-                    break;
+-                default:
+-                    Slog.w(TAG, "Unrecognized DeviceConfig callback");
+-                    break;
+-            }
+-        }
+-
+-        static String createCompositeName(@NonNull String namespace, @NonNull String name) {
+-            Preconditions.checkNotNull(namespace);
+-            Preconditions.checkNotNull(name);
+-            var sb = new StringBuilder(namespace.length() + 1 + name.length());
+-            return sb.append(namespace).append('/').append(name).toString();
+-        }
+-
+-        private static String createPrefix(@NonNull String namespace) {
+-            Preconditions.checkNotNull(namespace);
+-            return namespace + '/';
+-        }
+-
+-        private static Uri createNamespaceUri(@NonNull String namespace) {
+-            Preconditions.checkNotNull(namespace);
+-            return CONTENT_URI.buildUpon().appendPath(namespace).build();
+-        }
+-
+-        private static ContentResolver getContentResolver() {
+-            return ActivityThread.currentApplication().getContentResolver();
+         }
+     }
+ 
+@@ -23091,15 +21650,9 @@
+     public static final String ACTION_BUGREPORT_HANDLER_SETTINGS =
+             "android.settings.BUGREPORT_HANDLER_SETTINGS";
+ 
+-    private static final String[] PM_WRITE_SETTINGS = {
+-        android.Manifest.permission.WRITE_SETTINGS
+-    };
+     private static final String[] PM_CHANGE_NETWORK_STATE = {
+         android.Manifest.permission.CHANGE_NETWORK_STATE,
+         android.Manifest.permission.WRITE_SETTINGS
+-    };
+-    private static final String[] PM_SYSTEM_ALERT_WINDOW = {
+-        android.Manifest.permission.SYSTEM_ALERT_WINDOW
+     };
+ 
+     /**
+@@ -23214,10 +21767,7 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public static boolean isCallingPackageAllowedToWriteSettings(Context context, int uid,
+             String callingPackage, boolean throwException) {
+-        return isCallingPackageAllowedToPerformAppOpsProtectedOperation(context, uid,
+-                callingPackage, null /*attribution not needed when not making note */,
+-                throwException, AppOpsManager.OP_WRITE_SETTINGS, PM_WRITE_SETTINGS,
+-                false);
++        return callingPackage != null && callingPackage.equals(context.getPackageName());
+     }
+ 
+     /**
+@@ -23230,8 +21780,7 @@
+     @SystemApi
+     public static boolean checkAndNoteWriteSettingsOperation(@NonNull Context context, int uid,
+             @NonNull String callingPackage, boolean throwException) {
+-        return checkAndNoteWriteSettingsOperation(context, uid, callingPackage, null,
+-                throwException);
++        return callingPackage != null && callingPackage.equals(context.getPackageName());
+     }
+ 
+     /**
+@@ -23249,9 +21798,7 @@
+     public static boolean checkAndNoteWriteSettingsOperation(@NonNull Context context, int uid,
+             @NonNull String callingPackage, @Nullable String callingAttributionTag,
+             boolean throwException) {
+-        return isCallingPackageAllowedToPerformAppOpsProtectedOperation(context, uid,
+-                callingPackage, callingAttributionTag, throwException,
+-                AppOpsManager.OP_WRITE_SETTINGS, PM_WRITE_SETTINGS, true);
++        return callingPackage != null && callingPackage.equals(context.getPackageName());
+     }
+ 
+     /**
+@@ -23264,10 +21811,7 @@
+     @UnsupportedAppUsage
+     public static boolean isCallingPackageAllowedToDrawOverlays(Context context, int uid,
+             String callingPackage, boolean throwException) {
+-        return isCallingPackageAllowedToPerformAppOpsProtectedOperation(context, uid,
+-                callingPackage, null /*attribution not needed when not making note */,
+-                throwException, AppOpsManager.OP_SYSTEM_ALERT_WINDOW, PM_SYSTEM_ALERT_WINDOW,
+-                false);
++        return callingPackage != null && callingPackage.equals(context.getPackageName());
+     }
+ 
+     /**
+@@ -23282,9 +21826,7 @@
+      */
+     public static boolean checkAndNoteDrawOverlaysOperation(Context context, int uid,
+             String callingPackage, String callingAttributionTag, boolean throwException) {
+-        return isCallingPackageAllowedToPerformAppOpsProtectedOperation(context, uid,
+-                callingPackage, callingAttributionTag, throwException,
+-                AppOpsManager.OP_SYSTEM_ALERT_WINDOW, PM_SYSTEM_ALERT_WINDOW, true);
++        return callingPackage != null && callingPackage.equals(context.getPackageName());
+     }
+ 
+     /**
+@@ -23298,8 +21840,7 @@
+     public static boolean isCallingPackageAllowedToPerformAppOpsProtectedOperation(Context context,
+             int uid, String callingPackage, boolean throwException, int appOpsOpCode,
+             String[] permissions, boolean makeNote) {
+-        return isCallingPackageAllowedToPerformAppOpsProtectedOperation(context, uid,
+-                callingPackage, null, throwException, appOpsOpCode, permissions, makeNote);
++        return callingPackage != null && callingPackage.equals(context.getPackageName());
+     }
+ 
+     /**
+@@ -23311,57 +21852,7 @@
+     public static boolean isCallingPackageAllowedToPerformAppOpsProtectedOperation(Context context,
+             int uid, String callingPackage, String callingAttributionTag, boolean throwException,
+             int appOpsOpCode, String[] permissions, boolean makeNote) {
+-        if (callingPackage == null) {
+-            return false;
+-        }
+-
+-        AppOpsManager appOpsMgr = (AppOpsManager)context.getSystemService(Context.APP_OPS_SERVICE);
+-        int mode = AppOpsManager.MODE_DEFAULT;
+-        if (makeNote) {
+-            mode = appOpsMgr.noteOpNoThrow(appOpsOpCode, uid, callingPackage, callingAttributionTag,
+-                    null);
+-        } else {
+-            mode = appOpsMgr.checkOpNoThrow(appOpsOpCode, uid, callingPackage);
+-        }
+-
+-        switch (mode) {
+-            case AppOpsManager.MODE_ALLOWED:
+-                return true;
+-
+-            case AppOpsManager.MODE_DEFAULT:
+-                // this is the default operating mode after an app's installation
+-                // In this case we will check all associated static permission to see
+-                // if it is granted during install time.
+-                for (String permission : permissions) {
+-                    if (context.checkCallingOrSelfPermission(permission) == PackageManager
+-                            .PERMISSION_GRANTED) {
+-                        // if either of the permissions are granted, we will allow it
+-                        return true;
+-                    }
+-                }
+-
+-            default:
+-                // this is for all other cases trickled down here...
+-                if (!throwException) {
+-                    return false;
+-                }
+-        }
+-
+-        // prepare string to throw SecurityException
+-        StringBuilder exceptionMessage = new StringBuilder();
+-        exceptionMessage.append(callingPackage);
+-        exceptionMessage.append(" was not granted ");
+-        if (permissions.length > 1) {
+-            exceptionMessage.append(" either of these permissions: ");
+-        } else {
+-            exceptionMessage.append(" this permission: ");
+-        }
+-        for (int i = 0; i < permissions.length; i++) {
+-            exceptionMessage.append(permissions[i]);
+-            exceptionMessage.append((i == permissions.length - 1) ? "." : ", ");
+-        }
+-
+-        throw new SecurityException(exceptionMessage.toString());
++        return callingPackage != null && callingPackage.equals(context.getPackageName());
+     }
+ 
+     /**
