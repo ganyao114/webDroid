@@ -1,0 +1,33 @@
+--- a/frameworks/base/core/java/android/util/LongArray.java
++++ b/frameworks/base/core/java/android/util/LongArray.java
+@@ -21,7 +21,6 @@
+ import android.os.Build;
+ 
+ import com.android.internal.util.ArrayUtils;
+-import com.android.internal.util.Preconditions;
+ 
+ import java.util.Arrays;
+ 
+@@ -39,7 +38,10 @@
+ 
+     private  LongArray(long[] array, int size) {
+         mValues = array;
+-        mSize = Preconditions.checkArgumentInRange(size, 0, array.length, "size");
++        if (size < 0 || size > array.length) {
++            throw new IllegalArgumentException("size out of range: " + size);
++        }
++        mSize = size;
+     }
+ 
+     /**
+@@ -82,7 +84,9 @@
+      * created from the current content of this LongArray padded with 0s.
+      */
+     public void resize(int newSize) {
+-        Preconditions.checkArgumentNonnegative(newSize);
++        if (newSize < 0) {
++            throw new IllegalArgumentException("Negative size");
++        }
+         if (newSize <= mValues.length) {
+             Arrays.fill(mValues, newSize, mValues.length, 0);
+         } else {

@@ -1,0 +1,38 @@
+--- a/frameworks/base/core/java/android/util/ArrayMap.java
++++ b/frameworks/base/core/java/android/util/ArrayMap.java
+@@ -240,7 +240,7 @@
+                     }
+                     // Whoops!  Someone trampled the array (probably due to not protecting
+                     // their access with a lock).  Our cache is corrupt; report and give up.
+-                    Slog.wtf(TAG, "Found corrupt ArrayMap cache: [0]=" + array[0]
++                    Log.wtf(TAG, "Found corrupt ArrayMap cache: [0]=" + array[0]
+                             + " [1]=" + array[1]);
+                     mTwiceBaseCache = null;
+                     mTwiceBaseCacheSize = 0;
+@@ -267,7 +267,7 @@
+                     }
+                     // Whoops!  Someone trampled the array (probably due to not protecting
+                     // their access with a lock).  Our cache is corrupt; report and give up.
+-                    Slog.wtf(TAG, "Found corrupt ArrayMap cache: [0]=" + array[0]
++                    Log.wtf(TAG, "Found corrupt ArrayMap cache: [0]=" + array[0]
+                             + " [1]=" + array[1]);
+                     mBaseCache = null;
+                     mBaseCacheSize = 0;
+--- a/frameworks/base/core/java/android/view/InputEvent.java
++++ b/frameworks/base/core/java/android/view/InputEvent.java
+@@ -260,11 +260,13 @@
+     public static final @android.annotation.NonNull Parcelable.Creator<InputEvent> CREATOR
+             = new Parcelable.Creator<InputEvent>() {
+         public InputEvent createFromParcel(Parcel in) {
++            final int start = in.dataPosition();
+             int token = in.readInt();
++            in.setDataPosition(start);
+             if (token == PARCEL_TOKEN_KEY_EVENT) {
+-                return KeyEvent.createFromParcelBody(in);
++                return KeyEvent.CREATOR.createFromParcel(in);
+             } else if (token == PARCEL_TOKEN_MOTION_EVENT) {
+-                return MotionEvent.createFromParcelBody(in);
++                return MotionEvent.CREATOR.createFromParcel(in);
+             } else {
+                 throw new IllegalStateException("Unexpected input event type token in parcel.");
+             }

@@ -1,0 +1,116 @@
+--- a/frameworks/base/core/java/android/os/BaseBundle.java
++++ b/frameworks/base/core/java/android/os/BaseBundle.java
+@@ -23,17 +23,14 @@
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Intent;
+-import android.security.Flags;
+ import android.util.ArrayMap;
+ import android.util.Log;
+ import android.util.MathUtils;
+-import android.util.Slog;
+ import android.util.SparseArray;
+ 
+ import com.android.internal.annotations.GuardedBy;
+ import com.android.internal.annotations.VisibleForTesting;
+ import com.android.internal.util.IndentingPrintWriter;
+-import com.android.internal.util.Preconditions;
+ 
+ import java.io.Serializable;
+ import java.lang.ref.WeakReference;
+@@ -48,7 +45,11 @@
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ @SuppressWarnings("HiddenSuperclass")
+-public class BaseBundle implements Parcel.ClassLoaderProvider {
++public class BaseBundle {
++    private static native boolean deprecateBundleDefuse();
++
++    private native void readLazyArrayMap(Parcel parcel, ArrayMap<String, Object> map,
++            int count, boolean sorted, boolean lazy, int[] numLazyValues);
+     /** @hide */
+     protected static final String TAG = "Bundle";
+     static final boolean DEBUG = false;
+@@ -334,7 +335,9 @@
+         synchronized (this) {
+             final Parcel source = mParcelledData;
+             if (source != null) {
+-                Preconditions.checkState(mOwnsLazyValues);
++                if (!mOwnsLazyValues) {
++                    throw new IllegalStateException();
++                }
+                 initializeFromParcelLocked(source, /*ownsParcel*/ true, mParcelledByNative);
+             } else {
+                 if (DEBUG) {
+@@ -345,7 +348,7 @@
+             }
+             if (itemwise) {
+                 if (LOG_DEFUSABLE && sShouldDefuse && (mFlags & FLAG_DEFUSABLE) == 0) {
+-                    Slog.wtf(TAG,
++                    Log.wtf(TAG,
+                             "Attempting to unparcel all items in a Bundle while in transit; this "
+                                     + "may remove elements intended for the final desitination.",
+                             new Throwable());
+@@ -448,9 +451,9 @@
+                 object = ((BiFunction<Class<?>, Class<?>[], ?>) object).apply(clazz, itemTypes);
+             } catch (BadParcelableException e) {
+                 if (sShouldDefuse) {
+-                    Slog.wtf(TAG, "Failed to parse item " + mMap.keyAt(i) + ", returning null.",
++                    Log.wtf(TAG, "Failed to parse item " + mMap.keyAt(i) + ", returning null.",
+                             e);
+-                    if (Flags.deprecateBundleDefuse()) {
++                    if (deprecateBundleDefuse()) {
+                         throw e;
+                     }
+                     return null;
+@@ -461,8 +464,9 @@
+             mMap.setValueAt(i, object);
+             mLazyValues--;
+             if (mOwnsLazyValues) {
+-                Preconditions.checkState(mLazyValues >= 0,
+-                        "Lazy values ref count below 0");
++                if (mLazyValues < 0) {
++                    throw new IllegalStateException("Lazy values ref count below 0");
++                }
+                 // No more lazy values in mMap, so we can destroy the parcel early rather than
+                 // waiting for the next GC run
+                 Parcel parcel = mWeakParcelledData.get();
+@@ -509,12 +513,12 @@
+         }
+         int[] numLazyValues = new int[]{0};
+         try {
+-            parcelledData.readArrayMap(map, count, !parcelledByNative,
+-                    /* lazy */ ownsParcel, this, numLazyValues);
++            readLazyArrayMap(parcelledData, map, count, !parcelledByNative,
++                    /* lazy */ ownsParcel, numLazyValues);
+         } catch (BadParcelableException e) {
+             if (sShouldDefuse) {
+-                Slog.wtf(TAG, "Failed to parse Bundle, but defusing quietly", e);
+-                if (Flags.deprecateBundleDefuse()) {
++                Log.wtf(TAG, "Failed to parse Bundle, but defusing quietly", e);
++                if (deprecateBundleDefuse()) {
+                     throw e;
+                 }
+                 map.erase();
+--- a/frameworks/base/core/java/android/os/Bundle.java
++++ b/frameworks/base/core/java/android/os/Bundle.java
+@@ -1604,18 +1604,6 @@
+ 
+     /** @hide */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-
+-        if (mParcelledData != null) {
+-            if (isEmptyParcel()) {
+-                proto.write(BundleProto.PARCELLED_DATA_SIZE, 0);
+-            } else {
+-                proto.write(BundleProto.PARCELLED_DATA_SIZE, mParcelledData.dataSize());
+-            }
+-        } else {
+-            proto.write(BundleProto.MAP_DATA, mMap.toString());
+-        }
+-
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ }

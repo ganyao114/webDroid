@@ -1,0 +1,114 @@
+--- a/frameworks/base/graphics/java/android/graphics/Paint.java
++++ b/frameworks/base/graphics/java/android/graphics/Paint.java
+@@ -31,10 +31,8 @@
+ import android.annotation.Nullable;
+ import android.annotation.Px;
+ import android.annotation.Size;
+-import android.app.compat.CompatChanges;
+ import android.compat.annotation.ChangeId;
+ import android.compat.annotation.EnabledSince;
+-import android.compat.annotation.NoLogging;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.graphics.fonts.FontVariationAxis;
+ import android.graphics.text.TextRunShaper;
+@@ -52,7 +50,6 @@
+ import dalvik.annotation.optimization.CriticalNative;
+ import dalvik.annotation.optimization.FastNative;
+ 
+-import libcore.util.NativeAllocationRegistry;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -73,16 +70,11 @@
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     private long mNativePaint;
++    private static native boolean isUiFontChangeEnabled(long changeId);
++    private static native void nRegisterNativeAllocation(Paint paint, long handle);
+     private long mNativeShader;
+     private long mNativeColorFilter;
+     private long mNativeXfermode;
+-
+-    // Use a Holder to allow static initialization of Paint in the boot image.
+-    private static class NoImagePreloadHolder {
+-        public static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                Paint.class.getClassLoader(), nGetNativeFinalizer());
+-    }
+ 
+     @ColorLong private long mColor;
+     private ColorFilter     mColorFilter;
+@@ -700,7 +692,7 @@
+      */
+     public Paint(int flags) {
+         mNativePaint = nInit();
+-        NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, mNativePaint);
++        nRegisterNativeAllocation(this, mNativePaint);
+         setFlags(flags | HIDDEN_DEFAULT_PAINT_FLAGS);
+         // TODO: Turning off hinting has undesirable side effects, we need to
+         //       revisit hinting once we add support for subpixel positioning
+@@ -721,7 +713,7 @@
+      */
+     public Paint(Paint paint) {
+         mNativePaint = nInitWithPaint(paint.getNativeInstance());
+-        NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, mNativePaint);
++        nRegisterNativeAllocation(this, mNativePaint);
+         setClassVariablesFrom(paint);
+     }
+ 
+@@ -847,15 +839,6 @@
+             mNativeColorFilter = newNativeColorFilter;
+             nSetColorFilter(mNativePaint, mNativeColorFilter);
+         }
+-        if (com.android.graphics.hwui.flags.Flags.runtimeColorFiltersBlenders()) {
+-            if (mXfermode instanceof RuntimeXfermode) {
+-                long newNativeXfermode = ((RuntimeXfermode) mXfermode).getNativeInstance();
+-                if (newNativeXfermode != mNativeXfermode) {
+-                    mNativeXfermode = newNativeXfermode;
+-                    nSetXfermode(mNativePaint, mNativeXfermode);
+-                }
+-            }
+-        }
+         return mNativePaint;
+     }
+ 
+@@ -1483,13 +1466,6 @@
+ 
+     @Nullable
+     private Xfermode installXfermode(Xfermode xfermode) {
+-        if (com.android.graphics.hwui.flags.Flags.runtimeColorFiltersBlenders()) {
+-            if (xfermode instanceof RuntimeXfermode) {
+-                mXfermode = xfermode;
+-                nSetXfermode(mNativePaint, ((RuntimeXfermode) xfermode).getNativeInstance());
+-                return xfermode;
+-            }
+-        }
+         int newMode = (xfermode instanceof PorterDuffXfermode)
+                 ? ((PorterDuffXfermode) xfermode).porterDuffMode : PorterDuffXfermode.DEFAULT;
+         int curMode = (mXfermode instanceof PorterDuffXfermode)
+@@ -1900,7 +1876,7 @@
+     @FlaggedApi(FLAG_DEPRECATE_ELEGANT_TEXT_HEIGHT_API)
+     public void setElegantTextHeight(boolean elegant) {
+         if (Flags.deprecateElegantTextHeightApi() && !elegant
+-                && CompatChanges.isChangeEnabled(DEPRECATE_UI_FONT_ENFORCE)) {
++                && isUiFontChangeEnabled(DEPRECATE_UI_FONT_ENFORCE)) {
+             if (!elegant) {
+                 Log.w(TAG, "The elegant text height cannot be turned off.");
+             }
+@@ -1920,7 +1896,6 @@
+      * @hide
+      */
+     @ChangeId
+-    @NoLogging
+     @EnabledSince(targetSdkVersion = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+     public static final long DEPRECATE_UI_FONT = 279646685L;
+ 
+@@ -1938,7 +1913,7 @@
+ 
+ 
+     private void resetElegantTextHeight() {
+-        if (CompatChanges.isChangeEnabled(DEPRECATE_UI_FONT)) {
++        if (isUiFontChangeEnabled(DEPRECATE_UI_FONT)) {
+             nSetElegantTextHeight(mNativePaint, ELEGANT_TEXT_HEIGHT_UNSET);
+         } else {
+             nSetElegantTextHeight(mNativePaint, ELEGANT_TEXT_HEIGHT_DISABLED);

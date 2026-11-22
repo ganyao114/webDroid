@@ -1,0 +1,698 @@
+--- a/frameworks/base/core/java/android/content/IntentFilter.java
++++ b/frameworks/base/core/java/android/content/IntentFilter.java
+@@ -40,7 +40,6 @@
+ import android.util.Printer;
+ import android.util.proto.ProtoOutputStream;
+ 
+-import com.android.internal.util.XmlUtils;
+ 
+ import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+@@ -813,7 +812,7 @@
+      * @param action Name of the action to match, such as Intent.ACTION_VIEW.
+      */
+     public final void addAction(String action) {
+-        mActions.add(action.intern());
++        mActions.add(action);
+     }
+ 
+     /**
+@@ -933,8 +932,8 @@
+                 return;
+             }
+ 
+-            mDataTypes.add(internalType.intern());
+-            mStaticDataTypes.add(internalType.intern());
++            mDataTypes.add(internalType);
++            mStaticDataTypes.add(internalType);
+             mHasStaticPartialTypes = mHasStaticPartialTypes || isPartial;
+         });
+     }
+@@ -967,7 +966,7 @@
+             }
+ 
+             if (!mDataTypes.contains(internalType)) {
+-                mDataTypes.add(internalType.intern());
++                mDataTypes.add(internalType);
+ 
+                 mHasDynamicPartialTypes = mHasDynamicPartialTypes || isPartial;
+             }
+@@ -1131,7 +1130,7 @@
+     public final void addDataScheme(String scheme) {
+         if (mDataSchemes == null) mDataSchemes = new ArrayList<String>();
+         if (!mDataSchemes.contains(scheme)) {
+-            mDataSchemes.add(scheme.intern());
++            mDataSchemes.add(scheme);
+         }
+     }
+ 
+@@ -1182,7 +1181,7 @@
+         public AuthorityEntry(String host, String port) {
+             mOrigHost = host;
+             mWild = host.length() > 0 && host.charAt(0) == '*';
+-            mHost = mWild ? host.substring(1).intern() : host;
++            mHost = mWild ? host.substring(1) : host;
+             mPort = port != null ? Integer.parseInt(port) : -1;
+         }
+ 
+@@ -1201,12 +1200,7 @@
+         }
+ 
+         void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-            long token = proto.start(fieldId);
+-            // The original host information is already contained in host and wild, no output now.
+-            proto.write(AuthorityEntryProto.HOST, mHost);
+-            proto.write(AuthorityEntryProto.WILD, mWild);
+-            proto.write(AuthorityEntryProto.PORT, mPort);
+-            proto.end(token);
++            throw new UnsupportedOperationException("Platform proto diagnostics are unavailable");
+         }
+ 
+         public String getHost() {
+@@ -1428,8 +1422,8 @@
+      * @see #addDataScheme
+      */
+     public final void addDataAuthority(String host, String port) {
+-        if (port != null) port = port.intern();
+-        addDataAuthority(new AuthorityEntry(host.intern(), port));
++        if (port != null) port = port;
++        addDataAuthority(new AuthorityEntry(host, port));
+     }
+ 
+     /** @hide */
+@@ -1517,7 +1511,7 @@
+      * @see #addDataAuthority
+      */
+     public final void addDataPath(String path, int type) {
+-        addDataPath(new PatternMatcher(path.intern(), type));
++        addDataPath(new PatternMatcher(path, type));
+     }
+ 
+     /** @hide */
+@@ -1853,7 +1847,7 @@
+     public final void addCategory(String category) {
+         if (mCategories == null) mCategories = new ArrayList<String>();
+         if (!mCategories.contains(category)) {
+-            mCategories.add(category.intern());
++            mCategories.add(category);
+         }
+     }
+ 
+@@ -2594,7 +2588,7 @@
+         if (mExtras != null) {
+             serializer.startTag(null, EXTRAS_STR);
+             try {
+-                mExtras.saveToXml(serializer);
++                rejectExtrasXml();
+             } catch (XmlPullParserException e) {
+                 throw new IllegalStateException("Failed to write extras: " + mExtras.toString(), e);
+             }
+@@ -2770,83 +2764,33 @@
+                     addDataPath(path, PatternMatcher.PATTERN_SUFFIX);
+                 }
+             } else if (tagName.equals(EXTRAS_STR)) {
+-                mExtras = PersistableBundle.restoreFromXml(parser);
++                rejectExtrasXml();
+             } else if (Flags.relativeReferenceIntentFilters()
+                     && URI_RELATIVE_FILTER_GROUP_STR.equals(tagName)) {
+                 addUriRelativeFilterGroup(new UriRelativeFilterGroup(parser));
+             } else {
+                 Log.w("IntentFilter", "Unknown tag parsing IntentFilter: " + tagName);
+             }
+-            XmlUtils.skipCurrentTag(parser);
++            skipXmlTag(parser);
+         }
+     }
+ 
+     /** @hide */
++    private static void rejectExtrasXml() throws XmlPullParserException {
++        throw new XmlPullParserException("PersistableBundle XML is unavailable");
++    }
++
++    static void skipXmlTag(XmlPullParser parser) throws XmlPullParserException, IOException {
++        final int depth = parser.getDepth();
++        int type;
++        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
++                && (type != XmlPullParser.END_TAG || parser.getDepth() > depth)) {
++            // Skip the current element.
++        }
++    }
++
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        long token = proto.start(fieldId);
+-        if (mActions.size() > 0) {
+-            Iterator<String> it = mActions.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.ACTIONS, it.next());
+-            }
+-        }
+-        if (mCategories != null) {
+-            Iterator<String> it = mCategories.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.CATEGORIES, it.next());
+-            }
+-        }
+-        if (mDataSchemes != null) {
+-            Iterator<String> it = mDataSchemes.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.DATA_SCHEMES, it.next());
+-            }
+-        }
+-        if (mDataSchemeSpecificParts != null) {
+-            Iterator<PatternMatcher> it = mDataSchemeSpecificParts.iterator();
+-            while (it.hasNext()) {
+-                it.next().dumpDebug(proto, IntentFilterProto.DATA_SCHEME_SPECS);
+-            }
+-        }
+-        if (mDataAuthorities != null) {
+-            Iterator<AuthorityEntry> it = mDataAuthorities.iterator();
+-            while (it.hasNext()) {
+-                it.next().dumpDebug(proto, IntentFilterProto.DATA_AUTHORITIES);
+-            }
+-        }
+-        if (mDataPaths != null) {
+-            Iterator<PatternMatcher> it = mDataPaths.iterator();
+-            while (it.hasNext()) {
+-                it.next().dumpDebug(proto, IntentFilterProto.DATA_PATHS);
+-            }
+-        }
+-        if (mDataTypes != null) {
+-            Iterator<String> it = mDataTypes.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.DATA_TYPES, it.next());
+-            }
+-        }
+-        if (mMimeGroups != null) {
+-            Iterator<String> it = mMimeGroups.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.MIME_GROUPS, it.next());
+-            }
+-        }
+-        if (mPriority != 0 || hasPartialTypes()) {
+-            proto.write(IntentFilterProto.PRIORITY, mPriority);
+-            proto.write(IntentFilterProto.HAS_PARTIAL_TYPES, hasPartialTypes());
+-        }
+-        proto.write(IntentFilterProto.GET_AUTO_VERIFY, getAutoVerify());
+-        if (mExtras != null) {
+-            mExtras.dumpDebug(proto, IntentFilterProto.EXTRAS);
+-        }
+-        if (Flags.relativeReferenceIntentFilters() && mUriRelativeFilterGroups != null) {
+-            Iterator<UriRelativeFilterGroup> it = mUriRelativeFilterGroups.iterator();
+-            while (it.hasNext()) {
+-                it.next().dumpDebug(proto, IntentFilterProto.URI_RELATIVE_FILTER_GROUPS);
+-            }
+-        }
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     public void dump(Printer du, String prefix) {
+--- a/frameworks/base/core/java/android/content/UriRelativeFilter.java
++++ b/frameworks/base/core/java/android/content/UriRelativeFilter.java
+@@ -92,14 +92,9 @@
+             @PatternMatcher.PatternType int patternType,
+             @NonNull String filter) {
+         mUriPart = uriPart;
+-        com.android.internal.util.AnnotationValidations.validate(
+-                UriPart.class, null, mUriPart);
+         mPatternType = patternType;
+-        com.android.internal.util.AnnotationValidations.validate(
+-                PatternMatcher.PatternType.class, null, mPatternType);
+         mFilter = filter;
+-        com.android.internal.util.AnnotationValidations.validate(
+-                NonNull.class, null, mFilter);
++        java.util.Objects.requireNonNull(filter);
+     }
+ 
+     /**
+@@ -162,11 +157,7 @@
+ 
+     /** @hide */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        long token = proto.start(fieldId);
+-        proto.write(UriRelativeFilterProto.URI_PART, mUriPart);
+-        proto.write(UriRelativeFilterProto.PATTERN_TYPE, mPatternType);
+-        proto.write(UriRelativeFilterProto.FILTER, mFilter);
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /** @hide */
+--- a/frameworks/base/core/java/android/content/UriRelativeFilterGroup.java
++++ b/frameworks/base/core/java/android/content/UriRelativeFilterGroup.java
+@@ -27,8 +27,6 @@
+ import android.util.Log;
+ import android.util.proto.ProtoOutputStream;
+ 
+-import com.android.internal.util.CollectionUtils;
+-import com.android.internal.util.XmlUtils;
+ 
+ import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+@@ -150,7 +148,7 @@
+             } else {
+                 Log.w("IntentFilter", "Unknown tag parsing IntentFilter: " + tagName);
+             }
+-            XmlUtils.skipCurrentTag(parser);
++            IntentFilter.skipXmlTag(parser);
+         }
+     }
+ 
+@@ -167,7 +165,7 @@
+      */
+     public void addUriRelativeFilter(@NonNull UriRelativeFilter uriRelativeFilter) {
+         Objects.requireNonNull(uriRelativeFilter);
+-        if (!CollectionUtils.contains(mUriRelativeFilters, uriRelativeFilter)) {
++        if (!mUriRelativeFilters.contains(uriRelativeFilter)) {
+             mUriRelativeFilters.add(uriRelativeFilter);
+         }
+     }
+@@ -201,13 +199,7 @@
+ 
+     /** @hide */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        long token = proto.start(fieldId);
+-        proto.write(UriRelativeFilterGroupProto.ACTION, mAction);
+-        Iterator<UriRelativeFilter> it = mUriRelativeFilters.iterator();
+-        while (it.hasNext()) {
+-            it.next().dumpDebug(proto, UriRelativeFilterGroupProto.URI_RELATIVE_FILTERS);
+-        }
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /** @hide */
+--- a/frameworks/base/services/core/java/com/android/server/IntentResolver.java
++++ b/frameworks/base/services/core/java/com/android/server/IntentResolver.java
+@@ -16,7 +16,6 @@
+ 
+ package com.android.server;
+ 
+-import static android.permission.flags.Flags.ignoreProcessText;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -32,11 +31,9 @@
+ import android.util.MutableInt;
+ import android.util.PrintWriterPrinter;
+ import android.util.Printer;
+-import android.util.Slog;
+ import android.util.proto.ProtoOutputStream;
+ 
+ import com.android.internal.util.FastPrintWriter;
+-import com.android.server.pm.Computer;
+ import com.android.server.pm.snapshot.PackageDataSnapshot;
+ 
+ import java.io.PrintWriter;
+@@ -60,9 +57,9 @@
+     public void addFilter(@Nullable PackageDataSnapshot snapshot, F f) {
+         IntentFilter intentFilter = getIntentFilter(f);
+         if (localLOGV) {
+-            Slog.v(TAG, "Adding filter: " + f);
+-            intentFilter.dump(new LogPrinter(Log.VERBOSE, TAG, Log.LOG_ID_SYSTEM), "      ");
+-            Slog.v(TAG, "    Building Lookup Maps:");
++            Log.v(TAG, "Adding filter: " + f);
++            intentFilter.dump(new LogPrinter(Log.VERBOSE, TAG), "      ");
++            Log.v(TAG, "    Building Lookup Maps:");
+         }
+ 
+         mFilters.add(f);
+@@ -88,11 +85,11 @@
+                 || ((intent.getFlags() & Intent.FLAG_DEBUG_LOG_RESOLUTION) != 0);
+ 
+         final Printer logPrinter = debug
+-                ? new LogPrinter(Log.VERBOSE, TAG, Log.LOG_ID_SYSTEM) : null;
++                ? new LogPrinter(Log.VERBOSE, TAG) : null;
+ 
+         if (debug) {
+-            Slog.v(TAG, "Intent: " + intent);
+-            Slog.v(TAG, "Matching against filter: " + filter);
++            Log.v(TAG, "Intent: " + intent);
++            Log.v(TAG, "Matching against filter: " + filter);
+             filter.dump(logPrinter, "  ");
+         }
+ 
+@@ -101,7 +98,7 @@
+ 
+         if (match >= 0) {
+             if (debug) {
+-                Slog.v(TAG, "Filter matched!  match=0x" + Integer.toHexString(match));
++                Log.v(TAG, "Filter matched!  match=0x" + Integer.toHexString(match));
+             }
+             return true;
+         } else {
+@@ -114,7 +111,7 @@
+                     case IntentFilter.NO_MATCH_TYPE: reason = "type"; break;
+                     default: reason = "unknown reason"; break;
+                 }
+-                Slog.v(TAG, "Filter did not match: " + reason);
++                Log.v(TAG, "Filter did not match: " + reason);
+             }
+             return false;
+         }
+@@ -172,9 +169,9 @@
+     protected void removeFilterInternal(F f) {
+         IntentFilter intentFilter = getIntentFilter(f);
+         if (localLOGV) {
+-            Slog.v(TAG, "Removing filter: " + f);
+-            intentFilter.dump(new LogPrinter(Log.VERBOSE, TAG, Log.LOG_ID_SYSTEM), "      ");
+-            Slog.v(TAG, "    Cleaning Lookup Maps:");
++            Log.v(TAG, "Removing filter: " + f);
++            intentFilter.dump(new LogPrinter(Log.VERBOSE, TAG), "      ");
++            Log.v(TAG, "    Cleaning Lookup Maps:");
+         }
+ 
+         int numS = unregister_intent_filter(f, intentFilter.schemesIterator(),
+@@ -257,28 +254,11 @@
+     }
+ 
+     void writeProtoMap(ProtoOutputStream proto, long fieldId, ArrayMap<String, F[]> map) {
+-        int N = map.size();
+-        for (int mapi = 0; mapi < N; mapi++) {
+-            long token = proto.start(fieldId);
+-            proto.write(IntentResolverProto.ArrayMapEntry.KEY, map.keyAt(mapi));
+-            for (F f : map.valueAt(mapi)) {
+-                if (f != null) {
+-                    proto.write(IntentResolverProto.ArrayMapEntry.VALUES, f.toString());
+-                }
+-            }
+-            proto.end(token);
+-        }
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        long token = proto.start(fieldId);
+-        writeProtoMap(proto, IntentResolverProto.FULL_MIME_TYPES, mTypeToFilter);
+-        writeProtoMap(proto, IntentResolverProto.BASE_MIME_TYPES, mBaseTypeToFilter);
+-        writeProtoMap(proto, IntentResolverProto.WILD_MIME_TYPES, mWildTypeToFilter);
+-        writeProtoMap(proto, IntentResolverProto.SCHEMES, mSchemeToFilter);
+-        writeProtoMap(proto, IntentResolverProto.NON_DATA_ACTIONS, mActionToFilter);
+-        writeProtoMap(proto, IntentResolverProto.MIME_TYPED_ACTIONS, mTypedActionToFilter);
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     public boolean dump(PrintWriter out, String title, String prefix, String packageName,
+@@ -352,16 +332,9 @@
+         return Collections.unmodifiableSet(mFilters);
+     }
+ 
+-    public List<R> queryIntentFromList(@NonNull Computer computer, Intent intent,
++    public List<R> queryIntentFromList(@NonNull PackageDataSnapshot computer, Intent intent,
+             String resolvedType, boolean defaultOnly, ArrayList<F[]> listCut, int userId,
+             long customFlags) {
+-        if (Intent.ACTION_PROCESS_TEXT.equals(intent.getAction()) && ignoreProcessText()) {
+-            // This is for an experiment about deprecating PROCESS_TEXT
+-            // Note: SettingsProvider isn't ready early in boot and ACTION_PROCESS_TEXT isn't
+-            //       queried during boot so we are checking the action before the flag.
+-            return Collections.emptyList();
+-        }
+-
+         ArrayList<R> resultList = new ArrayList<R>();
+ 
+         final boolean debug = localLOGV ||
+@@ -386,13 +359,6 @@
+ 
+     protected final List<R> queryIntent(@NonNull PackageDataSnapshot snapshot, Intent intent,
+             String resolvedType, boolean defaultOnly, @UserIdInt int userId, long customFlags) {
+-        if (Intent.ACTION_PROCESS_TEXT.equals(intent.getAction()) && ignoreProcessText()) {
+-            // This is for an experiment about deprecating PROCESS_TEXT
+-            // Note: SettingsProvider isn't ready early in boot and ACTION_PROCESS_TEXT isn't
+-            //       queried during boot so we are checking the action before the flag.
+-            return Collections.emptyList();
+-        }
+-
+         String scheme = intent.getScheme();
+ 
+         ArrayList<R> finalList = new ArrayList<R>();
+@@ -400,7 +366,7 @@
+         final boolean debug = localLOGV ||
+                 ((intent.getFlags() & Intent.FLAG_DEBUG_LOG_RESOLUTION) != 0);
+ 
+-        if (debug) Slog.v(
++        if (debug) Log.v(
+             TAG, "Resolving type=" + resolvedType + " scheme=" + scheme
+             + " defaultOnly=" + defaultOnly + " userId=" + userId + " of " + intent);
+ 
+@@ -421,28 +387,28 @@
+                         // Not a wild card, so we can just look for all filters that
+                         // completely match or wildcards whose base type matches.
+                         firstTypeCut = mTypeToFilter.get(resolvedType);
+-                        if (debug) Slog.v(TAG, "First type cut: " + Arrays.toString(firstTypeCut));
++                        if (debug) Log.v(TAG, "First type cut: " + Arrays.toString(firstTypeCut));
+                         secondTypeCut = mWildTypeToFilter.get(baseType);
+-                        if (debug) Slog.v(TAG, "Second type cut: "
++                        if (debug) Log.v(TAG, "Second type cut: "
+                                 + Arrays.toString(secondTypeCut));
+                     } else {
+                         // We can match anything with our base type.
+                         firstTypeCut = mBaseTypeToFilter.get(baseType);
+-                        if (debug) Slog.v(TAG, "First type cut: " + Arrays.toString(firstTypeCut));
++                        if (debug) Log.v(TAG, "First type cut: " + Arrays.toString(firstTypeCut));
+                         secondTypeCut = mWildTypeToFilter.get(baseType);
+-                        if (debug) Slog.v(TAG, "Second type cut: "
++                        if (debug) Log.v(TAG, "Second type cut: "
+                                 + Arrays.toString(secondTypeCut));
+                     }
+                     // Any */* types always apply, but we only need to do this
+                     // if the intent type was not already */*.
+                     thirdTypeCut = mWildTypeToFilter.get("*");
+-                    if (debug) Slog.v(TAG, "Third type cut: " + Arrays.toString(thirdTypeCut));
++                    if (debug) Log.v(TAG, "Third type cut: " + Arrays.toString(thirdTypeCut));
+                 } else if (intent.getAction() != null) {
+                     // The intent specified any type ({@literal *}/*).  This
+                     // can be a whole heck of a lot of things, so as a first
+                     // cut let's use the action instead.
+                     firstTypeCut = mTypedActionToFilter.get(intent.getAction());
+-                    if (debug) Slog.v(TAG, "Typed Action list: " + Arrays.toString(firstTypeCut));
++                    if (debug) Log.v(TAG, "Typed Action list: " + Arrays.toString(firstTypeCut));
+                 }
+             }
+         }
+@@ -452,7 +418,7 @@
+         // on the authority and path by directly matching each resulting filter).
+         if (scheme != null) {
+             schemeCut = mSchemeToFilter.get(scheme);
+-            if (debug) Slog.v(TAG, "Scheme list: " + Arrays.toString(schemeCut));
++            if (debug) Log.v(TAG, "Scheme list: " + Arrays.toString(schemeCut));
+         }
+ 
+         // If the intent does not specify any data -- either a MIME type or
+@@ -460,11 +426,11 @@
+         // data.
+         if (resolvedType == null && scheme == null && intent.getAction() != null) {
+             firstTypeCut = mActionToFilter.get(intent.getAction());
+-            if (debug) Slog.v(TAG, "Action list: " + Arrays.toString(firstTypeCut));
++            if (debug) Log.v(TAG, "Action list: " + Arrays.toString(firstTypeCut));
+         }
+ 
+         FastImmutableArraySet<String> categories = getFastIntentCategories(intent);
+-        Computer computer = (Computer) snapshot;
++        PackageDataSnapshot computer = snapshot;
+         if (firstTypeCut != null) {
+             buildResolveList(computer, intent, categories, debug, defaultOnly, resolvedType,
+                     scheme, firstTypeCut, finalList, userId, customFlags);
+@@ -485,9 +451,9 @@
+         sortResults(finalList);
+ 
+         if (debug) {
+-            Slog.v(TAG, "Final result list:");
++            Log.v(TAG, "Final result list:");
+             for (int i=0; i<finalList.size(); i++) {
+-                Slog.v(TAG, "  " + finalList.get(i));
++                Log.v(TAG, "  " + finalList.get(i));
+             }
+         }
+         return finalList;
+@@ -507,7 +473,7 @@
+      * "stopped", that is whether it should not be included in the result
+      * if the intent requests to excluded stopped objects.
+      */
+-    protected boolean isFilterStopped(@NonNull Computer computer, F filter, @UserIdInt int userId) {
++    protected boolean isFilterStopped(@NonNull PackageDataSnapshot computer, F filter, @UserIdInt int userId) {
+         return false;
+     }
+ 
+@@ -537,7 +503,7 @@
+     protected abstract F[] newArray(int size);
+ 
+     @SuppressWarnings("unchecked")
+-    protected R newResult(@NonNull Computer computer, F filter, int match, int userId,
++    protected R newResult(@NonNull PackageDataSnapshot computer, F filter, int match, int userId,
+             long customFlags) {
+         return (R)filter;
+     }
+@@ -598,7 +564,7 @@
+         while (i.hasNext()) {
+             String name = i.next();
+             num++;
+-            if (localLOGV) Slog.v(TAG, prefix + name);
++            if (localLOGV) Log.v(TAG, prefix + name);
+             String baseName = name;
+             final int slashpos = name.indexOf('/');
+             if (slashpos > 0) {
+@@ -629,7 +595,7 @@
+         while (i.hasNext()) {
+             String name = i.next();
+             num++;
+-            if (localLOGV) Slog.v(TAG, prefix + name);
++            if (localLOGV) Log.v(TAG, prefix + name);
+             String baseName = name;
+             final int slashpos = name.indexOf('/');
+             if (slashpos > 0) {
+@@ -659,7 +625,7 @@
+         while (i.hasNext()) {
+             String name = i.next();
+             num++;
+-            if (localLOGV) Slog.v(TAG, prefix + name);
++            if (localLOGV) Log.v(TAG, prefix + name);
+             addFilter(dest, name, filter);
+         }
+         return num;
+@@ -675,7 +641,7 @@
+         while (i.hasNext()) {
+             String name = i.next();
+             num++;
+-            if (localLOGV) Slog.v(TAG, prefix + name);
++            if (localLOGV) Log.v(TAG, prefix + name);
+             remove_all_objects(dest, name, filter);
+         }
+         return num;
+@@ -718,7 +684,7 @@
+         return new FastImmutableArraySet<String>(categories.toArray(new String[categories.size()]));
+     }
+ 
+-    private void buildResolveList(@NonNull Computer computer, Intent intent,
++    private void buildResolveList(@NonNull PackageDataSnapshot computer, Intent intent,
+             FastImmutableArraySet<String> categories, boolean debug, boolean defaultOnly,
+             String resolvedType, String scheme, F[] src, List<R> dest, int userId,
+             long customFlags) {
+@@ -726,12 +692,13 @@
+         final Uri data = intent.getData();
+         final String packageName = intent.getPackage();
+ 
+-        final boolean excludingStopped = intent.isExcludingStopped();
++        final boolean excludingStopped = (intent.getFlags() & (Intent.FLAG_EXCLUDE_STOPPED_PACKAGES
++                | Intent.FLAG_INCLUDE_STOPPED_PACKAGES)) == Intent.FLAG_EXCLUDE_STOPPED_PACKAGES;
+ 
+         final Printer logPrinter;
+         final PrintWriter logPrintWriter;
+         if (debug) {
+-            logPrinter = new LogPrinter(Log.VERBOSE, TAG, Log.LOG_ID_SYSTEM);
++            logPrinter = new LogPrinter(Log.VERBOSE, TAG);
+             logPrintWriter = new FastPrintWriter(logPrinter);
+         } else {
+             logPrinter = null;
+@@ -744,11 +711,11 @@
+         F filter;
+         for (i=0; i<N && (filter=src[i]) != null; i++) {
+             int match;
+-            if (debug) Slog.v(TAG, "Matching against filter " + filter);
++            if (debug) Log.v(TAG, "Matching against filter " + filter);
+ 
+             if (excludingStopped && isFilterStopped(computer, filter, userId)) {
+                 if (debug) {
+-                    Slog.v(TAG, "  Filter's target is stopped; skipping");
++                    Log.v(TAG, "  Filter's target is stopped; skipping");
+                 }
+                 continue;
+             }
+@@ -756,7 +723,7 @@
+             // Is delivery being limited to filters owned by a particular package?
+             if (packageName != null && !isPackageForFilter(packageName, filter)) {
+                 if (debug) {
+-                    Slog.v(TAG, "  Filter is not from package " + packageName + "; skipping");
++                    Log.v(TAG, "  Filter is not from package " + packageName + "; skipping");
+                 }
+                 continue;
+             }
+@@ -765,10 +732,10 @@
+             IntentFilter intentFilter = getIntentFilter(filter);
+             if (intentFilter.getAutoVerify()) {
+                 if (localVerificationLOGV || debug) {
+-                    Slog.v(TAG, "  Filter verified: " + isFilterVerified(filter));
++                    Log.v(TAG, "  Filter verified: " + isFilterVerified(filter));
+                     int authorities = intentFilter.countDataAuthorities();
+                     for (int z = 0; z < authorities; z++) {
+-                        Slog.v(TAG, "   " + intentFilter.getDataAuthority(z)
++                        Log.v(TAG, "   " + intentFilter.getDataAuthority(z)
+                                 .getHost());
+                     }
+                 }
+@@ -777,19 +744,19 @@
+             // Do we already have this one?
+             if (!allowFilterResult(filter, dest)) {
+                 if (debug) {
+-                    Slog.v(TAG, "  Filter's target already added");
++                    Log.v(TAG, "  Filter's target already added");
+                 }
+                 continue;
+             }
+ 
+             match = intentFilter.match(action, resolvedType, scheme, data, categories, TAG);
+             if (match >= 0) {
+-                if (debug) Slog.v(TAG, "  Filter matched!  match=0x" +
++                if (debug) Log.v(TAG, "  Filter matched!  match=0x" +
+                         Integer.toHexString(match) + " hasDefault="
+                         + intentFilter.hasCategory(Intent.CATEGORY_DEFAULT));
+                 if (!defaultOnly || intentFilter.hasCategory(Intent.CATEGORY_DEFAULT)) {
+                     final R oneResult = newResult(computer, filter, match, userId, customFlags);
+-                    if (debug) Slog.v(TAG, "    Created result: " + oneResult);
++                    if (debug) Log.v(TAG, "    Created result: " + oneResult);
+                     if (oneResult != null) {
+                         dest.add(oneResult);
+                         if (debug) {
+@@ -811,16 +778,16 @@
+                         case IntentFilter.NO_MATCH_TYPE: reason = "type"; break;
+                         default: reason = "unknown reason"; break;
+                     }
+-                    Slog.v(TAG, "  Filter did not match: " + reason);
++                    Log.v(TAG, "  Filter did not match: " + reason);
+                 }
+             }
+         }
+ 
+         if (debug && hasNonDefaults) {
+             if (dest.size() == 0) {
+-                Slog.v(TAG, "resolveIntent failed: found match, but none with CATEGORY_DEFAULT");
++                Log.v(TAG, "resolveIntent failed: found match, but none with CATEGORY_DEFAULT");
+             } else if (dest.size() > 1) {
+-                Slog.v(TAG, "resolveIntent: multiple matches, only some with CATEGORY_DEFAULT");
++                Log.v(TAG, "resolveIntent: multiple matches, only some with CATEGORY_DEFAULT");
+             }
+         }
+     }
+@@ -861,7 +828,7 @@
+         final int end = r.size();
+         l.ensureCapacity(end);
+         for (int i = 0; i < end; i++) {
+-            l.append(snapshot(r.valueAt(i)));
++            l.add(snapshot(r.valueAt(i)));
+         }
+     }
+ 
+--- a/frameworks/base/services/core/java/com/android/server/pm/snapshot/PackageDataSnapshot.java
++++ b/frameworks/base/services/core/java/com/android/server/pm/snapshot/PackageDataSnapshot.java
+@@ -16,18 +16,15 @@
+ 
+ package com.android.server.pm.snapshot;
+ 
+-import android.content.pm.PackageManagerInternal;
+ 
+-import com.android.server.pm.Computer;
+-import com.android.server.pm.PackageManagerService;
+ 
+ /**
+- * An empty interface provided as the type for a snapshot of {@link PackageManagerService} data.
++ * An empty interface provided as the type for a snapshot of {@link com.android.server.pm.PackageManagerService} data.
+  * There should be no members of this interface, to discourage its usage beyond as an input to
+  * other package related APIs.
+  *
+- * Usage inside {@link PackageManagerInternal} and related should cast the object instance to
+- * a {@link Computer} to access data.
++ * Usage inside {@link android.content.pm.PackageManagerInternal} and related should cast the object instance to
++ * a {@link com.android.server.pm.Computer} to access data.
+  *
+  * @hide
+  */
