@@ -1,0 +1,138 @@
+--- a/frameworks/base/core/java/android/os/IBinder.java
++++ b/frameworks/base/core/java/android/os/IBinder.java
+@@ -17,7 +17,6 @@
+ package android.os;
+ 
+ import android.annotation.CallbackExecutor;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -210,7 +209,7 @@
+     /**
+      * Get the canonical name of the interface supported by this binder.
+      */
+-    public @Nullable String getInterfaceDescriptor() throws RemoteException;
++    public default @Nullable String getInterfaceDescriptor() throws RemoteException { return null; }
+ 
+     /**
+      * Check to see if the object still exists.
+@@ -220,7 +219,7 @@
+      * true) returned by the pingBinder() implementation on the other
+      * side.
+      */
+-    public boolean pingBinder();
++    public default boolean pingBinder() { return true; }
+ 
+     /**
+      * Check to see if the process that the binder is in is still alive.
+@@ -228,7 +227,7 @@
+      * @return false if the process is not alive.  Note that if it returns
+      * true, the process may have died while the call is returning.
+      */
+-    public boolean isBinderAlive();
++    public default boolean isBinderAlive() { return true; }
+ 
+     /**
+      * Attempt to retrieve a local implementation of an interface
+@@ -236,7 +235,7 @@
+      * to instantiate a proxy class to marshall calls through
+      * the transact() method.
+      */
+-    public @Nullable IInterface queryLocalInterface(@NonNull String descriptor);
++    public default @Nullable IInterface queryLocalInterface(@NonNull String descriptor) { return null; }
+ 
+     /**
+      * Print the object's state into the given stream.
+@@ -244,7 +243,7 @@
+      * @param fd The raw file descriptor that the dump is being sent to.
+      * @param args additional arguments to the dump request.
+      */
+-    public void dump(@NonNull FileDescriptor fd, @Nullable String[] args) throws RemoteException;
++    public default void dump(@NonNull FileDescriptor fd, @Nullable String[] args) throws RemoteException {}
+ 
+     /**
+      * Like {@link #dump(FileDescriptor, String[])} but always executes
+@@ -254,25 +253,8 @@
+      * @param fd The raw file descriptor that the dump is being sent to.
+      * @param args additional arguments to the dump request.
+      */
+-    public void dumpAsync(@NonNull FileDescriptor fd, @Nullable String[] args)
+-            throws RemoteException;
+-
+-    /**
+-     * Execute a shell command on this object.  This may be performed asynchrously from the caller;
+-     * the implementation must always call resultReceiver when finished.
+-     *
+-     * @param in The raw file descriptor that an input data stream can be read from.
+-     * @param out The raw file descriptor that normal command messages should be written to.
+-     * @param err The raw file descriptor that command error messages should be written to.
+-     * @param args Command-line arguments.
+-     * @param shellCallback Optional callback to the caller's shell to perform operations in it.
+-     * @param resultReceiver Called when the command has finished executing, with the result code.
+-     * @hide
+-     */
+-    public void shellCommand(@Nullable FileDescriptor in, @Nullable FileDescriptor out,
+-            @Nullable FileDescriptor err,
+-            @NonNull String[] args, @Nullable ShellCallback shellCallback,
+-            @NonNull ResultReceiver resultReceiver) throws RemoteException;
++    public default void dumpAsync(@NonNull FileDescriptor fd, @Nullable String[] args)
++            throws RemoteException {}
+ 
+     /**
+      * Get the binder extension of this binder interface.
+@@ -307,8 +289,8 @@
+      * a C++ or Rust implementation), then there are no oneway semantics, and
+      * false can still be returned.
+      */
+-    public boolean transact(int code, @NonNull Parcel data, @Nullable Parcel reply, int flags)
+-        throws RemoteException;
++    public default boolean transact(int code, @NonNull Parcel data, @Nullable Parcel reply, int flags)
++        throws RemoteException { return false; }
+ 
+     /**
+      * Interface for receiving a callback when the process hosting an IBinder
+@@ -361,8 +343,8 @@
+      *
+      * @see #unlinkToDeath
+      */
+-    public void linkToDeath(@NonNull DeathRecipient recipient, int flags)
+-            throws RemoteException;
++    public default void linkToDeath(@NonNull DeathRecipient recipient, int flags)
++            throws RemoteException {}
+ 
+     /**
+      * Remove a previously registered death notification.
+@@ -382,12 +364,12 @@
+      * exception will <em>not</em> be thrown, and you will receive a false
+      * return value instead.
+      */
+-    public boolean unlinkToDeath(@NonNull DeathRecipient recipient, int flags);
++    public default boolean unlinkToDeath(@NonNull DeathRecipient recipient, int flags) { return false; }
+ 
+     /**
+      * A callback interface for receiving frozen state change events.
+      */
+-    @FlaggedApi(Flags.FLAG_BINDER_FROZEN_STATE_CHANGE_CALLBACK)
++
+     interface FrozenStateChangeCallback {
+         /**
+          * @hide
+@@ -455,7 +437,7 @@
+      * @throws UnsupportedOperationException if the kernel binder driver does not support
+      * this feature.
+      */
+-    @FlaggedApi(Flags.FLAG_BINDER_FROZEN_STATE_CHANGE_CALLBACK)
++
+     default void addFrozenStateChangeCallback(
+             @NonNull @CallbackExecutor Executor executor,
+             @NonNull FrozenStateChangeCallback callback)
+@@ -478,7 +460,7 @@
+      * Unregister a {@link FrozenStateChangeCallback}. The callback will no longer be invoked when
+      * the hosting process changes its frozen state.
+      */
+-    @FlaggedApi(Flags.FLAG_BINDER_FROZEN_STATE_CHANGE_CALLBACK)
++
+     default boolean removeFrozenStateChangeCallback(@NonNull FrozenStateChangeCallback callback) {
+         throw new UnsupportedOperationException();
+     }

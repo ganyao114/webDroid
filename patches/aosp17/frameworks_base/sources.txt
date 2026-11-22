@@ -93,6 +93,34 @@ frameworks/base/core/java/android/os/SimpleClock.java
 frameworks/base/core/java/android/os/SystemClock.java
 frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
 frameworks/base/core/java/android/os/TraceNameSupplier.java
+
+# Phase 3 W3: upstream os, database, provider, appwidget, display, webkit
+frameworks/base/core/java/android/appwidget/AppWidgetHost.java
+frameworks/base/core/java/android/appwidget/AppWidgetHostView.java
+frameworks/base/core/java/android/appwidget/AppWidgetManager.java
+frameworks/base/core/java/android/appwidget/AppWidgetProviderInfo.java
+frameworks/base/core/java/android/database/ContentObserver.java
+frameworks/base/core/java/android/database/DataSetObserver.java
+frameworks/base/core/java/android/database/DatabaseUtils.java
+frameworks/base/core/java/android/database/sqlite/SQLiteClosable.java
+frameworks/base/core/java/android/database/sqlite/SQLiteDatabase.java
+frameworks/base/core/java/android/database/sqlite/SQLiteProgram.java
+frameworks/base/core/java/android/database/sqlite/SQLiteStatement.java
+frameworks/base/core/java/android/hardware/display/DisplayManager.java
+frameworks/base/core/java/android/os/Build.java
+frameworks/base/core/java/android/os/IBinder.java
+frameworks/base/core/java/android/os/Parcel.java
+frameworks/base/core/java/android/os/ParcelFormatException.java
+frameworks/base/core/java/android/os/Process.java
+frameworks/base/core/java/android/os/ServiceSpecificException.java
+frameworks/base/core/java/android/os/UserManager.java
+frameworks/base/core/java/android/os/Vibrator.java
+frameworks/base/core/java/android/provider/Settings.java
+frameworks/base/core/java/android/webkit/WebSettings.java
+frameworks/base/core/java/android/webkit/WebView.java
+frameworks/base/core/java/android/webkit/WebViewClient.java
+frameworks/base/core/java/android/webkit/WebViewProvider.java
+
 frameworks/base/core/java/android/util/ArrayMap.java
 frameworks/base/core/java/android/util/AttributeSet.java
 frameworks/base/core/java/android/util/ContainerHelpers.java
@@ -412,6 +440,9 @@ android/annotation/CallbackExecutor.java
 android/annotation/RequiresPermission.java
 dalvik/annotation/optimization/NeverInline.java
 
+# Phase 3 W3 compile-only annotations
+android/annotation/SdkConstant.java
+
 [aconfig]
 frameworks/base/core/java/android/app/privatecompute/flags/flags.aconfig
 frameworks/base/core/java/android/content/pm/flags.aconfig
@@ -453,6 +484,19 @@ patches/606-scroll-view-platform-boundaries.patch
 patches/607-control-view-boundaries.patch
 patches/608-list-view-platform-boundaries.patch
 patches/609-toast-window-boundary.patch
+
+# Phase 3 W3: upstream os, database, provider, appwidget, display, webkit
+patches/901-embedded-build-and-process.patch
+patches/902-local-binder-token.patch
+patches/903-parcel-buffer.patch
+patches/904-local-user-and-vibration.patch
+patches/905-content-observer-dispatch.patch
+patches/906-in-memory-sqlite.patch
+patches/907-database-utility-boundary.patch
+patches/908-in-memory-settings-provider.patch
+patches/909-local-appwidget-host.patch
+patches/910-embedded-display-manager.patch
+patches/911-iframe-webview-provider.patch
 
 01-offline-proto-diagnostics.patch
 02-interpreter-arrays.patch
