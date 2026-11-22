@@ -1,0 +1,56 @@
+--- a/frameworks/base/core/java/android/content/ComponentName.java
++++ b/frameworks/base/core/java/android/content/ComponentName.java
+@@ -304,10 +304,7 @@
+      * @hide
+      */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-        proto.write(ComponentNameProto.PACKAGE_NAME, mPackage);
+-        proto.write(ComponentNameProto.CLASS_NAME, mClass);
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/os/PatternMatcher.java
++++ b/frameworks/base/core/java/android/os/PatternMatcher.java
+@@ -172,12 +172,7 @@
+ 
+     /** @hide */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        long token = proto.start(fieldId);
+-        proto.write(PatternMatcherProto.PATTERN, mPattern);
+-        proto.write(PatternMatcherProto.TYPE, mType);
+-        // PatternMatcherProto.PARSED_PATTERN is too much to dump, but the field is reserved to
+-        // match the current data structure.
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /**
+@@ -204,13 +199,23 @@
+     public void writeToParcel(Parcel dest, int flags) {
+         dest.writeString(mPattern);
+         dest.writeInt(mType);
+-        dest.writeIntArray(mParsedPattern);
++        if (mParsedPattern == null) {
++            dest.writeInt(-1);
++        } else {
++            dest.writeInt(mParsedPattern.length);
++            for (int value : mParsedPattern) dest.writeInt(value);
++        }
+     }
+ 
+     public PatternMatcher(Parcel src) {
+         mPattern = src.readString();
+         mType = src.readInt();
+-        mParsedPattern = src.createIntArray();
++        int size = src.readInt();
++        if (size < -1 || size > MAX_PATTERN_STORAGE) {
++            throw new BadParcelableException("Invalid parsed pattern size " + size);
++        }
++        mParsedPattern = size == -1 ? null : new int[size];
++        for (int i = 0; i < size; i++) mParsedPattern[i] = src.readInt();
+     }
+     
+     public static final @android.annotation.NonNull Parcelable.Creator<PatternMatcher> CREATOR

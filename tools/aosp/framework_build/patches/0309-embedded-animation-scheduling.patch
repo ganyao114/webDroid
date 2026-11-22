@@ -1,0 +1,400 @@
+--- a/frameworks/base/core/java/android/animation/AnimationHandler.java
++++ b/frameworks/base/core/java/android/animation/AnimationHandler.java
+@@ -18,10 +18,8 @@
+ 
+ import android.annotation.Nullable;
+ import android.os.SystemClock;
+-import android.os.SystemProperties;
+ import android.util.ArrayMap;
+ import android.util.Log;
+-import android.util.TimeUtils;
+ import android.view.Choreographer;
+ 
+ import java.lang.ref.WeakReference;
+@@ -98,16 +96,24 @@
+      * It is only used if {@link Animator#setPostNotifyEndListenerEnabled(boolean)} sets true.
+      */
+     private long mEndAnimationFrameVsyncId;
++    private long mFrameTimeNanos;
++    private static long sFrameDelay = 10;
+ 
+     private final Choreographer.FrameCallback mFrameCallback = new Choreographer.FrameCallback() {
+         @Override
+         public void doFrame(long frameTimeNanos) {
+-            doAnimationFrame(frameTimeNanos / TimeUtils.NANOS_PER_MS);
++            mFrameTimeNanos = frameTimeNanos;
++            doAnimationFrame(frameTimeNanos / 1_000_000L);
+             if (mAnimationCallbacks.size() > 0) {
+                 getProvider().postFrameCallback(this);
+             }
+         }
+     };
++
++    static {
++        // Link the guest Thread class before its thread-local map is used.
++        Thread.currentThread();
++    }
+ 
+     public static final ThreadLocal<AnimationHandler> sAnimatorHandler = new ThreadLocal<>();
+     private static AnimationHandler sTestHandler = null;
+@@ -144,8 +150,7 @@
+      */
+     private static boolean isPauseBgAnimationsEnabledInSystemProperties() {
+         if (sOverrideAnimatorPausingSystemProperty) return sAnimatorPausingEnabled;
+-        return SystemProperties
+-                .getBoolean("framework.pause_bg_animations.enabled", true);
++        return true;
+     }
+ 
+     /**
+@@ -353,10 +358,10 @@
+         if (mPendingEndAnimationListeners.size() > 1) {
+             return;
+         }
+-        final Choreographer choreographer = Choreographer.getInstance();
+-        mLastAnimationFrameVsyncId = choreographer.getVsyncId();
++        // Host timestamps identify frames in the cooperative Choreographer.
++        mLastAnimationFrameVsyncId = mFrameTimeNanos;
+         getProvider().postFrameCallback(frame -> {
+-            mEndAnimationFrameVsyncId = choreographer.getVsyncId();
++            mEndAnimationFrameVsyncId = frame;
+             // The animation listeners can only get vsyncId of last animation frame in this frame
+             // by getLastAnimationFrameVsyncId(currentVsyncId).
+             while (mPendingEndAnimationListeners.size() > 0) {
+@@ -476,12 +481,12 @@
+ 
+         @Override
+         public long getFrameDelay() {
+-            return Choreographer.getFrameDelay();
++            return sFrameDelay;
+         }
+ 
+         @Override
+         public void setFrameDelay(long delay) {
+-            Choreographer.setFrameDelay(delay);
++            sFrameDelay = delay;
+         }
+     }
+ 
+--- a/frameworks/base/core/java/android/animation/Animator.java
++++ b/frameworks/base/core/java/android/animation/Animator.java
+@@ -16,12 +16,10 @@
+ 
+ package android.animation;
+ 
+-import android.annotation.CallSuper;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ConstantState;
+ import android.os.Build;
+ import android.os.Trace;
+@@ -60,7 +58,7 @@
+      * A set of flags which identify the type of configuration changes that can affect this
+      * Animator. Used by the Animator cache.
+      */
+-    @Config int mChangingConfigurations = 0;
++    int mChangingConfigurations = 0;
+ 
+     /**
+      * If this animator is inflated from a constant state, keep a reference to it so that
+@@ -428,7 +426,7 @@
+      * @see android.content.pm.ActivityInfo
+      * @hide
+      */
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return mChangingConfigurations;
+     }
+ 
+@@ -442,7 +440,7 @@
+      * @see android.content.pm.ActivityInfo
+      * @hide
+      */
+-    public void setChangingConfigurations(@Config int configs) {
++    public void setChangingConfigurations(int configs) {
+         mChangingConfigurations = configs;
+     }
+ 
+@@ -452,7 +450,7 @@
+      * This method is called while loading the animator.
+      * @hide
+      */
+-    public void appendChangingConfigurations(@Config int configs) {
++    public void appendChangingConfigurations(int configs) {
+         mChangingConfigurations |= configs;
+     }
+ 
+@@ -694,7 +692,6 @@
+         }
+     }
+ 
+-    @CallSuper
+     void completeEndAnimation(boolean isReversing, String notifyListenerTraceName) {
+         final boolean useTrace = mListeners != null && Trace.isTagEnabled(Trace.TRACE_TAG_VIEW);
+         if (useTrace) {
+@@ -880,7 +877,7 @@
+     private static class AnimatorConstantState extends ConstantState<Animator> {
+ 
+         final Animator mAnimator;
+-        @Config int mChangingConf;
++        int mChangingConf;
+ 
+         public AnimatorConstantState(Animator animator) {
+             mAnimator = animator;
+@@ -890,7 +887,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConf;
+         }
+ 
+--- a/frameworks/base/core/java/android/animation/AnimatorSet.java
++++ b/frameworks/base/core/java/android/animation/AnimatorSet.java
+@@ -16,7 +16,8 @@
+ 
+ package android.animation;
+ 
+-import android.app.ActivityThread;
++import android.app.Activity;
++import android.app.UiRuntime;
+ import android.app.Application;
+ import android.os.Build;
+ import android.os.Looper;
+@@ -208,12 +209,13 @@
+         mNodes.add(mRootNode);
+         boolean isPreO;
+         // Set the flag to ignore calling end() without start() for pre-N releases
+-        Application app = ActivityThread.currentApplication();
++        Activity activity = UiRuntime.getActivity();
++        Application app = activity == null ? null : activity.getApplication();
+         if (app == null || app.getApplicationInfo() == null) {
+             mShouldIgnoreEndWithoutStart = true;
+             isPreO = true;
+         } else {
+-            if (app.getApplicationInfo().targetSdkVersion < Build.VERSION_CODES.N) {
++            if (app.getApplicationInfo().targetSdkVersion < 24 /* Android N */) {
+                 mShouldIgnoreEndWithoutStart = true;
+             } else {
+                 mShouldIgnoreEndWithoutStart = false;
+--- a/frameworks/base/core/java/android/animation/LayoutTransition.java
++++ b/frameworks/base/core/java/android/animation/LayoutTransition.java
+@@ -950,7 +950,7 @@
+                 // Cache the animation in case we need to cancel it later
+                 currentChangingAnimations.put(child, anim);
+ 
+-                parent.requestTransitionStart(LayoutTransition.this);
++                parent.postOnAnimation(LayoutTransition.this::startChangingAnimations);
+ 
+                 // this only removes listeners whose views changed - must clear the
+                 // other listeners later
+--- a/frameworks/base/core/java/android/animation/ObjectAnimator.java
++++ b/frameworks/base/core/java/android/animation/ObjectAnimator.java
+@@ -16,7 +16,6 @@
+ 
+ package android.animation;
+ 
+-import android.annotation.CallSuper;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.graphics.Path;
+@@ -872,7 +871,6 @@
+      *  <p>Overriders of this method should call the superclass method to cause
+      *  internal mechanisms to be set up correctly.</p>
+      */
+-    @CallSuper
+     @Override
+     void initAnimation() {
+         if (!mInitialized) {
+@@ -967,7 +965,6 @@
+      *
+      * @param fraction The elapsed fraction of the animation.
+      */
+-    @CallSuper
+     @Override
+     void animateValue(float fraction) {
+         final Object target = getTarget();
+--- a/frameworks/base/core/java/android/animation/RevealAnimator.java
++++ b/frameworks/base/core/java/android/animation/RevealAnimator.java
+@@ -16,7 +16,8 @@
+ 
+ package android.animation;
+ 
+-import android.view.RenderNodeAnimator;
++import android.graphics.Outline;
++import android.view.ViewOutlineProvider;
+ import android.view.View;
+ 
+ /**
+@@ -26,21 +27,38 @@
+  *
+  * @hide
+  */
+-public class RevealAnimator extends RenderNodeAnimator {
+-
+-    private View mClipView;
++public class RevealAnimator extends ValueAnimator {
+ 
+     public RevealAnimator(View clipView, int x, int y,
+             float startRadius, float endRadius) {
+-        super(x, y, startRadius, endRadius);
+-        mClipView = clipView;
+-        setTarget(mClipView);
+-    }
++        setFloatValues(startRadius, endRadius);
++        ViewOutlineProvider reveal = new ViewOutlineProvider() {
++            @Override
++            public void getOutline(View view, Outline outline) {
++                float radius = ((Number) getAnimatedValue()).floatValue();
++                outline.setRoundRect(Math.round(x - radius), Math.round(y - radius),
++                        Math.round(x + radius), Math.round(y + radius), radius);
++            }
++        };
++        addUpdateListener(animation -> clipView.invalidateOutline());
++        addListener(new AnimatorListenerAdapter() {
++            private ViewOutlineProvider mPrevious;
++            private boolean mClipped;
+ 
+-    @Override
+-    protected void onFinished() {
+-        mClipView.setRevealClip(false, 0, 0, 0);
+-        super.onFinished();
++            @Override
++            public void onAnimationStart(Animator animation) {
++                mPrevious = clipView.getOutlineProvider();
++                mClipped = clipView.getClipToOutline();
++                clipView.setOutlineProvider(reveal);
++                clipView.setClipToOutline(true);
++            }
++
++            @Override
++            public void onAnimationEnd(Animator animation) {
++                clipView.setOutlineProvider(mPrevious);
++                clipView.setClipToOutline(mClipped);
++            }
++        });
+     }
+ 
+ }
+--- a/frameworks/base/core/java/android/animation/StateListAnimator.java
++++ b/frameworks/base/core/java/android/animation/StateListAnimator.java
+@@ -16,7 +16,6 @@
+ 
+ package android.animation;
+ 
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ConstantState;
+ import android.util.StateSet;
+ import android.view.View;
+@@ -54,7 +53,7 @@
+     private WeakReference<View> mViewRef;
+     private StateListAnimatorConstantState mConstantState;
+     private AnimatorListenerAdapter mAnimatorListener;
+-    private @Config int mChangingConfigurations;
++    private int mChangingConfigurations;
+ 
+     public StateListAnimator() {
+         initAnimatorListener();
+@@ -224,7 +223,7 @@
+      * @see android.content.pm.ActivityInfo
+      * @hide
+      */
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return mChangingConfigurations;
+     }
+ 
+@@ -238,7 +237,7 @@
+      * @see android.content.pm.ActivityInfo
+      * @hide
+      */
+-    public void setChangingConfigurations(@Config int configs) {
++    public void setChangingConfigurations(int configs) {
+         mChangingConfigurations = configs;
+     }
+ 
+@@ -248,7 +247,7 @@
+      * This method is called while loading the animator.
+      * @hide
+      */
+-    public void appendChangingConfigurations(@Config int configs) {
++    public void appendChangingConfigurations(int configs) {
+         mChangingConfigurations |= configs;
+     }
+ 
+@@ -310,7 +309,7 @@
+ 
+         final StateListAnimator mAnimator;
+ 
+-        @Config int mChangingConf;
++        int mChangingConf;
+ 
+         public StateListAnimatorConstantState(StateListAnimator animator) {
+             mAnimator = animator;
+@@ -319,7 +318,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConf;
+         }
+ 
+--- a/frameworks/base/core/java/android/animation/ValueAnimator.java
++++ b/frameworks/base/core/java/android/animation/ValueAnimator.java
+@@ -16,17 +16,14 @@
+ 
+ package android.animation;
+ 
+-import android.annotation.CallSuper;
+ import android.annotation.FloatRange;
+ import android.annotation.IntDef;
+-import android.annotation.MainThread;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.os.Build;
+ import android.os.Looper;
+-import android.os.SystemProperties;
+ import android.os.Trace;
+ import android.util.AndroidRuntimeException;
+ import android.util.Log;
+@@ -80,8 +77,7 @@
+ public class ValueAnimator extends Animator implements AnimationHandler.AnimationFrameCallback {
+     private static final String TAG = "ValueAnimator";
+     private static final boolean DEBUG = false;
+-    private static final boolean TRACE_ANIMATION_FRACTION = SystemProperties.getBoolean(
+-            "persist.debug.animator.trace_fraction", false);
++    private static final boolean TRACE_ANIMATION_FRACTION = false;
+ 
+     /**
+      * Internal constants
+@@ -292,7 +288,6 @@
+      */
+     @UnsupportedAppUsage
+     @TestApi
+-    @MainThread
+     public static void setDurationScale(@FloatRange(from = 0) float durationScale) {
+         sDurationScale = durationScale;
+         List<WeakReference<DurationScaleChangeListener>> listenerCopy;
+@@ -633,7 +628,6 @@
+      *  <p>Overrides of this method should call the superclass method to ensure
+      *  that internal mechanisms for the animation are set up correctly.</p>
+      */
+-    @CallSuper
+     void initAnimation() {
+         if (!mInitialized) {
+             if (mValues != null) {
+@@ -1607,7 +1601,6 @@
+      *
+      * @param fraction The elapsed fraction of the animation.
+      */
+-    @CallSuper
+     @UnsupportedAppUsage
+     void animateValue(float fraction) {
+         if (TRACE_ANIMATION_FRACTION) {

@@ -1,0 +1,520 @@
+--- a/frameworks/base/core/java/android/animation/PropertyValuesHolder.java
++++ b/frameworks/base/core/java/android/animation/PropertyValuesHolder.java
+@@ -26,6 +26,7 @@
+ 
+ import java.lang.reflect.InvocationTargetException;
+ import java.lang.reflect.Method;
++import java.util.Arrays;
+ import java.util.HashMap;
+ import java.util.List;
+ 
+@@ -699,7 +700,7 @@
+         Class args[] = null;
+         if (valueType == null) {
+             try {
+-                returnVal = targetClass.getMethod(methodName, args);
++                returnVal = findMethod(targetClass, methodName, args);
+             } catch (NoSuchMethodException e) {
+                 // Swallow the error, log it later
+             }
+@@ -719,7 +720,7 @@
+             for (Class typeVariant : typeVariants) {
+                 args[0] = typeVariant;
+                 try {
+-                    returnVal = targetClass.getMethod(methodName, args);
++                    returnVal = findMethod(targetClass, methodName, args);
+                     if (mConverter == null) {
+                         // change the value type to suit
+                         mValueType = typeVariant;
+@@ -755,6 +756,7 @@
+     private Method setupSetterOrGetter(Class targetClass,
+             HashMap<Class, HashMap<String, Method>> propertyMapMap,
+             String prefix, Class valueType) {
++        String key = valueType == null ? mPropertyName : mPropertyName + ":" + valueType.getName();
+         Method setterOrGetter = null;
+         synchronized(propertyMapMap) {
+             // Have to lock property map prior to reading it, to guard against
+@@ -763,9 +765,9 @@
+             HashMap<String, Method> propertyMap = propertyMapMap.get(targetClass);
+             boolean wasInMap = false;
+             if (propertyMap != null) {
+-                wasInMap = propertyMap.containsKey(mPropertyName);
++                wasInMap = propertyMap.containsKey(key);
+                 if (wasInMap) {
+-                    setterOrGetter = propertyMap.get(mPropertyName);
++                    setterOrGetter = propertyMap.get(key);
+                 }
+             }
+             if (!wasInMap) {
+@@ -774,7 +776,7 @@
+                     propertyMap = new HashMap<String, Method>();
+                     propertyMapMap.put(targetClass, propertyMap);
+                 }
+-                propertyMap.put(mPropertyName, setterOrGetter);
++                propertyMap.put(key, setterOrGetter);
+             }
+         }
+         return setterOrGetter;
+@@ -1148,10 +1150,6 @@
+ 
+     static class IntPropertyValuesHolder extends PropertyValuesHolder {
+ 
+-        // Cache JNI functions to avoid looking them up twice
+-        private static final HashMap<Class, HashMap<String, Long>> sJNISetterPropertyMap =
+-                new HashMap<Class, HashMap<String, Long>>();
+-        long mJniSetter;
+         private IntProperty mIntProperty;
+ 
+         Keyframes.IntKeyframes mIntKeyframes;
+@@ -1234,10 +1232,6 @@
+             }
+             if (mProperty != null) {
+                 mProperty.set(target, mIntAnimatedValue);
+-                return;
+-            }
+-            if (mJniSetter != 0) {
+-                nCallIntMethod(target, mJniSetter, mIntAnimatedValue);
+                 return;
+             }
+             if (mSetter != null) {
+@@ -1252,53 +1246,10 @@
+             }
+         }
+ 
+-        @Override
+-        void setupSetter(Class targetClass) {
+-            if (mProperty != null) {
+-                return;
+-            }
+-            // Check new static hashmap<propName, int> for setter method
+-            synchronized(sJNISetterPropertyMap) {
+-                HashMap<String, Long> propertyMap = sJNISetterPropertyMap.get(targetClass);
+-                boolean wasInMap = false;
+-                if (propertyMap != null) {
+-                    wasInMap = propertyMap.containsKey(mPropertyName);
+-                    if (wasInMap) {
+-                        Long jniSetter = propertyMap.get(mPropertyName);
+-                        if (jniSetter != null) {
+-                            mJniSetter = jniSetter;
+-                        }
+-                    }
+-                }
+-                if (!wasInMap) {
+-                    String methodName = getMethodName("set", mPropertyName);
+-                    try {
+-                        mJniSetter = nGetIntMethod(targetClass, methodName);
+-                    } catch (NoSuchMethodError e) {
+-                        // Couldn't find it via JNI - try reflection next. Probably means the method
+-                        // doesn't exist, or the type is wrong. An error will be logged later if
+-                        // reflection fails as well.
+-                    }
+-                    if (propertyMap == null) {
+-                        propertyMap = new HashMap<String, Long>();
+-                        sJNISetterPropertyMap.put(targetClass, propertyMap);
+-                    }
+-                    propertyMap.put(mPropertyName, mJniSetter);
+-                }
+-            }
+-            if (mJniSetter == 0) {
+-                // Couldn't find method through fast JNI approach - just use reflection
+-                super.setupSetter(targetClass);
+-            }
+-        }
+     }
+ 
+     static class FloatPropertyValuesHolder extends PropertyValuesHolder {
+ 
+-        // Cache JNI functions to avoid looking them up twice
+-        private static final HashMap<Class, HashMap<String, Long>> sJNISetterPropertyMap =
+-                new HashMap<Class, HashMap<String, Long>>();
+-        long mJniSetter;
+         private FloatProperty mFloatProperty;
+ 
+         Keyframes.FloatKeyframes mFloatKeyframes;
+@@ -1381,10 +1332,6 @@
+             }
+             if (mProperty != null) {
+                 mProperty.set(target, mFloatAnimatedValue);
+-                return;
+-            }
+-            if (mJniSetter != 0) {
+-                nCallFloatMethod(target, mJniSetter, mFloatAnimatedValue);
+                 return;
+             }
+             if (mSetter != null) {
+@@ -1399,52 +1346,11 @@
+             }
+         }
+ 
+-        @Override
+-        void setupSetter(Class targetClass) {
+-            if (mProperty != null) {
+-                return;
+-            }
+-            // Check new static hashmap<propName, int> for setter method
+-            synchronized (sJNISetterPropertyMap) {
+-                HashMap<String, Long> propertyMap = sJNISetterPropertyMap.get(targetClass);
+-                boolean wasInMap = false;
+-                if (propertyMap != null) {
+-                    wasInMap = propertyMap.containsKey(mPropertyName);
+-                    if (wasInMap) {
+-                        Long jniSetter = propertyMap.get(mPropertyName);
+-                        if (jniSetter != null) {
+-                            mJniSetter = jniSetter;
+-                        }
+-                    }
+-                }
+-                if (!wasInMap) {
+-                    String methodName = getMethodName("set", mPropertyName);
+-                    try {
+-                        mJniSetter = nGetFloatMethod(targetClass, methodName);
+-                    } catch (NoSuchMethodError e) {
+-                        // Couldn't find it via JNI - try reflection next. Probably means the method
+-                        // doesn't exist, or the type is wrong. An error will be logged later if
+-                        // reflection fails as well.
+-                    }
+-                    if (propertyMap == null) {
+-                        propertyMap = new HashMap<String, Long>();
+-                        sJNISetterPropertyMap.put(targetClass, propertyMap);
+-                    }
+-                    propertyMap.put(mPropertyName, mJniSetter);
+-                }
+-            }
+-            if (mJniSetter == 0) {
+-                // Couldn't find method through fast JNI approach - just use reflection
+-                super.setupSetter(targetClass);
+-            }
+-        }
+-
+     }
+ 
+     static class MultiFloatValuesHolder extends PropertyValuesHolder {
+-        private long mJniSetter;
+-        private static final HashMap<Class, HashMap<String, Long>> sJNISetterPropertyMap =
+-                new HashMap<Class, HashMap<String, Long>>();
++        private Method mMethod;
++        private Object[] mArguments;
+ 
+         public MultiFloatValuesHolder(String propertyName, TypeConverter converter,
+                 TypeEvaluator evaluator, Object... values) {
+@@ -1472,26 +1378,15 @@
+          */
+         @Override
+         void setAnimatedValue(Object target) {
++            if (mMethod == null) return;
+             float[] values = (float[]) getAnimatedValue();
+-            int numParameters = values.length;
+-            if (mJniSetter != 0) {
+-                switch (numParameters) {
+-                    case 1:
+-                        nCallFloatMethod(target, mJniSetter, values[0]);
+-                        break;
+-                    case 2:
+-                        nCallTwoFloatMethod(target, mJniSetter, values[0], values[1]);
+-                        break;
+-                    case 4:
+-                        nCallFourFloatMethod(target, mJniSetter, values[0], values[1],
+-                                values[2], values[3]);
+-                        break;
+-                    default: {
+-                        nCallMultipleFloatMethod(target, mJniSetter, values);
+-                        break;
+-                    }
+-                }
+-            }
++            if (mArguments == null || mArguments.length != values.length) {
++                mArguments = new Object[values.length];
++            }
++            for (int i = 0; i < values.length; i++) {
++                mArguments[i] = values[i];
++            }
++            invokeSetter(mMethod, target, mArguments);
+         }
+ 
+         /**
+@@ -1507,51 +1402,15 @@
+ 
+         @Override
+         void setupSetter(Class targetClass) {
+-            if (mJniSetter != 0) {
+-                return;
+-            }
+-            synchronized(sJNISetterPropertyMap) {
+-                HashMap<String, Long> propertyMap = sJNISetterPropertyMap.get(targetClass);
+-                boolean wasInMap = false;
+-                if (propertyMap != null) {
+-                    wasInMap = propertyMap.containsKey(mPropertyName);
+-                    if (wasInMap) {
+-                        Long jniSetter = propertyMap.get(mPropertyName);
+-                        if (jniSetter != null) {
+-                            mJniSetter = jniSetter;
+-                        }
+-                    }
+-                }
+-                if (!wasInMap) {
+-                    String methodName = getMethodName("set", mPropertyName);
+-                    calculateValue(0f);
+-                    float[] values = (float[]) getAnimatedValue();
+-                    int numParams = values.length;
+-                    try {
+-                        mJniSetter = nGetMultipleFloatMethod(targetClass, methodName, numParams);
+-                    } catch (NoSuchMethodError e) {
+-                        // try without the 'set' prefix
+-                        try {
+-                            mJniSetter = nGetMultipleFloatMethod(targetClass, mPropertyName,
+-                                    numParams);
+-                        } catch (NoSuchMethodError e2) {
+-                            // just try reflection next
+-                        }
+-                    }
+-                    if (propertyMap == null) {
+-                        propertyMap = new HashMap<String, Long>();
+-                        sJNISetterPropertyMap.put(targetClass, propertyMap);
+-                    }
+-                    propertyMap.put(mPropertyName, mJniSetter);
+-                }
+-            }
++            calculateValue(0f);
++            mMethod = findMultiSetter(targetClass, mPropertyName, float.class,
++                    ((float[]) getAnimatedValue()).length);
+         }
+     }
+ 
+     static class MultiIntValuesHolder extends PropertyValuesHolder {
+-        private long mJniSetter;
+-        private static final HashMap<Class, HashMap<String, Long>> sJNISetterPropertyMap =
+-                new HashMap<Class, HashMap<String, Long>>();
++        private Method mMethod;
++        private Object[] mArguments;
+ 
+         public MultiIntValuesHolder(String propertyName, TypeConverter converter,
+                 TypeEvaluator evaluator, Object... values) {
+@@ -1579,26 +1438,15 @@
+          */
+         @Override
+         void setAnimatedValue(Object target) {
++            if (mMethod == null) return;
+             int[] values = (int[]) getAnimatedValue();
+-            int numParameters = values.length;
+-            if (mJniSetter != 0) {
+-                switch (numParameters) {
+-                    case 1:
+-                        nCallIntMethod(target, mJniSetter, values[0]);
+-                        break;
+-                    case 2:
+-                        nCallTwoIntMethod(target, mJniSetter, values[0], values[1]);
+-                        break;
+-                    case 4:
+-                        nCallFourIntMethod(target, mJniSetter, values[0], values[1],
+-                                values[2], values[3]);
+-                        break;
+-                    default: {
+-                        nCallMultipleIntMethod(target, mJniSetter, values);
+-                        break;
+-                    }
+-                }
+-            }
++            if (mArguments == null || mArguments.length != values.length) {
++                mArguments = new Object[values.length];
++            }
++            for (int i = 0; i < values.length; i++) {
++                mArguments[i] = values[i];
++            }
++            invokeSetter(mMethod, target, mArguments);
+         }
+ 
+         /**
+@@ -1614,44 +1462,9 @@
+ 
+         @Override
+         void setupSetter(Class targetClass) {
+-            if (mJniSetter != 0) {
+-                return;
+-            }
+-            synchronized(sJNISetterPropertyMap) {
+-                HashMap<String, Long> propertyMap = sJNISetterPropertyMap.get(targetClass);
+-                boolean wasInMap = false;
+-                if (propertyMap != null) {
+-                    wasInMap = propertyMap.containsKey(mPropertyName);
+-                    if (wasInMap) {
+-                        Long jniSetter = propertyMap.get(mPropertyName);
+-                        if (jniSetter != null) {
+-                            mJniSetter = jniSetter;
+-                        }
+-                    }
+-                }
+-                if (!wasInMap) {
+-                    String methodName = getMethodName("set", mPropertyName);
+-                    calculateValue(0f);
+-                    int[] values = (int[]) getAnimatedValue();
+-                    int numParams = values.length;
+-                    try {
+-                        mJniSetter = nGetMultipleIntMethod(targetClass, methodName, numParams);
+-                    } catch (NoSuchMethodError e) {
+-                        // try without the 'set' prefix
+-                        try {
+-                            mJniSetter = nGetMultipleIntMethod(targetClass, mPropertyName,
+-                                    numParams);
+-                        } catch (NoSuchMethodError e2) {
+-                            // couldn't find it.
+-                        }
+-                    }
+-                    if (propertyMap == null) {
+-                        propertyMap = new HashMap<String, Long>();
+-                        sJNISetterPropertyMap.put(targetClass, propertyMap);
+-                    }
+-                    propertyMap.put(mPropertyName, mJniSetter);
+-                }
+-            }
++            calculateValue(0f);
++            mMethod = findMultiSetter(targetClass, mPropertyName, int.class,
++                    ((int[]) getAnimatedValue()).length);
+         }
+     }
+ 
+@@ -1709,21 +1522,41 @@
+         }
+     }
+ 
+-    native static private long nGetIntMethod(Class targetClass, String methodName);
+-    native static private long nGetFloatMethod(Class targetClass, String methodName);
+-    native static private long nGetMultipleIntMethod(Class targetClass, String methodName,
+-            int numParams);
+-    native static private long nGetMultipleFloatMethod(Class targetClass, String methodName,
+-            int numParams);
+-    native static private void nCallIntMethod(Object target, long methodID, int arg);
+-    native static private void nCallFloatMethod(Object target, long methodID, float arg);
+-    native static private void nCallTwoIntMethod(Object target, long methodID, int arg1, int arg2);
+-    native static private void nCallFourIntMethod(Object target, long methodID, int arg1, int arg2,
+-            int arg3, int arg4);
+-    native static private void nCallMultipleIntMethod(Object target, long methodID, int[] args);
+-    native static private void nCallTwoFloatMethod(Object target, long methodID, float arg1,
+-            float arg2);
+-    native static private void nCallFourFloatMethod(Object target, long methodID, float arg1,
+-            float arg2, float arg3, float arg4);
+-    native static private void nCallMultipleFloatMethod(Object target, long methodID, float[] args);
++    // The guest exposes declared-method reflection in place of the VM's JNI method IDs.
++    static Method findMethod(Class<?> owner, String name, Class<?>... parameters)
++            throws NoSuchMethodException {
++        for (Class<?> type = owner; type != null; type = type.getSuperclass()) {
++            try {
++                Method method = type.getDeclaredMethod(name, parameters);
++                method.setAccessible(true);
++                return method;
++            } catch (NoSuchMethodException ignored) {
++                // A target may inherit its property from a base class.
++            }
++        }
++        throw new NoSuchMethodException(name);
++    }
++
++    private static Method findMultiSetter(Class<?> owner, String property, Class<?> type, int count) {
++        Class<?>[] parameters = new Class<?>[count];
++        Arrays.fill(parameters, type);
++        try {
++            return findMethod(owner, getMethodName("set", property), parameters);
++        } catch (NoSuchMethodException e) {
++            try {
++                return findMethod(owner, property, parameters);
++            } catch (NoSuchMethodException missing) {
++                Log.w("PropertyValuesHolder", "Method " + property + " not found", missing);
++                return null;
++            }
++        }
++    }
++
++    private static void invokeSetter(Method method, Object target, Object[] arguments) {
++        try {
++            method.invoke(target, arguments);
++        } catch (InvocationTargetException | IllegalAccessException e) {
++            Log.e("PropertyValuesHolder", e.toString());
++        }
++    }
+ }
+--- a/frameworks/base/core/java/android/util/ReflectiveProperty.java
++++ b/frameworks/base/core/java/android/util/ReflectiveProperty.java
+@@ -51,12 +51,12 @@
+         String capitalizedName = firstLetter + theRest;
+         String getterName = PREFIX_GET + capitalizedName;
+         try {
+-            mGetter = propertyHolder.getMethod(getterName, (Class<?>[])null);
++            mGetter = findMethod(propertyHolder, getterName, (Class<?>[])null);
+         } catch (NoSuchMethodException e) {
+             // getName() not available - try isName() instead
+             getterName = PREFIX_IS + capitalizedName;
+             try {
+-                mGetter = propertyHolder.getMethod(getterName, (Class<?>[])null);
++                mGetter = findMethod(propertyHolder, getterName, (Class<?>[])null);
+             } catch (NoSuchMethodException e1) {
+                 // Try public field instead
+                 try {
+@@ -67,14 +67,20 @@
+                                 "does not match Property type (" + valueType + ")");
+                     }
+                     return;
+-                } catch (NoSuchFieldException e2) {
++                } catch (NoSuchFieldException | NoSuchMethodError e2) {
+                     // no way to access property - throw appropriate exception
+                     throw new NoSuchPropertyException("No accessor method or field found for"
+                             + " property with name " + name);
+                 }
+             }
+         }
+-        Class getterType = mGetter.getReturnType();
++        Class getterType;
++        try {
++            getterType = mGetter.getReturnType();
++        } catch (NoSuchMethodError e) {
++            // The interpreter exposes invocation without a reflective return-type query.
++            getterType = valueType;
++        }
+         // Check to make sure our getter type matches our valueType
+         if (!typesMatch(valueType, getterType)) {
+             throw new NoSuchPropertyException("Underlying type (" + getterType + ") " +
+@@ -82,10 +88,43 @@
+         }
+         String setterName = PREFIX_SET + capitalizedName;
+         try {
+-            mSetter = propertyHolder.getMethod(setterName, getterType);
++            mSetter = findMethod(propertyHolder, setterName, getterType);
+         } catch (NoSuchMethodException ignored) {
+-            // Okay to not have a setter - just a readonly property
+-        }
++            Class<?> primitive = primitiveType(getterType);
++            if (primitive != getterType) {
++                try {
++                    mSetter = findMethod(propertyHolder, setterName, primitive);
++                } catch (NoSuchMethodException readonly) {
++                    // A getter-only property is read-only.
++                }
++            }
++        }
++    }
++
++    private static Method findMethod(Class<?> owner, String name, Class<?>... parameters)
++            throws NoSuchMethodException {
++        for (Class<?> type = owner; type != null; type = type.getSuperclass()) {
++            try {
++                Method method = type.getDeclaredMethod(name, parameters);
++                method.setAccessible(true);
++                return method;
++            } catch (NoSuchMethodException ignored) {
++                // Inherited property accessor.
++            }
++        }
++        throw new NoSuchMethodException(name);
++    }
++
++    private static Class<?> primitiveType(Class<?> type) {
++        if (type == Float.class) return float.class;
++        if (type == Integer.class) return int.class;
++        if (type == Boolean.class) return boolean.class;
++        if (type == Long.class) return long.class;
++        if (type == Double.class) return double.class;
++        if (type == Short.class) return short.class;
++        if (type == Byte.class) return byte.class;
++        if (type == Character.class) return char.class;
++        return type;
+     }
+ 
+     /**

@@ -1,0 +1,543 @@
+--- a/frameworks/base/core/java/android/content/IntentFilter.java
++++ b/frameworks/base/core/java/android/content/IntentFilter.java
+@@ -16,16 +16,11 @@
+ 
+ package android.content;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.SystemApi;
+-import android.compat.annotation.ChangeId;
+-import android.compat.annotation.Disabled;
+-import android.compat.annotation.Overridable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.Flags;
+ import android.net.Uri;
+ import android.os.Build;
+ import android.os.Bundle;
+@@ -40,7 +35,6 @@
+ import android.util.Printer;
+ import android.util.proto.ProtoOutputStream;
+ 
+-import com.android.internal.util.XmlUtils;
+ 
+ import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+@@ -160,6 +154,7 @@
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class IntentFilter implements Parcelable {
++    private static final boolean RELATIVE_REFERENCE_FILTERS = true;
+     private static final String TAG = "IntentFilter";
+ 
+     private static final String AGLOB_STR = "aglob";
+@@ -196,9 +191,6 @@
+      *
+      * @hide
+      */
+-    @ChangeId
+-    @Disabled
+-    @Overridable
+     public static final long BLOCK_NULL_ACTION_INTENTS = 293560872;
+ 
+     /**
+@@ -518,7 +510,7 @@
+     public IntentFilter(IntentFilter o) {
+         mPriority = o.mPriority;
+         mOrder = o.mOrder;
+-        mActions = new ArraySet<>(o.mActions);
++        mActions = Intent.copyArraySet(o.mActions);
+         if (o.mCategories != null) {
+             mCategories = new ArrayList<String>(o.mCategories);
+         }
+@@ -575,7 +567,7 @@
+             sb.append(" sch=");
+             sb.append(mDataSchemes.toString());
+         }
+-        if (Flags.relativeReferenceIntentFilters() && countUriRelativeFilterGroups() > 0) {
++        if (RELATIVE_REFERENCE_FILTERS && countUriRelativeFilterGroups() > 0) {
+             sb.append(" grp=");
+             sb.append(mUriRelativeFilterGroups.toString());
+         }
+@@ -1201,12 +1193,7 @@
+         }
+ 
+         void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-            long token = proto.start(fieldId);
+-            // The original host information is already contained in host and wild, no output now.
+-            proto.write(AuthorityEntryProto.HOST, mHost);
+-            proto.write(AuthorityEntryProto.WILD, mWild);
+-            proto.write(AuthorityEntryProto.PORT, mPort);
+-            proto.end(token);
++            throw new UnsupportedOperationException("Platform proto diagnostics are unavailable");
+         }
+ 
+         public String getHost() {
+@@ -1617,7 +1604,6 @@
+      * @see #addDataScheme
+      * @see #addDataAuthority
+      */
+-    @FlaggedApi(Flags.FLAG_RELATIVE_REFERENCE_INTENT_FILTERS)
+     public final void addUriRelativeFilterGroup(@NonNull UriRelativeFilterGroup group) {
+         Objects.requireNonNull(group);
+         if (mUriRelativeFilterGroups == null) {
+@@ -1629,7 +1615,6 @@
+     /**
+      * Return the number of URI relative filter groups in the intent filter.
+      */
+-    @FlaggedApi(Flags.FLAG_RELATIVE_REFERENCE_INTENT_FILTERS)
+     public final int countUriRelativeFilterGroups() {
+         return mUriRelativeFilterGroups == null ? 0 : mUriRelativeFilterGroups.size();
+     }
+@@ -1643,7 +1628,6 @@
+      * @param index index of the element to return
+      * @throws IndexOutOfBoundsException if index is out of range
+      */
+-    @FlaggedApi(Flags.FLAG_RELATIVE_REFERENCE_INTENT_FILTERS)
+     @NonNull
+     public final UriRelativeFilterGroup getUriRelativeFilterGroup(int index) {
+         return mUriRelativeFilterGroups.get(index);
+@@ -1652,7 +1636,6 @@
+     /**
+      * Removes all existing URI relative filter groups in the intent filter.
+      */
+-    @FlaggedApi(Flags.FLAG_RELATIVE_REFERENCE_INTENT_FILTERS)
+     public final void clearUriRelativeFilterGroups() {
+         mUriRelativeFilterGroups = null;
+     }
+@@ -1773,7 +1756,7 @@
+                     if (authMatch >= 0) {
+                         final ArrayList<PatternMatcher> paths = mDataPaths;
+                         final ArrayList<UriRelativeFilterGroup> groups = mUriRelativeFilterGroups;
+-                        if (Flags.relativeReferenceIntentFilters()) {
++                        if (RELATIVE_REFERENCE_FILTERS) {
+                             if (paths == null && groups == null) {
+                                 match = authMatch;
+                             } else if (hasDataPath(data.getPath(), wildcardSupported)
+@@ -2594,13 +2577,13 @@
+         if (mExtras != null) {
+             serializer.startTag(null, EXTRAS_STR);
+             try {
+-                mExtras.saveToXml(serializer);
++                rejectExtrasXml();
+             } catch (XmlPullParserException e) {
+                 throw new IllegalStateException("Failed to write extras: " + mExtras.toString(), e);
+             }
+             serializer.endTag(null, EXTRAS_STR);
+         }
+-        if (Flags.relativeReferenceIntentFilters()) {
++        if (RELATIVE_REFERENCE_FILTERS) {
+             N = countUriRelativeFilterGroups();
+             for (int i = 0; i < N; i++) {
+                 mUriRelativeFilterGroups.get(i).writeToXml(serializer);
+@@ -2770,83 +2753,33 @@
+                     addDataPath(path, PatternMatcher.PATTERN_SUFFIX);
+                 }
+             } else if (tagName.equals(EXTRAS_STR)) {
+-                mExtras = PersistableBundle.restoreFromXml(parser);
+-            } else if (Flags.relativeReferenceIntentFilters()
++                rejectExtrasXml();
++            } else if (RELATIVE_REFERENCE_FILTERS
+                     && URI_RELATIVE_FILTER_GROUP_STR.equals(tagName)) {
+                 addUriRelativeFilterGroup(new UriRelativeFilterGroup(parser));
+             } else {
+                 Log.w("IntentFilter", "Unknown tag parsing IntentFilter: " + tagName);
+             }
+-            XmlUtils.skipCurrentTag(parser);
++            skipXmlTag(parser);
+         }
+     }
+ 
+     /** @hide */
++    private static void rejectExtrasXml() throws XmlPullParserException {
++        throw new XmlPullParserException("PersistableBundle XML is unavailable");
++    }
++
++    static void skipXmlTag(XmlPullParser parser) throws XmlPullParserException, IOException {
++        final int depth = parser.getDepth();
++        int type;
++        while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
++                && (type != XmlPullParser.END_TAG || parser.getDepth() > depth)) {
++            // Skip the current element.
++        }
++    }
++
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        long token = proto.start(fieldId);
+-        if (mActions.size() > 0) {
+-            Iterator<String> it = mActions.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.ACTIONS, it.next());
+-            }
+-        }
+-        if (mCategories != null) {
+-            Iterator<String> it = mCategories.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.CATEGORIES, it.next());
+-            }
+-        }
+-        if (mDataSchemes != null) {
+-            Iterator<String> it = mDataSchemes.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.DATA_SCHEMES, it.next());
+-            }
+-        }
+-        if (mDataSchemeSpecificParts != null) {
+-            Iterator<PatternMatcher> it = mDataSchemeSpecificParts.iterator();
+-            while (it.hasNext()) {
+-                it.next().dumpDebug(proto, IntentFilterProto.DATA_SCHEME_SPECS);
+-            }
+-        }
+-        if (mDataAuthorities != null) {
+-            Iterator<AuthorityEntry> it = mDataAuthorities.iterator();
+-            while (it.hasNext()) {
+-                it.next().dumpDebug(proto, IntentFilterProto.DATA_AUTHORITIES);
+-            }
+-        }
+-        if (mDataPaths != null) {
+-            Iterator<PatternMatcher> it = mDataPaths.iterator();
+-            while (it.hasNext()) {
+-                it.next().dumpDebug(proto, IntentFilterProto.DATA_PATHS);
+-            }
+-        }
+-        if (mDataTypes != null) {
+-            Iterator<String> it = mDataTypes.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.DATA_TYPES, it.next());
+-            }
+-        }
+-        if (mMimeGroups != null) {
+-            Iterator<String> it = mMimeGroups.iterator();
+-            while (it.hasNext()) {
+-                proto.write(IntentFilterProto.MIME_GROUPS, it.next());
+-            }
+-        }
+-        if (mPriority != 0 || hasPartialTypes()) {
+-            proto.write(IntentFilterProto.PRIORITY, mPriority);
+-            proto.write(IntentFilterProto.HAS_PARTIAL_TYPES, hasPartialTypes());
+-        }
+-        proto.write(IntentFilterProto.GET_AUTO_VERIFY, getAutoVerify());
+-        if (mExtras != null) {
+-            mExtras.dumpDebug(proto, IntentFilterProto.EXTRAS);
+-        }
+-        if (Flags.relativeReferenceIntentFilters() && mUriRelativeFilterGroups != null) {
+-            Iterator<UriRelativeFilterGroup> it = mUriRelativeFilterGroups.iterator();
+-            while (it.hasNext()) {
+-                it.next().dumpDebug(proto, IntentFilterProto.URI_RELATIVE_FILTER_GROUPS);
+-            }
+-        }
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     public void dump(Printer du, String prefix) {
+@@ -2987,35 +2920,45 @@
+         return 0;
+     }
+ 
++    private static void writeStrings(Parcel dest, Collection<String> values) {
++        dest.writeInt(values.size());
++        for (String value : values) dest.writeString(value);
++    }
++
++    private static void readStrings(Parcel source, Collection<String> values) {
++        final int count = source.readInt();
++        for (int i = 0; i < count; i++) values.add(source.readString());
++    }
++
+     public final void writeToParcel(Parcel dest, int flags) {
+-        dest.writeStringArray(mActions.toArray(new String[mActions.size()]));
++        writeStrings(dest, mActions);
+         if (mCategories != null) {
+             dest.writeInt(1);
+-            dest.writeStringList(mCategories);
++            writeStrings(dest, mCategories);
+         } else {
+             dest.writeInt(0);
+         }
+         if (mDataSchemes != null) {
+             dest.writeInt(1);
+-            dest.writeStringList(mDataSchemes);
++            writeStrings(dest, mDataSchemes);
+         } else {
+             dest.writeInt(0);
+         }
+         if (mStaticDataTypes != null) {
+             dest.writeInt(1);
+-            dest.writeStringList(mStaticDataTypes);
++            writeStrings(dest, mStaticDataTypes);
+         } else {
+             dest.writeInt(0);
+         }
+         if (mDataTypes != null) {
+             dest.writeInt(1);
+-            dest.writeStringList(mDataTypes);
++            writeStrings(dest, mDataTypes);
+         } else {
+             dest.writeInt(0);
+         }
+         if (mMimeGroups != null) {
+             dest.writeInt(1);
+-            dest.writeStringList(mMimeGroups);
++            writeStrings(dest, mMimeGroups);
+         } else {
+             dest.writeInt(0);
+         }
+@@ -3058,7 +3001,7 @@
+         } else {
+             dest.writeInt(0);
+         }
+-        if (Flags.relativeReferenceIntentFilters() && mUriRelativeFilterGroups != null) {
++        if (RELATIVE_REFERENCE_FILTERS && mUriRelativeFilterGroups != null) {
+             final int N = mUriRelativeFilterGroups.size();
+             dest.writeInt(N);
+             for (int i = 0; i < N; i++) {
+@@ -3120,28 +3063,27 @@
+ 
+     /** @hide */
+     public IntentFilter(Parcel source) {
+-        List<String> actions = new ArrayList<>();
+-        source.readStringList(actions);
+-        mActions = new ArraySet<>(actions);
++        mActions = new ArraySet<>();
++        readStrings(source, mActions);
+         if (source.readInt() != 0) {
+             mCategories = new ArrayList<String>();
+-            source.readStringList(mCategories);
++            readStrings(source, mCategories);
+         }
+         if (source.readInt() != 0) {
+             mDataSchemes = new ArrayList<String>();
+-            source.readStringList(mDataSchemes);
++            readStrings(source, mDataSchemes);
+         }
+         if (source.readInt() != 0) {
+             mStaticDataTypes = new ArrayList<String>();
+-            source.readStringList(mStaticDataTypes);
++            readStrings(source, mStaticDataTypes);
+         }
+         if (source.readInt() != 0) {
+             mDataTypes = new ArrayList<String>();
+-            source.readStringList(mDataTypes);
++            readStrings(source, mDataTypes);
+         }
+         if (source.readInt() != 0) {
+             mMimeGroups = new ArrayList<String>();
+-            source.readStringList(mMimeGroups);
++            readStrings(source, mMimeGroups);
+         }
+         int N = source.readInt();
+         if (N > 0) {
+@@ -3174,7 +3116,7 @@
+             mExtras = PersistableBundle.CREATOR.createFromParcel(source);
+         }
+         N = source.readInt();
+-        if (Flags.relativeReferenceIntentFilters() && N > 0) {
++        if (RELATIVE_REFERENCE_FILTERS && N > 0) {
+             mUriRelativeFilterGroups = new ArrayList<UriRelativeFilterGroup>(N);
+             for (int i = 0; i < N; i++) {
+                 mUriRelativeFilterGroups.add(new UriRelativeFilterGroup(source));
+--- a/frameworks/base/core/java/android/content/UriRelativeFilter.java
++++ b/frameworks/base/core/java/android/content/UriRelativeFilter.java
+@@ -16,11 +16,9 @@
+ 
+ package android.content;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.content.pm.Flags;
+ import android.net.Uri;
+ import android.os.Parcel;
+ import android.os.PatternMatcher;
+@@ -39,7 +37,6 @@
+  * {@link UriRelativeFilterGroup}. A single filter can only be
+  * matched against either a URI path, query or fragment
+  */
+-@FlaggedApi(Flags.FLAG_RELATIVE_REFERENCE_INTENT_FILTERS)
+ public final class UriRelativeFilter {
+     private static final String FILTER_STR = "filter";
+     private static final String PART_STR = "part";
+@@ -92,14 +89,9 @@
+             @PatternMatcher.PatternType int patternType,
+             @NonNull String filter) {
+         mUriPart = uriPart;
+-        com.android.internal.util.AnnotationValidations.validate(
+-                UriPart.class, null, mUriPart);
+         mPatternType = patternType;
+-        com.android.internal.util.AnnotationValidations.validate(
+-                PatternMatcher.PatternType.class, null, mPatternType);
+         mFilter = filter;
+-        com.android.internal.util.AnnotationValidations.validate(
+-                NonNull.class, null, mFilter);
++        java.util.Objects.requireNonNull(filter);
+     }
+ 
+     /**
+@@ -162,11 +154,7 @@
+ 
+     /** @hide */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        long token = proto.start(fieldId);
+-        proto.write(UriRelativeFilterProto.URI_PART, mUriPart);
+-        proto.write(UriRelativeFilterProto.PATTERN_TYPE, mPatternType);
+-        proto.write(UriRelativeFilterProto.FILTER, mFilter);
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /** @hide */
+@@ -217,15 +205,6 @@
+                 + " }";
+     }
+ 
+-    /** @hide */
+-    public UriRelativeFilterParcel toParcel() {
+-        UriRelativeFilterParcel parcel = new UriRelativeFilterParcel();
+-        parcel.uriPart = mUriPart;
+-        parcel.patternType = mPatternType;
+-        parcel.filter = mFilter;
+-        return parcel;
+-    }
+-
+     @Override
+     public boolean equals(@Nullable Object o) {
+         if (this == o) return true;
+@@ -267,10 +246,4 @@
+         mFilter = parser.getAttributeValue(null, FILTER_STR);
+     }
+ 
+-    /** @hide */
+-    public UriRelativeFilter(UriRelativeFilterParcel parcel) {
+-        mUriPart = parcel.uriPart;
+-        mPatternType = parcel.patternType;
+-        mFilter = parcel.filter;
+-    }
+ }
+--- a/frameworks/base/core/java/android/content/UriRelativeFilterGroup.java
++++ b/frameworks/base/core/java/android/content/UriRelativeFilterGroup.java
+@@ -16,19 +16,15 @@
+ 
+ package android.content;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.content.pm.Flags;
+ import android.net.Uri;
+ import android.os.Parcel;
+ import android.util.ArraySet;
+ import android.util.Log;
+ import android.util.proto.ProtoOutputStream;
+ 
+-import com.android.internal.util.CollectionUtils;
+-import com.android.internal.util.XmlUtils;
+ 
+ import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+@@ -61,7 +57,6 @@
+  * group also contained additional query or fragment filters then it will
+  * not match.</p>
+  */
+-@FlaggedApi(Flags.FLAG_RELATIVE_REFERENCE_INTENT_FILTERS)
+ public final class UriRelativeFilterGroup {
+     private static final String TAG = "UriRelativeFilterGroup";
+     private static final String ALLOW_STR = "allow";
+@@ -95,30 +90,6 @@
+             }
+         }
+         return false;
+-    }
+-
+-    /** @hide */
+-    public static List<UriRelativeFilterGroup> parcelsToGroups(
+-            @Nullable List<UriRelativeFilterGroupParcel> parcels) {
+-        List<UriRelativeFilterGroup> groups = new ArrayList<>();
+-        if (parcels != null) {
+-            for (int i = 0; i < parcels.size(); i++) {
+-                groups.add(new UriRelativeFilterGroup(parcels.get(i)));
+-            }
+-        }
+-        return groups;
+-    }
+-
+-    /** @hide */
+-    public static List<UriRelativeFilterGroupParcel> groupsToParcels(
+-            @Nullable List<UriRelativeFilterGroup> groups) {
+-        List<UriRelativeFilterGroupParcel> parcels = new ArrayList<>();
+-        if (groups != null) {
+-            for (int i = 0; i < groups.size(); i++) {
+-                parcels.add(groups.get(i).toParcel());
+-            }
+-        }
+-        return parcels;
+     }
+ 
+     /**
+@@ -150,7 +121,7 @@
+             } else {
+                 Log.w("IntentFilter", "Unknown tag parsing IntentFilter: " + tagName);
+             }
+-            XmlUtils.skipCurrentTag(parser);
++            IntentFilter.skipXmlTag(parser);
+         }
+     }
+ 
+@@ -167,7 +138,7 @@
+      */
+     public void addUriRelativeFilter(@NonNull UriRelativeFilter uriRelativeFilter) {
+         Objects.requireNonNull(uriRelativeFilter);
+-        if (!CollectionUtils.contains(mUriRelativeFilters, uriRelativeFilter)) {
++        if (!mUriRelativeFilters.contains(uriRelativeFilter)) {
+             mUriRelativeFilters.add(uriRelativeFilter);
+         }
+     }
+@@ -201,13 +172,7 @@
+ 
+     /** @hide */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        long token = proto.start(fieldId);
+-        proto.write(UriRelativeFilterGroupProto.ACTION, mAction);
+-        Iterator<UriRelativeFilter> it = mUriRelativeFilters.iterator();
+-        while (it.hasNext()) {
+-            it.next().dumpDebug(proto, UriRelativeFilterGroupProto.URI_RELATIVE_FILTERS);
+-        }
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /** @hide */
+@@ -269,17 +234,6 @@
+     }
+ 
+     /** @hide */
+-    public UriRelativeFilterGroupParcel toParcel() {
+-        UriRelativeFilterGroupParcel parcel = new UriRelativeFilterGroupParcel();
+-        parcel.action = mAction;
+-        parcel.filters = new ArrayList<>();
+-        for (UriRelativeFilter filter : mUriRelativeFilters) {
+-            parcel.filters.add(filter.toParcel());
+-        }
+-        return parcel;
+-    }
+-
+-    /** @hide */
+     UriRelativeFilterGroup(@NonNull Parcel src) {
+         mAction = src.readInt();
+         final int n = src.readInt();
+@@ -288,11 +242,4 @@
+         }
+     }
+ 
+-    /** @hide */
+-    public UriRelativeFilterGroup(UriRelativeFilterGroupParcel parcel) {
+-        mAction = parcel.action;
+-        for (int i = 0; i < parcel.filters.size(); i++) {
+-            mUriRelativeFilters.add(new UriRelativeFilter(parcel.filters.get(i)));
+-        }
+-    }
+ }
