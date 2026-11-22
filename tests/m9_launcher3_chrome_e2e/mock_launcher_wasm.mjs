@@ -17,7 +17,7 @@ export function mockLauncherWasm() {
   const view = new DataView(wasmMemory.buffer), words = new Uint32Array(wasmMemory.buffer);
   const allocations = new Map(), calls = [], events = [], apps = new Map();
   let heap = 0x600000, lastError, state, acquired, pending, locale, size, sequence, touch;
-  let timeNs, vsyncFrame, paused, loadedFramework;
+  let timeNs, vsyncFrame, paused, loadedFramework, loadedResources, loadedSystemUi, recentsPending;
   const u16 = (at, n) => view.setUint16(at, n, true);
   const u32 = (at, n) => view.setUint32(at, n, true);
   const float = (at, n) => view.setFloat32(at, n, true);
@@ -61,6 +61,8 @@ export function mockLauncherWasm() {
       label('Launcher3', 24, 36);
       for (const [index, app] of [...apps.values()].entries()) label(app.label, 80 + index * 125, 300, 1);
     }
+    label('12:34', 10, 20);
+    label('100%', width - 50, 20);
     const listSize = p - frame - payload;
     [0x31464157, 1, payload + listSize, ++sequence, 1, headerBytes, payload, listSize, width, height, density, 0]
       .forEach((value, index) => u32(frame + 4 * index, value));
@@ -83,6 +85,29 @@ export function mockLauncherWasm() {
     state.searchQuery = '';
   }
 
+  function systemUiButtons() {
+    const y = size.height - 24;
+    return state.systemUiGestural ? { back: null, home: null, recents: null } : {
+      back: { x: size.width * 0.25, y }, home: { x: size.width * 0.5, y },
+      recents: { x: size.width * 0.75, y },
+    };
+  }
+
+  function systemUiKeyAt(x, y) {
+    const buttons = systemUiButtons();
+    for (const [button, code] of [['back', 4], ['home', 3], ['recents', 187]]) {
+      const center = buttons[button];
+      if (center && Math.abs(x - center.x) <= 24 && Math.abs(y - center.y) <= 24) return code;
+    }
+    return 0;
+  }
+
+  function recordSystemUiKey(code) {
+    ++state.systemUiKeyEvents;
+    state.systemUiLastKeyCode = code;
+    state.systemUiLastKeyFlags = 0x48;
+  }
+
   function drainInput() {
     let read = Atomics.load(words, input / 4 + 1);
     const write = Atomics.load(words, input / 4);
@@ -98,12 +123,26 @@ export function mockLauncherWasm() {
       assert.equal(readU32(at + 316), 0);
       events.push(event);
       ++state.inputEventsProcessed;
-      if (kind === 1 && action === 0) touch = { x, y };
+      if (kind === 1 && action === 0) {
+        touch = { x, y, systemUiKey: systemUiKeyAt(x, y) };
+        if (touch.systemUiKey) recordSystemUiKey(touch.systemUiKey);
+      }
       if (kind === 1 && action === 2 && touch && Math.abs(touch.x - x) > 20) {
         state.workspaceScrollX = Math.max(0, Math.round(touch.x - x));
       }
       if (kind === 1 && action === 1 && touch) {
-        if (touch.y - y > 50) {
+        if (touch.systemUiKey) {
+          if (systemUiKeyAt(x, y) === touch.systemUiKey) {
+            recordSystemUiKey(touch.systemUiKey);
+            if (touch.systemUiKey === 187) recentsPending = true;
+            if (touch.systemUiKey === 3) home();
+            if (touch.systemUiKey === 4) {
+              state.drawerOpen = false;
+              state.drawerProgress = 0;
+              state.searchQuery = '';
+            }
+          }
+        } else if (touch.y - y > 50) {
           state.drawerOpen = true; state.drawerProgress = 1;
         } else if (touch.x - x > size.width * 0.2) {
           state.workspacePage = 1; state.workspaceScrollX = size.width - 32;
@@ -136,10 +175,13 @@ export function mockLauncherWasm() {
       assert(['en-US', 'zh-CN'].includes(locale));
       size = { width, height, density };
       state = { booted: false, package: 'com.android.launcher3', activity: 'com.android.launcher3.Launcher',
+        systemUiMounted: false, systemUiClass: '', systemUiGestural: false,
+        systemUiKeyEvents: 0, systemUiLastKeyCode: 0, systemUiLastKeyFlags: 0,
         frames: 0, workspacePage: 0, workspaceScrollX: 0, pageCount: 2, drawerOpen: false, drawerProgress: 0,
         searchQuery: '', gcLive: 412, gcCollections: 3, inputEventsProcessed: 0, launchCount: 0, bootMs: 13.25 };
       sequence = timeNs = vsyncFrame = 0;
-      acquired = paused = loadedFramework = false;
+      acquired = paused = loadedFramework = loadedResources = loadedSystemUi = recentsPending = false;
+      touch = undefined;
       HEAPU8.fill(0, vsync, vsync + 32);
       HEAPU8.fill(0, input, input + 16 + 128 * 320);
       calls.push(['create', width, height, density, locale]);
@@ -160,6 +202,7 @@ export function mockLauncherWasm() {
     },
     _wa_system_launcher_set_framework_res_apk(ptr, size) {
       assert.deepEqual(HEAPU8.slice(ptr, ptr + size), Uint8Array.of(2, 254));
+      loadedResources = true;
       calls.push(['resources']);
       return 0;
     },
@@ -171,12 +214,22 @@ export function mockLauncherWasm() {
       apps.set(app.package, { ...app, apkName });
       return 0;
     },
+    _wa_system_launcher_load_systemui_apk(ptr, bytes, size) {
+      assert(loadedFramework && loadedResources && !state.booted);
+      assert.equal(string(ptr), 'SystemUI-upstream.apk');
+      assert.deepEqual(HEAPU8.slice(bytes, bytes + size), Uint8Array.of(7, 249));
+      loadedSystemUi = true;
+      calls.push(['systemui']);
+      return 0;
+    },
     _wa_system_launcher_boot_apk(ptr, bytes, length) {
-      assert(loadedFramework);
+      assert(loadedFramework && loadedResources && loadedSystemUi);
       assert.equal(string(ptr), 'Launcher3.apk');
       assert.deepEqual(HEAPU8.slice(bytes, bytes + length), Uint8Array.of(6, 250));
       calls.push(['boot']);
       state.booted = true;
+      state.systemUiMounted = true;
+      state.systemUiClass = 'com.android.systemui.statusbar.phone.PhoneStatusBarView';
       draw();
       return 0;
     },
@@ -203,8 +256,20 @@ export function mockLauncherWasm() {
     _wa_system_launcher_resume() { assert(paused); paused = false; calls.push(['resume']); return 0; },
     _wa_system_launcher_send_home() { calls.push(['home']); home(); return 0; },
     _wa_system_launcher_send_back() { calls.push(['back']); home(); return 0; },
+    _wa_system_launcher_set_gesture_navigation(enabled) {
+      assert(state.systemUiMounted && (enabled === 0 || enabled === 1));
+      state.systemUiGestural = enabled === 1;
+      calls.push(['gestural', enabled]);
+      return 0;
+    },
+    _wa_system_launcher_consume_recents() {
+      if (!recentsPending) return 0;
+      recentsPending = false;
+      return 1;
+    },
     _wa_system_launcher_state_json(ptr, capacity) {
-      return text(ptr, capacity, JSON.stringify({ ...state, installedApps: apps.size, searchResults: matching().length }));
+      return text(ptr, capacity, JSON.stringify({ ...state, systemUiButtons: systemUiButtons(),
+        installedApps: apps.size, searchResults: matching().length }));
     },
     _wa_system_launcher_consume_launch(ptr, capacity) {
       assert(!acquired);
@@ -236,7 +301,7 @@ export function mockLauncherWasm() {
     _wa_bitmap_release: () => assert.fail('No acquired bitmap'),
   };
   const assets = { frameworkDex: Uint8Array.of(1, 255), resources: Uint8Array.of(2, 254),
-    launcher: Uint8Array.of(6, 250), apks: [
+    launcher: Uint8Array.of(6, 250), systemUi: Uint8Array.of(7, 249), apks: [
       { name: 'wa_cube_app.apk', bytes: Uint8Array.of(3, 253) },
       { name: 'settings.apk', bytes: Uint8Array.of(4, 252) },
     ] };

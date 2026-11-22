@@ -5,7 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { WORKTREE } from '../../tools/chrome_harness/serve.mjs';
-import { cubeName, frameworkDexName, launcherName, manifestName, resourcesName } from '../../web/launcher/assets.mjs';
+import { cubeName, frameworkDexName, launcherName, manifestName, resourcesName,
+  systemUiName } from '../../web/launcher/assets.mjs';
 import { stageM6Browser } from '../m6_apk_chrome_e2e/stage_m6_browser.mjs';
 
 const suite = 'tests/m9_launcher3_chrome_e2e';
@@ -42,15 +43,17 @@ async function sdkJar(buildRoots) {
   }
   const sdkRoots = [process.env.ANDROID_SDK_ROOT, process.env.ANDROID_HOME,
     process.platform === 'darwin' ? join(homedir(), 'Library/Android/sdk') : join(homedir(), 'Android/Sdk')];
-  return firstFile(sdkRoots.filter(Boolean).map(dir => join(dir, 'platforms/android-36/android.jar')), false);
+  return firstFile(sdkRoots.filter(Boolean).map(dir => join(dir, 'platforms/android-36/android.jar')));
 }
 
 export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostBuild } = {}) {
   const builds = [wasmBuild, hostBuild].filter(Boolean).map(dir => resolve(dir));
   const artifact = (paths, required) => firstFile(builds.flatMap(dir => paths.map(path => join(dir, path))), required);
-  const [cube, launcher, dex, apkResources, ...fixtures] = await Promise.all([
+  const [cube, launcher, systemUi, dex, apkResources, ...fixtures] = await Promise.all([
     artifact([cubeName, `${m6}/${cubeName}`]),
     artifact([launcherName, `tests/m8_aosp17_launcher3_apk/apk/${launcherName}`]),
+    artifact([systemUiName, `tests/m9_aosp17_launcher3_boot/apk/${systemUiName}`,
+      `tests/m10_upstream_systemui/apk/${systemUiName}`, `apk/${systemUiName}`]),
     artifact([frameworkDexName, `runtime/android_system/aosp17-ui/${frameworkDexName}`,
       `aosp17-ui/${frameworkDexName}`, `tests/m8_aosp17_ui_framework/aosp17-ui/${frameworkDexName}`]),
     artifact([resourcesName, 'android.jar', `runtime/android_system/aosp17-ui/${resourcesName}`], false),
@@ -66,9 +69,9 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
     ...sfFiles.map(name => `web/surfaceflinger/${name}.mjs`),
     'web/workers/jit_table.mjs', 'web/workers/jit_registry.mjs', `${m1}/m1_cube_worker.mjs`, `${m1}/m1_cube_runtime.mjs`];
   const copies = [...files.map(file => [join(WORKTREE, file), file]),
-    [launcher, `build/${launcherName}`], [dex, `build/${frameworkDexName}`],
+    [launcher, `build/${launcherName}`], [systemUi, `build/${systemUiName}`],
+    [dex, `build/${frameworkDexName}`], [resources, `build/${resourcesName}`],
     ...fixtures.map((path, index) => [path, `build/${fixtureNames[index]}`])];
-  if (resources) copies.push([resources, `build/${resourcesName}`]);
   for (const name of ['libndk_gles3_cube_armv7a.so', 'libndk_gles3_cube_arm64.so']) {
     const file = await artifact([name, `${m6}/ndk/${name}`, `${m1}/ndk/${name}`], false);
     if (file) copies.push([file, `build/${name}`]);
@@ -82,7 +85,7 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
   const failures = results.filter(result => result.status === 'rejected');
   if (failures.length) throw new Error(failures.map(({ reason }) => reason.message).join('\n'));
   await writeFile(join(root, 'build', manifestName), JSON.stringify({
-    fixtures: fixtureNames, resources: resources ? resourcesName : null,
+    fixtures: fixtureNames, resources: resourcesName,
   }));
 }
 

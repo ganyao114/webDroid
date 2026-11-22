@@ -3,7 +3,8 @@ import { encoder, Memory } from '../surfaceflinger/abi.mjs';
 const textCapacity = 64 * 1024;
 const launcherExports = [
   'create', 'destroy', 'sf_ctx', 'load_framework_dex', 'set_framework_res_apk', 'install_apk',
-  'boot_apk', 'tick', 'resize', 'pause', 'resume', 'send_home', 'send_back',
+  'load_systemui_apk', 'boot_apk', 'tick', 'resize', 'pause', 'resume', 'send_home', 'send_back',
+  'set_gesture_navigation', 'consume_recents',
   'state_json', 'consume_launch', 'last_error',
 ].map(name => `_wa_system_launcher_${name}`);
 const compositorExports = [
@@ -112,6 +113,7 @@ export class LauncherAbi {
   }
 
   installApk(name, bytes) { this.#apk('install_apk', name, bytes); }
+  loadSystemUiApk(name, bytes) { this.#apk('load_systemui_apk', name, bytes); }
   bootApk(name, bytes) { this.#apk('boot_apk', name, bytes); }
   tick(timestamp) { this.#check('tick', this.#call('tick', frameTimeNs(timestamp))); }
   resize({ width, height, densityDpi }) {
@@ -121,6 +123,10 @@ export class LauncherAbi {
   resume() { this.#check('resume', this.#call('resume')); }
   home() { this.#check('send_home', this.#call('send_home')); }
   back() { this.#check('send_back', this.#call('send_back')); }
+  setGestureNavigation(enabled) {
+    this.#check('set_gesture_navigation', this.#call('set_gesture_navigation', Number(enabled)));
+  }
+  consumeRecents() { return this.#check('consume_recents', this.#call('consume_recents')) === 1; }
   state() { return this.#json('state_json'); }
   consumeLaunch() { return this.#json('consume_launch'); }
 

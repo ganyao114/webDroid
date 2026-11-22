@@ -2,7 +2,7 @@ import { Action, Input } from '../surfaceflinger/abi.mjs';
 import { createSurfaceFlingerCompositor } from '../surfaceflinger/compositor.mjs';
 import { attachAndroidInput } from '../surfaceflinger/input_ime.mjs';
 import { LauncherAbi } from './abi_helpers.mjs';
-import { launcherName, loadAndroidSystem, loadLauncherAssets } from './assets.mjs';
+import { launcherName, loadAndroidSystem, loadLauncherAssets, systemUiName } from './assets.mjs';
 import { ForegroundApk, LauncherAudio } from './foreground_apk.mjs';
 import { sceneLabels } from './scene_labels.mjs';
 
@@ -43,7 +43,8 @@ export class LauncherHost {
   #frames = 0;
 
   constructor({ canvas, appSurface, surfaceHost, viewport, backend = 'auto', locale = 'en-US',
-    loadSystem = loadAndroidSystem, loadAssets = loadLauncherAssets, onChange, onError }) {
+    gesturalNavigation = false, loadSystem = loadAndroidSystem, loadAssets = loadLauncherAssets,
+    onChange, onRecents, onError }) {
     if (!['auto', 'webgpu', 'webgl2'].includes(backend)) throw new Error(`Invalid GPU backend ${backend}`);
     this.canvas = canvas;
     this.appSurface = appSurface;
@@ -51,9 +52,11 @@ export class LauncherHost {
     this.viewport = viewport;
     this.backend = backend;
     this.locale = locale;
+    this.gesturalNavigation = gesturalNavigation;
     this.loadSystem = loadSystem;
     this.loadAssets = loadAssets;
     this.onChange = onChange;
+    this.onRecents = onRecents;
     this.onError = onError;
     canvas.ownerDocument.addEventListener('keydown', event => {
       if (!this.#active || event.isComposing || !['Home', 'Escape', 'BrowserBack'].includes(event.key)) return;
@@ -107,9 +110,11 @@ export class LauncherHost {
     try {
       abi.create(session.size, this.locale);
       abi.loadFrameworkDex(this.#assets.frameworkDex);
-      if (this.#assets.resources) abi.setFrameworkResources(this.#assets.resources);
+      abi.setFrameworkResources(this.#assets.resources);
       for (const [name, bytes] of this.#apks) abi.installApk(name, bytes);
+      abi.loadSystemUiApk(systemUiName, this.#assets.systemUi);
       abi.bootApk(launcherName, this.#assets.launcher);
+      if (this.gesturalNavigation) abi.setGestureNavigation(true);
       session.scene = abi.scene;
       session.compositor = await createSurfaceFlingerCompositor({
         module: this.#module, scene: session.scene, canvas: this.canvas, webviewHost: this.surfaceHost,
@@ -233,6 +238,7 @@ export class LauncherHost {
     this.#lastFrame = timestamp;
     this.#history[this.#frames++ % historySize] = { frameMs, tickMs, replayMs: now - replayStart };
     this.bootMs ??= now - this.#started;
+    if (abi.consumeRecents()) this.navigate('recents');
     const launch = abi.consumeLaunch();
     if (launch?.pending) void this.#launch(launch);
   }
@@ -288,8 +294,13 @@ export class LauncherHost {
   navigate(action) {
     if (!this.#session?.ready) return;
     try {
-      if (this.#active) this.#returnHome();
-      else if (this.#phase === 'launcher') {
+      if (action === 'recents') {
+        if (this.#active) this.#returnHome();
+        this.#session.input.blurIME();
+        this.onRecents?.(this);
+      } else if (this.#active) {
+        this.#returnHome();
+      } else if (this.#phase === 'launcher') {
         this.#session.input.blurIME();
         if (action === 'back') this.#session.abi.back();
         else this.#session.abi.home();

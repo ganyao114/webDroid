@@ -172,6 +172,7 @@
     </section>
     <div class="wa-bottom">
       <div class="wa-hud" aria-label="Runtime telemetry">
+        <span data-stat="system">Android 17</span>
         <span data-stat="backend">GPU —</span><span data-stat="fps">FPS —</span>
         <span data-stat="tick">Wasm —</span><span data-stat="gc">ART GC —</span><span data-stat="activity"></span>
       </div>
@@ -290,7 +291,10 @@
       root.hidden = false;
       try {
         const { mountLauncherPlayground } = await import('./launcher_playground.mjs');
-        const playground = mountLauncherPlayground(root, { backend: params.get('backend') ?? 'auto' });
+        const playground = mountLauncherPlayground(root, {
+          backend: params.get('backend') ?? 'auto',
+          gesturalNavigation: params.get('navigation') === 'gestural',
+        });
         addEventListener('pagehide', () => { void playground.close(); }, { once: true });
       } catch (error) {
         root.querySelector('.wa-status').textContent = error.message;

@@ -17,6 +17,29 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
     aosp17_servicemanager_generate_aidl(wa_android_system_binder PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/aidl" android/wasm
         PackageRecord IPackageManagerLite ActivityState IActivityManagerLite)
+
+    find_program(WA_JAR_EXECUTABLE jar NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+    get_target_property(wa_framework_classes aosp17_framework_core WA_FRAMEWORK_CLASSES)
+    cmake_path(CONVERT "${wa_framework_classes};${WA_ANDROID_JAR}" TO_NATIVE_PATH_LIST wa_systemui_classpath)
+    set(wa_systemui_host "${CMAKE_CURRENT_BINARY_DIR}/systemui-host")
+    set(wa_systemui_host_dex "${wa_systemui_host}/systemui_host_dex.inc")
+    add_custom_command(OUTPUT "${wa_systemui_host_dex}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${wa_systemui_host}/classes"
+        COMMAND "${WA_JAVAC_EXECUTABLE}" --release 17 -proc:none -encoding UTF-8
+            -classpath "${wa_systemui_classpath}" -d "${wa_systemui_host}/classes"
+            "${CMAKE_CURRENT_SOURCE_DIR}/LauncherSystemUi.java"
+        COMMAND "${WA_JAR_EXECUTABLE}" cf "${wa_systemui_host}/host.jar"
+            -C "${wa_systemui_host}/classes" .
+        COMMAND "${WA_D8_EXECUTABLE}" --release --min-api 26 --lib "${WA_ANDROID_JAR}"
+            --classpath "${wa_framework_classes}" --output "${wa_systemui_host}" "${wa_systemui_host}/host.jar"
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/embed_systemui_host.py"
+            "${wa_systemui_host}/classes.dex" "${wa_systemui_host_dex}"
+        DEPENDS aosp17_framework_core "${wa_framework_classes}" "${WA_ANDROID_JAR}"
+            LauncherSystemUi.java embed_systemui_host.py
+            "${WA_JAVAC_EXECUTABLE}" "${WA_JAR_EXECUTABLE}" "${WA_D8_EXECUTABLE}"
+        COMMENT "Compiling the window adapter for the upstream SystemUI APK"
+        VERBATIM)
+    set(wa_launcher_runtime_sources art_sf_entry.cpp launcher_session_entry.cpp "${wa_systemui_host_dex}")
 endif()
 
 if(EMSCRIPTEN)
@@ -47,7 +70,8 @@ if(EMSCRIPTEN)
     )
     if(TARGET wa_android_system_apk)
         target_link_libraries(android_system PRIVATE wa_android_system_apk wa_android_system_binder)
-        target_sources(android_system PRIVATE art_sf_entry.cpp launcher_session_entry.cpp)
+        target_sources(android_system PRIVATE ${wa_launcher_runtime_sources})
+        target_include_directories(android_system PRIVATE "${wa_systemui_host}")
         target_link_libraries(android_system PRIVATE aosp17_ui_jni aosp17_libandroidfw)
         target_compile_options(android_system PRIVATE -ffunction-sections -fdata-sections)
         target_compile_options(aosp17_art_interp PRIVATE -ffunction-sections -fdata-sections)
@@ -77,8 +101,10 @@ if(EMSCRIPTEN)
             _wa_system_art_set_gc_paused _wa_system_art_set_inline_caches_enabled
             _wa_system_launcher_create _wa_system_launcher_destroy _wa_system_launcher_sf_ctx
             _wa_system_launcher_load_framework_dex _wa_system_launcher_set_framework_res_apk
-            _wa_system_launcher_install_apk _wa_system_launcher_boot_apk _wa_system_launcher_tick
+            _wa_system_launcher_install_apk _wa_system_launcher_load_systemui_apk
+            _wa_system_launcher_boot_apk _wa_system_launcher_tick
             _wa_system_launcher_resize _wa_system_launcher_pause _wa_system_launcher_resume
+            _wa_system_launcher_set_gesture_navigation _wa_system_launcher_consume_recents
             _wa_system_launcher_send_home _wa_system_launcher_send_back _wa_system_launcher_state_json
             _wa_system_launcher_consume_launch _wa_system_launcher_last_error
             _wa_system_sf_init _wa_system_sf_ctx _wa_system_sf_destroy
@@ -102,7 +128,8 @@ else()
         PRIVATE wa_hal_browser svm_wasm svm_arm32_numeric svm_arm64_numeric)
     if(TARGET wa_android_system_apk)
         target_link_libraries(wa_android_system PRIVATE wa_android_system_apk wa_android_system_binder)
-        target_sources(wa_android_system PRIVATE art_sf_entry.cpp launcher_session_entry.cpp)
+        target_sources(wa_android_system PRIVATE ${wa_launcher_runtime_sources})
+        target_include_directories(wa_android_system PRIVATE "${wa_systemui_host}")
         target_link_libraries(wa_android_system PRIVATE aosp17_ui_jni aosp17_libandroidfw
             PUBLIC wa_hal_surfaceflinger)
     endif()

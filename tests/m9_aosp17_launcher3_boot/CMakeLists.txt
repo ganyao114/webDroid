@@ -9,6 +9,41 @@ else()
 endif()
 get_target_property(cube_build wa_cube_app_apk BINARY_DIR)
 set(apps "${cube_build}/wa_cube_app.apk")
+
+if(TARGET aosp17_systemui_apk)
+    get_target_property(systemui_build aosp17_systemui_apk BINARY_DIR)
+    set(systemui_target aosp17_systemui_apk)
+else()
+    get_filename_component(repo "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+    set(systemui_build "${CMAKE_CURRENT_BINARY_DIR}")
+    set(systemui_target m9_launcher_systemui_apk)
+    set(systemui_output "${systemui_build}/apk")
+    set(builder "${repo}/tools/aosp/build_upstream_systemui.py")
+    set(patches "${repo}/patches/aosp17/systemui")
+    set(WA_SYSTEMUI_DEPS_DIR "${repo}/third_party/aosp17_deps" CACHE PATH "Offline SystemUI dependencies")
+    set(WA_APKSIGNER_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/apksigner"
+        CACHE FILEPATH "SDK 36 apksigner")
+    find_program(WA_JAVA_EXECUTABLE java NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+    file(GLOB systemui_patches CONFIGURE_DEPENDS "${patches}/*.patch")
+    file(GLOB systemui_kotlinc CONFIGURE_DEPENDS "${WA_SYSTEMUI_DEPS_DIR}/kotlinc/*.jar")
+    add_custom_command(OUTPUT "${systemui_output}/SystemUI-upstream.apk"
+                              "${systemui_output}/systemui_provenance.json"
+        COMMAND "${CMAKE_COMMAND}" -E env PYTHONDONTWRITEBYTECODE=1
+            "${Python3_EXECUTABLE}" "${builder}" --aosp-root "${AOSP17_SOURCE_DIR}"
+            --deps-dir "${WA_SYSTEMUI_DEPS_DIR}" --out-dir "${systemui_output}"
+            --java "${WA_JAVA_EXECUTABLE}" --javac "${WA_JAVAC_EXECUTABLE}"
+            --aapt2 "${WA_AAPT2_EXECUTABLE}" --d8 "${WA_D8_EXECUTABLE}"
+            --zipalign "${WA_ZIPALIGN_EXECUTABLE}" --apksigner "${WA_APKSIGNER_EXECUTABLE}"
+            --android-jar "${WA_ANDROID_JAR}" --depfile "${systemui_output}/systemui.d"
+        DEPENDS "${builder}" "${patches}/sources.txt" "${patches}/resources.txt"
+            ${systemui_patches} ${systemui_kotlinc}
+        DEPFILE "${systemui_output}/systemui.d"
+        COMMENT "Compiling and signing the upstream AOSP 17 SystemUI APK"
+        VERBATIM)
+    add_custom_target(${systemui_target} DEPENDS "${systemui_output}/SystemUI-upstream.apk"
+        "${systemui_output}/systemui_provenance.json")
+endif()
+
 set(demos "${CMAKE_CURRENT_BINARY_DIR}/apps")
 set(demo_apks)
 foreach(app IN ITEMS settings browser gallery calculator clock)
@@ -23,10 +58,11 @@ add_custom_command(OUTPUT ${demo_apks}
     COMMENT "Building localized Android APKs for Launcher3"
     VERBATIM)
 add_custom_target(m9_launcher3_fixtures ALL DEPENDS ${demo_apks})
-add_dependencies(m9_launcher3_fixtures aosp17_framework_core aosp17_launcher3_apk wa_cube_app_apk)
+add_dependencies(m9_launcher3_fixtures aosp17_framework_core aosp17_launcher3_apk wa_cube_app_apk
+    ${systemui_target})
 
 set(fixtures "${framework_dex}" "${WA_ANDROID_JAR}" "${launcher_build}/apk/Launcher3.apk"
-    ${apps} ${demo_apks})
+    "${systemui_build}/apk/SystemUI-upstream.apk" ${apps} ${demo_apks})
 if(EMSCRIPTEN)
     add_dependencies(android_system m9_launcher3_fixtures)
     add_test(NAME test_m9_launcher3_boot_wasm COMMAND "${WA_NODE_EXECUTABLE}"

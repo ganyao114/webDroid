@@ -28,17 +28,19 @@ export function mountLauncherPlayground(root, options = {}) {
     appSurface.inert = phase !== 'app';
     launcher.inert = phase !== 'launcher';
     const available = ['launcher', 'opening-app', 'app'].includes(phase);
+    stats.system.textContent = available && host.state()?.systemUiMounted ? 'SystemUI + Launcher3' : 'Android 17';
     for (const button of nav) button.disabled = !available;
     allApps.disabled = locale.disabled = phase !== 'launcher';
     install.disabled = !available;
     locale.textContent = host.locale === 'zh-CN' ? 'Locale 中文' : 'Locale EN';
-    if (phase === 'starting') show('Starting Android 17 Launcher3…');
+    if (phase === 'starting') show('Starting Android 17 SystemUI and Launcher3…');
     if (phase === 'opening-app') show(`Opening ${host.activeLaunch.label || host.activeLaunch.package}…`);
     if (phase === 'launcher' || phase === 'app') show('');
   }
 
   const host = new LauncherHost({ ...options, canvas: launcher.querySelector('canvas'), appSurface,
-    surfaceHost: launcher, onChange: updateDevice, onError: error => show(error.message.split('\n')[0], true) });
+    surfaceHost: launcher, onChange: updateDevice, onRecents: toggleRecents,
+    onError: error => show(error.message.split('\n')[0], true) });
 
   function refreshHud() {
     const state = host.state();
@@ -56,21 +58,20 @@ export function mountLauncherPlayground(root, options = {}) {
 
   function closeRecents() { recents.hidden = true; }
 
+  function toggleRecents(host) {
+    recent.disabled = !host.recent;
+    recent.textContent = host.recent?.label || host.recent?.package || 'No recent apps';
+    recents.hidden = !recents.hidden;
+    if (!recents.hidden && host.recent) recent.focus();
+  }
+
   for (const button of nav) {
     button.addEventListener('click', () => {
       host.unlockAudio();
       const action = button.dataset.nav;
-      if (action === 'recents') {
-        if (host.activeLaunch) host.navigate('home');
-        recent.disabled = !host.recent;
-        recent.textContent = host.recent?.label || host.recent?.package || 'No recent apps';
-        recents.hidden = !recents.hidden;
-        if (!recents.hidden && host.recent) recent.focus();
-      } else {
-        closeRecents();
-        if (action === 'all-apps') host.openAllApps();
-        else host.navigate(action);
-      }
+      if (action !== 'recents') closeRecents();
+      if (action === 'all-apps') host.openAllApps();
+      else host.navigate(action);
     }, { signal });
   }
 
