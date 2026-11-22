@@ -1,0 +1,3 @@
+# Launcher and adaptive art from Settings, plus dynamic layout lookups.
+drawable/ic_launcher_settings
+mipmap/ic_launcher_settings
