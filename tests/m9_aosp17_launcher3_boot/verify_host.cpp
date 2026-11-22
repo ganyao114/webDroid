@@ -590,7 +590,7 @@ void Run(int width, int height, const char* locale, const char* composition, con
     Session session(width, height, locale);
     Check(wa_system_launcher_load_framework_dex(dex.bytes.data(), dex.bytes.size()), "load framework");
     Check(wa_system_launcher_load_framework_fallback_dex(fallback.bytes.data(), fallback.bytes.size()),
-        "load upstream framework");
+        "load framework compatibility");
     Check(wa_system_launcher_set_framework_res_apk(resources.bytes.data(), resources.bytes.size()), "mount framework");
     for (const auto& app : apps) app.Install();
     Require(wa_system_launcher_boot_apk(launcher.name.c_str(), launcher.bytes.data(), launcher.bytes.size()) ==

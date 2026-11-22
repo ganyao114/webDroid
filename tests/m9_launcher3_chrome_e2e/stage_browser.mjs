@@ -40,9 +40,9 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
     artifact([launcherName, `${systemRoot}/launcher/${launcherName}`, `apk/${launcherName}`]),
     artifact([systemUiName, `${systemRoot}/launcher/${systemUiName}`, `tests/m9_aosp17_launcher3_boot/apk/${systemUiName}`,
       `tests/m10_upstream_systemui/apk/${systemUiName}`, `apk/${systemUiName}`]),
-    artifact([frameworkDexName, `${systemRoot}/aosp17-ui/${frameworkDexName}`,
-      `aosp17-ui/${frameworkDexName}`, `tests/m8_aosp17_ui_framework/aosp17-ui/${frameworkDexName}`]),
-    artifact([fallbackDexName, `${systemRoot}/upstream-framework/${fallbackDexName}`]),
+    artifact([frameworkDexName, `${systemRoot}/upstream-framework/${frameworkDexName}`]),
+    artifact([fallbackDexName, `${systemRoot}/aosp17-ui/${fallbackDexName}`,
+      `aosp17-ui/${fallbackDexName}`, `tests/m8_aosp17_ui_framework/aosp17-ui/${fallbackDexName}`]),
     artifact([resourcesName, `${systemRoot}/upstream-framework/framework-res-upstream.apk`]),
     // stageM6Browser also validates and copies the two unified module files.
   ]);

@@ -1,0 +1,105 @@
+--- a/frameworks/base/core/java/android/content/res/AssetManager.java
++++ b/frameworks/base/core/java/android/content/res/AssetManager.java
+@@ -230,6 +230,24 @@
+         return result;
+     }
+ 
++    static void setMountedSystem(AssetManager manager, ApkAssets apk) {
++        synchronized (sSync) {
++            sSystemApkAssets = new ApkAssets[] {apk};
++            sSystemApkAssetsSet = new ArraySet<>(Arrays.asList(sSystemApkAssets));
++            sSystem = manager;
++        }
++    }
++
++    static void clearMountedSystem(AssetManager manager) {
++        synchronized (sSync) {
++            if (sSystem == manager) {
++                sSystem = null;
++                sSystemApkAssets = new ApkAssets[0];
++                sSystemApkAssetsSet = null;
++            }
++        }
++    }
++
+     private record ApkKey(String path, boolean sharedLibrary, boolean overlay) {}
+ 
+     /**
+@@ -1305,14 +1323,9 @@
+     long createTheme() {
+         synchronized (this) {
+             ensureValidLocked();
+-            long themePtr = nativeThemeCreate(mObject);
+-            incRefsLocked(themePtr);
+-            return themePtr;
+-        }
+-    }
+-
+-    void releaseTheme(long themePtr) {
+-        decRefs(themePtr);
++            // ThemeImpl keeps the manager reachable and owns the native theme peer.
++            return nativeThemeCreate(mObject);
++        }
+     }
+ 
+     static long getThemeFreeFunction() {
+@@ -1330,18 +1343,6 @@
+ 
+     AssetManager rebaseTheme(long themePtr, @NonNull AssetManager newAssetManager,
+             @StyleRes int[] styleIds, @StyleRes boolean[] force, int count) {
+-        // Exchange ownership of the theme with the new asset manager.
+-        if (this != newAssetManager) {
+-            synchronized (this) {
+-                ensureValidLocked();
+-                decRefs(themePtr);
+-            }
+-            synchronized (newAssetManager) {
+-                newAssetManager.ensureValidLocked();
+-                newAssetManager.incRefsLocked(themePtr);
+-            }
+-        }
+-
+         try {
+             synchronized (newAssetManager) {
+                 newAssetManager.ensureValidLocked();
+--- a/frameworks/base/core/java/android/content/res/Resources.java
++++ b/frameworks/base/core/java/android/content/res/Resources.java
+@@ -279,9 +279,10 @@
+             result = forAssets(assets, new DisplayMetrics(), config);
+             result.mOwnedApks = owned;
+             if (framework == null && assets.length > 1
+-                    && "android".equals(result.getResourcePackageName(android.R.string.ok))) {
++                    && "android".equals(result.getAssets().getResourcePackageName(android.R.string.ok))) {
+                 result.mMountedSystem = forAssets(new ApkAssets[] {assets[0]}, new DisplayMetrics(), config);
+                 synchronized (sSync) {
++                    AssetManager.setMountedSystem(result.mMountedSystem.getAssets(), assets[0]);
+                     mSystem = result.mMountedSystem;
+                 }
+             }
+@@ -337,7 +338,10 @@
+     public void close() {
+         if (mMountedSystem != null) {
+             synchronized (sSync) {
+-                if (mSystem == mMountedSystem) mSystem = null;
++                if (mSystem == mMountedSystem) {
++                    AssetManager.clearMountedSystem(mMountedSystem.getAssets());
++                    mSystem = null;
++                }
+             }
+             mMountedSystem.close();
+             mMountedSystem = null;
+--- a/frameworks/base/core/java/android/content/res/ResourcesImpl.java
++++ b/frameworks/base/core/java/android/content/res/ResourcesImpl.java
+@@ -1498,12 +1498,6 @@
+             retainNativeTheme(this, mTheme);
+         }
+ 
+-        @Override
+-        protected void finalize() throws Throwable {
+-            super.finalize();
+-            mAssets.releaseTheme(mTheme);
+-        }
+-
+         /*package*/ Resources.ThemeKey getKey() {
+             return mKey;
+         }

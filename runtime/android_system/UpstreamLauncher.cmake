@@ -6,7 +6,6 @@ set(wa_aosp_patches "${wa_launcher_repo}/patches/aosp17")
 if(NOT DEFINED wa_launcher_output)
     set(wa_launcher_output "${CMAKE_CURRENT_BINARY_DIR}/launcher")
 endif()
-set(wa_upstream_framework_output "${CMAKE_CURRENT_BINARY_DIR}/upstream-framework")
 if(NOT DEFINED wa_settings_output)
     set(wa_settings_output "${CMAKE_CURRENT_BINARY_DIR}/upstream-settings")
 endif()
@@ -29,8 +28,8 @@ foreach(name IN ITEMS DeskClock Browser2 Gallery2 Music)
     list(APPEND WA_BUILTIN_APKS "${WA_BUILTIN_APPS_DIR}/${name}-upstream.apk")
 endforeach()
 set(WA_SYSTEM_APP_APKS "${WA_SETTINGS_APK}" ${WA_BUILTIN_APKS})
-set(WA_LAUNCHER_FRAMEWORK_DEX "${wa_upstream_framework_output}/aosp17_upstream_framework.dex")
-set(WA_LAUNCHER_FRAMEWORK_RES "${wa_upstream_framework_output}/framework-res-upstream.apk")
+get_target_property(WA_LAUNCHER_FRAMEWORK_DEX aosp17_upstream_framework WA_FRAMEWORK_DEX)
+get_target_property(WA_LAUNCHER_FRAMEWORK_RES aosp17_upstream_framework WA_FRAMEWORK_RES)
 
 file(GLOB_RECURSE wa_launcher_patches CONFIGURE_DEPENDS "${wa_aosp_patches}/launcher3/*")
 add_custom_command(OUTPUT "${WA_LAUNCHER_APK}" "${wa_launcher_output}/upstream_provenance.json"
@@ -101,26 +100,8 @@ add_custom_command(OUTPUT "${wa_builtin_provenance}" ${WA_BUILTIN_APKS}
 add_custom_target(wa_upstream_builtin_apps DEPENDS "${wa_builtin_provenance}" ${WA_BUILTIN_APKS})
 set_target_properties(wa_upstream_builtin_apps PROPERTIES WA_BUILTIN_APPS_DIR "${WA_BUILTIN_APPS_DIR}")
 
-file(GLOB wa_upstream_framework_patches CONFIGURE_DEPENDS "${wa_aosp_patches}/frameworks_base/*.patch")
-add_custom_command(OUTPUT "${WA_LAUNCHER_FRAMEWORK_DEX}" "${WA_LAUNCHER_FRAMEWORK_RES}"
-    BYPRODUCTS "${wa_upstream_framework_output}/aosp17_upstream_framework_classes.jar"
-        "${wa_upstream_framework_output}/aosp17_upstream_services.dex"
-        "${wa_upstream_framework_output}/framework_provenance.json"
-    COMMAND "${Python3_EXECUTABLE}" "${wa_aosp_tools}/build_upstream_framework_dex.py"
-        --aosp-root "${AOSP17_SOURCE_DIR}" --android-sdk "${WA_ANDROID_SDK}"
-        --javac "${WA_JAVAC_EXECUTABLE}" --android-jar "${WA_ANDROID_JAR}"
-        --d8 "${WA_D8_EXECUTABLE}" --aapt2 "${WA_AAPT2_EXECUTABLE}"
-        --out-dir "${wa_upstream_framework_output}"
-        --depfile "${wa_upstream_framework_output}/framework.d"
-    DEPENDS "${wa_aosp_tools}/build_upstream_framework_dex.py"
-        "${wa_aosp_patches}/frameworks_base/sources.txt" ${wa_upstream_framework_patches}
-    DEPFILE "${wa_upstream_framework_output}/framework.d"
-    COMMENT "Building the upstream framework DEX and resource APK for Launcher3"
-    VERBATIM)
-
-add_custom_target(wa_foreground_framework_assets
-    DEPENDS "${WA_LAUNCHER_FRAMEWORK_DEX}" "${WA_LAUNCHER_FRAMEWORK_RES}")
-add_dependencies(wa_foreground_framework_assets aosp17_framework_core)
+add_custom_target(wa_foreground_framework_assets)
+add_dependencies(wa_foreground_framework_assets aosp17_upstream_framework aosp17_framework_core)
 
 add_custom_target(wa_upstream_launcher_assets)
 add_dependencies(wa_upstream_launcher_assets wa_upstream_launcher_apk wa_upstream_systemui_apk

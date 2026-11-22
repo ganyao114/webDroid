@@ -131,14 +131,14 @@ bool HasClockTime(std::string_view text) {
     return false;
 }
 
-void Verify(const App& app, const std::filesystem::path& path, const std::vector<uint8_t>& core,
+void Verify(const App& app, const std::filesystem::path& path, const std::vector<uint8_t>& framework,
             const std::vector<uint8_t>& fallback, const std::vector<uint8_t>& resources) {
     auto bytes = ReadFile(path);
     Check(wa_system_app_create(kWidth, kHeight, kDpi, "en-US"));
     struct Destroy {
         ~Destroy() { wa_system_app_destroy(); }
     } destroy;
-    Check(wa_system_app_load_framework_dex(core.data(), core.size()));
+    Check(wa_system_app_load_framework_dex(framework.data(), framework.size()));
     Check(wa_system_app_load_framework_fallback_dex(fallback.data(), fallback.size()));
     Check(wa_system_app_set_framework_res_apk(resources.data(), resources.size()));
     const auto file = path.filename().string();
@@ -241,17 +241,17 @@ void Verify(const App& app, const std::filesystem::path& path, const std::vector
 
 int main(int argc, char** argv) {
     if (argc < 5) {
-        std::cerr << "usage: test_m14_upstream_apps CORE FALLBACK RES APK_DIR [APP ...]\n";
+        std::cerr << "usage: test_m14_upstream_apps FRAMEWORK FALLBACK RES APK_DIR [APP ...]\n";
         return 2;
     }
     try {
-        const auto core = ReadFile(argv[1]), fallback = ReadFile(argv[2]), resources = ReadFile(argv[3]);
+        const auto framework = ReadFile(argv[1]), fallback = ReadFile(argv[2]), resources = ReadFile(argv[3]);
         bool passed = true;
         for (const auto& app : kApps) {
             if (argc > 5 && std::find(argv + 5, argv + argc, app.name) == argv + argc) continue;
             try {
                 Verify(app, std::filesystem::path(argv[4]) / (std::string(app.name) + "-upstream.apk"),
-                       core, fallback, resources);
+                       framework, fallback, resources);
             } catch (const std::exception& error) {
                 std::cerr << app.name << " " << error.what() << '\n';
                 passed = false;

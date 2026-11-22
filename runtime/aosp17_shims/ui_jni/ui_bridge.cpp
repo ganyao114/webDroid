@@ -1,4 +1,5 @@
 #include "native_methods.h"
+#include "jni_bridge.h"
 
 #include <androidfw/AssetManager2.h>
 #include <androidfw/ResourceTypes.h>
@@ -291,8 +292,12 @@ jobject EnumConstant(JNIEnv* env, jclass, jclass type, jstring constant) {
     });
 }
 
-void ReleaseTheme(JNIEnv*, jclass, jlong theme) {
-    delete reinterpret_cast<android::Theme*>(static_cast<uintptr_t>(theme));
+void RetainTheme(JNIEnv* env, jclass, jobject peer, jlong theme) {
+    CallSafely(env, [&] {
+        auto allocation = std::shared_ptr<android::Theme>(
+            reinterpret_cast<android::Theme*>(static_cast<uintptr_t>(theme)));
+        interp::JniBridge::From(env).RetainNativePeer(peer, std::move(allocation));
+    });
 }
 
 jstring LikelyScript(JNIEnv* env, jclass, jstring tag) {
@@ -501,8 +506,9 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     }
     vm.RegisterResourceNatives();
     detail::LocalFrame locals(env);
-    Register(vm, "android/content/res/AssetManager",
-             Method<detail::ReleaseTheme>(vm, "releaseTheme", "(J)V"));
+    Register(vm, "android/content/res/ResourcesImpl$ThemeImpl",
+             Method<detail::RetainTheme>(vm, "retainNativeTheme",
+                                         "(Landroid/content/res/ResourcesImpl$ThemeImpl;J)V"));
     Register(vm, "android/view/LayoutInflater",
              Method<detail::CreateView>(vm, "nativeCreateView",
                                         "(Ljava/lang/String;Landroid/content/Context;Landroid/util/"

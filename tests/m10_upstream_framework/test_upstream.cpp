@@ -1,4 +1,5 @@
 #include "art_interp.h"
+#include "base/mem_map.h"
 #include "dex/art_dex_file_loader.h"
 #include "dex/class_accessor-inl.h"
 #include "dex/dex_file-inl.h"
@@ -82,36 +83,40 @@ void Verify(const char* path, std::span<const Minimum> minimums) {
                                      std::istreambuf_iterator<char>()};
     art::ArtDexFileLoader loader(bytes.data(), bytes.size(), path);
     std::string error;
-    const auto dex = loader.OpenOne(0, 0, nullptr, /*verify=*/false, /*verify_checksum=*/false, &error);
-    Require(dex != nullptr, error);
-    const bool verified = art::dex::Verify(dex.get(), path, /*verify_checksum=*/true, &error);
-    Require(verified && error.empty(), error);
+    art::MemMap::Init();
+    std::vector<std::unique_ptr<const art::DexFile>> dexes;
+    const bool opened = loader.Open(/*verify=*/true, /*verify_checksum=*/true, &error, &dexes);
+    Require(opened && !dexes.empty(), error);
     std::map<std::string_view, Counts> classes;
     Counts total;
-    for (const art::ClassAccessor cls : dex->GetClasses()) {
-        auto& count = classes[cls.GetDescriptorView()];
-        for (const auto& method : cls.GetMethods()) {
-            ++count.methods;
-            const auto code = method.GetInstructionsAndData();
-            if (!code.HasCodeItem()) {
-                continue;
-            }
-            size_t offset = 0;
-            for (auto insn = code.begin(); insn != code.end(); ++insn) {
-                Require(insn.DexPc() == offset, "Noncontiguous DEX instruction offsets");
-                offset += insn->SizeInCodeUnits();
-                if (insn->Opcode() != art::Instruction::NOP || insn->VRegA_10x() == 0) {
-                    ++count.instructions;
+    size_t method_ids = 0;
+    for (const auto& dex : dexes) {
+        method_ids += dex->NumMethodIds();
+        for (const art::ClassAccessor cls : dex->GetClasses()) {
+            auto& count = classes[cls.GetDescriptorView()];
+            for (const auto& method : cls.GetMethods()) {
+                ++count.methods;
+                const auto code = method.GetInstructionsAndData();
+                if (!code.HasCodeItem()) {
+                    continue;
                 }
+                size_t offset = 0;
+                for (auto insn = code.begin(); insn != code.end(); ++insn) {
+                    Require(insn.DexPc() == offset, "Noncontiguous DEX instruction offsets");
+                    offset += insn->SizeInCodeUnits();
+                    if (insn->Opcode() != art::Instruction::NOP || insn->VRegA_10x() == 0) {
+                        ++count.instructions;
+                    }
+                }
+                Require(offset == code.InsnsSizeInCodeUnits(), "DEX instruction sizes disagree");
             }
-            Require(offset == code.InsnsSizeInCodeUnits(), "DEX instruction sizes disagree");
+            total.methods += count.methods;
+            total.instructions += count.instructions;
         }
-        total.methods += count.methods;
-        total.instructions += count.instructions;
     }
-    std::cout << "ART verified " << dex->GetLocation() << " with 0 errors, " << bytes.size()
-              << " bytes, " << classes.size() << " classes, " << total.methods
-              << " defined methods, " << dex->NumMethodIds() << " method IDs, "
+    std::cout << "ART verified " << path << " with 0 errors, " << bytes.size()
+              << " bytes in " << dexes.size() << " DEX files, " << classes.size() << " classes, "
+              << total.methods << " defined methods, " << method_ids << " method IDs, "
               << total.instructions << " instructions\n";
     for (const auto& [descriptor, minimum] : minimums) {
         const auto it = classes.find(descriptor);

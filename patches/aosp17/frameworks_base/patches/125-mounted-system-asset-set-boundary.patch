@@ -1,0 +1,12 @@
+--- a/frameworks/base/core/java/android/content/res/AssetManager.java
++++ b/frameworks/base/core/java/android/content/res/AssetManager.java
+@@ -235,7 +235,8 @@
+     static void setMountedSystem(AssetManager manager, ApkAssets apk) {
+         synchronized (sSync) {
+             sSystemApkAssets = new ApkAssets[] {apk};
+-            sSystemApkAssetsSet = new ArraySet<>(Arrays.asList(sSystemApkAssets));
++            sSystemApkAssetsSet = new ArraySet<>();
++            sSystemApkAssetsSet.add(apk);
+             sSystem = manager;
+         }
+     }

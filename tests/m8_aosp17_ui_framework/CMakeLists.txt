@@ -13,6 +13,8 @@ set(WA_AAPT2_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/aapt2" CACHE FILEP
 set(WA_ZIPALIGN_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/zipalign" CACHE FILEPATH "SDK 36 zipalign")
 get_target_property(framework_dex aosp17_framework_core WA_FRAMEWORK_DEX)
 get_target_property(framework_classes aosp17_framework_core WA_FRAMEWORK_CLASSES)
+get_target_property(upstream_dex aosp17_upstream_framework WA_FRAMEWORK_DEX)
+get_target_property(upstream_res aosp17_upstream_framework WA_FRAMEWORK_RES)
 file(GLOB_RECURSE fixture_files CONFIGURE_DEPENDS LIST_DIRECTORIES false
     "${CMAKE_CURRENT_SOURCE_DIR}/fixture/*")
 set(apk "${CMAKE_CURRENT_BINARY_DIR}/ui_smoke_app.apk")
@@ -37,8 +39,8 @@ if(EMSCRIPTEN)
         -sSTACK_SIZE=2097152 "-sEXPORTED_RUNTIME_METHODS=FS,callMain")
     add_test(NAME m8_aosp17_ui_framework COMMAND "${WA_NODE_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/run_wasm.mjs" "$<TARGET_FILE:test_aosp17_ui_framework>"
-        "${framework_dex}" "${apk}" "${WA_ANDROID_JAR}")
+        "${upstream_dex}" "${framework_dex}" "${apk}" "${upstream_res}")
 else()
     add_test(NAME m8_aosp17_ui_framework COMMAND test_aosp17_ui_framework
-        "${framework_dex}" "${apk}" "${WA_ANDROID_JAR}")
+        "${upstream_dex}" "${framework_dex}" "${apk}" "${upstream_res}")
 endif()

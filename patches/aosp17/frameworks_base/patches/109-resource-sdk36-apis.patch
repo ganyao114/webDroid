@@ -1,0 +1,143 @@
+--- a/frameworks/base/core/java/android/content/res/ResourcesImpl.java
++++ b/frameworks/base/core/java/android/content/res/ResourcesImpl.java
+@@ -50,7 +50,6 @@
+ import android.util.DisplayMetrics;
+ import android.util.Log;
+ import android.util.LongSparseArray;
+-import android.util.Slog;
+ import android.util.TypedValue;
+ import android.util.Xml;
+ import android.view.DisplayAdjustments;
+@@ -256,7 +255,7 @@
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     DisplayMetrics getDisplayMetrics() {
+-        if (DEBUG_CONFIG) Slog.v(TAG, "Returning DisplayMetrics: " + mMetrics.widthPixels
++        if (DEBUG_CONFIG) Log.v(TAG, "Returning DisplayMetrics: " + mMetrics.widthPixels
+                 + "x" + mMetrics.heightPixels + " " + mMetrics.density);
+         return mMetrics;
+     }
+@@ -466,10 +465,10 @@
+         try {
+             synchronized (mAccessLock) {
+                 if (DEBUG_CONFIG) {
+-                    Slog.i(TAG, "**** Updating config of " + this + ": old config is "
++                    Log.i(TAG, "**** Updating config of " + this + ": old config is "
+                             + mConfiguration + " old compat is "
+                             + mDisplayAdjustments.getCompatibilityInfo());
+-                    Slog.i(TAG, "**** Updating config of " + this + ": new config is "
++                    Log.i(TAG, "**** Updating config of " + this + ": new config is "
+                             + config + " new compat is " + compat);
+                 }
+                 if (compat != null) {
+@@ -560,7 +559,7 @@
+                                         // Update the configuration so that it goes first.
+                                         mConfiguration.setLocales(
+                                                 new LocaleList(bestLocale, configLocales));
+-                                        Slog.v(TAG, "Updating configuration with selected locales "
++                                        Log.v(TAG, "Updating configuration with selected locales "
+                                                 + Arrays.toString(selectedLocales));
+                                     }
+                                 }
+@@ -638,7 +637,7 @@
+                         sdkVersionFull, forceAssetsRefresh);
+ 
+                 if (DEBUG_CONFIG) {
+-                    Slog.i(TAG, "**** Updating config of " + this + ": final config is "
++                    Log.i(TAG, "**** Updating config of " + this + ": final config is "
+                             + mConfiguration + " final compat is "
+                             + mDisplayAdjustments.getCompatibilityInfo());
+                 }
+--- a/frameworks/base/core/java/android/content/res/TypedArray.java
++++ b/frameworks/base/core/java/android/content/res/TypedArray.java
+@@ -1256,8 +1256,7 @@
+     }
+ 
+     @RavenwoodIgnore(
+-            bug = 447612418,
+-            comment = "Better fix in b/447612418#comment2, but it might not be safe")
++            bug = 447612418)
+     private void releaseToPool() {
+         mResources.mTypedArrayPool.release(this);
+     }
+--- a/frameworks/base/core/java/android/content/res/loader/ResourcesProvider.java
++++ b/frameworks/base/core/java/android/content/res/loader/ResourcesProvider.java
+@@ -31,7 +31,6 @@
+ 
+ import com.android.internal.annotations.GuardedBy;
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.content.om.OverlayManagerImpl;
+ import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.Preconditions;
+ 
+@@ -89,30 +88,7 @@
+     @NonNull
+     public static ResourcesProvider loadOverlay(@NonNull OverlayInfo overlayInfo)
+             throws IOException {
+-        Objects.requireNonNull(overlayInfo);
+-        Preconditions.checkArgument(overlayInfo.isFabricated(), "Not accepted overlay");
+-        if (!Flags.selfTargetingAndroidResourceFrro()) {
+-            Preconditions.checkStringNotEmpty(
+-                    overlayInfo.getTargetOverlayableName(), "Without overlayable name");
+-        }
+-        final String overlayName =
+-                OverlayManagerImpl.checkOverlayNameValid(overlayInfo.getOverlayName());
+-        final String path =
+-                Preconditions.checkStringNotEmpty(
+-                        overlayInfo.getBaseCodePath(), "Invalid base path");
+-
+-        final Path frroPath = Path.of(path);
+-        if (!Files.isRegularFile(frroPath)) {
+-            throw new FileNotFoundException("The frro file not found");
+-        }
+-        final Path idmapPath = frroPath.getParent().resolve(overlayName + ".idmap");
+-        if (!Files.isRegularFile(idmapPath)) {
+-            throw new FileNotFoundException("The idmap file not found");
+-        }
+-
+-        return new ResourcesProvider(
+-                ApkAssets.loadOverlayFromPath(
+-                        idmapPath.toString(), 0 /* flags: self targeting overlay */));
++        throw new UnsupportedOperationException("Runtime overlay providers require the Android overlay service");
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/util/TypedValue.java
++++ b/frameworks/base/core/java/android/util/TypedValue.java
+@@ -21,7 +21,6 @@
+ import android.annotation.IntDef;
+ import android.annotation.IntRange;
+ import android.annotation.NonNull;
+-import android.content.pm.ActivityInfo.Config;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ 
+ import java.lang.annotation.Retention;
+@@ -234,7 +233,7 @@
+      * @see android.content.pm.ActivityInfo#CONFIG_COLOR_MODE
+      *
+      */
+-    public @Config int changingConfigurations = -1;
++    public int changingConfigurations = -1;
+ 
+     /**
+      * If the Value came from a resource, this holds the corresponding pixel density.
+--- a/frameworks/base/graphics/java/android/graphics/drawable/ColorStateListDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/ColorStateListDrawable.java
+@@ -251,7 +251,7 @@
+         ColorStateList mTint = null;
+         int mAlpha = -1;
+         BlendMode mBlendMode = DEFAULT_BLEND_MODE;
+-        @ActivityInfo.Config int mChangingConfigurations = 0;
++        int mChangingConfigurations = 0;
+ 
+         ColorStateListDrawableState() {
+         }
+@@ -270,7 +270,7 @@
+         }
+ 
+         @Override
+-        public @ActivityInfo.Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | (mColor != null ? mColor.getChangingConfigurations() : 0)
+                     | (mTint != null ? mTint.getChangingConfigurations() : 0);

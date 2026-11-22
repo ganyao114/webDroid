@@ -42,6 +42,17 @@ void Require(bool condition, std::string_view detail) {
     if (!condition) throw std::runtime_error(std::string(detail));
 }
 
+bool IsDarkOnWhite(uint32_t argb) {
+    const auto alpha = argb >> 24;
+    const auto red = (argb >> 16) & 255;
+    const auto green = (argb >> 8) & 255;
+    const auto blue = argb & 255;
+    // Perceived brightness on the white Settings background, scaled by 1000.
+    const auto brightness = (212u * red + 715u * green + 73u * blue) * alpha
+        + 255'000u * (255u - alpha);
+    return brightness < 135'000u * 255u;
+}
+
 double Milliseconds(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
@@ -144,6 +155,7 @@ void CheckResources(const char* path) {
 
 struct Frame {
     size_t paths = 0;
+    size_t dark_paths = 0;
     std::vector<std::string> texts;
 
     bool Has(std::string_view text) const {
@@ -176,7 +188,13 @@ Frame ReadFrame(wa_sf_t* sf) {
         Require(record.byte_size >= sizeof(record) && record.byte_size <= layer.list_size - offset,
                 "Command fits Settings display list");
         offset += record.byte_size;
-        frame.paths += record.opcode == WA_CANVAS_DRAW_PATH;
+        if (record.opcode == WA_CANVAS_DRAW_PATH) {
+            wa_canvas_path_t path{};
+            Require(record.byte_size >= sizeof(record) + sizeof(path), "Complete path command header");
+            std::memcpy(&path, command + sizeof(record), sizeof(path));
+            ++frame.paths;
+            frame.dark_paths += IsDarkOnWhite(path.paint.argb);
+        }
         if (record.opcode != WA_CANVAS_DRAW_TEXT) continue;
         wa_canvas_text_t text{};
         Require(record.byte_size >= sizeof(record) + sizeof(text), "Complete text command header");
@@ -196,6 +214,57 @@ Object* ClassForName(Vm& vm, ScopedHandleScope& roots, std::string_view name) {
 
 bool IsInstance(Vm& vm, Object* object, Object* type) {
     return vm.CallVirtual(type, "isInstance", "(Ljava/lang/Object;)Z", std::array{Value::Ref(object)}).i();
+}
+
+void CheckIconContrast(Vm& vm, Object* drawable, int size, std::string_view name) {
+    ScopedHandleScope roots(vm);
+    constexpr auto bitmap_type = "Landroid/graphics/Bitmap;";
+    auto* config = roots.Hold(vm.ReadStaticField("Landroid/graphics/Bitmap$Config;", "ARGB_8888",
+                                                "Landroid/graphics/Bitmap$Config;").ref());
+    const std::array bitmap_args{Value::Int(size), Value::Int(size), Value::Ref(config)};
+    auto* bitmap = roots.Hold(vm.CallStatic(bitmap_type, "createBitmap",
+        "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", bitmap_args).ref());
+    auto* canvas = roots.Hold(vm.NewObject("Landroid/graphics/Canvas;", "(Landroid/graphics/Bitmap;)V",
+                                           std::array{Value::Ref(bitmap)}));
+    vm.CallVirtual(drawable, "setBounds", "(IIII)V", std::array{Value::Int(0), Value::Int(0),
+                                                               Value::Int(size), Value::Int(size)});
+    vm.CallVirtual(drawable, "draw", "(Landroid/graphics/Canvas;)V", std::array{Value::Ref(canvas)});
+    size_t dark = 0;
+    for (int y = 0; y < size; ++y) {
+        for (int x = 0; x < size; ++x) {
+            const auto argb = static_cast<uint32_t>(vm.CallVirtual(bitmap, "getPixel", "(II)I",
+                                                                   std::array{Value::Int(x), Value::Int(y)}).i());
+            dark += IsDarkOnWhite(argb);
+        }
+    }
+    Require(dark >= static_cast<size_t>(size * size / 20), std::string(name) + " has a dark foreground");
+    std::cout << name << " dark foreground pixels " << dark << '/' << size * size << '\n';
+}
+
+void CheckHomepageIconContrast(Vm& vm, Object* activity) {
+    ScopedHandleScope roots(vm);
+    auto* resources = roots.Hold(vm.CallVirtual(activity, "getResources",
+                                                "()Landroid/content/res/Resources;").ref());
+    auto* theme = roots.Hold(vm.CallVirtual(resources, "newTheme", "()Landroid/content/res/Resources$Theme;").ref());
+    const auto id = [&](const char* name, const char* type, const char* package) {
+        const std::array args{Value::Ref(roots.Hold(vm.NewString(name))),
+                              Value::Ref(roots.Hold(vm.NewString(type))),
+                              Value::Ref(roots.Hold(vm.NewString(package)))};
+        const auto id = vm.CallVirtual(resources, "getIdentifier",
+            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I", args).i();
+        Require(id != 0, name);
+        return Value::Int(id);
+    };
+    vm.CallVirtual(theme, "applyStyle", "(IZ)V", std::array{id("Theme.Material.Light", "style", "android"),
+                                                           Value::Int(1)});
+    auto* vector_class = ClassForName(vm, roots, "android.graphics.drawable.VectorDrawable");
+    for (const auto* name : {"ic_settings_wireless_filled", "ic_apps_filled", "ic_settings_display_filled"}) {
+        auto* drawable = roots.Hold(vm.CallVirtual(resources, "getDrawable",
+            "(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;",
+            std::array{id(name, "drawable", "com.android.settings"), Value::Ref(theme)}).ref());
+        Require(drawable && IsInstance(vm, drawable, vector_class), name);
+        CheckIconContrast(vm, drawable, 24, name);
+    }
 }
 
 Object* FindText(Vm& vm, Object* node, std::string_view title, Object* text_class, Object* group_class) {
@@ -238,6 +307,10 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
     try {
         vm.LoadDexFile(framework);
         vm.LoadFallbackDexFile(fallback);
+        for (const auto* type : {"Landroid/graphics/drawable/Drawable;", "Landroid/graphics/drawable/VectorDrawable;",
+                                "Landroid/content/res/ColorStateList;", "Landroid/content/res/Resources$Theme;"}) {
+            Require(vm.DexLocation(type).starts_with(framework), type);
+        }
         auto start = Clock::now();
         vm.LoadApkDexFiles(apk);
         const double load_ms = Milliseconds(start);
@@ -271,6 +344,8 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
                                         std::array{Value::Ref(icon)}).i() && IsInstance(vm, icon, bitmap_class),
                 "ApplicationInfo.loadIcon decodes the upstream mipmap");
         Require(vm.CallVirtual(icon, "getIntrinsicWidth", "()I").i() > 1, "Launcher art has positive width");
+        CheckIconContrast(vm, icon, 48, "mipmap/ic_launcher_settings");
+        CheckHomepageIconContrast(vm, activity);
 
         auto* window = roots.Hold(vm.CallVirtual(activity, "getWindow", "()Landroid/view/Window;").ref());
         auto* decor = roots.Hold(vm.CallVirtual(window, "getDecorView", "()Landroid/view/View;").ref());
@@ -290,6 +365,7 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
         home.RequireText("Network & internet");
         home.RequireText("Apps");
         Require(home.paths >= 4, "Upstream homepage vector paths rendered");
+        Require(home.dark_paths >= 3, "Settings homepage draws high-contrast path colors");
 
         constexpr auto view_root = "Landroid/view/ViewRootImpl;";
         constexpr auto draw_signature = "(Landroid/graphics/Canvas;)V";
@@ -438,7 +514,7 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
 
 int main(int argc, char** argv) {
     try {
-        Require(argc == 5, "Usage: test_m14_upstream_settings APK core.dex upstream.dex framework-resources.apk");
+        Require(argc == 5, "Usage: test_m14_upstream_settings APK upstream.dex core.dex framework-resources.apk");
         CheckResources(argv[1]);
         CheckRuntime(argv[1], argv[2], argv[3], argv[4], 960, 660);
         CheckRuntime(argv[1], argv[2], argv[3], argv[4], 448, 896);

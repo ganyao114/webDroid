@@ -1,0 +1,96 @@
+--- a/frameworks/base/graphics/java/android/graphics/Typeface.java
++++ b/frameworks/base/graphics/java/android/graphics/Typeface.java
+@@ -433,8 +433,8 @@
+         try {
+             FontFamily.Builder familyBuilder = null;
+             for (final FontFileResourceEntry fontFile : filesEntry.getEntries()) {
+-                final Font.Builder fontBuilder = new Font.Builder(mgr, fontFile.getFileName(),
+-                        false /* isAsset */, AssetManager.COOKIE_UNKNOWN)
++                final Font.Builder fontBuilder = new Font.Builder(Font.Builder.createBuffer(mgr, fontFile.getFileName(),
++                        false /* isAsset */, AssetManager.COOKIE_UNKNOWN))
+                         .setTtcIndex(fontFile.getTtcIndex())
+                         .setFontVariationSettings(fontFile.getVariationSettings());
+                 if (fontFile.getWeight() != Typeface.RESOLVE_BY_FONT_TABLE) {
+@@ -619,7 +619,7 @@
+          */
+         public Builder(@NonNull AssetManager assetManager, @NonNull String path, boolean isAsset,
+                 int cookie) {
+-            mFontBuilder = new Font.Builder(assetManager, path, isAsset, cookie);
++            mFontBuilder = new Font.Builder(Font.Builder.createBuffer(assetManager, path, isAsset, cookie));
+             mAssetManager = assetManager;
+             mPath = path;
+         }
+@@ -1692,8 +1692,8 @@
+     /** @hide */
+     public static void init() {
+         // Preload Roboto-Regular.ttf in Zygote for improving app launch performance.
+-        preloadFontFile(SystemFonts.SYSTEM_FONT_DIR + "Roboto-Regular.ttf");
+-        preloadFontFile(SystemFonts.SYSTEM_FONT_DIR + "RobotoStatic-Regular.ttf");
++        preloadFontFile("/system/fonts/Roboto-Regular.ttf");
++        preloadFontFile("/system/fonts/RobotoStatic-Regular.ttf");
+ 
+         String locale = SystemProperties.get("persist.sys.locale", "en-US");
+         String script = ULocale.addLikelySubtags(ULocale.forLanguageTag(locale)).getScript();
+--- a/frameworks/base/graphics/java/android/graphics/FontFamily.java
++++ b/frameworks/base/graphics/java/android/graphics/FontFamily.java
+@@ -203,11 +203,17 @@
+         }
+ 
+         try {
+-            ByteBuffer buffer =  Font.Builder.createBuffer(mgr, path, isAsset, cookie);
++            ByteBuffer buffer = resourceFontBuffer(mgr, path, isAsset, cookie);
+             return addFontFromBuffer(buffer, ttcIndex, axes, weight, isItalic);
+         } catch (IOException e) {
+             return false;
+         }
++    }
++
++    // Keep the checked error declared by the platform's hidden Font.Builder method.
++    private static ByteBuffer resourceFontBuffer(AssetManager mgr, String path,
++            boolean isAsset, int cookie) throws IOException {
++        return Font.Builder.createBuffer(mgr, path, isAsset, cookie);
+     }
+ 
+     private static native long nInitBuilder(String langs, int variant);
+--- a/frameworks/base/core/java/android/text/FontConfig.java
++++ b/frameworks/base/core/java/android/text/FontConfig.java
+@@ -855,7 +855,7 @@
+         }
+ 
+         @Override
+-        public void writeToParcel(@androidx.annotation.NonNull Parcel dest, int flags) {
++        public void writeToParcel(@NonNull Parcel dest, int flags) {
+             dest.writeTypedList(mFamilies, flags);
+             dest.writeString8(mName);
+             dest.writeString8(mFallback);
+--- a/frameworks/base/core/java/android/content/res/loader/ResourcesProvider.java
++++ b/frameworks/base/core/java/android/content/res/loader/ResourcesProvider.java
+@@ -234,7 +234,7 @@
+             throw new IllegalArgumentException("Split " + splitName + " not found");
+         }
+ 
+-        String splitPath = appInfo.getSplitCodePaths()[splitIndex];
++        String splitPath = appInfo.splitSourceDirs[splitIndex];
+         return new ResourcesProvider(ApkAssets.loadFromPath(splitPath, ApkAssets.PROPERTY_LOADER,
+                 null /* assetsProvider */));
+     }
+--- a/frameworks/base/core/java/android/util/ArraySet.java
++++ b/frameworks/base/core/java/android/util/ArraySet.java
+@@ -203,7 +203,7 @@
+                     }
+                     // Whoops!  Someone trampled the array (probably due to not protecting
+                     // their access with a lock).  Our cache is corrupt; report and give up.
+-                    Slog.wtf(TAG, "Found corrupt ArraySet cache: [0]=" + array[0]
++                    Log.wtf(TAG, "Found corrupt ArraySet cache: [0]=" + array[0]
+                             + " [1]=" + array[1]);
+                     sTwiceBaseCache = null;
+                     sTwiceBaseCacheSize = 0;
+@@ -230,7 +230,7 @@
+                     }
+                     // Whoops!  Someone trampled the array (probably due to not protecting
+                     // their access with a lock).  Our cache is corrupt; report and give up.
+-                    Slog.wtf(TAG, "Found corrupt ArraySet cache: [0]=" + array[0]
++                    Log.wtf(TAG, "Found corrupt ArraySet cache: [0]=" + array[0]
+                             + " [1]=" + array[1]);
+                     sBaseCache = null;
+                     sBaseCacheSize = 0;

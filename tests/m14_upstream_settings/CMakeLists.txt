@@ -40,6 +40,6 @@ else()
     set(test_command "$<TARGET_FILE:test_m14_upstream_settings>")
     set(test_name test_m14_upstream_settings)
 endif()
-add_test(NAME ${test_name} COMMAND ${test_command} "${WA_SETTINGS_APK}" "${framework}"
-    "${WA_LAUNCHER_FRAMEWORK_DEX}" "${WA_LAUNCHER_FRAMEWORK_RES}")
+add_test(NAME ${test_name} COMMAND ${test_command} "${WA_SETTINGS_APK}" "${WA_LAUNCHER_FRAMEWORK_DEX}"
+    "${framework}" "${WA_LAUNCHER_FRAMEWORK_RES}")
 set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)

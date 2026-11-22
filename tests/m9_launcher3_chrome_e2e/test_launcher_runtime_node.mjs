@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { LauncherAbi, frameTimeNs } from '../../web/launcher/abi_helpers.mjs';
-import { cubeName, fallbackDexName, launcherName, loadAndroidSystem, loadLauncherAssets, settingsName,
+import { cubeName, fallbackDexName, frameworkDexName, launcherName, loadAndroidSystem, loadLauncherAssets, settingsName,
   systemAppNames, systemUiName } from '../../web/launcher/assets.mjs';
 import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
 import { mountLauncherPlayground } from '../../web/shell/launcher_playground.mjs';
@@ -64,10 +64,10 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
     const wasmFile = 'android_system.wasm';
     await put(wasmBuild, wasmFile, Uint8Array.of(0, 97, 115, 109));
     await put(wasmBuild, 'android_system.mjs', 'export default async ({ locateFile } = {}) => ({ locateFile });\n');
-    await put(hostBuild, 'runtime/android_system/aosp17-ui/aosp17_framework_core.dex', Uint8Array.of(1, 255));
     const systemRoot = 'runtime/android_system';
+    await put(hostBuild, `${systemRoot}/aosp17-ui/${fallbackDexName}`, Uint8Array.of(1, 255));
     await put(hostBuild, `${systemRoot}/upstream-framework/framework-res-upstream.apk`, Uint8Array.of(2, 254));
-    await put(hostBuild, `${systemRoot}/upstream-framework/${fallbackDexName}`, Uint8Array.of(8, 248));
+    await put(hostBuild, `${systemRoot}/upstream-framework/${frameworkDexName}`, Uint8Array.of(8, 248));
     await put(hostBuild, 'tests/m6_apk_chrome_e2e/wa_cube_app.apk', Uint8Array.of(3, 253));
     await put(hostBuild, 'tests/m8_aosp17_launcher3_apk/apk/Launcher3.apk', Uint8Array.of(6, 250));
     await put(hostBuild, `${systemRoot}/launcher/${systemUiName}`, Uint8Array.of(7, 249));
@@ -114,7 +114,8 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
       const assets = await loadLauncherAssets({ base });
       assert.deepEqual(assets.apks.map(({ name }) => name), [cubeName, ...systemAppNames]);
       assert.deepEqual(assets.resources, Uint8Array.of(2, 254));
-      assert.deepEqual(assets.fallbackDex, Uint8Array.of(8, 248));
+      assert.deepEqual(assets.frameworkDex, Uint8Array.of(8, 248));
+      assert.deepEqual(assets.fallbackDex, Uint8Array.of(1, 255));
       assert.deepEqual(assets.systemUi, Uint8Array.of(7, 249));
       assert.equal(assets.launcherSources, 879);
       await rm(new URL(systemUiName, base));

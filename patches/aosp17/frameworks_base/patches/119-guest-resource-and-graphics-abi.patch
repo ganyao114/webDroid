@@ -1,0 +1,33 @@
+--- a/frameworks/base/core/java/android/content/res/Configuration.java
++++ b/frameworks/base/core/java/android/content/res/Configuration.java
+@@ -2153,6 +2153,12 @@
+         return mLocaleList;
+     }
+ 
++    /** The primary locale tag used by the guest package manager. @hide */
++    public String getLocaleTag() {
++        Locale primaryLocale = getLocales().get(0);
++        return primaryLocale == null ? "" : primaryLocale.toLanguageTag();
++    }
++
+     /**
+      * Set the locale list. This is the preferred way for setting up the locales (instead of using
+      * the direct accessor or {@link #setLocale(Locale)}). This will also set the layout direction
+--- a/frameworks/base/graphics/java/android/graphics/BlurMaskFilter.java
++++ b/frameworks/base/graphics/java/android/graphics/BlurMaskFilter.java
+@@ -24,6 +24,7 @@
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class BlurMaskFilter extends MaskFilter {
++    final float radius;
+ 
+     public enum Blur {
+         /**
+@@ -60,6 +61,7 @@
+      * @return       The new blur maskfilter
+      */
+     public BlurMaskFilter(float radius, Blur style) {
++        this.radius = radius;
+         native_instance = nativeConstructor(radius, style.native_int);
+     }
+ 

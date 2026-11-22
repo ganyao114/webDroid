@@ -1,32 +1,14 @@
 # Sources compiled directly from the read-only AOSP 17 checkout.
-frameworks/base/core/java/android/animation/TimeInterpolator.java
 frameworks/base/core/java/android/animation/TypeEvaluator.java
 frameworks/base/core/java/android/animation/PointFEvaluator.java
 frameworks/base/core/java/android/animation/RectEvaluator.java
 frameworks/base/core/java/android/animation/ArgbEvaluator.java
 @patch 0021-srgb-argb-evaluator.patch
-frameworks/base/core/java/android/content/res/ApkAssets.java
-frameworks/base/core/java/android/content/res/XmlBlock.java
-frameworks/base/core/java/android/content/res/XmlResourceParser.java
-frameworks/base/core/java/android/content/res/loader/AssetsProvider.java
-frameworks/base/core/java/android/util/ArrayMap.java
-frameworks/base/core/java/android/util/AttributeSet.java
-frameworks/base/core/java/android/util/ContainerHelpers.java
-frameworks/base/core/java/android/util/EmptyArray.java
-frameworks/base/core/java/android/util/MapCollections.java
-frameworks/base/core/java/android/util/Pair.java
-frameworks/base/core/java/android/util/SparseArray.java
-frameworks/base/core/java/android/util/SparseBooleanArray.java
-frameworks/base/core/java/android/util/SparseIntArray.java
-frameworks/base/core/java/android/util/SparseLongArray.java
 frameworks/base/core/java/android/util/LongSparseArray.java
 frameworks/base/core/java/com/android/internal/util/function/LongObjPredicate.java
-frameworks/base/core/java/android/util/TypedValue.java
-frameworks/base/core/java/android/view/Gravity.java
 frameworks/base/core/java/android/view/animation/BaseInterpolator.java
 frameworks/base/core/java/android/view/animation/Interpolator.java
 frameworks/base/core/java/android/view/animation/LinearInterpolator.java
-frameworks/base/core/java/com/android/internal/util/GrowingArrayUtils.java
 frameworks/base/core/java/android/view/animation/AccelerateDecelerateInterpolator.java
 frameworks/base/core/java/android/view/animation/DecelerateInterpolator.java
 frameworks/base/core/java/android/view/animation/AccelerateInterpolator.java
@@ -36,22 +18,17 @@ frameworks/base/core/java/android/view/animation/PathInterpolator.java
 frameworks/base/core/java/android/widget/OverScroller.java
 frameworks/base/core/java/android/widget/Scroller.java
 frameworks/base/core/java/android/widget/Advanceable.java
-frameworks/base/core/java/android/util/UtilConfig.java
-libcore/ojluni/src/main/java/java/lang/Runnable.java
 libcore/ojluni/src/main/java/java/lang/Void.java
 libcore/ojluni/src/main/java/java/io/ByteArrayOutputStream.java
 libcore/ojluni/src/main/java/java/io/Flushable.java
 libcore/ojluni/src/main/java/java/io/OutputStream.java
 libcore/ojluni/src/main/java/java/util/concurrent/Callable.java
-libcore/ojluni/src/main/java/java/util/function/BiConsumer.java
-libcore/ojluni/src/main/java/java/util/function/BiFunction.java
 libcore/ojluni/src/main/java/java/util/function/IntConsumer.java
 libcore/ojluni/src/main/java/java/util/function/IntBinaryOperator.java
 libcore/ojluni/src/main/java/java/util/function/IntFunction.java
 libcore/ojluni/src/main/java/java/util/function/LongFunction.java
 libcore/ojluni/src/main/java/java/util/function/IntPredicate.java
 libcore/ojluni/src/main/java/java/util/function/IntUnaryOperator.java
-frameworks/base/core/java/android/os/LocaleList.java
 frameworks/base/core/java/android/app/Application.java
 frameworks/base/core/java/android/content/ComponentCallbacks.java
 frameworks/base/core/java/android/content/ComponentCallbacks2.java
@@ -62,13 +39,10 @@ frameworks/base/core/java/android/os/HandlerThread.java
 frameworks/base/core/java/android/os/Trace.java
 frameworks/base/core/java/android/content/BroadcastReceiver.java
 frameworks/base/core/java/android/app/Person.java
-frameworks/base/core/java/android/os/Parcelable.java
 libcore/ojluni/src/main/java/java/util/AbstractMap.java
 libcore/ojluni/src/main/java/java/util/AbstractCollection.java
 libcore/ojluni/src/main/java/java/util/AbstractSet.java
 libcore/ojluni/src/main/java/java/util/WeakHashMap.java
-frameworks/base/core/java/android/content/res/ResourceId.java
-frameworks/base/core/java/android/util/Pools.java
 frameworks/base/core/java/android/view/RemotableViewMethod.java
 frameworks/base/core/java/android/widget/RelativeLayout.java
 libcore/ojluni/src/main/java/java/util/ArrayDeque.java
@@ -81,7 +55,6 @@ frameworks/base/core/java/android/os/OperationCanceledException.java
 frameworks/base/core/java/android/view/ViewTreeObserver.java
 frameworks/base/core/java/android/view/GestureDetector.java
 frameworks/base/core/java/android/view/accessibility/AccessibilityNodeProvider.java
-frameworks/base/graphics/java/android/graphics/Matrix.java
 
 # Exact patches applied to staged copies of entries above.
 @patch 0001-cooperative-handler-thread.patch
@@ -94,7 +67,6 @@ frameworks/base/graphics/java/android/graphics/Matrix.java
 @patch 0008-reverse-deque-jdk17.patch
 @patch 0009-local-cancellation-signal.patch
 @patch 0010-view-tree-observer-sdk.patch
-@patch 0011-matrix-ui-jni.patch
 libcore/ojluni/src/main/java/java/util/OptionalInt.java
 libcore/ojluni/src/main/java/java/util/PrimitiveIterator.java
 libcore/ojluni/src/main/java/java/util/Spliterator.java

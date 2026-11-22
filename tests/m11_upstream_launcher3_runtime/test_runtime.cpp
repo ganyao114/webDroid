@@ -115,8 +115,8 @@ void PrintLoadMemory() {
 }
 
 void Load(Vm& vm, const Inputs& inputs, bool report) {
-    vm.LoadDexFile(inputs.core);
-    vm.LoadFallbackDexFile(inputs.framework);
+    vm.LoadDexFile(inputs.framework);
+    vm.LoadFallbackDexFile(inputs.core);
     const auto before = vm.GetDexStats();
 
     const auto start = Clock::now();
@@ -171,9 +171,14 @@ void TestArchives(const std::string& compressed, const std::string& invalid) {
     vm.LoadApkDexFiles(compressed);
     const auto loaded = vm.GetDexStats();
     constexpr auto kFilter = "Landroid/content/IntentFilter;";
-    Require(loaded.files.size() == 1 && loaded.linked_classes == 0 &&
-                vm.DexLocation(kFilter) == compressed + "!classes.dex",
+    Require(!loaded.files.empty() && loaded.linked_classes == 0 &&
+                vm.DexLocation(kFilter).starts_with(compressed + "!classes"),
             "Deflated DEX loaded lazily and asset entries were ignored");
+    Vm framework;
+    framework.LoadDexFile(compressed);
+    Require(framework.GetDexStats().files.size() == loaded.files.size() &&
+                framework.DexLocation(kFilter) == vm.DexLocation(kFilter),
+            "Framework archive loads every DEX in the parent class path");
     rejected = false;
     try {
         vm.LoadApkDexFiles(compressed);
@@ -181,7 +186,8 @@ void TestArchives(const std::string& compressed, const std::string& invalid) {
         rejected = std::string_view(error.what()).starts_with("Duplicate DEX class");
     }
     const auto final = vm.GetDexStats();
-    Require(rejected && final.files.size() == 1 && final.indexed_classes == loaded.indexed_classes,
+    Require(rejected && final.files.size() == loaded.files.size()
+                && final.indexed_classes == loaded.indexed_classes,
             "Duplicate application DEX leaves the original index untouched");
     std::cout << "Verified deflated entries, corrupt secondary DEX rejection, and atomic publication\n";
 }

@@ -1,0 +1,270 @@
+--- a/frameworks/base/core/java/android/content/res/AssetManager.java
++++ b/frameworks/base/core/java/android/content/res/AssetManager.java
+@@ -16,7 +16,6 @@
+ 
+ package android.content.res;
+ 
+-import static android.app.ResourcesManager.ApkKey;
+ import static android.content.res.Flags.resourcesMinorVersionSupport;
+ import static android.content.res.Resources.ID_NULL;
+ 
+@@ -28,16 +27,13 @@
+ import android.annotation.StringRes;
+ import android.annotation.StyleRes;
+ import android.annotation.TestApi;
+-import android.app.ResourcesManager;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.pm.ActivityInfo;
+ import android.content.res.Configuration.NativeConfig;
+ import android.content.res.loader.ResourcesLoader;
+ import android.os.Build;
+-import android.os.Build.SdkIntFull;
+ import android.os.ParcelFileDescriptor;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.ravenwood.annotation.RavenwoodReplace;
+ import android.ravenwood.annotation.RavenwoodThrow;
+ import android.util.ArrayMap;
+ import android.util.ArraySet;
+@@ -47,8 +43,6 @@
+ 
+ import com.android.internal.annotations.GuardedBy;
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.content.om.OverlayConfig;
+-import com.android.internal.ravenwood.RavenwoodHelperBridge;
+ 
+ import java.io.FileDescriptor;
+ import java.io.FileNotFoundException;
+@@ -220,15 +214,23 @@
+         }
+     }
+ 
+-    @RavenwoodReplace
+     private static String getFrameworkApkPath() {
+         return FRAMEWORK_APK_PATH_DEVICE;
+     }
+ 
+-    private static String getFrameworkApkPath$ravenwood() {
+-        return RavenwoodHelperBridge.getInstance().getRavenwoodRuntimePath()
+-                + FRAMEWORK_APK_PATH_RAVENWOOD;
+-    }
++    static AssetManager forMountedApks(ApkAssets[] apkAssets) {
++        final AssetManager result = new AssetManager(false);
++        result.mApkAssets = apkAssets.clone();
++        try {
++            nativeSetApkAssets(result.mObject, result.mApkAssets, false, false);
++        } catch (RuntimeException | Error failure) {
++            result.close();
++            throw failure;
++        }
++        return result;
++    }
++
++    private record ApkKey(String path, boolean sharedLibrary, boolean overlay) {}
+ 
+     /**
+      * Create a new AssetManager containing only the basic system assets.
+@@ -283,14 +285,6 @@
+         try {
+             final ArrayList<ApkAssets> apkAssets = new ArrayList<>();
+             apkAssets.add(ApkAssets.loadFromPath(frameworkPath, ApkAssets.PROPERTY_SYSTEM));
+-
+-            // TODO(Ravenwood): overlay support?
+-            final String[] systemIdmapPaths =
+-                    RavenwoodHelperBridge.getInstance().isRunningOnRavenwood() ? new String[0] :
+-                    OverlayConfig.getZygoteInstance().createImmutableFrameworkIdmapsInZygote();
+-            for (String idmapPath : systemIdmapPaths) {
+-                apkAssets.add(ApkAssets.loadOverlayFromPath(idmapPath, ApkAssets.PROPERTY_SYSTEM));
+-            }
+ 
+             sSystemApkAssetsSet = new ArraySet<>(apkAssets);
+             sSystemApkAssets = apkAssets.toArray(new ApkAssets[0]);
+@@ -504,7 +498,7 @@
+     /**
+      * @hide
+      */
+-    public void addApkKeys(@NonNull List<ApkKey> keys, boolean presetAssets) {
++    void addApkKeys(@NonNull List<ApkKey> keys, boolean presetAssets) {
+         addAssetPathInternal(keys, presetAssets);
+     }
+ 
+@@ -588,14 +582,12 @@
+     private static @NonNull ArrayList<ApkAssets> loadAssets(@NonNull ArrayList<ApkKey> keys) {
+         final int pathsSize = keys.size();
+         final var loadedAssets = new ArrayList<ApkAssets>(pathsSize);
+-        final var resourcesManager = ResourcesManager.getInstance();
+         for (int i = 0; i < pathsSize; i++) {
+             final var key = keys.get(i);
+             try {
+-                // ResourcesManager has a cache of loaded assets, ensuring we don't open the same
+-                // file repeatedly, which is useful for the common overlays and registered
+-                // shared libraries.
+-                loadedAssets.add(resourcesManager.loadApkAssets(key));
++                loadedAssets.add(key.overlay ? ApkAssets.loadOverlayFromPath(key.path, 0)
++                        : ApkAssets.loadFromPath(key.path,
++                                key.sharedLibrary ? ApkAssets.PROPERTY_DYNAMIC : 0));
+             } catch (IOException e) {
+                 Log.w(TAG, "Failed to load asset, key = " + key, e);
+             }
+@@ -1582,7 +1574,7 @@
+             int orientation, int touchscreen, int density, int keyboard, int keyboardHidden,
+             int navigation, int screenWidth, int screenHeight, int smallestScreenWidthDp,
+             int screenWidthDp, int screenHeightDp, int screenLayout, int uiMode, int colorMode,
+-            int grammaticalGender, @SdkIntFull int sdkVersionFull) {
++            int grammaticalGender, int sdkVersionFull) {
+         setConfigurationInternal(mcc, mnc, defaultLocale, locales, orientation,
+                 touchscreen, density, keyboard, keyboardHidden, navigation, screenWidth,
+                 screenHeight, smallestScreenWidthDp, screenWidthDp, screenHeightDp,
+@@ -1598,7 +1590,7 @@
+             int orientation, int touchscreen, int density, int keyboard, int keyboardHidden,
+             int navigation, int screenWidth, int screenHeight, int smallestScreenWidthDp,
+             int screenWidthDp, int screenHeightDp, int screenLayout, int uiMode, int colorMode,
+-            int grammaticalGender, @SdkIntFull int sdkVersionFull, boolean forceRefresh) {
++            int grammaticalGender, int sdkVersionFull, boolean forceRefresh) {
+         synchronized (this) {
+             ensureValidLocked();
+             final int majorVersion = Build.getMajorSdkVersion(sdkVersionFull);
+--- a/frameworks/base/core/java/android/content/res/Resources.java
++++ b/frameworks/base/core/java/android/content/res/Resources.java
+@@ -127,7 +127,7 @@
+  * href="{@docRoot}guide/topics/resources/index.html">Application Resources</a>.</p>
+  */
+ @RavenwoodKeepWholeClass
+-public class Resources {
++public class Resources implements AutoCloseable {
+     /**
+      * The {@code null} resource ID. This denotes an invalid resource ID that is returned by the
+      * system when a resource is not found or the value is set to {@code @null} in XML.
+@@ -147,6 +147,10 @@
+     // Used by BridgeResources in layoutlib
+     @UnsupportedAppUsage
+     static Resources mSystem = null;
++    private ApkAssets[] mOwnedApks;
++    private AssetManager mOwnedAssets;
++    private Resources mMountedSystem;
++
+ 
+     @UnsupportedAppUsage
+     private ResourcesImpl mResourcesImpl;
+@@ -232,6 +236,122 @@
+             return dark;
+         }
+         return deviceDefault;
++    }
++
++    /** Creates resources for the APK paths mounted by the guest process. @hide */
++    public static Resources forApk(String[] paths, String locale, int dpi) throws IOException {
++        return forMountedApks(paths, locale, dpi, null);
++    }
++
++    /** @hide */
++    public static Resources forApk(String path, String locale, int dpi) throws IOException {
++        return forApk(new String[] {path}, locale, dpi);
++    }
++
++    /** @hide */
++    public Resources forApkWithFramework(String path, String locale, int dpi) throws IOException {
++        return forPackage(path, locale, dpi);
++    }
++
++    /** @hide */
++    public Resources forPackage(String path, String locale, int dpi) throws IOException {
++        final ApkAssets[] assets = getAssets().getApkAssets();
++        final ApkAssets framework = mMountedSystem == null ? null : assets[0];
++        return forMountedApks(new String[] {path}, locale, dpi, framework);
++    }
++
++    private static Resources forMountedApks(String[] paths, String locale, int dpi,
++            ApkAssets framework) throws IOException {
++        final ApkAssets[] owned = new ApkAssets[paths.length];
++        final Configuration config = new Configuration();
++        config.setToDefaults();
++        config.setLocale(java.util.Locale.forLanguageTag(locale));
++        config.densityDpi = dpi;
++        Resources result = null;
++        try {
++            for (int i = 0; i < paths.length; ++i) owned[i] = ApkAssets.loadFromPath(paths[i]);
++            final ApkAssets[] assets;
++            if (framework != null) {
++                assets = new ApkAssets[owned.length + 1];
++                assets[0] = framework;
++                System.arraycopy(owned, 0, assets, 1, owned.length);
++            } else {
++                assets = owned;
++            }
++            result = forAssets(assets, new DisplayMetrics(), config);
++            result.mOwnedApks = owned;
++            if (framework == null && assets.length > 1
++                    && "android".equals(result.getResourcePackageName(android.R.string.ok))) {
++                result.mMountedSystem = forAssets(new ApkAssets[] {assets[0]}, new DisplayMetrics(), config);
++                synchronized (sSync) {
++                    mSystem = result.mMountedSystem;
++                }
++            }
++            return result;
++        } catch (IOException | RuntimeException | Error failure) {
++            if (result != null) result.close();
++            else for (ApkAssets apk : owned) if (apk != null) apk.close();
++            throw failure;
++        }
++    }
++
++    private static Resources forAssets(ApkAssets[] assets, DisplayMetrics metrics, Configuration config) {
++        final AssetManager manager = AssetManager.forMountedApks(assets);
++        try {
++            final Resources resources = new Resources(manager, metrics, config);
++            resources.mOwnedAssets = manager;
++            return resources;
++        } catch (RuntimeException | Error failure) {
++            manager.close();
++            throw failure;
++        }
++    }
++
++    /** @hide */
++    public Resources withConfiguration(Configuration override) {
++        final Configuration config = new Configuration(getConfiguration());
++        config.updateFrom(override);
++        return forAssets(getAssets().getApkAssets(), getDisplayMetrics(), config);
++    }
++
++    /** @hide */
++    public void updateDisplay(int width, int height, int density) {
++        final DisplayMetrics current = getDisplayMetrics();
++        if (current.widthPixels == width && current.heightPixels == height && current.densityDpi == density) {
++            return;
++        }
++        final DisplayMetrics metrics = new DisplayMetrics();
++        metrics.setTo(current);
++        metrics.widthPixels = metrics.noncompatWidthPixels = width;
++        metrics.heightPixels = metrics.noncompatHeightPixels = height;
++        final Configuration config = new Configuration(getConfiguration());
++        config.densityDpi = density;
++        config.screenWidthDp = (int) (width * 160f / density);
++        config.screenHeightDp = (int) (height * 160f / density);
++        config.smallestScreenWidthDp = Math.min(config.screenWidthDp, config.screenHeightDp);
++        config.orientation = width > height ? Configuration.ORIENTATION_LANDSCAPE
++                : Configuration.ORIENTATION_PORTRAIT;
++        updateConfiguration(config, metrics);
++    }
++
++    /** Releases the APK paths opened by the guest resource factory. @hide */
++    @Override
++    public void close() {
++        if (mMountedSystem != null) {
++            synchronized (sSync) {
++                if (mSystem == mMountedSystem) mSystem = null;
++            }
++            mMountedSystem.close();
++            mMountedSystem = null;
++        }
++        if (mOwnedAssets != null) {
++            mOwnedAssets.close();
++            mOwnedAssets = null;
++        }
++        if (mOwnedApks != null) {
++            for (ApkAssets apk : mOwnedApks) if (apk != null) apk.close();
++            mOwnedApks = null;
++        }
+     }
+ 
+     /**

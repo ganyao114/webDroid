@@ -282,8 +282,9 @@ void PrintList(std::string_view label, const DisplayList& frame) {
               << " round_clip=" << frame.counts[WA_CANVAS_CLIP_ROUND_RECT] << '\n';
 }
 
-void Run(Vm& vm, const char* framework, const char* apk, const char* system_resources) {
-    vm.LoadDexFile(framework);
+void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, const char* system_resources) {
+    vm.LoadDexFile(upstream);
+    vm.LoadFallbackDexFile(framework);
     vm.LoadDexFile(std::string(apk) + "!classes.dex", ExtractDex(apk));
     std::unique_ptr<wa_sf_t, decltype(&wa_sf_destroy)> sf(wa_sf_create(), wa_sf_destroy);
     Require(sf != nullptr, "SurfaceFlinger allocation");
@@ -500,14 +501,14 @@ void Run(Vm& vm, const char* framework, const char* apk, const char* system_reso
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
+    if (argc != 5) {
         std::cerr
-            << "Usage: test_aosp17_ui_framework FRAMEWORK.dex APP.apk PLATFORM_RESOURCES.apk\n";
+            << "Usage: test_aosp17_ui_framework UPSTREAM.dex CORE.dex APP.apk PLATFORM_RESOURCES.apk\n";
         return 2;
     }
     Vm vm({.gc_interval = 137});
     try {
-        Run(vm, argv[1], argv[2], argv[3]);
+        Run(vm, argv[1], argv[2], argv[3], argv[4]);
         return 0;
     } catch (const wa::interp::ManagedException&) {
         std::cerr << vm.ExceptionSummary() << '\n';

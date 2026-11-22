@@ -673,7 +673,7 @@ int32_t wa_system_launcher_load_framework_dex(const uint8_t* bytes, size_t lengt
         if (s.booted || s.runtime) return WA_ERR_BUSY;
         std::vector<uint8_t> dex(bytes, bytes + length);
         auto next = std::make_unique<LauncherRuntime>();
-        next->vm.LoadDexFile("aosp17_framework_core.dex", dex);
+        next->vm.LoadDexFile("aosp17_upstream_framework.dex", dex);
         s.framework_dex = std::move(dex);
         s.runtime = std::move(next);
         return WA_OK;
@@ -681,11 +681,11 @@ int32_t wa_system_launcher_load_framework_dex(const uint8_t* bytes, size_t lengt
 }
 
 int32_t wa_system_launcher_load_framework_fallback_dex(const uint8_t* bytes, size_t length) {
-    return Active("Load upstream framework DEX", [&](Session& s) -> int32_t {
+    return Active("Load framework compatibility DEX", [&](Session& s) -> int32_t {
         if (!bytes || !length || !s.runtime) return WA_ERR_INVALID;
         if (s.booted || !s.fallback_dex.empty()) return WA_ERR_BUSY;
         std::vector<uint8_t> dex(bytes, bytes + length);
-        s.runtime->vm.LoadFallbackDexFile("aosp17_upstream_framework.dex", dex);
+        s.runtime->vm.LoadFallbackDexFile("aosp17_framework_core.dex", dex);
         s.fallback_dex = std::move(dex);
         return WA_OK;
     });
@@ -743,7 +743,7 @@ int32_t StageLauncherApk(Session& s, const char* name, const uint8_t* bytes, siz
     if (s.booted) return WA_ERR_BUSY;
     if (!name || !*name || !bytes || !length) return WA_ERR_INVALID;
     if (s.framework_dex.empty() || s.fallback_dex.empty())
-        throw std::invalid_argument("Load the core and upstream framework DEX files first");
+        throw std::invalid_argument("Load the upstream and compatibility framework DEX files first");
     if (!s.framework_resource || !s.systemui_apk)
         throw std::invalid_argument("Load framework resources and SystemUI-upstream.apk first");
     LauncherPackage package;
@@ -767,8 +767,8 @@ int32_t BootLauncher(Session& s) {
     auto apk = std::move(s.launcher_apk);
     if (!s.runtime) {
         auto next = std::make_unique<LauncherRuntime>();
-        next->vm.LoadDexFile("aosp17_framework_core.dex", s.framework_dex);
-        next->vm.LoadFallbackDexFile("aosp17_upstream_framework.dex", s.fallback_dex);
+        next->vm.LoadDexFile("aosp17_upstream_framework.dex", s.framework_dex);
+        next->vm.LoadFallbackDexFile("aosp17_framework_core.dex", s.fallback_dex);
         s.runtime = std::move(next);
     }
     auto& [vm, ui, system_ui] = *s.runtime;

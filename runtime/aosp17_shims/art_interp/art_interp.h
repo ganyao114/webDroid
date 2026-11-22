@@ -97,6 +97,7 @@ class Vm {
   Vm(const Vm&) = delete;
   Vm& operator=(const Vm&) = delete;
 
+  // Loads a raw DEX or an archive with consecutive classes*.dex entries as parent classes.
   void LoadDexFile(const std::string& path);
   void LoadDexFile(std::string location, std::vector<uint8_t> bytes);
   // Fills holes in the existing class path without replacing earlier definitions.

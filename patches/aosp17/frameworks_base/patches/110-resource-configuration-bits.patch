@@ -1,0 +1,252 @@
+--- a/frameworks/base/core/java/android/content/res/AssetManager.java
++++ b/frameworks/base/core/java/android/content/res/AssetManager.java
+@@ -654,7 +654,7 @@
+             }
+ 
+             // Convert the changing configurations flags populated by native code.
+-            outValue.changingConfigurations = ActivityInfo.activityInfoConfigNativeToJava(
++            outValue.changingConfigurations = nativeConfigToJava(
+                     outValue.changingConfigurations);
+ 
+             if (outValue.type == TypedValue.TYPE_STRING) {
+@@ -703,7 +703,7 @@
+             }
+ 
+             // Convert the changing configurations flags populated by native code.
+-            outValue.changingConfigurations = ActivityInfo.activityInfoConfigNativeToJava(
++            outValue.changingConfigurations = nativeConfigToJava(
+                     outValue.changingConfigurations);
+ 
+             if (outValue.type == TypedValue.TYPE_STRING) {
+@@ -837,7 +837,7 @@
+             }
+ 
+             // Convert the changing configurations flags populated by native code.
+-            outValue.changingConfigurations = ActivityInfo.activityInfoConfigNativeToJava(
++            outValue.changingConfigurations = nativeConfigToJava(
+                     outValue.changingConfigurations);
+ 
+             if (outValue.type == TypedValue.TYPE_STRING) {
+@@ -1704,6 +1704,35 @@
+     }
+ 
+     // AssetManager setup native methods.
++    private static final int[] CONFIG_NATIVE_BITS = new int[] {
++        Configuration.NATIVE_CONFIG_MNC,                    // MNC
++        Configuration.NATIVE_CONFIG_MCC,                    // MCC
++        Configuration.NATIVE_CONFIG_LOCALE,                 // LOCALE
++        Configuration.NATIVE_CONFIG_TOUCHSCREEN,            // TOUCH SCREEN
++        Configuration.NATIVE_CONFIG_KEYBOARD,               // KEYBOARD
++        Configuration.NATIVE_CONFIG_KEYBOARD_HIDDEN,        // KEYBOARD HIDDEN
++        Configuration.NATIVE_CONFIG_NAVIGATION,             // NAVIGATION
++        Configuration.NATIVE_CONFIG_ORIENTATION,            // ORIENTATION
++        Configuration.NATIVE_CONFIG_SCREEN_LAYOUT,          // SCREEN LAYOUT
++        Configuration.NATIVE_CONFIG_UI_MODE,                // UI MODE
++        Configuration.NATIVE_CONFIG_SCREEN_SIZE,            // SCREEN SIZE
++        Configuration.NATIVE_CONFIG_SMALLEST_SCREEN_SIZE,   // SMALLEST SCREEN SIZE
++        Configuration.NATIVE_CONFIG_DENSITY,                // DENSITY
++        Configuration.NATIVE_CONFIG_LAYOUTDIR,              // LAYOUT DIRECTION
++        Configuration.NATIVE_CONFIG_COLOR_MODE,             // COLOR_MODE
++        Configuration.NATIVE_CONFIG_GRAMMATICAL_GENDER,
++    };
++
++    static int nativeConfigToJava(@NativeConfig int input) {
++        int output = 0;
++        for (int i = 0; i < CONFIG_NATIVE_BITS.length; i++) {
++            if ((input & CONFIG_NATIVE_BITS[i]) != 0) {
++                output |= (1 << i);
++            }
++        }
++        return output;
++    }
++
+     private static native long nativeCreate();
+     private static native void nativeDestroy(long ptr);
+     private static native void nativeSetApkAssets(long ptr, @NonNull ApkAssets[] apkAssets,
+--- a/frameworks/base/core/java/android/content/res/ResourcesImpl.java
++++ b/frameworks/base/core/java/android/content/res/ResourcesImpl.java
+@@ -1601,7 +1601,7 @@
+         int getChangingConfigurations() {
+             final @NativeConfig int nativeChangingConfig =
+                     AssetManager.nativeThemeGetChangingConfigurations(mTheme);
+-            return ActivityInfo.activityInfoConfigNativeToJava(nativeChangingConfig);
++            return AssetManager.nativeConfigToJava(nativeChangingConfig);
+         }
+ 
+         public void dump(int priority, String tag, String prefix) {
+--- a/frameworks/base/core/java/android/content/res/TypedArray.java
++++ b/frameworks/base/core/java/android/content/res/TypedArray.java
+@@ -328,7 +328,7 @@
+         index *= STYLE_NUM_ENTRIES;
+         final int[] data = mData;
+         final int type = data[index + STYLE_TYPE];
+-        final int changingConfigs = ActivityInfo.activityInfoConfigNativeToJava(
++        final int changingConfigs = AssetManager.nativeConfigToJava(
+                 data[index + STYLE_CHANGING_CONFIGURATIONS]);
+         if ((changingConfigs & ~allowedChangingConfigs) != 0) {
+             return null;
+@@ -1360,7 +1360,7 @@
+             if (type == TypedValue.TYPE_NULL) {
+                 continue;
+             }
+-            changingConfig |= ActivityInfo.activityInfoConfigNativeToJava(
++            changingConfig |= AssetManager.nativeConfigToJava(
+                     data[index + STYLE_CHANGING_CONFIGURATIONS]);
+         }
+         return changingConfig;
+@@ -1377,7 +1377,7 @@
+         outValue.data = data[index + STYLE_DATA];
+         outValue.assetCookie = data[index + STYLE_ASSET_COOKIE];
+         outValue.resourceId = data[index + STYLE_RESOURCE_ID];
+-        outValue.changingConfigurations = ActivityInfo.activityInfoConfigNativeToJava(
++        outValue.changingConfigurations = AssetManager.nativeConfigToJava(
+                 data[index + STYLE_CHANGING_CONFIGURATIONS]);
+         outValue.density = data[index + STYLE_DENSITY];
+         outValue.string = (type == TypedValue.TYPE_STRING) ? loadStringValueAt(index) : null;
+--- a/frameworks/base/core/java/android/content/res/Configuration.java
++++ b/frameworks/base/core/java/android/content/res/Configuration.java
+@@ -378,6 +378,8 @@
+      */
+     public int fontWeightAdjustment;
+ 
++    static final int CONFIG_WINDOW_CONFIGURATION = 0x20000000;
++
+     /**
+      * Configuration relating to the windowing state of the object associated with this
+      * Configuration. Contents of this field are not intended to affect resources, but need to be
+@@ -511,7 +513,7 @@
+         if ((diff & ActivityInfo.CONFIG_ASSETS_PATHS) != 0) {
+             list.add("CONFIG_ASSETS_PATHS");
+         }
+-        if ((diff & ActivityInfo.CONFIG_WINDOW_CONFIGURATION) != 0) {
++        if ((diff & Configuration.CONFIG_WINDOW_CONFIGURATION) != 0) {
+             list.add("CONFIG_WINDOW_CONFIGURATION");
+         }
+         if ((diff & ActivityInfo.CONFIG_FONT_WEIGHT_ADJUSTMENT) != 0) {
+@@ -1593,7 +1595,7 @@
+             seq = delta.seq;
+         }
+         if (windowConfiguration.updateFrom(delta.windowConfiguration) != 0) {
+-            changed |= ActivityInfo.CONFIG_WINDOW_CONFIGURATION;
++            changed |= Configuration.CONFIG_WINDOW_CONFIGURATION;
+         }
+ 
+         if (delta.fontWeightAdjustment != FONT_WEIGHT_ADJUSTMENT_UNDEFINED
+@@ -1682,7 +1684,7 @@
+         if ((mask & ActivityInfo.CONFIG_ASSETS_PATHS) != 0) {
+             assetsSeq = delta.assetsSeq;
+         }
+-        if ((mask & ActivityInfo.CONFIG_WINDOW_CONFIGURATION) != 0) {
++        if ((mask & Configuration.CONFIG_WINDOW_CONFIGURATION) != 0) {
+             windowConfiguration.setTo(delta.windowConfiguration, windowMask);
+         }
+         if ((mask & ActivityInfo.CONFIG_FONT_WEIGHT_ADJUSTMENT) != 0) {
+@@ -1819,7 +1821,7 @@
+         // WindowConfiguration differences aren't considered public...
+         if (!publicOnly
+                 && windowConfiguration.diff(delta.windowConfiguration, compareUndefined) != 0) {
+-            changed |= ActivityInfo.CONFIG_WINDOW_CONFIGURATION;
++            changed |= Configuration.CONFIG_WINDOW_CONFIGURATION;
+         }
+ 
+         if ((compareUndefined || delta.fontWeightAdjustment != FONT_WEIGHT_ADJUSTMENT_UNDEFINED)
+@@ -2585,7 +2587,7 @@
+             parts.add(width + "x" + height);
+         }
+ 
+-        parts.add("v" + Build.VERSION.RESOURCES_SDK_INT);
++        parts.add("v" + Build.VERSION.SDK_INT);
+         return TextUtils.join("-", parts);
+     }
+ 
+--- a/frameworks/base/core/java/android/content/res/CompatibilityInfo.java
++++ b/frameworks/base/core/java/android/content/res/CompatibilityInfo.java
+@@ -867,7 +867,7 @@
+     public int getCompatibilityChangesForConfig(@Nullable CompatibilityInfo o) {
+         int changes = 0;
+         if (!isCameraCompatibilityInfoEqual(o)) {
+-            changes |= ActivityInfo.CONFIG_WINDOW_CONFIGURATION;
++            changes |= Configuration.CONFIG_WINDOW_CONFIGURATION;
+         }
+         if (!isScaleEqual(o) || !isCompatibilityFlagsEqual(o)) {
+             changes |= ActivityInfo.CONFIG_SCREEN_LAYOUT
+--- a/frameworks/base/core/java/android/util/DisplayMetrics.java
++++ b/frameworks/base/core/java/android/util/DisplayMetrics.java
+@@ -16,14 +16,11 @@
+ 
+ package android.util;
+ 
+-import static com.android.window.flags.Flags.FLAG_DENSITY_390_API;
+-
+-import android.annotation.FlaggedApi;
++
+ import android.annotation.IntDef;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.res.FontScaleConverter;
+-import android.os.SystemProperties;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ import android.view.WindowManager;
+ 
+@@ -188,7 +185,6 @@
+      * This is not a density that applications should target, instead relying
+      * on the system to scale their {@link #DENSITY_XXHIGH} assets for them.
+      */
+-    @FlaggedApi(FLAG_DENSITY_390_API)
+     public static final int DENSITY_390 = 390;
+ 
+     /**
+@@ -506,11 +502,7 @@
+     }
+ 
+     private static int getDeviceDensity() {
+-        // qemu.sf.lcd_density can be used to override ro.sf.lcd_density
+-        // when running in the emulator, allowing for dynamic configurations.
+-        // The reason for this is that ro.sf.lcd_density is write-once and is
+-        // set by the init process when it parses build.prop before anything else.
+-        return SystemProperties.getInt("qemu.sf.lcd_density",
+-                SystemProperties.getInt("ro.sf.lcd_density", DENSITY_DEFAULT));
++        // The display metrics supplied by the host override this baseline.
++        return DENSITY_DEFAULT;
+     }
+ }
+--- a/frameworks/base/core/java/android/app/WindowConfiguration.java
++++ b/frameworks/base/core/java/android/app/WindowConfiguration.java
+@@ -81,7 +81,6 @@
+      * The rotation of this window's apparent display. This can differ from mRotation in some
+      * situations (like letterbox).
+      */
+-    @Surface.Rotation
+     private int mDisplayRotation = ROTATION_UNDEFINED;
+ 
+     /**
+@@ -90,7 +89,6 @@
+      * it is). It is used by the configuration hierarchy to apply rotation-dependent
+      * policy during bounds calculation.
+      */
+-    @Surface.Rotation
+     private int mRotation = ROTATION_UNDEFINED;
+ 
+     /** Rotation is not defined, use the parent containers rotation. */
+@@ -385,12 +383,10 @@
+      * Gets the display rotation.
+      */
+     @SuppressLint("UnflaggedApi") // @TestApi without associated feature.
+-    @Surface.Rotation
+     public int getDisplayRotation() {
+         return mDisplayRotation;
+     }
+ 
+-    @Surface.Rotation
+     public int getRotation() {
+         return mRotation;
+     }
+@@ -736,7 +732,7 @@
+      * @hide
+      */
+     public void readFromProto(@NonNull ProtoInputStream proto, long fieldId)
+-            throws IOException, WireTypeMismatchException {
++            throws IOException {
+         throw new UnsupportedOperationException("Perfetto window protos are unavailable");
+     }
+ 

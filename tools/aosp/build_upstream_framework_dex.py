@@ -52,10 +52,10 @@ METHODS_TO_AUDIT = (
 # SDK 36 exposes the public classes but omits these platform members. The
 # projections are only javac inputs and are built from the SDK classfiles.
 HIDDEN_METHODS = {
-    "frameworks/base/core/java/android/content/res/AssetManager.java": ("android/content/res/AssetManager", (
+    "android/content/res/AssetManager": ("frameworks/base/core/java/android/content/res/AssetManager.java", (
         ("xmlBlockGone", "(I)V", False),
     )),
-    "frameworks/base/core/java/android/os/Parcel.java": ("android/os/Parcel", (
+    "android/os/Parcel": ("frameworks/base/core/java/android/os/Parcel.java", (
         ("adoptClassCookies", "(Landroid/os/Parcel;)V", False),
         ("compareData", "(Landroid/os/Parcel;)I", False),
         ("destroy", "()V", False),
@@ -68,45 +68,92 @@ HIDDEN_METHODS = {
         ("writeArrayMapInternal", "(Landroid/util/ArrayMap;)V", False),
         ("writeString8", "(Ljava/lang/String;)V", False),
     )),
-    "frameworks/base/core/java/android/os/ParcelFileDescriptor.java": ("android/os/ParcelFileDescriptor", (
+    "android/os/ParcelFileDescriptor": ("frameworks/base/core/java/android/os/ParcelFileDescriptor.java", (
         ("seekTo", "(J)J", False),
     )),
-    "frameworks/base/graphics/java/android/graphics/ColorSpace.java": ("android/graphics/ColorSpace", (
+    "android/graphics/ColorSpace": ("frameworks/base/graphics/java/android/graphics/ColorSpace.java", (
         ("get", "(I)Landroid/graphics/ColorSpace;", True),
         ("getNativeInstance", "()J", False),
     )),
-    "frameworks/base/graphics/java/android/graphics/Bitmap.java": ("android/graphics/Bitmap", (
+    "android/graphics/Bitmap": ("frameworks/base/graphics/java/android/graphics/Bitmap.java", (
         ("checkRecycled", "(Ljava/lang/String;)V", False),
+        ("createScaledAshmemBitmap", "(Landroid/graphics/Bitmap;IIZ)Landroid/graphics/Bitmap;", True),
         ("getDefaultDensity", "()I", True),
+        ("getNinePatchInsets", "()Landroid/graphics/NinePatch$InsetStruct;", False),
         ("getNativeInstance", "()J", False),
+        ("getOpticalInsets", "(Landroid/graphics/Rect;)V", False),
+        ("scaleFromDensity", "(III)I", True),
     )),
-    "frameworks/base/graphics/java/android/graphics/Mesh.java": ("android/graphics/Mesh", (
+    "android/graphics/Mesh": ("frameworks/base/graphics/java/android/graphics/Mesh.java", (
         ("getNativeWrapperInstance", "()J", False),
     )),
-    "frameworks/base/graphics/java/android/graphics/ColorFilter.java": ("android/graphics/ColorFilter", (
+    "android/graphics/ColorFilter": ("frameworks/base/graphics/java/android/graphics/ColorFilter.java", (
         ("getNativeInstance", "()J", False),
     )),
-    "frameworks/base/graphics/java/android/graphics/Typeface.java": ("android/graphics/Typeface", (
+    "android/graphics/Typeface": ("frameworks/base/graphics/java/android/graphics/Typeface.java", (
         ("createFromTypefaceWithVariation",
          "(Landroid/graphics/Typeface;Ljava/util/List;)Landroid/graphics/Typeface;", True),
         ("getNativeInstance", "()J", False),
         ("isSupportedAxes", "(I)Z", False),
     )),
-    "frameworks/base/graphics/java/android/graphics/fonts/Font.java": ("android/graphics/fonts/Font", (
+    "android/graphics/fonts/Font": ("frameworks/base/graphics/java/android/graphics/fonts/Font.java", (
         ("getNativePtr", "()J", False),
     )),
-    "frameworks/base/graphics/java/android/graphics/text/MeasuredText.java": ("android/graphics/text/MeasuredText", (
+    "android/graphics/fonts/FontStyle": ("frameworks/base/graphics/java/android/graphics/fonts/FontStyle.java", (
+        ("getMatchScore", "(Landroid/graphics/fonts/FontStyle;)I", False),
+    )),
+    "android/graphics/fonts/FontFamily": ("frameworks/base/graphics/java/android/graphics/fonts/FontFamily.java", (
+        ("getNativePtr", "()J", False),
+    )),
+    "android/graphics/fonts/Font$Builder": ("frameworks/base/graphics/java/android/graphics/fonts/Font.java", (
+        ("createBuffer", "(Landroid/content/res/AssetManager;Ljava/lang/String;ZI)Ljava/nio/ByteBuffer;", True),
+    )),
+    "android/graphics/fonts/SystemFonts": ("frameworks/base/graphics/java/android/graphics/fonts/SystemFonts.java", (
+        ("getSystemPreinstalledFontConfig", "()Landroid/text/FontConfig;", True),
+        ("getSystemPreinstalledFontConfigFromLegacyXml", "()Landroid/text/FontConfig;", True),
+        ("buildSystemFallback", "(Landroid/text/FontConfig;)Ljava/util/Map;", True),
+        ("buildSystemTypefaces", "(Landroid/text/FontConfig;Ljava/util/Map;)Ljava/util/Map;", True),
+    )),
+    "android/graphics/ImageDecoder": ("frameworks/base/graphics/java/android/graphics/ImageDecoder.java", (
+        ("createSource", "(Landroid/content/res/Resources;Ljava/io/InputStream;I)Landroid/graphics/ImageDecoder$Source;", True),
+    )),
+    "android/provider/FontsContract": ("sdk/android/provider/FontsContract.java", (
+        ("getFontSync", "(Landroid/provider/FontRequest;)Landroid/graphics/Typeface;", True),
+    )),
+    "android/animation/AnimatorInflater": ("frameworks/base/core/java/android/animation/AnimatorInflater.java", (
+        ("loadAnimator", "(Landroid/content/res/Resources;Landroid/content/res/Resources$Theme;IF)Landroid/animation/Animator;", True),
+    )),
+    "android/animation/PropertyValuesHolder": ("frameworks/base/core/java/android/animation/PropertyValuesHolder.java", (
+        ("getValueType", "()Ljava/lang/Class;", False),
+    )),
+    "android/animation/AnimatorSet": ("frameworks/base/core/java/android/animation/AnimatorSet.java", (
+        ("canReverse", "()Z", False),
+    )),
+    "android/os/StrictMode": ("frameworks/base/core/java/android/os/StrictMode.java", (
+        ("noteResourceMismatch", "(Ljava/lang/Object;)V", True),
+    )),
+    "android/graphics/text/MeasuredText": ("frameworks/base/graphics/java/android/graphics/text/MeasuredText.java", (
         ("getChars", "()[C", False),
         ("getNativePtr", "()J", False),
     )),
-    "frameworks/base/core/java/android/content/Intent.java": ("android/content/Intent", (
+    "android/content/Intent": ("frameworks/base/core/java/android/content/Intent.java", (
         ("maybeMarkAsMissingCreatorToken", "(Ljava/lang/Object;)V", True),
     )),
-    "frameworks/base/core/java/android/text/TextUtils.java": ("android/text/TextUtils", (
+    "android/text/TextUtils": ("frameworks/base/core/java/android/text/TextUtils.java", (
         ("nullIfEmpty", "(Ljava/lang/String;)Ljava/lang/String;", True),
     )),
-    "frameworks/base/core/java/android/view/ViewGroup.java": ("android/view/ViewGroup", (
+    "android/view/ViewGroup": ("frameworks/base/core/java/android/view/ViewGroup.java", (
         ("generateLayoutParams", "(Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;", False),
+    )),
+    "android/view/MotionEvent": ("frameworks/base/core/java/android/view/MotionEvent.java", (
+        ("scale", "(F)V", False),
+    )),
+    "android/view/WindowManager$LayoutParams": ("frameworks/base/core/java/android/view/WindowManager.java", (
+        ("scale", "(F)V", False),
+    )),
+    "android/util/Xml": ("sdk/android/util/Xml.java", (
+        ("newFastPullParser", "()Lcom/android/modules/utils/TypedXmlPullParser;", True),
+        ("newFastSerializer", "()Lcom/android/modules/utils/TypedXmlSerializer;", True),
     )),
 }
 
@@ -115,24 +162,53 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def profile_sources():
+def profile_sources(aosp_root, inputs, manifest=PROFILE / "sources.txt"):
     groups = defaultdict(list)
-    manifest = PROFILE / "sources.txt"
+    directories = defaultdict(list)
+    exclusions = defaultdict(set)
     group = None
     for number, line in enumerate(manifest.read_text(encoding="utf-8").splitlines(), 1):
         line = line.partition("#")[0].strip()
         if not line:
             continue
-        if line in ("[framework]", "[java-base]", "[services]", "[annotations]",
+        if line in ("[framework]", "[java-base]", "[services]", "[annotations]", "[sdk-support]",
                     "[aconfig]", "[aidl]", "[patches]"):
             group = line[1:-1]
             continue
-        path = PurePosixPath(line)
-        if group is None or path.is_absolute() or ".." in path.parts or path.as_posix() != line:
-            raise ValueError(f"{manifest}:{number}: invalid source path {line!r}")
-        if any(line in paths for paths in groups.values()):
-            raise ValueError(f"{manifest}:{number}: duplicate source {line}")
-        groups[group].append(line)
+        parts = line.split(maxsplit=1)
+        directive, name = parts if line.startswith("@") and len(parts) == 2 else ("", line)
+        path = PurePosixPath(name)
+        if group is None or not path.parts or path.is_absolute() or ".." in path.parts or path.as_posix() != name:
+            raise ValueError(f"{manifest}:{number}: invalid source path {name!r}")
+        if not directive and not name.startswith("@"):
+            groups[group].append(name)
+        elif group in ("framework", "services") and directive == "@dir":
+            directories[group].append(path)
+        elif group in ("framework", "services") and directive == "@exclude":
+            if name in exclusions[group]:
+                raise ValueError(f"{manifest}:{number}: repeated source exclusion {name}")
+            exclusions[group].add(name)
+        else:
+            raise ValueError(f"{manifest}:{number}: unsupported source directive {line!r}")
+    seen = set()
+    for group in sorted(groups.keys() | directories.keys() | exclusions.keys()):
+        expanded = []
+        for directory in directories[group]:
+            root = aosp_root / directory
+            java_files = sorted(root.rglob("*.java"))
+            if not java_files:
+                raise ValueError(f"{manifest}: no Java files under {directory}")
+            inputs.add(root)
+            inputs.update(path for path in root.rglob("*") if path.is_dir())
+            expanded.extend(path.relative_to(aosp_root).as_posix() for path in java_files)
+        missing = exclusions[group].difference(expanded)
+        if missing:
+            raise ValueError(f"{manifest}: exclusions outside selected directories: {sorted(missing)}")
+        groups[group].extend(name for name in expanded if name not in exclusions[group])
+        for name in groups[group]:
+            if name in seen:
+                raise ValueError(f"{manifest}: duplicate source {name}")
+            seen.add(name)
     for name in ("framework", "services"):
         if not groups[name]:
             raise ValueError(f"{manifest}: empty {name} group")
@@ -314,9 +390,12 @@ def resource_flag_declarations(symbols, destination, program_sources):
 def javac(args, files, classes, classpath, *options):
     classes.mkdir()
     if files:
+        sources = classes.with_suffix(".sources")
+        sources.write_text("".join(json.dumps(str(file), ensure_ascii=False) + "\n"
+                                   for file in sorted(files)), encoding="utf-8")
         run(args.javac, "--release", "17", *options, "-encoding", "UTF-8", "-proc:none", "-implicit:none",
             "-g:source,lines", "-XDstringConcat=inline", "-sourcepath", "",
-            "-classpath", os.pathsep.join(map(str, classpath)), "-d", classes, *sorted(files))
+            "-classpath", os.pathsep.join(map(str, classpath)), "-d", classes, "@" + str(sources))
 
 
 def jar_from_classes(path, *directories):
@@ -336,8 +415,9 @@ def compile_only_api(args, stage, inputs):
     entries = {}
     records = []
     with zipfile.ZipFile(args.android_jar) as sdk:
-        for name, (owner, methods) in HIDDEN_METHODS.items():
-            path = args.aosp_root / name
+        for owner, (name, methods) in HIDDEN_METHODS.items():
+            path = (args.sdk_sources / name.removeprefix("sdk/") if name.startswith("sdk/")
+                    else args.aosp_root / name)
             data = path.read_bytes()
             inputs.add(path)
             for method, _, _ in methods:
@@ -351,33 +431,96 @@ def compile_only_api(args, stage, inputs):
     return output, records
 
 
+def compile_only_platform_sources(args, stage, inputs):
+    """Project SDK-hidden platform declarations used by framework source."""
+    declarations = {
+        "dalvik/system/VMRuntime.java": (
+            "libcore/libart/src/main/java/dalvik/system/VMRuntime.java",
+            ("public static native VMRuntime getRuntime();",
+             "public native void registerNativeAllocation(int bytes);",
+             "public native void registerNativeFree(int bytes);"),
+        ),
+        "libcore/util/NativeAllocationRegistry.java": (
+            "libcore/luni/src/main/java/libcore/util/NativeAllocationRegistry.java",
+            ("public static native NativeAllocationRegistry createMalloced(ClassLoader loader, long freeFunction);",
+             "public static native NativeAllocationRegistry createMalloced("
+             "ClassLoader loader, long freeFunction, long size);",
+             "public native Runnable registerNativeAllocation(Object object, long address);"),
+        ),
+        "android/os/SystemProperties.java": (
+            "frameworks/base/core/java/android/os/SystemProperties.java",
+            ("public static native String get(String key, String defaultValue);",),
+        ),
+        "android/view/InsetsState.java": (
+            "frameworks/base/core/java/android/view/InsetsState.java",
+            ("public native void scale(float factor);",),
+        ),
+        "android/view/InsetsSourceControl.java": (
+            "frameworks/base/core/java/android/view/InsetsSourceControl.java",
+            ("public native android.graphics.Insets getInsetsHint();",
+             "public native void setInsetsHint(int left, int top, int right, int bottom);"),
+        ),
+    }
+    for name, (upstream, members) in declarations.items():
+        source = args.aosp_root / upstream
+        data = source.read_bytes()
+        inputs.add(source)
+        for member in members:
+            method = member.partition("(")[0].split()[-1]
+            if not re.search(rb"\b" + method.encode() + rb"\s*\(", data):
+                raise ValueError(f"{source}: missing platform declaration for {method}")
+        path = PurePosixPath(name)
+        package = ".".join(path.parent.parts)
+        code = f"package {package};\npublic class {path.stem} {{\n"
+        code += "".join(f"    {member}\n" for member in members)
+        yield stage_java(stage, name, (code + "}\n").encode())
+
+
 def dex_from_jar(args, stage, jar, output, classpath):
     out = stage / output
     out.mkdir()
     libraries = [arg for path in classpath for arg in ("--classpath", path)]
     run(args.d8, "--release", "--min-api", "26", "--lib", args.android_jar,
         *libraries, "--output", out, jar)
-    if sorted(file.name for file in out.glob("*.dex")) != ["classes.dex"]:
-        raise ValueError(f"{output}: expected one classes.dex from D8")
-    (out / "classes.dex").replace(stage / (output + ".dex"))
+    count = len(list(out.glob("*.dex")))
+    names = ["classes.dex", *(f"classes{i}.dex" for i in range(2, count + 1))]
+    if not count or any(not (out / name).is_file() for name in names):
+        raise ValueError(f"{output}: expected consecutive classes*.dex from D8")
+    artifact = stage / (output + ".dex")
+    if count == 1:
+        (out / names[0]).replace(artifact)
+    else:
+        # ART recognizes the standard multidex ZIP by magic, so the build and
+        # deployment keep one stable asset path for either representation.
+        write_jar(artifact, {name: (out / name).read_bytes() for name in names})
+    return names
+
+
+def dex_entries(path):
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            for name in archive.namelist():
+                yield archive.read(name)
+    else:
+        yield path.read_bytes()
 
 
 def defined_methods(stage):
     counts = {}
     for artifact in (FRAMEWORK_DEX, SERVICES_DEX):
-        profile = dex_profile((stage / artifact).read_bytes(), set(), set())
-        for line in profile.splitlines():
-            if line.startswith("L"):
-                descriptor, methods, _ = line.split()
-                counts[descriptor[1:-1].replace("/", ".")] = int(methods)
+        for dex in dex_entries(stage / artifact):
+            for line in dex_profile(dex, set(), set()).splitlines():
+                if line.startswith("L"):
+                    descriptor, methods, _ = line.split()
+                    counts[descriptor[1:-1].replace("/", ".")] = int(methods)
     return {name: counts.get(name) for name in METHODS_TO_AUDIT}
 
 
 def build(args, stage):
     manifest = PROFILE / "sources.txt"
-    groups = profile_sources()
     inputs = {Path(__file__).resolve(), Path(__file__).with_name("build_pm_dex.py").resolve(),
               manifest, PROFILE, args.javac, args.android_jar, args.d8, args.aapt2}
+    groups = profile_sources(args.aosp_root, inputs, manifest)
     toolchain = {"android_jar": args.android_jar, "javac": args.javac, "d8": args.d8,
                  "aapt2": args.aapt2}
     d8_jar = args.d8.parent / "lib/d8.jar"
@@ -397,8 +540,8 @@ def build(args, stage):
     patches = {}
     for name in groups["patches"]:
         path = PROFILE / name
-        if Path(name).name != name or not name.endswith(".patch"):
-            raise ValueError(f"{manifest}: expected a patch filename: {name}")
+        if path.suffix != ".patch" or path.parent not in (PROFILE, PROFILE / "patches"):
+            raise ValueError(f"{manifest}: expected a patch in the framework profile: {name}")
         inputs.add(path)
         patches[path.name] = apply_patch(path, java)
     records = []
@@ -480,6 +623,10 @@ def build(args, stage):
     for file, record in resource_flag_declarations(symbols, stage / "resource-annotations", program_flags):
         annotation_files.append(file)
         generated.append(record)
+    annotation_files.extend(compile_only_platform_sources(args, stage / "platform-api", inputs))
+    annotation_files.append(stage_java(stage / "platform-api",
+        "com/google/errorprone/annotations/CompileTimeConstant.java",
+        b"package com.google.errorprone.annotations;\npublic @interface CompileTimeConstant {}\n"))
     javac(args, annotation_files, annotations, [args.android_jar])
     framework = stage / "framework-classes"
     core_library = stage / "java-base-classes"
@@ -493,6 +640,14 @@ def build(args, stage):
     parser_source = args.sdk_sources / parser_entry
     inputs.add(parser_source)
     staged["framework"].append(parser_source)
+    sdk_runtime_sources = []
+    for name in sorted(groups["sdk-support"]):
+        path = args.sdk_sources / name
+        if path.suffix != ".java":
+            raise ValueError(f"{manifest}: expected an SDK support source: {name}")
+        inputs.add(path)
+        staged["framework"].append(path)
+        sdk_runtime_sources.append({"path": name, "sha256": digest(path.read_bytes())})
     javac(args, staged["framework"], framework, sdk_classpath)
     javac(args, staged["java-base"], core_library, sdk_classpath,
           "--patch-module", f"java.base={java_base}")
@@ -501,22 +656,27 @@ def build(args, stage):
     services_jar = stage / SERVICES_JAR
     jar_from_classes(framework_jar, framework, core_library)
     jar_from_classes(services_jar, services)
-    dex_from_jar(args, stage, framework_jar, Path(FRAMEWORK_DEX).stem, [])
-    dex_from_jar(args, stage, services_jar, Path(SERVICES_DEX).stem, [framework_jar])
+    dex_files = {
+        FRAMEWORK_DEX: dex_from_jar(args, stage, framework_jar, Path(FRAMEWORK_DEX).stem, []),
+        SERVICES_DEX: dex_from_jar(args, stage, services_jar, Path(SERVICES_DEX).stem, [framework_jar]),
+    }
 
     records.extend({"path": name, "kind": "aconfig", "sha256": digest(data)}
                    for name, data in aconfig.items())
     stats = {kind: sum(item["kind"] == kind for item in records)
              for kind in ("verbatim", "patched", "aidl", "aconfig", "compile_api")}
     stats.update(added=sum(p["added"] for p in patches.values()),
-                 removed=sum(p["removed"] for p in patches.values()))
+                 removed=sum(p["removed"] for p in patches.values()),
+                 framework_base_java=sum(name.startswith("frameworks/base/")
+                                         for name in groups["framework"]))
     report = {"format_version": 1, "upstream_tag": "android-17.0.0_r1",
               "upstream_files": sorted(records, key=lambda item: item["path"]),
               "upstream_resources": resources, "disabled_resource_flags": resource_flags,
-              "defined_methods": defined_methods(stage),
+              "defined_methods": defined_methods(stage), "dex_files": dex_files,
               "patches": patches, "stats": stats, "generated": generated,
               "sdk_compile_only_annotations": sdk_sources,
               "sdk_runtime_interfaces": [{"path": parser_entry, "sha256": digest(parser_source.read_bytes())}],
+              "sdk_runtime_sources": sdk_runtime_sources,
               "toolchain_sha256": {name: digest(path.read_bytes()) for name, path in toolchain.items()},
               "artifacts": {name: digest((stage / name).read_bytes())
                             for name in outputs(args) if name != PROVENANCE}}
@@ -579,7 +739,8 @@ def main():
                 write_depfile(args.depfile, args.out_dir / FRAMEWORK_DEX, inputs)
         verb = "Verified" if args.check else "Built"
         print(f"{verb} framework and services DEX in {args.out_dir} "
-              f"({stats['verbatim']} verbatim, {stats['patched']} patched, "
+              f"({stats['framework_base_java']} frameworks/base Java files in the primary DEX, "
+              f"{stats['verbatim']} verbatim, {stats['patched']} patched, "
               f"+{stats['added']}/-{stats['removed']} lines)")
     except (OSError, ValueError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         parser.exit(1, f"{parser.prog}: {error}\n")

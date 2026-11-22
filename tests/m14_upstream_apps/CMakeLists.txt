@@ -1,5 +1,5 @@
 get_target_property(m14_core aosp17_framework_core WA_FRAMEWORK_DEX)
-set(m14_inputs "${m14_core}" "${WA_LAUNCHER_FRAMEWORK_DEX}" "${WA_LAUNCHER_FRAMEWORK_RES}"
+set(m14_inputs "${WA_LAUNCHER_FRAMEWORK_DEX}" "${m14_core}" "${WA_LAUNCHER_FRAMEWORK_RES}"
     "${WA_BUILTIN_APPS_DIR}")
 
 if(EMSCRIPTEN)

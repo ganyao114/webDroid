@@ -1,0 +1,266 @@
+--- a/frameworks/base/core/java/android/content/res/ResourcesImpl.java
++++ b/frameworks/base/core/java/android/content/res/ResourcesImpl.java
+@@ -461,7 +461,7 @@
+     private void updateConfigurationImpl(Configuration config, DisplayMetrics metrics,
+                                          CompatibilityInfo compat, boolean forceAssetsRefresh,
+                                          int sdkVersionFull) {
+-        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, "ResourcesImpl#updateConfiguration");
++        Trace.beginSection("ResourcesImpl#updateConfiguration");
+         try {
+             synchronized (mAccessLock) {
+                 if (DEBUG_CONFIG) {
+@@ -656,7 +656,7 @@
+                 }
+             }
+         } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++            Trace.endSection();
+         }
+     }
+ 
+@@ -977,31 +977,16 @@
+     @Nullable
+     private Drawable decodeImageDrawable(@NonNull AssetInputStream ais,
+             @NonNull Resources wrapper, @NonNull TypedValue value) {
+-        ImageDecoder.Source src = new ImageDecoder.AssetInputStreamSource(ais,
+-                wrapper, value);
+-        try {
+-            return ImageDecoder.decodeDrawable(src, (decoder, info, s) -> {
+-                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+-            });
++        try (ais) {
++            return Drawable.createFromResourceStream(wrapper, value, ais, null);
+         } catch (IOException ioe) {
+-            // This is okay. This may be something that ImageDecoder does not
+-            // support, like SVG.
+             return null;
+         }
+     }
+ 
+     @Nullable
+     private Drawable decodeImageDrawable(@NonNull FileInputStream fis, @NonNull Resources wrapper) {
+-        ImageDecoder.Source src = ImageDecoder.createSource(wrapper, fis);
+-        try {
+-            return ImageDecoder.decodeDrawable(src, (decoder, info, s) -> {
+-                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+-            });
+-        } catch (IOException ioe) {
+-            // This is okay. This may be something that ImageDecoder does not
+-            // support, like SVG.
+-            return null;
+-        }
++        return Drawable.createFromResourceStream(wrapper, null, fis, null);
+     }
+ 
+     /**
+@@ -1037,7 +1022,7 @@
+ 
+         final Drawable dr;
+ 
+-        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, file);
++        Trace.beginSection(file);
+         LookupStack stack = mLookupStack.get();
+         try {
+             // Perform a linear search to check if we have already referenced this resource before.
+@@ -1083,13 +1068,13 @@
+                 stack.pop();
+             }
+         } catch (Exception | StackOverflowError e) {
+-            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++            Trace.endSection();
+             final NotFoundException rnf = new NotFoundException(
+                     "File " + file + " from drawable resource ID #0x" + Integer.toHexString(id));
+             rnf.initCause(e);
+             throw rnf;
+         }
+-        Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++        Trace.endSection();
+ 
+         return dr;
+     }
+@@ -1145,7 +1130,7 @@
+             Log.v(TAG, "Loading font for cookie " + value.assetCookie + ": " + file);
+         }
+ 
+-        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, file);
++        Trace.beginSection(file);
+         try {
+             if (file.endsWith("xml")) {
+                 final XmlResourceParser rp = loadXmlResourceParser(
+@@ -1164,7 +1149,7 @@
+         } catch (IOException e) {
+             Log.e(TAG, "Failed to read xml resource " + file, e);
+         } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++            Trace.endSection();
+         }
+         return null;
+     }
+@@ -1339,7 +1324,7 @@
+ 
+         ComplexColor complexColor = null;
+ 
+-        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, file);
++        Trace.beginSection(file);
+         if (file.endsWith(".xml")) {
+             try {
+                 final XmlResourceParser parser = loadXmlResourceParser(
+@@ -1363,7 +1348,7 @@
+                 }
+                 parser.close();
+             } catch (Exception e) {
+-                Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++                Trace.endSection();
+                 final NotFoundException rnf = new NotFoundException(
+                         "File " + file + " from ComplexColor resource ID #0x"
+                                 + Integer.toHexString(id));
+@@ -1371,12 +1356,12 @@
+                 throw rnf;
+             }
+         } else {
+-            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++            Trace.endSection();
+             throw new NotFoundException(
+                     "File " + file + " from drawable resource ID #0x"
+                             + Integer.toHexString(id) + ": .xml extension required");
+         }
+-        Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++        Trace.endSection();
+ 
+         return complexColor;
+     }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/Drawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/Drawable.java
+@@ -1218,11 +1218,11 @@
+      */
+     public static @Nullable Drawable createFromStream(@Nullable InputStream is,
+             @Nullable String srcName) {
+-        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, srcName != null ? srcName : "Unknown drawable");
++        Trace.beginSection(srcName != null ? srcName : "Unknown drawable");
+         try {
+             return createFromResourceStream(null, null, is, srcName);
+         } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++            Trace.endSection();
+         }
+     }
+ 
+@@ -1232,11 +1232,11 @@
+      */
+     public static @Nullable Drawable createFromResourceStream(@Nullable Resources res,
+             @Nullable TypedValue value, @Nullable InputStream is, @Nullable String srcName) {
+-        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, srcName != null ? srcName : "Unknown drawable");
++        Trace.beginSection(srcName != null ? srcName : "Unknown drawable");
+         try {
+             return createFromResourceStream(res, value, is, srcName, null);
+         } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++            Trace.endSection();
+         }
+     }
+ 
+@@ -1253,9 +1253,7 @@
+             return null;
+         }
+ 
+-        if (opts == null) {
+-            return getBitmapDrawable(res, value, is);
+-        }
++        if (opts == null) opts = new BitmapFactory.Options();
+ 
+         /*  ugh. The decodeStream contract is that we have already allocated
+             the pad rect, but if the bitmap does not had a ninepatch chunk,
+@@ -1288,37 +1286,6 @@
+         return null;
+     }
+ 
+-    private static Drawable getBitmapDrawable(Resources res, @Nullable TypedValue value,
+-            @NonNull InputStream is) {
+-        try {
+-            ImageDecoder.Source source = null;
+-            if (value != null) {
+-                int density = Bitmap.DENSITY_NONE;
+-                if (value.density == TypedValue.DENSITY_DEFAULT) {
+-                    density = DisplayMetrics.DENSITY_DEFAULT;
+-                } else if (value.density != TypedValue.DENSITY_NONE) {
+-                    density = value.density;
+-                }
+-                source = ImageDecoder.createSource(res, is, density);
+-            } else {
+-                source = ImageDecoder.createSource(res, is);
+-            }
+-
+-            return ImageDecoder.decodeDrawable(source, (decoder, info, src) -> {
+-                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+-                decoder.setOnPartialImageListener((e) -> {
+-                    return e.getError() == ImageDecoder.DecodeException.SOURCE_INCOMPLETE;
+-                });
+-            });
+-        } catch (IOException e) {
+-            /*  do nothing.
+-                If the exception happened on decode, the drawable will be null.
+-            */
+-            Log.e("Drawable", "Unable to decode stream: " + e);
+-        }
+-        return null;
+-    }
+-
+     /**
+      * Create a drawable from an XML document. For more information on how to
+      * create resources in XML, see
+@@ -1414,13 +1381,13 @@
+             return null;
+         }
+ 
+-        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, pathName);
++        Trace.beginSection(pathName);
+         try (FileInputStream stream = new FileInputStream(pathName)) {
+             return getBitmapDrawable(null, null, stream);
+         } catch(IOException e) {
+             // Do nothing; we will just return null if the FileInputStream had an error
+         } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++            Trace.endSection();
+         }
+ 
+         return null;
+--- a/frameworks/base/graphics/java/android/graphics/drawable/VectorDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/VectorDrawable.java
+@@ -706,7 +706,7 @@
+             @NonNull AttributeSet attrs, @Nullable Theme theme)
+             throws XmlPullParserException, IOException {
+         try {
+-            Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, "VectorDrawable#inflate");
++            Trace.beginSection("VectorDrawable#inflate");
+             if (mVectorState.mRootGroup != null || mVectorState.mNativeTree != null) {
+                 // This VD has been used to display other VD resource content, clean up.
+                 if (mVectorState.mRootGroup != null) {
+@@ -741,7 +741,7 @@
+             // Update local properties.
+             updateLocalState(r);
+         } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
++            Trace.endSection();
+         }
+     }
+ 
+--- a/frameworks/base/graphics/java/android/graphics/Typeface.java
++++ b/frameworks/base/graphics/java/android/graphics/Typeface.java
+@@ -1530,7 +1530,7 @@
+                     "Once set, buffer-based system font map cannot be updated");
+         }
+         sSystemFontMapSharedMemory = sharedMemory;
+-        Trace.traceBegin(Trace.TRACE_TAG_GRAPHICS, "setSystemFontMap");
++        Trace.beginSection("setSystemFontMap");
+         try {
+             if (sharedMemory == null) {
+                 // FontManagerService is not started. This may happen in FACTORY_TEST_LOW_LEVEL
+@@ -1549,7 +1549,7 @@
+             }
+             setSystemFontMap(systemFontMap);
+         } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_GRAPHICS);
++            Trace.endSection();
+         }
+     }
+ 

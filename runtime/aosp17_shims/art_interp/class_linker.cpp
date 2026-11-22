@@ -1,6 +1,7 @@
 #include "runtime_internal.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <limits>
 #include <mutex>
@@ -43,20 +44,18 @@ size_t DexEntryNumber(std::string_view name) {
 }
 
 std::unique_ptr<const art::DexFile> OpenApkEntry(ZipArchiveHandle archive, const ZipEntry64& entry,
-                                                const std::string& location, bool verify) {
+                                                const std::string& location, bool verify,
+                                                [[maybe_unused]] bool file_backed) {
   if (entry.uncompressed_length == 0 || entry.uncompressed_length > UINT32_MAX ||
       entry.uncompressed_length > std::vector<uint8_t>().max_size() || (entry.gpbf & 1)) {
     throw std::runtime_error("Invalid or encrypted DEX entry " + location);
   }
   const size_t size = static_cast<size_t>(entry.uncompressed_length);
 #ifndef __EMSCRIPTEN__
-  if (entry.method == kCompressStored && entry.compressed_length == size &&
+  if (file_backed && entry.method == kCompressStored && entry.compressed_length == size &&
       entry.offset % alignof(art::DexFile::Header) == 0) {
-    static std::mutex mem_map_init;
-    {
-      std::lock_guard lock(mem_map_init);
-      art::MemMap::Init();
-    }
+    static std::once_flag mem_map_init;
+    std::call_once(mem_map_init, &art::MemMap::Init);
     std::string error;
     auto mapping = art::MemMap::MapFile(size, PROT_READ, MAP_PRIVATE, GetFileDescriptor(archive),
                                         entry.offset, false, location.c_str(), &error);
@@ -74,6 +73,37 @@ std::unique_ptr<const art::DexFile> OpenApkEntry(ZipArchiveHandle archive, const
   }
   art::ArtDexFileLoader loader(std::move(bytes), location);
   return OpenDex(loader, location, verify, entry.crc32);
+}
+
+std::vector<std::unique_ptr<const art::DexFile>> ReadDexArchive(
+    ZipArchiveHandle handle, const std::string& path, bool verify, bool file_backed) {
+  std::vector<std::pair<size_t, ZipEntry64>> entries;
+  {
+    void* cookie = nullptr;
+    if (const auto status = StartIteration(handle, &cookie, "classes", ".dex"); status != 0) {
+      throw std::runtime_error("DEX archive " + path + ": " + ErrorCodeString(status));
+    }
+    const std::unique_ptr<void, decltype(&EndIteration)> iteration(cookie, EndIteration);
+    int32_t status;
+    ZipEntry64 entry{};
+    std::string_view name;
+    while ((status = Next(cookie, &entry, &name)) == 0) {
+      if (const size_t number = DexEntryNumber(name); number != 0) entries.emplace_back(number, entry);
+    }
+    if (status != kIterationEnd) throw std::runtime_error("DEX archive " + path + ": " + ErrorCodeString(status));
+  }
+
+  std::ranges::sort(entries, {}, &std::pair<size_t, ZipEntry64>::first);
+  if (entries.empty() || entries.front().first != 1) {
+    throw std::runtime_error("DEX archive " + path + ": missing classes.dex");
+  }
+  std::vector<std::unique_ptr<const art::DexFile>> files;
+  files.reserve(entries.size());
+  for (const auto& [number, entry] : entries) {
+    const std::string location = path + '!' + art::DexFileLoader::GetMultiDexZipEntryName(number - 1);
+    files.push_back(OpenApkEntry(handle, entry, location, verify, file_backed));
+  }
+  return files;
 }
 
 }  // namespace
@@ -108,9 +138,19 @@ bool Method::IsVirtual() const {
 std::string Method::QualifiedName() const { return owner->descriptor + "->" + name + signature; }
 
 void ClassLinker::LoadDexFile(std::string location, std::vector<uint8_t> bytes, bool fallback) {
+  constexpr std::array<uint8_t, 4> zip_magic{'P', 'K', 3, 4};
+  const bool verify = runtime_.options.verify_dex;
   DexFiles files;
-  art::ArtDexFileLoader loader(std::move(bytes), location);
-  files.push_back(OpenDex(loader, location, runtime_.options.verify_dex));
+  if (bytes.size() >= zip_magic.size() && std::ranges::equal(zip_magic, std::span(bytes).first(4))) {
+    ZipArchiveHandle handle = nullptr;
+    const auto status = OpenArchiveFromMemory(bytes.data(), bytes.size(), location.c_str(), &handle);
+    const std::unique_ptr<ZipArchive, decltype(&CloseArchive)> archive(handle, CloseArchive);
+    if (status != 0) throw std::runtime_error("DEX archive " + location + ": " + ErrorCodeString(status));
+    files = ReadDexArchive(handle, location, verify, /*file_backed=*/false);
+  } else {
+    art::ArtDexFileLoader loader(std::move(bytes), location);
+    files.push_back(OpenDex(loader, location, verify));
+  }
   IndexDexFiles(std::move(files), fallback ? DexSource::Fallback : DexSource::File);
 }
 
@@ -120,32 +160,7 @@ void ClassLinker::LoadApkDexFiles(const std::string& path, bool fallback) {
   const std::unique_ptr<ZipArchive, decltype(&CloseArchive)> archive(handle, CloseArchive);
   if (opened != 0) throw std::runtime_error("APK " + path + ": " + ErrorCodeString(opened));
 
-  std::vector<std::pair<size_t, ZipEntry64>> entries;
-  {
-    void* cookie = nullptr;
-    if (const auto status = StartIteration(handle, &cookie, "classes", ".dex"); status != 0) {
-      throw std::runtime_error("APK " + path + ": " + ErrorCodeString(status));
-    }
-    const std::unique_ptr<void, decltype(&EndIteration)> iteration(cookie, EndIteration);
-    int32_t status;
-    ZipEntry64 entry{};
-    std::string_view name;
-    while ((status = Next(cookie, &entry, &name)) == 0) {
-      if (const size_t number = DexEntryNumber(name); number != 0) entries.emplace_back(number, entry);
-    }
-    if (status != kIterationEnd) throw std::runtime_error("APK " + path + ": " + ErrorCodeString(status));
-  }
-
-  std::ranges::sort(entries, {}, &std::pair<size_t, ZipEntry64>::first);
-  if (entries.empty() || entries.front().first != 1) {
-    throw std::runtime_error("APK " + path + ": missing classes.dex");
-  }
-  DexFiles files;
-  files.reserve(entries.size());
-  for (const auto& [number, entry] : entries) {
-    const std::string location = path + '!' + art::DexFileLoader::GetMultiDexZipEntryName(number - 1);
-    files.push_back(OpenApkEntry(handle, entry, location, runtime_.options.verify_dex));
-  }
+  auto files = ReadDexArchive(handle, path, runtime_.options.verify_dex, /*file_backed=*/true);
   IndexDexFiles(std::move(files), fallback ? DexSource::FallbackApk : DexSource::Apk);
 }
 

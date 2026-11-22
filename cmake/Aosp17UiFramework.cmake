@@ -21,6 +21,32 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(WA_JAVAC_EXECUTABLE "/usr/bin/javac" CACHE FILEPATH "JDK javac")
 set(WA_D8_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/d8" CACHE FILEPATH "SDK 36 d8")
 set(WA_ANDROID_JAR "${WA_ANDROID_SDK}/platforms/android-36/android.jar" CACHE FILEPATH "SDK 36 API")
+set(WA_AAPT2_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/aapt2" CACHE FILEPATH "SDK 36 aapt2")
+set(_wa_upstream_output "${CMAKE_CURRENT_BINARY_DIR}/upstream-framework")
+set(_wa_upstream_profile "${_wa_ui_root}/patches/aosp17/frameworks_base")
+set(_wa_upstream_builder "${_wa_ui_root}/tools/aosp/build_upstream_framework_dex.py")
+set(_wa_upstream_dex "${_wa_upstream_output}/aosp17_upstream_framework.dex")
+set(_wa_upstream_classes "${_wa_upstream_output}/aosp17_upstream_framework_classes.jar")
+set(_wa_upstream_res "${_wa_upstream_output}/framework-res-upstream.apk")
+file(GLOB _wa_upstream_patches CONFIGURE_DEPENDS
+    "${_wa_upstream_profile}/*.patch" "${_wa_upstream_profile}/patches/*.patch")
+add_custom_command(OUTPUT "${_wa_upstream_dex}" "${_wa_upstream_classes}" "${_wa_upstream_res}"
+    BYPRODUCTS "${_wa_upstream_output}/aosp17_upstream_services.dex"
+        "${_wa_upstream_output}/framework_provenance.json"
+    COMMAND "${Python3_EXECUTABLE}" "${_wa_upstream_builder}"
+        --aosp-root "${AOSP17_SOURCE_DIR}" --android-sdk "${WA_ANDROID_SDK}"
+        --javac "${WA_JAVAC_EXECUTABLE}" --android-jar "${WA_ANDROID_JAR}"
+        --d8 "${WA_D8_EXECUTABLE}" --aapt2 "${WA_AAPT2_EXECUTABLE}"
+        --out-dir "${_wa_upstream_output}" --depfile "${_wa_upstream_output}/framework.d"
+    DEPENDS "${_wa_upstream_builder}" "${_wa_upstream_profile}/sources.txt" ${_wa_upstream_patches}
+    DEPFILE "${_wa_upstream_output}/framework.d"
+    COMMENT "Building the upstream framework DEX and resource APK"
+    VERBATIM)
+add_custom_target(aosp17_upstream_framework
+    DEPENDS "${_wa_upstream_dex}" "${_wa_upstream_classes}" "${_wa_upstream_res}")
+set_target_properties(aosp17_upstream_framework PROPERTIES WA_FRAMEWORK_DEX "${_wa_upstream_dex}"
+    WA_FRAMEWORK_CLASSES "${_wa_upstream_classes}" WA_FRAMEWORK_RES "${_wa_upstream_res}")
+
 set(_wa_ui_output "${CMAKE_CURRENT_BINARY_DIR}/aosp17-ui")
 set(_wa_ui_script "${_wa_ui_root}/tools/aosp/build_framework_dex.py")
 set(_wa_ui_sources "${_wa_ui_root}/tools/aosp/framework_build")
@@ -32,11 +58,13 @@ add_custom_command(OUTPUT "${AOSP17_FRAMEWORK_DEX}" "${AOSP17_FRAMEWORK_CLASSES}
     COMMAND "${Python3_EXECUTABLE}" "${_wa_ui_script}"
         --aosp-root "${AOSP17_SOURCE_DIR}" --out-dir "${_wa_ui_output}"
         --javac "${WA_JAVAC_EXECUTABLE}" --d8 "${WA_D8_EXECUTABLE}"
-        --android-jar "${WA_ANDROID_JAR}" --depfile "${_wa_ui_output}/framework.d"
-    DEPENDS "${_wa_ui_script}" "${_wa_ui_sources}/upstream.txt" "${_wa_ui_sources}/AssetManager.java.in" ${_wa_ui_java}
+        --android-jar "${WA_ANDROID_JAR}" --upstream-classes "${_wa_upstream_classes}"
+        --depfile "${_wa_ui_output}/framework.d"
+    DEPENDS "${_wa_ui_script}" "${_wa_ui_sources}/upstream.txt" "${_wa_upstream_classes}" ${_wa_ui_java}
         "${WA_JAVAC_EXECUTABLE}" "${WA_D8_EXECUTABLE}" "${WA_ANDROID_JAR}"
     DEPFILE "${_wa_ui_output}/framework.d" VERBATIM)
 add_custom_target(aosp17_framework_core ALL DEPENDS "${AOSP17_FRAMEWORK_DEX}" "${AOSP17_FRAMEWORK_CLASSES}")
+add_dependencies(aosp17_framework_core aosp17_upstream_framework)
 set_target_properties(aosp17_framework_core PROPERTIES
     WA_FRAMEWORK_DEX "${AOSP17_FRAMEWORK_DEX}" WA_FRAMEWORK_CLASSES "${AOSP17_FRAMEWORK_CLASSES}")
 

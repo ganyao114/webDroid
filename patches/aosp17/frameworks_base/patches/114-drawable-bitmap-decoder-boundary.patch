@@ -1,0 +1,114 @@
+--- a/frameworks/base/graphics/java/android/graphics/drawable/Drawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/Drawable.java
+@@ -1383,7 +1383,7 @@
+ 
+         Trace.beginSection(pathName);
+         try (FileInputStream stream = new FileInputStream(pathName)) {
+-            return getBitmapDrawable(null, null, stream);
++            return createFromResourceStream(null, null, stream, pathName);
+         } catch(IOException e) {
+             // Do nothing; we will just return null if the FileInputStream had an error
+         } finally {
+--- a/frameworks/base/graphics/java/android/graphics/drawable/BitmapDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/BitmapDrawable.java
+@@ -24,12 +24,12 @@
+ import android.content.res.Resources.Theme;
+ import android.content.res.TypedArray;
+ import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
+ import android.graphics.BitmapShader;
+ import android.graphics.BlendMode;
+ import android.graphics.BlendModeColorFilter;
+ import android.graphics.Canvas;
+ import android.graphics.ColorFilter;
+-import android.graphics.ImageDecoder;
+ import android.graphics.Insets;
+ import android.graphics.Matrix;
+ import android.graphics.Outline;
+@@ -173,10 +173,7 @@
+     public BitmapDrawable(Resources res, String filepath) {
+         Bitmap bitmap = null;
+         try (FileInputStream stream = new FileInputStream(filepath)) {
+-            bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(res, stream),
+-                    (decoder, info, src) -> {
+-                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+-            });
++            bitmap = BitmapFactory.decodeResourceStream(res, null, stream, null, null);
+         } catch (Exception e) {
+             /*  do nothing. This matches the behavior of BitmapFactory.decodeFile()
+                 If the exception happened on decode, mBitmapState.mBitmap will be null.
+@@ -206,10 +203,7 @@
+     public BitmapDrawable(Resources res, java.io.InputStream is) {
+         Bitmap bitmap = null;
+         try {
+-            bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(res, is),
+-                    (decoder, info, src) -> {
+-                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+-            });
++            bitmap = BitmapFactory.decodeResourceStream(res, null, is, null, null);
+         } catch (Exception e) {
+             /*  do nothing. This matches the behavior of BitmapFactory.decodeStream()
+                 If the exception happened on decode, mBitmapState.mBitmap will be null.
+@@ -840,19 +834,9 @@
+                 }
+             }
+ 
+-            int density = Bitmap.DENSITY_NONE;
+-            if (value.density == TypedValue.DENSITY_DEFAULT) {
+-                density = DisplayMetrics.DENSITY_DEFAULT;
+-            } else if (value.density != TypedValue.DENSITY_NONE) {
+-                density = value.density;
+-            }
+-
+             Bitmap bitmap = null;
+             try (InputStream is = r.openRawResource(srcResId, value)) {
+-                ImageDecoder.Source source = ImageDecoder.createSource(r, is, density);
+-                bitmap = ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
+-                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+-                });
++                bitmap = BitmapFactory.decodeResourceStream(r, value, is, null, null);
+             } catch (Exception e) {
+                 // Do nothing and pick up the error below.
+             }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/NinePatchDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/NinePatchDrawable.java
+@@ -24,11 +24,11 @@
+ import android.content.res.Resources.Theme;
+ import android.content.res.TypedArray;
+ import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
+ import android.graphics.BlendMode;
+ import android.graphics.BlendModeColorFilter;
+ import android.graphics.Canvas;
+ import android.graphics.ColorFilter;
+-import android.graphics.ImageDecoder;
+ import android.graphics.Insets;
+ import android.graphics.NinePatch;
+ import android.graphics.Outline;
+@@ -426,23 +426,9 @@
+             final Rect opticalInsets = new Rect();
+             Bitmap bitmap = null;
+ 
+-            try {
+-                final TypedValue value = new TypedValue();
+-                final InputStream is = r.openRawResource(srcResId, value);
+-
+-                int density = Bitmap.DENSITY_NONE;
+-                if (value.density == TypedValue.DENSITY_DEFAULT) {
+-                    density = DisplayMetrics.DENSITY_DEFAULT;
+-                } else if (value.density != TypedValue.DENSITY_NONE) {
+-                    density = value.density;
+-                }
+-                ImageDecoder.Source source = ImageDecoder.createSource(r, is, density);
+-                bitmap = ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
+-                    decoder.setOutPaddingRect(padding);
+-                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+-                });
+-
+-                is.close();
++            final TypedValue value = new TypedValue();
++            try (InputStream is = r.openRawResource(srcResId, value)) {
++                bitmap = BitmapFactory.decodeResourceStream(r, value, is, padding, null);
+             } catch (IOException e) {
+                 // Ignore
+             }

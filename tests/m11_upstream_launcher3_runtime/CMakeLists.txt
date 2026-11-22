@@ -13,7 +13,8 @@ find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 set(WA_UPSTREAM_LAUNCHER3_APK "" CACHE FILEPATH "Use an existing upstream Launcher3 APK")
 set(WA_UPSTREAM_FRAMEWORK_DEX "" CACHE FILEPATH "Use an existing upstream AOSP 17 framework DEX")
 set(WA_M11_FRAMEWORK_CORE_DEX "" CACHE FILEPATH "Use an existing AOSP 17 core UI framework DEX")
-set(WA_M11_FRAMEWORK_RES_APK "${WA_ANDROID_JAR}" CACHE FILEPATH "Framework resource archive for the Launcher APK")
+get_target_property(m11_framework_res aosp17_upstream_framework WA_FRAMEWORK_RES)
+set(WA_M11_FRAMEWORK_RES_APK "${m11_framework_res}" CACHE FILEPATH "Framework resource archive for the Launcher APK")
 
 set(m11_dependencies)
 if(WA_UPSTREAM_LAUNCHER3_APK)
@@ -37,22 +38,8 @@ endif()
 if(WA_UPSTREAM_FRAMEWORK_DEX)
     set(m11_upstream_dex "${WA_UPSTREAM_FRAMEWORK_DEX}")
 else()
-    set(m11_upstream_dir "${CMAKE_CURRENT_BINARY_DIR}/upstream-dex")
-    set(m11_upstream_dex "${m11_upstream_dir}/aosp17_upstream_framework.dex")
-    set(m11_framework_driver "${m11_repo}/tools/aosp/build_upstream_framework_dex.py")
-    set(m11_framework_profile "${m11_repo}/patches/aosp17/frameworks_base")
-    file(GLOB m11_framework_patches CONFIGURE_DEPENDS "${m11_framework_profile}/*.patch")
-    add_custom_command(OUTPUT "${m11_upstream_dex}"
-        COMMAND "${Python3_EXECUTABLE}" "${m11_framework_driver}"
-            --aosp-root "${AOSP17_SOURCE_DIR}" --android-sdk "${WA_ANDROID_SDK}"
-            --javac "${WA_JAVAC_EXECUTABLE}" --android-jar "${WA_ANDROID_JAR}"
-            --d8 "${WA_D8_EXECUTABLE}" --out-dir "${m11_upstream_dir}"
-            --depfile "${m11_upstream_dir}/framework.d"
-        DEPENDS "${m11_framework_driver}" "${m11_framework_profile}/sources.txt" ${m11_framework_patches}
-        DEPFILE "${m11_upstream_dir}/framework.d"
-        VERBATIM)
-    add_custom_target(m11_upstream_framework_dex DEPENDS "${m11_upstream_dex}")
-    list(APPEND m11_dependencies m11_upstream_framework_dex)
+    get_target_property(m11_upstream_dex aosp17_upstream_framework WA_FRAMEWORK_DEX)
+    list(APPEND m11_dependencies aosp17_upstream_framework)
 endif()
 
 if(WA_M11_FRAMEWORK_CORE_DEX)
