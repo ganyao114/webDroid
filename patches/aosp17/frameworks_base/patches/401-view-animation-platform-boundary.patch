@@ -1,0 +1,159 @@
+--- a/frameworks/base/core/java/android/view/animation/Animation.java
++++ b/frameworks/base/core/java/android/view/animation/Animation.java
+@@ -25,12 +25,9 @@
+ import android.graphics.RectF;
+ import android.os.Build;
+ import android.os.Handler;
+-import android.os.SystemProperties;
+ import android.util.AttributeSet;
+ import android.util.TypedValue;
+ import android.view.WindowInsets;
+-
+-import dalvik.system.CloseGuard;
+ 
+ /**
+  * Abstraction for an Animation that can be applied to Views, Surfaces, or
+@@ -96,13 +93,6 @@
+      * content for the duration of the animation.
+      */
+     public static final int ZORDER_BOTTOM = -1;
+-
+-    // Use a preload holder to isolate static initialization into inner class, which allows
+-    // Animation and its subclasses to be compile-time initialized.
+-    private static class NoImagePreloadHolder {
+-        public static final boolean USE_CLOSEGUARD
+-                = SystemProperties.getBoolean("log.closeguard.Animation", false);
+-    }
+ 
+     /**
+      * Set by {@link #getTransformation(long, Transformation)} when the animation ends.
+@@ -229,7 +219,6 @@
+     @UnsupportedAppUsage
+     Transformation mPreviousTransformation = new Transformation();
+ 
+-    private final CloseGuard guard = CloseGuard.get();
+ 
+     private Handler mListenerHandler;
+     private Runnable mOnStart;
+@@ -329,7 +318,6 @@
+         if (mStarted && !mEnded) {
+             fireAnimationEnd();
+             mEnded = true;
+-            guard.close();
+         }
+         // Make sure we move the animation to the end
+         mStartTime = Long.MIN_VALUE;
+@@ -343,7 +331,6 @@
+     public void detach() {
+         if (mStarted && !mEnded) {
+             mEnded = true;
+-            guard.close();
+             fireAnimationEnd();
+         }
+     }
+@@ -1033,9 +1020,6 @@
+             if (!mStarted) {
+                 fireAnimationStart();
+                 mStarted = true;
+-                if (NoImagePreloadHolder.USE_CLOSEGUARD) {
+-                    guard.open("cancel or detach or getTransformation");
+-                }
+             }
+ 
+             if (mFillEnabled) normalizedTime = Math.max(Math.min(normalizedTime, 1.0f), 0.0f);
+@@ -1051,7 +1035,6 @@
+             if (mRepeatCount == mRepeated || isCanceled()) {
+                 if (!mEnded) {
+                     mEnded = true;
+-                    guard.close();
+                     fireAnimationEnd();
+                 }
+             } else {
+@@ -1246,16 +1229,6 @@
+         if (mFillBefore) {
+             final Transformation previousTransformation = mPreviousTransformation;
+             applyTransformation(mInterpolator.getInterpolation(0.0f), previousTransformation);
+-        }
+-    }
+-
+-    protected void finalize() throws Throwable {
+-        try {
+-            if (guard != null) {
+-                guard.warnIfOpen();
+-            }
+-        } finally {
+-            super.finalize();
+         }
+     }
+ 
+--- a/frameworks/base/core/java/android/view/animation/AnimationUtils.java
++++ b/frameworks/base/core/java/android/view/animation/AnimationUtils.java
+@@ -43,7 +43,7 @@
+  */
+ // This class would probably just work as-is on Ravenwood, but until we port the test, we just keep
+ // the minimal surface for Choreographer.
+-@RavenwoodKeepPartialClass(comment = "Keeping just enough for Choreographer to work")
++@RavenwoodKeepPartialClass
+ public class AnimationUtils {
+ 
+     /**
+--- a/frameworks/base/core/java/android/view/animation/BaseInterpolator.java
++++ b/frameworks/base/core/java/android/view/animation/BaseInterpolator.java
+@@ -16,24 +16,22 @@
+ 
+ package android.view.animation;
+ 
+-import android.content.pm.ActivityInfo.Config;
+-
+ /**
+  * An abstract class which is extended by default interpolators.
+  */
+ abstract public class BaseInterpolator implements Interpolator {
+-    private @Config int mChangingConfiguration;
++    private int mChangingConfiguration;
+     /**
+      * @hide
+      */
+-    public @Config int getChangingConfiguration() {
++    public int getChangingConfiguration() {
+         return mChangingConfiguration;
+     }
+ 
+     /**
+      * @hide
+      */
+-    void setChangingConfiguration(@Config int changingConfiguration) {
++    void setChangingConfiguration(int changingConfiguration) {
+         mChangingConfiguration = changingConfiguration;
+     }
+ }
+--- a/frameworks/base/graphics/java/android/graphics/animation/FallbackLUTInterpolator.java
++++ b/frameworks/base/graphics/java/android/graphics/animation/FallbackLUTInterpolator.java
+@@ -17,7 +17,6 @@
+ package android.graphics.animation;
+ 
+ import android.animation.TimeInterpolator;
+-import android.util.TimeUtils;
+ import android.view.Choreographer;
+ 
+ /**
+@@ -47,7 +46,7 @@
+ 
+     private static float[] createLUT(TimeInterpolator interpolator, long duration) {
+         long frameIntervalNanos = Choreographer.getInstance().getFrameIntervalNanos();
+-        int animIntervalMs = (int) (frameIntervalNanos / TimeUtils.NANOS_PER_MS);
++        int animIntervalMs = (int) Math.max(1, frameIntervalNanos / 1_000_000);
+         // We need 2 frame values as the minimal.
+         int numAnimFrames = Math.max(2, (int) Math.ceil(((double) duration) / animIntervalMs));
+         numAnimFrames = Math.min(numAnimFrames, MAX_SAMPLE_POINTS);
+--- a/frameworks/base/graphics/java/android/graphics/animation/NativeInterpolatorFactory.java
++++ b/frameworks/base/graphics/java/android/graphics/animation/NativeInterpolatorFactory.java
+@@ -35,7 +35,7 @@
+             duration) {
+         if (interpolator == null) {
+             return createLinearInterpolator();
+-        } else if (RenderNodeAnimator.isNativeInterpolator(interpolator)) {
++        } else if (interpolator instanceof NativeInterpolator) {
+             return ((NativeInterpolator) interpolator).createNativeInterpolator();
+         } else {
+             return FallbackLUTInterpolator.createNativeInterpolator(interpolator, duration);

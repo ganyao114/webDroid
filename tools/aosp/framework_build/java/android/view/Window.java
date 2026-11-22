@@ -90,7 +90,22 @@ public class Window {
             int id = resources.getIdentifier("navigation_bar_height", "dimen", "android");
             navigation = id == 0 ? (int) (22 * density + 0.5f) : resources.getDimensionPixelSize(id);
         }
-        return new WindowInsets((int) (24 * density + 0.5f), navigation);
+        return makeInsets((int) (24 * density + 0.5f), navigation, navigation);
+    }
+    private static WindowInsets makeInsets(int status, int navigation, int gesture) {
+        var insets = new WindowInsets.Builder();
+        setInset(insets, WindowInsets.Type.statusBars() | WindowInsets.Type.tappableElement(),
+                android.graphics.Insets.of(0, status, 0, 0));
+        setInset(insets, WindowInsets.Type.navigationBars(),
+                android.graphics.Insets.of(0, 0, 0, navigation));
+        setInset(insets, WindowInsets.Type.systemGestures() | WindowInsets.Type.mandatorySystemGestures(),
+                android.graphics.Insets.of(0, 0, 0, gesture));
+        return insets.build();
+    }
+    private static void setInset(WindowInsets.Builder builder, int types, android.graphics.Insets inset) {
+        builder.setInsets(types, inset)
+                .setInsetsIgnoringVisibility(types, inset)
+                .setVisible(types, !android.graphics.Insets.NONE.equals(inset));
     }
     public static WindowMetrics displayMetrics(Context context) {
         DisplayMetrics metrics = context.getResources().getDisplayMetrics();
@@ -113,7 +128,8 @@ public class Window {
         boolean fitTop = decorFitsSystemWindows && (layout & View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN) == 0;
         boolean fitBottom = decorFitsSystemWindows && (layout & View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION) == 0;
         decor.setPadding(0, fitTop ? bars.top : 0, 0, fitBottom ? bars.bottom : 0);
-        decor.dispatchApplyWindowInsets(new WindowInsets(fitTop ? 0 : bars.top, fitBottom ? 0 : bars.bottom, bars.bottom));
+        decor.dispatchApplyWindowInsets(makeInsets(fitTop ? 0 : bars.top,
+                fitBottom ? 0 : bars.bottom, bars.bottom));
     }
     private void updateSystemBars() {
         nativeSetSystemBars(insetsController.getSystemBarsAppearance(), statusBarColor, navigationBarColor);

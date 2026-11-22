@@ -120,6 +120,36 @@ frameworks/base/core/java/com/android/internal/util/VirtualRefBasePtr.java
 frameworks/base/graphics/java/android/graphics/CanvasProperty.java
 frameworks/base/graphics/java/android/graphics/FontFamily.java
 
+# Phase 2 W1: upstream android.view
+frameworks/base/core/java/android/util/DisplayUtils.java
+frameworks/base/core/java/android/util/RotationUtils.java
+frameworks/base/core/java/android/view/Choreographer.java
+frameworks/base/core/java/android/view/ContextThemeWrapper.java
+frameworks/base/core/java/android/view/CutoutSpecification.java
+frameworks/base/core/java/android/view/DisplayCutout.java
+frameworks/base/core/java/android/view/DisplayEventReceiver.java
+frameworks/base/core/java/android/view/DisplayShape.java
+frameworks/base/core/java/android/view/InflateException.java
+frameworks/base/core/java/android/view/KeyEvent.java
+frameworks/base/core/java/android/view/MotionEvent.java
+frameworks/base/core/java/android/view/PrivacyIndicatorBounds.java
+frameworks/base/core/java/android/view/RemotableViewMethod.java
+frameworks/base/core/java/android/view/RoundedCorner.java
+frameworks/base/core/java/android/view/RoundedCorners.java
+frameworks/base/core/java/android/view/VelocityTracker.java
+frameworks/base/core/java/android/view/ViewConfiguration.java
+frameworks/base/core/java/android/view/ViewManager.java
+frameworks/base/core/java/android/view/ViewOutlineProvider.java
+frameworks/base/core/java/android/view/ViewStub.java
+frameworks/base/core/java/android/view/WindowId.java
+frameworks/base/core/java/android/view/WindowInsets.java
+frameworks/base/core/java/android/view/WindowMetrics.java
+frameworks/base/core/java/com/android/internal/util/DataClass.java
+frameworks/base/graphics/java/android/graphics/FrameInfo.java
+@dir frameworks/base/core/java/android/view/animation
+@dir frameworks/base/graphics/java/android/graphics/animation
+@exclude frameworks/base/graphics/java/android/graphics/animation/RenderNodeAnimator.java
+
 [sdk-support]
 # The SDK supplies the color appearance model used by ColorStateList lStar.
 com/android/internal/graphics/ColorUtils.java
@@ -178,8 +208,10 @@ android/annotation/FloatRange.java
 android/annotation/FontRes.java
 android/annotation/FractionRes.java
 android/annotation/HalfFloat.java
+android/annotation/IdRes.java
 android/annotation/IntDef.java
 android/annotation/IntRange.java
+android/annotation/InterpolatorRes.java
 android/annotation/IntegerRes.java
 android/annotation/LayoutRes.java
 android/annotation/LongDef.java
@@ -189,6 +221,7 @@ android/annotation/PluralsRes.java
 android/annotation/Px.java
 android/annotation/RawRes.java
 android/annotation/Size.java
+android/annotation/StringDef.java
 android/annotation/StringRes.java
 android/annotation/StyleRes.java
 android/annotation/StyleableRes.java
@@ -217,6 +250,7 @@ android/ravenwood/annotation/RavenwoodReplace.java
 android/ravenwood/annotation/RavenwoodThrow.java
 com/android/internal/annotations/GuardedBy.java
 com/android/internal/annotations/VisibleForTesting.java
+com/android/internal/annotations/WeaklyReferencedCallback.java
 dalvik/annotation/optimization/CriticalNative.java
 dalvik/annotation/optimization/FastNative.java
 dalvik/annotation/optimization/NeverCompile.java
@@ -228,6 +262,10 @@ frameworks/base/core/java/android/content/res/flags.aconfig
 frameworks/base/core/java/android/os/flags.aconfig
 frameworks/base/core/java/android/text/flags/24Q3.aconfig
 frameworks/base/core/java/android/text/flags/flags.aconfig
+frameworks/base/core/java/android/view/flags/refresh_rate_flags.aconfig
+frameworks/base/core/java/android/view/flags/scroll_feedback_flags.aconfig
+frameworks/base/core/java/android/view/flags/view_flags.aconfig
+frameworks/base/core/java/android/view/flags/window_insets.aconfig
 frameworks/base/graphics/java/android/framework_graphics.aconfig
 
 [aidl]
@@ -289,3 +327,10 @@ patches/212-adaptive-icon-software-mask.patch
 patches/213-solid-ripple-on-host.patch
 patches/214-host-resource-drawables.patch
 patches/215-flush-mounted-layout-cache.patch
+patches/401-view-animation-platform-boundary.patch
+patches/402-view-sdk36-declarations.patch
+patches/403-display-geometry-sdk36.patch
+patches/404-browser-vsync.patch
+patches/405-input-host-jni.patch
+patches/406-host-view-configuration.patch
+patches/407-local-window-focus.patch

@@ -1,0 +1,648 @@
+--- a/frameworks/base/core/java/android/view/Choreographer.java
++++ b/frameworks/base/core/java/android/view/Choreographer.java
+@@ -28,24 +28,19 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.graphics.FrameInfo;
+ import android.graphics.Insets;
+-import android.hardware.display.DisplayManagerGlobal;
+ import android.os.Build;
+ import android.os.Handler;
+ import android.os.Looper;
+ import android.os.Message;
+ import android.os.SystemClock;
+-import android.os.SystemProperties;
+-import android.os.Trace;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ import android.ravenwood.annotation.RavenwoodReplace;
+ import android.util.Log;
+-import android.util.TimeUtils;
+ import android.view.animation.AnimationUtils;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+ 
+ import java.io.PrintWriter;
+-import java.util.Locale;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ 
+ /**
+@@ -155,31 +150,8 @@
+ 
+     private static volatile Choreographer sMainInstance;
+ 
+-    // Enable/disable vsync for animations and drawing.
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 123769497)
+-    private static final boolean USE_VSYNC = getUseVsync();
+-
+-    @RavenwoodReplace(reason = "don't simulate vsync on ravenwood")
+-    private static boolean getUseVsync() {
+-        return SystemProperties.getBoolean("debug.choreographer.vsync", true);
+-    }
+-
+-    @SuppressWarnings("unused")
+-    private static boolean getUseVsync$ravenwood() {
+-        return false;
+-    }
+-
+-    // Enable/disable using the frame time instead of returning now.
+-    private static final boolean USE_FRAME_TIME = SystemProperties.getBoolean(
+-            "debug.choreographer.frametime", true);
+-
+-    // Set a limit to warn about skipped frames.
+-    // Skipped frames imply jank.
+-    private static final int SKIPPED_FRAME_WARNING_LIMIT = SystemProperties.getInt(
+-            "debug.choreographer.skipwarning", 30);
+-
++    private static final long NANOS_PER_MS = 1_000_000;
+     private static final int MSG_DO_FRAME = 0;
+-    private static final int MSG_DO_SCHEDULE_VSYNC = 1;
+     private static final int MSG_DO_SCHEDULE_CALLBACK = 2;
+ 
+     // All frame callbacks posted by applications have this token or VSYNC_CALLBACK_TOKEN.
+@@ -198,11 +170,9 @@
+     private final Looper mLooper;
+     private final FrameHandler mHandler;
+ 
+-    // The display event receiver can only be accessed by the looper thread to which
+-    // it is attached.  We take care to ensure that we post message to the looper
+-    // if appropriate when interacting with the display event receiver.
+-    @UnsupportedAppUsage
+-    private final FrameDisplayEventReceiver mDisplayEventReceiver;
++    // The host supplies frame times on the main looper.
++    private final DisplayEventReceiver.VsyncEventData mHostVsyncEventData =
++            new DisplayEventReceiver.VsyncEventData();
+ 
+     private CallbackRecord mCallbackPool;
+ 
+@@ -219,18 +189,12 @@
+     // determine idle state.
+     private long mLastNoOffsetFrameTimeNanos;
+ 
+-    /** DO NOT USE since this will not updated when screen refresh changes. */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R,
+-            publicAlternatives = "Use {@link android.view.Display#getRefreshRate} instead")
+-    @Deprecated
+-    private long mFrameIntervalNanos;
+     private long mLastFrameIntervalNanos;
+ 
+     private int mFPSDivisor = 1;
+     private final DisplayEventReceiver.VsyncEventData mLastVsyncEventData =
+             new DisplayEventReceiver.VsyncEventData();
+     private final FrameData mFrameData = new FrameData();
+-    private volatile boolean mInDoFrameCallback = false;
+ 
+     private static class BufferStuffingState {
+         enum RecoveryAction {
+@@ -305,14 +269,6 @@
+      * @hide
+      */
+     FrameInfo mFrameInfo = new FrameInfo();
+-
+-    /**
+-     * Must be kept in sync with CALLBACK_* ints below, used to index into this array.
+-     * @hide
+-     */
+-    private static final String[] CALLBACK_TRACE_TITLES = {
+-            "input", "animation", "insets_animation", "traversal", "commit"
+-    };
+ 
+     /**
+      * Callback type: Input callback.  Runs first.
+@@ -371,32 +327,14 @@
+     private Choreographer(Looper looper, long layerHandle) {
+         mLooper = looper;
+         mHandler = new FrameHandler(looper);
+-        mDisplayEventReceiver = USE_VSYNC
+-                ? new FrameDisplayEventReceiver(looper, layerHandle)
+-                : null;
+         mLastFrameTimeNanos = Long.MIN_VALUE;
+ 
+-        mFrameIntervalNanos = (long)(1000000000 / getRefreshRate());
++        mLastFrameIntervalNanos = frameIntervalNanos();
+ 
+         mCallbackQueues = new CallbackQueue[CALLBACK_LAST + 1];
+         for (int i = 0; i <= CALLBACK_LAST; i++) {
+             mCallbackQueues[i] = new CallbackQueue();
+         }
+-        // b/68769804: For low FPS experiments.
+-        setFPSDivisor(SystemProperties.getInt(ThreadedRenderer.DEBUG_FPS_DIVISOR, 1));
+-    }
+-
+-    @RavenwoodReplace(blockedBy = DisplayManagerGlobal.class,
+-            reason = "just use fixed refresh rate")
+-    private static float getRefreshRate() {
+-        DisplayInfo di = DisplayManagerGlobal.getInstance().getDisplayInfo(
+-                Display.DEFAULT_DISPLAY);
+-        return di.getRefreshRate();
+-    }
+-
+-    @SuppressWarnings("unused")
+-    private static float getRefreshRate$ravenwood() {
+-        return 120f;
+     }
+ 
+     /**
+@@ -458,7 +396,7 @@
+     }
+ 
+     private void dispose() {
+-        mDisplayEventReceiver.dispose();
++        mHandler.removeCallbacksAndMessages(null);
+     }
+ 
+     /**
+@@ -569,7 +507,7 @@
+         writer.print(innerPrefix); writer.print("mFrameScheduled=");
+                 writer.println(mFrameScheduled);
+         writer.print(innerPrefix); writer.print("mLastFrameTime=");
+-                writer.println(TimeUtils.formatUptime(mLastFrameTimeNanos / 1000000));
++                writer.println(mLastFrameTimeNanos / NANOS_PER_MS);
+     }
+ 
+     /**
+@@ -829,7 +767,7 @@
+      */
+     @UnsupportedAppUsage
+     public long getFrameTime() {
+-        return getFrameTimeNanos() / TimeUtils.NANOS_PER_MS;
++        return getFrameTimeNanos() / NANOS_PER_MS;
+     }
+ 
+     /**
+@@ -849,7 +787,7 @@
+                 throw new IllegalStateException("This method must only be called as "
+                         + "part of a callback while a frame is in progress.");
+             }
+-            return USE_FRAME_TIME ? mLastFrameTimeNanos : System.nanoTime();
++            return mLastFrameTimeNanos;
+         }
+     }
+ 
+@@ -861,7 +799,7 @@
+      */
+     public long getLastFrameTimeNanos() {
+         synchronized (mLock) {
+-            return USE_FRAME_TIME ? mLastFrameTimeNanos : System.nanoTime();
++            return mLastFrameTimeNanos;
+         }
+     }
+ 
+@@ -894,7 +832,7 @@
+      * @hide
+      */
+     public long getExpectedPresentationTimeMillis() {
+-        return getExpectedPresentationTimeNanos() / TimeUtils.NANOS_PER_MS;
++        return getExpectedPresentationTimeNanos() / NANOS_PER_MS;
+     }
+ 
+     /**
+@@ -908,42 +846,13 @@
+      * @hide
+      */
+     public long getLatestExpectedPresentTimeNanos() {
+-        if (mDisplayEventReceiver == null) {
+-            return System.nanoTime();
+-        }
+-
+-        return mDisplayEventReceiver.getLatestVsyncEventData()
+-                .preferredFrameTimeline().expectedPresentationTime;
++        return mLastVsyncEventData.preferredFrameTimeline().expectedPresentationTime;
+     }
+ 
+     private void scheduleFrameLocked(long now) {
+         if (!mFrameScheduled) {
+             mFrameScheduled = true;
+-            if (USE_VSYNC) {
+-                if (DEBUG_FRAMES) {
+-                    Log.d(TAG, "Scheduling next frame on vsync.");
+-                }
+-
+-                // If running on the Looper thread, then schedule the vsync immediately,
+-                // otherwise post a message to schedule the vsync from the UI thread
+-                // as soon as possible.
+-                if (isRunningOnLooperThreadLocked()) {
+-                    scheduleVsyncLocked();
+-                } else {
+-                    Message msg = mHandler.obtainMessage(MSG_DO_SCHEDULE_VSYNC);
+-                    msg.setAsynchronous(true);
+-                    mHandler.sendMessageAtFrontOfQueue(msg);
+-                }
+-            } else {
+-                final long nextFrameTime = Math.max(
+-                        mLastFrameTimeNanos / TimeUtils.NANOS_PER_MS + sFrameDelay, now);
+-                if (DEBUG_FRAMES) {
+-                    Log.d(TAG, "Scheduling next frame in " + (nextFrameTime - now) + " ms.");
+-                }
+-                Message msg = mHandler.obtainMessage(MSG_DO_FRAME);
+-                msg.setAsynchronous(true);
+-                mHandler.sendMessageAtTime(msg, nextFrameTime);
+-            }
++            scheduleVsyncLocked();
+         }
+     }
+ 
+@@ -956,11 +865,6 @@
+      * @hide
+      */
+     public long getVsyncId() {
+-        if (!mInDoFrameCallback && Trace.isTagEnabled(Trace.TRACE_TAG_VIEW)) {
+-            String message = String.format(Locale.getDefault(), "unsync-vsync-id=%d",
+-                    mLastVsyncEventData.preferredFrameTimeline().vsyncId);
+-            Trace.instant(Trace.TRACE_TAG_VIEW, message);
+-        }
+         return mLastVsyncEventData.preferredFrameTimeline().vsyncId;
+     }
+ 
+@@ -978,12 +882,6 @@
+     void setFPSDivisor(int divisor) {
+         if (divisor <= 0) divisor = 1;
+         mFPSDivisor = divisor;
+-        ThreadedRenderer.setFPSDivisor(divisor);
+-    }
+-
+-    private void traceMessage(String msg) {
+-        Trace.traceBegin(Trace.TRACE_TAG_VIEW, msg);
+-        Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+     }
+ 
+     // Conducts logic for beginning or ending buffer stuffing recovery.
+@@ -999,19 +897,11 @@
+             if (mBufferStuffingState.isStuffed.getAndSet(false)) {
+                 // The start of recovery
+                 if (!mBufferStuffingState.isRecovering) {
+-                    if (Trace.isTagEnabled(Trace.TRACE_TAG_VIEW)) {
+-                        Trace.asyncTraceForTrackBegin(
+-                                Trace.TRACE_TAG_VIEW, "Buffer stuffing recovery", "Thread "
+-                                + android.os.Process.myTid() + ", recover frame", 0);
+-                    }
+                     mBufferStuffingState.isRecovering = true;
+                 }
+ 
+                 if (bufferStuffingRecoveryThreshold() && mBufferStuffingState.maxDelayReached()) {
+-                    Trace.instant(Trace.TRACE_TAG_VIEW,
+-                            "buffer stuffed - max recovery delay reached");
+                 } else {
+-                    Trace.instant(Trace.TRACE_TAG_VIEW, "buffer stuffed");
+                     return BufferStuffingState.RecoveryAction.DELAY_FRAME;
+                 }
+ 
+@@ -1027,11 +917,6 @@
+                 }
+                 // Frame delay only occurs at the start of recovery to free a buffer.
+                 mBufferStuffingState.isRecovering = true;
+-                if (Trace.isTagEnabled(Trace.TRACE_TAG_VIEW)) {
+-                    Trace.asyncTraceForTrackBegin(
+-                            Trace.TRACE_TAG_VIEW, "Buffer stuffing recovery", "Thread "
+-                            + android.os.Process.myTid() + ", recover frame", 0);
+-                }
+                 return BufferStuffingState.RecoveryAction.DELAY_FRAME;
+             }
+         }
+@@ -1052,10 +937,6 @@
+             if (DEBUG_JANK) {
+                 Log.d(TAG, "End buffer stuffing recovery");
+             }
+-            if (Trace.isTagEnabled(Trace.TRACE_TAG_VIEW)) {
+-                Trace.asyncTraceForTrackEnd(
+-                        Trace.TRACE_TAG_VIEW, "Buffer stuffing recovery", 0);
+-            }
+             mBufferStuffingState.reset();
+             return BufferStuffingState.RecoveryAction.NONE;
+         }
+@@ -1063,23 +944,31 @@
+         if (DEBUG_JANK) {
+             Log.d(TAG, "Adjust animation timeline with a negative offset");
+         }
+-        if (Trace.isTagEnabled(Trace.TRACE_TAG_VIEW)) {
+-            Trace.instantForTrack(
+-                    Trace.TRACE_TAG_VIEW, "Buffer stuffing recovery", "Negative offset of "
+-                    + vsyncEventData.frameInterval + " ns added to animation");
+-        }
+         return BufferStuffingState.RecoveryAction.OFFSET;
+     }
+ 
+-    void doFrame(long frameTimeNanos, int frame,
+-            DisplayEventReceiver.VsyncEventData vsyncEventData) {
++    static native long frameIntervalNanos();
++
++    /** Delivers the browser's vertical sync to this looper. @hide */
++    public void doFrame(long frameTimeNanos, Runnable traversal) {
++        final long interval = frameIntervalNanos();
++        mHostVsyncEventData.frameInterval = interval;
++        for (int i = 0; i < mHostVsyncEventData.frameTimelines.length; i++) {
++            final var timeline = mHostVsyncEventData.frameTimelines[i];
++            timeline.deadline = frameTimeNanos + i * interval;
++            timeline.expectedPresentationTime = timeline.deadline + interval;
++        }
++        doFrame(frameTimeNanos, 0, mHostVsyncEventData, traversal);
++    }
++
++    private void doFrame(long frameTimeNanos, int frame,
++            DisplayEventReceiver.VsyncEventData vsyncEventData, Runnable traversal) {
+         final long startNanos;
+         final long frameIntervalNanos = vsyncEventData.frameInterval;
+         // Original intended vsync time that is not adjusted by jitter
+         // or buffer stuffing recovery. Reported for jank tracking.
+         final long intendedFrameTimeNanos = frameTimeNanos;
+         long offsetFrameTimeNanos = frameTimeNanos;
+-        boolean resynced = false;
+ 
+         // Evaluate if buffer stuffing recovery needs to start or end, and
+         // what actions need to be taken for recovery.
+@@ -1105,19 +994,13 @@
+ 
+         try {
+             FrameTimeline timeline = mFrameData.update(offsetFrameTimeNanos, vsyncEventData);
+-            if (Trace.isTagEnabled(Trace.TRACE_TAG_VIEW)) {
+-                Trace.traceBegin(
+-                        Trace.TRACE_TAG_VIEW, "Choreographer#doFrame " + timeline.mVsyncId);
+-                mInDoFrameCallback = true;
+-            }
+             synchronized (mLock) {
+-                if (!mFrameScheduled) {
+-                    traceMessage("Frame not scheduled");
++                if (!mFrameScheduled && traversal == null) {
+                     return; // no work to do
+                 }
+                 mLastNoOffsetFrameTimeNanos = frameTimeNanos;
+ 
+-                startNanos = System.nanoTime();
++                startNanos = SystemClock.elapsedRealtimeNanos();
+                 // Calculating jitter involves using the original frame time without
+                 // adjustments from buffer stuffing
+                 final long jitterNanos = startNanos - frameTimeNanos;
+@@ -1129,7 +1012,7 @@
+                         long lastFrameOffset = jitterNanos % frameIntervalNanos;
+                         frameTimeNanos = frameTimeNanos - lastFrameOffset;
+                         final long skippedFrames = jitterNanos / frameIntervalNanos;
+-                        if (skippedFrames >= SKIPPED_FRAME_WARNING_LIMIT) {
++                        if (skippedFrames >= 30) {
+                             Log.i(TAG, "Skipped " + skippedFrames + " frames!  "
+                                     + "The application may be doing too much work on its main "
+                                     + "thread.");
+@@ -1151,8 +1034,7 @@
+                         }
+                     }
+                     timeline = mFrameData.update(
+-                            frameTimeNanos, mDisplayEventReceiver, jitterNanos);
+-                    resynced = true;
++                            frameTimeNanos, jitterNanos);
+                 }
+ 
+                 if (frameTimeNanos < mLastFrameTimeNanos) {
+@@ -1160,7 +1042,6 @@
+                         Log.d(TAG, "Frame time appears to be going backwards.  May be due to a "
+                                 + "previously skipped frame.  Waiting for next vsync.");
+                     }
+-                    traceMessage("Frame time goes backward");
+                     if (mBufferStuffingState.isRecovering) {
+                         mBufferStuffingState.numberWaitsForNextVsync++;
+                     }
+@@ -1171,7 +1052,6 @@
+                 if (mFPSDivisor > 1) {
+                     long timeSinceVsync = frameTimeNanos - mLastFrameTimeNanos;
+                     if (timeSinceVsync < (frameIntervalNanos * mFPSDivisor) && timeSinceVsync > 0) {
+-                        traceMessage("Frame skipped due to FPSDivisor");
+                         if (mBufferStuffingState.isRecovering) {
+                             mBufferStuffingState.numberWaitsForNextVsync++;
+                         }
+@@ -1190,13 +1070,8 @@
+                 mLastVsyncEventData.copyFrom(vsyncEventData);
+             }
+ 
+-            if (resynced && Trace.isTagEnabled(Trace.TRACE_TAG_VIEW)) {
+-                String message = String.format("Choreographer#doFrame - resynced to %d in %.1fms",
+-                        timeline.mVsyncId, (timeline.mDeadlineNanos - startNanos) * 0.000001f);
+-                Trace.traceBegin(Trace.TRACE_TAG_VIEW, message);
+-            }
+-
+-            AnimationUtils.lockAnimationClock(frameTimeNanos / TimeUtils.NANOS_PER_MS);
++
++            AnimationUtils.lockAnimationClock(frameTimeNanos / NANOS_PER_MS);
+ 
+             mFrameInfo.markInputHandlingStart();
+             doCallbacks(Choreographer.CALLBACK_INPUT);
+@@ -1206,20 +1081,15 @@
+             doCallbacks(Choreographer.CALLBACK_INSETS_ANIMATION);
+ 
+             mFrameInfo.markPerformTraversalsStart();
+-            doCallbacks(Choreographer.CALLBACK_TRAVERSAL);
++            doCallbacks(Choreographer.CALLBACK_TRAVERSAL, traversal);
+ 
+             doCallbacks(Choreographer.CALLBACK_COMMIT);
+         } finally {
+             AnimationUtils.unlockAnimationClock();
+-            mInDoFrameCallback = false;
+-            if (resynced) {
+-                Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+-            }
+-            Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+         }
+ 
+         if (DEBUG_FRAMES) {
+-            final long endNanos = System.nanoTime();
++            final long endNanos = SystemClock.elapsedRealtimeNanos();
+             Log.d(TAG, "Frame " + frame + ": Finished, took "
+                     + (endNanos - startNanos) * 0.000001f + " ms, latency "
+                     + (startNanos - frameTimeNanos) * 0.000001f + " ms.");
+@@ -1227,22 +1097,24 @@
+     }
+ 
+     void doCallbacks(int callbackType) {
++        doCallbacks(callbackType, null);
++    }
++
++    private void doCallbacks(int callbackType, Runnable traversal) {
+         CallbackRecord callbacks;
+-        long frameTimeNanos = mFrameData.mFrameTimeNanos;
+         synchronized (mLock) {
+             // We use "now" to determine when callbacks become due because it's possible
+             // for earlier processing phases in a frame to post callbacks that should run
+             // in a following phase, such as an input event that causes an animation to start.
+-            final long now = System.nanoTime();
++            final long now = SystemClock.elapsedRealtimeNanos();
+             callbacks = mCallbackQueues[callbackType].extractDueCallbacksLocked(
+-                    now / TimeUtils.NANOS_PER_MS);
+-            if (callbacks == null) {
++                    now / NANOS_PER_MS);
++            if (callbacks == null && traversal == null) {
+                 return;
+             }
+             mCallbacksRunning = true;
+         }
+         try {
+-            Trace.traceBegin(Trace.TRACE_TAG_VIEW, CALLBACK_TRACE_TITLES[callbackType]);
+             for (CallbackRecord c = callbacks; c != null; c = c.next) {
+                 if (DEBUG_FRAMES) {
+                     Log.d(TAG, "RunCallback: type=" + callbackType
+@@ -1251,23 +1123,17 @@
+                 }
+                 c.run(mFrameData);
+             }
++            if (traversal != null) {
++                traversal.run();
++            }
+         } finally {
+             synchronized (mLock) {
+                 mCallbacksRunning = false;
+-                do {
++                while (callbacks != null) {
+                     final CallbackRecord next = callbacks.next;
+                     recycleCallbackLocked(callbacks);
+                     callbacks = next;
+-                } while (callbacks != null);
+-            }
+-            Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+-        }
+-    }
+-
+-    void doScheduleVsync() {
+-        synchronized (mLock) {
+-            if (mFrameScheduled) {
+-                scheduleVsyncLocked();
++                }
+             }
+         }
+     }
+@@ -1283,18 +1149,15 @@
+         }
+     }
+ 
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     private void scheduleVsyncLocked() {
+-        try {
+-            Trace.traceBegin(Trace.TRACE_TAG_VIEW, "Choreographer#scheduleVsyncLocked");
+-            mDisplayEventReceiver.scheduleVsync();
+-        } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+-        }
+-    }
+-
+-    private boolean isRunningOnLooperThreadLocked() {
+-        return Looper.myLooper() == mLooper;
++        if (mLooper == Looper.getMainLooper()) {
++            return;
++        }
++        final long now = SystemClock.uptimeMillis();
++        final long nextFrameTime = Math.max(mLastFrameTimeNanos / NANOS_PER_MS + sFrameDelay, now);
++        Message msg = mHandler.obtainMessage(MSG_DO_FRAME);
++        msg.setAsynchronous(true);
++        mHandler.sendMessageAtTime(msg, nextFrameTime);
+     }
+ 
+     private CallbackRecord obtainCallbackLocked(long dueTime, Object action, Object token) {
+@@ -1501,30 +1364,17 @@
+          * @param jitterNanos currentTime - frameTime
+          */
+         FrameTimeline update(
+-                long frameTimeNanos, DisplayEventReceiver displayEventReceiver, long jitterNanos) {
++                long frameTimeNanos, long jitterNanos) {
+             int newPreferredIndex = 0;
+             final long minimumDeadline =
+                     mFrameTimelines[mPreferredFrameTimelineIndex].mDeadlineNanos + jitterNanos;
+-            // Look for a non-past deadline timestamp in the existing frame data. Otherwise, binder
+-            // query for new frame data. Note that binder is relatively slow, O(ms), so it is
+-            // only called when the existing frame data does not hold a valid frame.
++            // Look for a non-past deadline timestamp among the host timelines.
+             while (newPreferredIndex < mFrameTimelines.length - 1
+                     && mFrameTimelines[newPreferredIndex].mDeadlineNanos < minimumDeadline) {
+                 newPreferredIndex++;
+             }
+ 
+-            long newPreferredDeadline = mFrameTimelines[newPreferredIndex].mDeadlineNanos;
+-            if (USE_VSYNC && newPreferredDeadline < minimumDeadline) {
+-                DisplayEventReceiver.VsyncEventData latestVsyncEventData =
+-                        displayEventReceiver.getLatestVsyncEventData();
+-                if (latestVsyncEventData == null) {
+-                    Log.w(TAG, "Could not get latest VsyncEventData. Did SurfaceFlinger crash?");
+-                } else {
+-                    update(frameTimeNanos, latestVsyncEventData);
+-                }
+-            } else {
+-                update(frameTimeNanos, newPreferredIndex);
+-            }
++            update(frameTimeNanos, newPreferredIndex);
+             return mFrameTimelines[mPreferredFrameTimelineIndex];
+         }
+ 
+@@ -1564,80 +1414,12 @@
+         public void handleMessage(Message msg) {
+             switch (msg.what) {
+                 case MSG_DO_FRAME:
+-                    doFrame(System.nanoTime(), 0, new DisplayEventReceiver.VsyncEventData());
+-                    break;
+-                case MSG_DO_SCHEDULE_VSYNC:
+-                    doScheduleVsync();
++                    doFrame(SystemClock.elapsedRealtimeNanos(), null);
+                     break;
+                 case MSG_DO_SCHEDULE_CALLBACK:
+                     doScheduleCallback(msg.arg1);
+                     break;
+             }
+-        }
+-    }
+-
+-    private final class FrameDisplayEventReceiver extends DisplayEventReceiver
+-            implements Runnable {
+-        private boolean mHavePendingVsync;
+-        private long mTimestampNanos;
+-        private int mFrame;
+-        private final VsyncEventData mLastVsyncEventData = new VsyncEventData();
+-
+-        FrameDisplayEventReceiver(Looper looper, long layerHandle) {
+-            super(looper, /* eventRegistration */ 0, layerHandle);
+-        }
+-
+-        // TODO(b/116025192): physicalDisplayId is ignored because SF only emits VSYNC events for
+-        // the internal display and DisplayEventReceiver#scheduleVsync only allows requesting VSYNC
+-        // for the internal display implicitly.
+-        @Override
+-        public void onVsync(long timestampNanos, long physicalDisplayId, int frame,
+-                VsyncEventData vsyncEventData) {
+-            try {
+-                if (Trace.isTagEnabled(Trace.TRACE_TAG_VIEW)) {
+-                    Trace.traceBegin(Trace.TRACE_TAG_VIEW,
+-                            "Choreographer#onVsync "
+-                                    + vsyncEventData.preferredFrameTimeline().vsyncId);
+-                }
+-                // Post the vsync event to the Handler.
+-                // The idea is to prevent incoming vsync events from completely starving
+-                // the message queue.  If there are no messages in the queue with timestamps
+-                // earlier than the frame time, then the vsync event will be processed immediately.
+-                // Otherwise, messages that predate the vsync event will be handled first.
+-                long now = System.nanoTime();
+-                if (timestampNanos > now) {
+-                    if (DEBUG_JANK) {
+-                        Log.w(TAG, "Frame time is " + ((timestampNanos - now) * 0.000001f)
+-                                + " ms in the future!  Check that graphics HAL is generating vsync "
+-                                + "timestamps using the correct timebase.");
+-                    }
+-                    timestampNanos = now;
+-                }
+-
+-                if (mHavePendingVsync) {
+-                    if (DEBUG_JANK) {
+-                        Log.w(TAG, "Already have a pending vsync event.  There should only be "
+-                                + "one at a time.");
+-                    }
+-                } else {
+-                    mHavePendingVsync = true;
+-                }
+-
+-                mTimestampNanos = timestampNanos;
+-                mFrame = frame;
+-                mLastVsyncEventData.copyFrom(vsyncEventData);
+-                Message msg = Message.obtain(mHandler, this);
+-                msg.setAsynchronous(true);
+-                mHandler.sendMessageAtTime(msg, timestampNanos / TimeUtils.NANOS_PER_MS);
+-            } finally {
+-                Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+-            }
+-        }
+-
+-        @Override
+-        public void run() {
+-            mHavePendingVsync = false;
+-            doFrame(mTimestampNanos, mFrame, mLastVsyncEventData);
+         }
+     }
+ 

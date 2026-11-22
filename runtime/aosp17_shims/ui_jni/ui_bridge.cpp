@@ -12,6 +12,8 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "view_input_jni.cpp"
+
 namespace wa::ui_jni::detail {
 namespace {
 
@@ -574,6 +576,7 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     detail::RegisterPath(vm);
     detail::RegisterBitmaps(vm);
     detail::RegisterVectors(vm);
+    detail::RegisterViewInput(vm);
     detail::bindings.emplace(env, state_.get());
     state_->env = env;
     state_->vm = &vm;

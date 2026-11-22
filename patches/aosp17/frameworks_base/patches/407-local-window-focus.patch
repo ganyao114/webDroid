@@ -1,0 +1,191 @@
+--- a/frameworks/base/core/java/android/view/WindowId.java
++++ b/frameworks/base/core/java/android/view/WindowId.java
+@@ -23,9 +23,10 @@
+ import android.os.Message;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.os.RemoteException;
+-
++
++import java.util.ArrayList;
+ import java.util.HashMap;
++import java.util.Objects;
+ 
+ /**
+  * Safe identifier for a window.  This currently allows you to retrieve and observe
+@@ -38,7 +39,9 @@
+  */
+ public class WindowId implements Parcelable {
+     @NonNull
+-    private final IWindowId mToken;
++    private final IBinder mToken;
++    private final ArrayList<FocusObserver> mObservers = new ArrayList<>();
++    private volatile boolean mFocused;
+ 
+     /**
+      * Subclass for observing changes to the focus state of an {@link WindowId}.
+@@ -48,34 +51,14 @@
+      * from the window.
+      */
+     public static abstract class FocusObserver {
+-        final IWindowFocusObserver.Stub mIObserver = new IWindowFocusObserver.Stub() {
+-
+-            @Override
+-            public void focusGained(IBinder inputToken) {
+-                WindowId token;
+-                synchronized (mRegistrations) {
+-                    token = mRegistrations.get(inputToken);
++        void dispatchFocusChanged(IBinder inputToken, boolean focused) {
++            synchronized (mRegistrations) {
++                final WindowId window = mRegistrations.get(inputToken);
++                if (window != null) {
++                    mHandler.sendMessage(mHandler.obtainMessage(focused ? 1 : 2, window));
+                 }
+-                if (mHandler != null) {
+-                    mHandler.sendMessage(mHandler.obtainMessage(1, token));
+-                } else {
+-                    onFocusGained(token);
+-                }
+-            }
+-
+-            @Override
+-            public void focusLost(IBinder inputToken) {
+-                WindowId token;
+-                synchronized (mRegistrations) {
+-                    token = mRegistrations.get(inputToken);
+-                }
+-                if (mHandler != null) {
+-                    mHandler.sendMessage(mHandler.obtainMessage(2, token));
+-                } else {
+-                    onFocusLost(token);
+-                }
+-            }
+-        };
++            }
++        }
+ 
+         final HashMap<IBinder, WindowId> mRegistrations = new HashMap<>();
+ 
+@@ -120,10 +103,19 @@
+      * Retrieve the current focus state of the associated window.
+      */
+     public boolean isFocused() {
+-        try {
+-            return mToken.isFocused();
+-        } catch (RemoteException e) {
+-            return false;
++        return mFocused;
++    }
++
++    // Called by the single-window host when it activates or deactivates the view root.
++    void dispatchFocusChanged(boolean focused) {
++        final ArrayList<FocusObserver> observers;
++        synchronized (mObservers) {
++            if (mFocused == focused) return;
++            mFocused = focused;
++            observers = new ArrayList<>(mObservers);
++        }
++        for (FocusObserver observer : observers) {
++            observer.dispatchFocusChanged(mToken, focused);
+         }
+     }
+ 
+@@ -132,14 +124,13 @@
+      */
+     public void registerFocusObserver(FocusObserver observer) {
+         synchronized (observer.mRegistrations) {
+-            if (observer.mRegistrations.containsKey(mToken.asBinder())) {
++            if (observer.mRegistrations.containsKey(mToken)) {
+                 throw new IllegalStateException(
+                         "Focus observer already registered with input token");
+             }
+-            observer.mRegistrations.put(mToken.asBinder(), this);
+-            try {
+-                mToken.registerFocusObserver(observer.mIObserver);
+-            } catch (RemoteException e) {
++            observer.mRegistrations.put(mToken, this);
++            synchronized (mObservers) {
++                mObservers.add(observer);
+             }
+         }
+     }
+@@ -149,12 +140,11 @@
+      */
+     public void unregisterFocusObserver(FocusObserver observer) {
+         synchronized (observer.mRegistrations) {
+-            if (observer.mRegistrations.remove(mToken.asBinder()) == null) {
++            if (observer.mRegistrations.remove(mToken) == null) {
+                 throw new IllegalStateException("Focus observer not registered with input token");
+             }
+-            try {
+-                mToken.unregisterFocusObserver(observer.mIObserver);
+-            } catch (RemoteException e) {
++            synchronized (mObservers) {
++                mObservers.remove(observer);
+             }
+         }
+     }
+@@ -167,14 +157,14 @@
+     @Override
+     public boolean equals(@Nullable Object otherObj) {
+         if (otherObj instanceof WindowId) {
+-            return mToken.asBinder().equals(((WindowId) otherObj).mToken.asBinder());
++            return mToken.equals(((WindowId) otherObj).mToken);
+         }
+         return false;
+     }
+ 
+     @Override
+     public int hashCode() {
+-        return mToken.asBinder().hashCode();
++        return mToken.hashCode();
+     }
+ 
+     @Override
+@@ -183,7 +173,7 @@
+         sb.append("IntentSender{");
+         sb.append(Integer.toHexString(System.identityHashCode(this)));
+         sb.append(": ");
+-        sb.append(mToken.asBinder());
++        sb.append(mToken);
+         sb.append('}');
+         return sb.toString();
+     }
+@@ -193,14 +183,14 @@
+     }
+ 
+     public void writeToParcel(Parcel out, int flags) {
+-        out.writeStrongBinder(mToken.asBinder());
++        // The host Parcel transports references within the guest VM.
++        out.writeParcelable(this, flags);
+     }
+ 
+     public static final @android.annotation.NonNull Parcelable.Creator<WindowId> CREATOR = new Parcelable.Creator<WindowId>() {
+         @Override
+         public WindowId createFromParcel(Parcel in) {
+-            IBinder target = in.readStrongBinder();
+-            return target != null ? new WindowId(target) : null;
++            return in.readParcelable(WindowId.class.getClassLoader(), WindowId.class);
+         }
+ 
+         @Override
+@@ -210,18 +200,7 @@
+     };
+ 
+     /** @hide */
+-    @NonNull
+-    public IWindowId getTarget() {
+-        return mToken;
+-    }
+-
+-    /** @hide */
+-    public WindowId(@NonNull IWindowId target) {
+-        mToken = target;
+-    }
+-
+-    /** @hide */
+     public WindowId(@NonNull IBinder target) {
+-        mToken = IWindowId.Stub.asInterface(target);
++        mToken = Objects.requireNonNull(target);
+     }
+ }

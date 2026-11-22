@@ -1,0 +1,71 @@
+--- a/frameworks/base/core/java/android/view/ContextThemeWrapper.java
++++ b/frameworks/base/core/java/android/view/ContextThemeWrapper.java
+@@ -26,9 +26,6 @@
+ import android.content.res.Resources;
+ import android.os.Build;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.ravenwood.annotation.RavenwoodReplace;
+-
+-import dalvik.system.VMRuntime;
+ 
+ /**
+  * A context wrapper that allows you to modify or replace the theme of the
+@@ -163,7 +160,6 @@
+     }
+ 
+     /** @hide */
+-    @Override
+     @UnsupportedAppUsage
+     public int getThemeResId() {
+         return mThemeResource;
+@@ -175,21 +171,17 @@
+             return mTheme;
+         }
+ 
+-        mThemeResource = Resources.selectDefaultTheme(mThemeResource, getTargetSdk());
++        // The browser host attaches the application context directly to the Activity.
++        // Inherit its manifest theme when the Activity did not declare an override.
++        final int themeResource = mThemeResource == 0 ? getApplicationInfo().theme : mThemeResource;
++        mThemeResource = Resources.selectDefaultTheme(themeResource, getTargetSdk());
+         initializeTheme();
+ 
+         return mTheme;
+     }
+ 
+-    @RavenwoodReplace
+     private int getTargetSdk() {
+         return getApplicationInfo().targetSdkVersion;
+-    }
+-
+-    private int getTargetSdk$ravenwood() {
+-        // On Ravenwood we don't support loading other package's context yet,
+-        // so we use the current process's target SDK version instead.
+-        return VMRuntime.getRuntime().getTargetSdkVersion();
+     }
+ 
+     @Override
+--- a/frameworks/base/core/java/android/view/ViewStub.java
++++ b/frameworks/base/core/java/android/view/ViewStub.java
+@@ -108,12 +108,10 @@
+ 
+         final TypedArray a = context.obtainStyledAttributes(attrs,
+                 R.styleable.ViewStub, defStyleAttr, defStyleRes);
+-        saveAttributeDataForStyleable(context, R.styleable.ViewStub, attrs, a, defStyleAttr,
+-                defStyleRes);
+ 
+         mInflatedId = a.getResourceId(R.styleable.ViewStub_inflatedId, NO_ID);
+         mLayoutResource = a.getResourceId(R.styleable.ViewStub_layout, 0);
+-        mID = a.getResourceId(R.styleable.ViewStub_id, NO_ID);
++        setId(a.getResourceId(R.styleable.ViewStub_id, NO_ID));
+         a.recycle();
+ 
+         setVisibility(GONE);
+@@ -267,7 +265,7 @@
+         if (mInflater != null) {
+             factory = mInflater;
+         } else {
+-            factory = LayoutInflater.from(mContext);
++            factory = LayoutInflater.from(getContext());
+         }
+         final View view = factory.inflate(mLayoutResource, parent, false);
+ 
