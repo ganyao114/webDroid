@@ -1,0 +1,134 @@
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/model/ModelProxyProvider.kt b/packages/apps/Launcher3/src/com/android/launcher3/model/ModelProxyProvider.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/ModelProxyProvider.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/ModelProxyProvider.kt
+@@ -16,7 +16,6 @@
+ 
+ package com.android.launcher3.model
+ 
+-import android.Manifest.permission.ACCESS_LAUNCHER_DATA
+ import android.appwidget.AppWidgetManager
+ import android.content.ComponentName
+ import android.content.ContentUris
+@@ -220,7 +219,7 @@
+      * "call" method at all. We also enforce the appropriate per-method permissions.
+      */
+     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
+-        if (context.checkCallingOrSelfPermission(ACCESS_LAUNCHER_DATA) != PERMISSION_GRANTED) {
++        if (context.checkCallingOrSelfPermission("android.permission.ACCESS_LAUNCHER_DATA") != PERMISSION_GRANTED) {
+             throw SecurityException("Caller doesn't have read permission")
+         }
+         return when (method) {
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/model/data/AppInfo.java b/packages/apps/Launcher3/src/com/android/launcher3/model/data/AppInfo.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/data/AppInfo.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/data/AppInfo.java
+@@ -212,20 +212,6 @@
+             info.runtimeStatusFlags &= ~FLAG_NOT_PINNABLE;
+         }
+ 
+-        if (android.security.Flags.appLockApis()) {
+-            if (appInfo.isAppLockSupported()) {
+-                info.runtimeStatusFlags |= FLAG_APP_LOCK_SUPPORTED;
+-            } else {
+-                info.runtimeStatusFlags &= ~FLAG_APP_LOCK_SUPPORTED;
+-            }
+-
+-            if (appInfo.isAppLockEnabled()) {
+-                info.runtimeStatusFlags |= FLAG_APP_LOCK_ENABLED;
+-            } else {
+-                info.runtimeStatusFlags &= ~FLAG_APP_LOCK_ENABLED;
+-            }
+-        }
+-
+         // Sets the progress level, installation and incremental download flags.
+         info.setProgressLevel(
+                 PackageManagerHelper.getLoadingProgress(lai),
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/popup/AppLockShortcut.kt b/packages/apps/Launcher3/src/com/android/launcher3/popup/AppLockShortcut.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/popup/AppLockShortcut.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/popup/AppLockShortcut.kt
+@@ -25,7 +25,6 @@
+ import com.android.launcher3.logging.StatsLogManager.LauncherEvent.LAUNCHER_SYSTEM_SHORTCUT_ENABLE_APP_LOCK_TAP
+ import com.android.launcher3.model.data.ItemInfo
+ import com.android.launcher3.popup.AppLockShortcut.Companion.newInstance
+-import com.android.launcher3.util.Executors
+ import com.android.launcher3.views.ActivityContext
+ import java.util.concurrent.CompletableFuture
+ 
+@@ -52,25 +51,7 @@
+         getAppLockPendingIntentFuture()
+ 
+     private fun getAppLockPendingIntentFuture(): CompletableFuture<PendingIntent?> =
+-        if (packageName == null) {
+-            Log.w(TAG, "Package name is null")
+-            CompletableFuture.completedFuture(null)
+-        } else {
+-            CompletableFuture.supplyAsync(
+-                {
+-                    try {
+-                        mTarget
+-                            .asContext()
+-                            .packageManager
+-                            .getEnableAppLockIntentForPackage(packageName, newAppLockEnabled)
+-                    } catch (e: SecurityException) {
+-                        Log.e(TAG, "Failed to get App Lock intent for $packageName", e)
+-                        null
+-                    }
+-                },
+-                Executors.ORDERED_BG_EXECUTOR,
+-            )
+-        }
++        CompletableFuture.completedFuture(null)
+ 
+     /**
+      * Handles the click event for the App Lock shortcut.
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/popup/SystemShortcut.java b/packages/apps/Launcher3/src/com/android/launcher3/popup/SystemShortcut.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/popup/SystemShortcut.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/popup/SystemShortcut.java
+@@ -616,9 +616,6 @@
+ 
+     public static final Factory<ActivityContext> APP_LOCK =
+             (activity, itemInfo, originalView) -> {
+-                if (!android.security.Flags.appLockApis()) {
+-                    return null;
+-                }
+                 if (itemInfo instanceof ItemInfoWithIcon itemInfoWithIcon) {
+                     if (itemInfoWithIcon.isAppLockSupported()) {
+                         return AppLockShortcut.newInstance(activity, itemInfo, originalView,
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/util/ApplicationInfoWrapper.kt b/packages/apps/Launcher3/src/com/android/launcher3/util/ApplicationInfoWrapper.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/util/ApplicationInfoWrapper.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/util/ApplicationInfoWrapper.kt
+@@ -114,10 +114,8 @@
+     fun getInfo(): ApplicationInfo? = appInfo
+ 
+     /** Returns whether the target app supports App Lock for a given user */
+-    fun isAppLockSupported() =
+-        android.security.Flags.appLockApis() && appInfo?.isAppLockSupported ?: false
++    fun isAppLockSupported() = false
+ 
+     /** Returns whether the target app has App Lock enabled for a given user */
+-    fun isAppLockEnabled() =
+-        android.security.Flags.appLockApis() && appInfo?.isAppLockEnabled ?: false
++    fun isAppLockEnabled() = false
+ }
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/widget/WidgetVisibilityTracker.kt b/packages/apps/Launcher3/src/com/android/launcher3/widget/WidgetVisibilityTracker.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/widget/WidgetVisibilityTracker.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/widget/WidgetVisibilityTracker.kt
+@@ -70,11 +70,17 @@
+                     workspace.getPageIndexForScreenId(it)
+                 } ?: return@forEach
+             if (inNormalState && noFloatingViews && pageIndex in visiblePages) {
+-                view.startVisibilityTracking()
++                updateWidgetTracking(view, "startVisibilityTracking")
+             } else {
+-                view.stopVisibilityTracking()
++                updateWidgetTracking(view, "stopVisibilityTracking")
+             }
+         }
++    }
++
++    private fun updateWidgetTracking(view: View, methodName: String) {
++        // Visibility tracking is available on newer platform widget hosts.
++        runCatching { view.javaClass.getMethod(methodName).invoke(view) }
++            .onFailure { error -> if (error !is ReflectiveOperationException) throw error }
+     }
+ 
+     fun destroy() {

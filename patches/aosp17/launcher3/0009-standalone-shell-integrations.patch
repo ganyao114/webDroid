@@ -1,0 +1,248 @@
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/CheckLongPressHelper.java b/packages/apps/Launcher3/src/com/android/launcher3/CheckLongPressHelper.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/CheckLongPressHelper.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/CheckLongPressHelper.java
+@@ -142,7 +142,7 @@
+ 
+     private void triggerLongPress() {
+         if ((mView.getParent() != null)
+-                && (Flags.showHomeBehindDesktop() || mView.hasWindowFocus())
++                && (Flags.SHOW_HOME_BEHIND_DESKTOP || mView.hasWindowFocus())
+                 && (!mView.isPressed() || mListener != null)
+                 && !mHasPerformedLongPress) {
+             boolean handled;
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/DeviceProfile.java b/packages/apps/Launcher3/src/com/android/launcher3/DeviceProfile.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/DeviceProfile.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/DeviceProfile.java
+@@ -22,7 +22,7 @@
+ import static com.android.launcher3.testing.shared.ResourceUtils.INVALID_RESOURCE_HANDLE;
+ import static com.android.launcher3.testing.shared.ResourceUtils.pxFromDp;
+ import static com.android.systemui.shared.Flags.enableRecentsInTaskbar;
+-import static com.android.wm.shell.Flags.enableBubbleBar;
++import static com.android.wm.shell.Flags.ENABLE_BUBBLE_BAR;
+ 
+ import static java.lang.Math.max;
+ 
+@@ -1509,7 +1509,7 @@
+      * Returns whether Taskbar and Hotseat should adjust horizontally on bubble bar location update.
+      */
+     public boolean shouldAdjustHotseatOnNavBarLocationUpdate(Context context) {
+-        return enableBubbleBar()
++        return ENABLE_BUBBLE_BAR
+                 && !DisplayController.getNavigationMode(context).hasGestures;
+     }
+ 
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/Utilities.java b/packages/apps/Launcher3/src/com/android/launcher3/Utilities.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/Utilities.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/Utilities.java
+@@ -25,7 +25,7 @@
+ import static com.android.launcher3.util.SplitConfigurationOptions.STAGE_POSITION_BOTTOM_OR_RIGHT;
+ import static com.android.launcher3.util.SplitConfigurationOptions.STAGE_POSITION_TOP_OR_LEFT;
+ import static com.android.launcher3.util.SplitConfigurationOptions.STAGE_TYPE_MAIN;
+-import static com.android.window.flags.Flags.enableNonDefaultDisplaySplitBugfix;
++import static com.android.window.flags.Flags.ENABLE_NON_DEFAULT_DISPLAY_SPLIT_BUGFIX;
+ 
+ import android.app.ActivityManager;
+ import android.app.ActivityOptions;
+@@ -922,7 +922,7 @@
+     public static boolean calculateIsLeftRightSplit(boolean allowLeftRightSplitInPortrait,
+             DeviceProperties deviceProperties, boolean isExternalDisplay) {
+         if (allowLeftRightSplitInPortrait && deviceProperties.isLargeScreen()) {
+-            if (!isExternalDisplay || !enableNonDefaultDisplaySplitBugfix()) {
++            if (!isExternalDisplay || !ENABLE_NON_DEFAULT_DISPLAY_SPLIT_BUGFIX) {
+                 return !deviceProperties.isLandscape();
+             } else {
+                 // If split is started in external display and the non_default_display_split
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/DeviceProperties.kt b/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/DeviceProperties.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/DeviceProperties.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/DeviceProperties.kt
+@@ -71,8 +71,8 @@
+             val availableWidthPx = windowBounds.availableSize.x
+             val availableHeightPx = windowBounds.availableSize.y
+             val taskbarOrBubbleBarOnPhones =
+-                Flags.enableTinyTaskbar() ||
+-                    (Flags.enableBubbleBar() && Flags.enableBubbleBarOnPhones())
++                Flags.ENABLE_TINY_TASKBAR ||
++                    (Flags.ENABLE_BUBBLE_BAR && Flags.ENABLE_BUBBLE_BAR_ON_PHONES)
+             return DeviceProperties(
+                 windowX = windowX,
+                 windowY = windowY,
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/homescreenfiles/HomeScreenFilesUtils.kt b/packages/apps/Launcher3/src/com/android/launcher3/homescreenfiles/HomeScreenFilesUtils.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/homescreenfiles/HomeScreenFilesUtils.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/homescreenfiles/HomeScreenFilesUtils.kt
+@@ -20,12 +20,10 @@
+ import android.net.Uri
+ import android.os.Environment
+ import android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+-import com.android.launcher3.Flags.enableHomeScreenFilesTrashing
+ import com.android.launcher3.Flags.showFilesOnHomeScreen
+ import com.android.launcher3.LauncherSettings.Favorites.ITEM_TYPE_FILE_SYSTEM_FILE
+ import com.android.launcher3.LauncherSettings.Favorites.ITEM_TYPE_FILE_SYSTEM_FOLDER
+ import com.android.launcher3.model.data.ItemInfo
+-import com.android.providers.media.flags.Flags.enableTrashAndRestoreByFilePathApi
+ 
+ /** Other utility methods related to managing files on the home screen. */
+ class HomeScreenFilesUtils {
+@@ -42,8 +40,8 @@
+         }
+ 
+         /** Returns `true` if the "Move to trash" feature is enabled. */
+-        fun isTrashingEnabled() =
+-            enableHomeScreenFilesTrashing() && enableTrashAndRestoreByFilePathApi()
++        // This SDK build does not link the MediaProvider file trash integration.
++        fun isTrashingEnabled() = false
+ 
+         /** Returns the appropriate item type for the given [homeScreenFile]. */
+         fun buildItemType(homeScreenFile: HomeScreenFile) =
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/model/WorkspaceItemProcessor.kt b/packages/apps/Launcher3/src/com/android/launcher3/model/WorkspaceItemProcessor.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/WorkspaceItemProcessor.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/WorkspaceItemProcessor.kt
+@@ -791,7 +791,7 @@
+         private const val ORPHAN_APPS_QUERY =
+             "$CONTAINER >= 0 AND $CONTAINER NOT IN (SELECT $_ID FROM $TABLE_NAME )"
+         private val BAD_APP_PAIR_QUERY =
+-            if (com.android.wm.shell.Flags.enable2x1Split()) {
++            if (com.android.wm.shell.Flags.ENABLE_2X1_SPLIT) {
+                 "$ITEM_TYPE = $ITEM_TYPE_APP_GROUP AND $_ID NOT IN (SELECT $CONTAINER FROM $TABLE_NAME GROUP BY $CONTAINER HAVING COUNT BETWEEN ${AppPairInfo.MIN_ITEMS} AND ${AppPairInfo.MAX_ITEMS})"
+             } else {
+                 "$ITEM_TYPE = $ITEM_TYPE_APP_GROUP AND $_ID NOT IN (SELECT $CONTAINER FROM $TABLE_NAME GROUP BY $CONTAINER HAVING COUNT(*) = 2)"
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/model/data/AppPairInfo.kt b/packages/apps/Launcher3/src/com/android/launcher3/model/data/AppPairInfo.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/data/AppPairInfo.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/data/AppPairInfo.kt
+@@ -33,7 +33,7 @@
+ 
+         @JvmStatic
+         fun hasValidItemCount(count: Int): Boolean {
+-            if (Flags.enable2x1Split()) {
++            if (Flags.ENABLE_2X1_SPLIT) {
+                 return count in MIN_ITEMS..MAX_ITEMS
+             }
+ 
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/model/data/WorkspaceItemInfo.java b/packages/apps/Launcher3/src/com/android/launcher3/model/data/WorkspaceItemInfo.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/data/WorkspaceItemInfo.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/data/WorkspaceItemInfo.java
+@@ -37,7 +37,6 @@
+ import com.android.launcher3.shortcuts.ShortcutKey;
+ import com.android.launcher3.util.ApiWrapper;
+ import com.android.launcher3.util.ContentWriter;
+-import com.android.wm.shell.shared.bubbles.BubbleFlagHelper;
+ 
+ import java.util.Arrays;
+ 
+@@ -190,9 +189,7 @@
+ 
+     public void updateFromDeepShortcutInfo(@NonNull final ShortcutInfo shortcutInfo,
+             @NonNull final Context context) {
+-        if (BubbleFlagHelper.enableCreateAnyBubble()) {
+-            mShortcutInfo = shortcutInfo;
+-        }
++        // The standalone SDK build has no WM Shell bubble starter.
+         // {@link ShortcutInfo#getActivity} can change during an update. Recreate the intent
+         intent = ShortcutKey.makeIntent(shortcutInfo);
+         title = shortcutInfo.getShortLabel();
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/popup/PopupContainerWithArrow.kt b/packages/apps/Launcher3/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/popup/PopupContainerWithArrow.kt
+@@ -393,7 +393,7 @@
+         if (view is DeepShortcutView) {
+             // System shortcut takes entire row with icon and text
+             val shortcutView = view
+-            if (com.android.wm.shell.Flags.enableGsf()) {
++            if (com.android.wm.shell.Flags.ENABLE_GSF) {
+                 shortcutView.bubbleText.typeface =
+                     Typeface.create(
+                         DeepShortcutTextView.GOOGLE_SANS_FLEX_LABEL_LARGE,
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/popup/PopupDataSource.kt b/packages/apps/Launcher3/src/com/android/launcher3/popup/PopupDataSource.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/popup/PopupDataSource.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/popup/PopupDataSource.kt
+@@ -55,7 +55,6 @@
+ import com.android.launcher3.views.ActivityContext
+ import com.android.launcher3.views.Snackbar
+ import com.android.launcher3.widget.LauncherAppWidgetHostView
+-import com.android.wm.shell.shared.bubbles.logging.EntryPoint
+ import javax.inject.Inject
+ 
+ object PopupDataSource {
+@@ -364,14 +363,14 @@
+     private fun showBubbleShortcut(starter: BubbleActivityStarter, itemInfo: ItemInfo) {
+         fun ItemInfo.getEntryPoint() =
+             when {
+-                isInAllApps -> EntryPoint.ALL_APPS_ICON_MENU
++                isInAllApps -> "ALL_APPS_ICON_MENU"
+                 isInHotseat ->
+                     if (starter is TaskbarBubbleActivityStarter) {
+-                        EntryPoint.TASKBAR_ICON_MENU
++                        "TASKBAR_ICON_MENU"
+                     } else {
+-                        EntryPoint.HOTSEAT_ICON_MENU
++                        "HOTSEAT_ICON_MENU"
+                     }
+-                else -> EntryPoint.LAUNCHER_ICON_MENU
++                else -> "LAUNCHER_ICON_MENU"
+             }
+ 
+         // TODO: handle GroupTask (single) items so that recent items in taskbar work
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/popup/SystemShortcut.java b/packages/apps/Launcher3/src/com/android/launcher3/popup/SystemShortcut.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/popup/SystemShortcut.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/popup/SystemShortcut.java
+@@ -54,7 +54,6 @@
+ import com.android.launcher3.views.ActivityContext;
+ import com.android.launcher3.views.Snackbar;
+ import com.android.launcher3.widget.picker.model.data.WidgetPickerData;
+-import com.android.wm.shell.shared.bubbles.logging.EntryPoint;
+ 
+ import java.util.Arrays;
+ 
+@@ -552,10 +551,10 @@
+ 
+     public interface BubbleActivityStarter {
+         /** Tell SysUI to show the provided shortcut in a bubble. */
+-        void showShortcutBubble(ShortcutInfo info, EntryPoint entryPoint);
++        void showShortcutBubble(ShortcutInfo info, String entryPoint);
+ 
+         /** Tell SysUI to show the provided intent in a bubble. */
+-        void showAppBubble(Intent intent, UserHandle user, EntryPoint entryPoint);
++        void showAppBubble(Intent intent, UserHandle user, String entryPoint);
+     }
+ 
+     /** Marker interface for identifying bubbles starting from taskbar. */
+@@ -575,14 +574,14 @@
+             mInTaskbar = target instanceof TaskbarBubbleActivityStarter;
+         }
+ 
+-        private EntryPoint getEntryPoint() {
++        private String getEntryPoint() {
+             if (mItemInfo.isInAllApps()) {
+-                return EntryPoint.ALL_APPS_ICON_MENU;
++                return "ALL_APPS_ICON_MENU";
+             }
+             if (mItemInfo.isInHotseat()) {
+-                return mInTaskbar ? EntryPoint.TASKBAR_ICON_MENU : EntryPoint.HOTSEAT_ICON_MENU;
+-            }
+-            return EntryPoint.LAUNCHER_ICON_MENU;
++                return mInTaskbar ? "TASKBAR_ICON_MENU" : "HOTSEAT_ICON_MENU";
++            }
++            return "LAUNCHER_ICON_MENU";
+         }
+ 
+         @Override
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/shortcuts/DeepShortcutTextView.java b/packages/apps/Launcher3/src/com/android/launcher3/shortcuts/DeepShortcutTextView.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/shortcuts/DeepShortcutTextView.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/shortcuts/DeepShortcutTextView.java
+@@ -16,7 +16,7 @@
+ 
+ package com.android.launcher3.shortcuts;
+ 
+-import static com.android.wm.shell.Flags.enableGsf;
++import static com.android.wm.shell.Flags.ENABLE_GSF;
+ 
+ import android.content.Context;
+ import android.graphics.Canvas;
+@@ -52,7 +52,7 @@
+     public DeepShortcutTextView(Context context, AttributeSet attrs, int defStyle) {
+         super(context, attrs, defStyle);
+         showLoadingState(true);
+-        if (enableGsf()) {
++        if (ENABLE_GSF) {
+             setTypeface(Typeface.create(GOOGLE_SANS_FLEX_LABEL_LARGE, Typeface.NORMAL));
+         }
+     }

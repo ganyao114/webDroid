@@ -1,0 +1,115 @@
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/graphics/ShapeDelegate.kt b/packages/apps/Launcher3/src/com/android/launcher3/graphics/ShapeDelegate.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/graphics/ShapeDelegate.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/graphics/ShapeDelegate.kt
+@@ -22,11 +22,9 @@
+ import android.graphics.Canvas
+ import android.graphics.Color
+ import android.graphics.Matrix
+-import android.graphics.Matrix.ScaleToFit.FILL
+ import android.graphics.Paint
+ import android.graphics.Path
+ import android.graphics.Rect
+-import android.graphics.RectF
+ import android.graphics.drawable.AdaptiveIconDrawable
+ import android.graphics.drawable.ColorDrawable
+ import android.util.FloatProperty
+@@ -35,13 +33,6 @@
+ import android.view.ViewOutlineProvider
+ import androidx.core.graphics.PathParser
+ import androidx.dynamicanimation.animation.DynamicAnimation.MIN_VISIBLE_CHANGE_SCALE
+-import androidx.graphics.shapes.CornerRounding
+-import androidx.graphics.shapes.Morph
+-import androidx.graphics.shapes.RoundedPolygon
+-import androidx.graphics.shapes.SvgPathParser
+-import androidx.graphics.shapes.rectangle
+-import androidx.graphics.shapes.toPath
+-import androidx.graphics.shapes.transformed
+ import com.android.launcher3.Flags
+ import com.android.launcher3.anim.SpringAnimationBuilder
+ import com.android.launcher3.folder.Folder
+@@ -173,17 +164,7 @@
+ 
+     /** Generic shape delegate with pathString in bounds [0, 0, 100, 100] */
+     data class GenericPathShape(private val pathString: String) : ShapeDelegate {
+-        private val poly =
+-            RoundedPolygon(
+-                features = SvgPathParser.parseFeatures(pathString),
+-                centerX = 50f,
+-                centerY = 50f,
+-            )
+-        // This ensures that a valid morph is possible from the provided path
+-        private val basePath =
+-            Path().apply {
+-                Morph(poly, createRoundedRect(0f, 0f, 100f, 100f, 25f)).toPath(0f, this)
+-            }
++        private val basePath = PathParser.createPathFromPathData(pathString)
+         private val tmpPath = Path()
+         private val tmpMatrix = Matrix()
+ 
+@@ -227,38 +208,8 @@
+             endRadius: Float,
+             isReversed: Boolean,
+         ): ValueAnimator where T : View, T : ClipPathView {
+-            // End poly is defined as a rectangle starting at top/center so that the
+-            // transformation has minimum motion
+-            val morph =
+-                Morph(
+-                    start =
+-                        poly.transformed(
+-                            Matrix().apply {
+-                                setRectToRect(
+-                                    RectF(0f, 0f, DEFAULT_PATH_SIZE, DEFAULT_PATH_SIZE),
+-                                    RectF(startRect),
+-                                    FILL,
+-                                )
+-                            }
+-                        ),
+-                    end =
+-                        createRoundedRect(
+-                            left = endRect.left.toFloat(),
+-                            top = endRect.top.toFloat(),
+-                            right = endRect.right.toFloat(),
+-                            bottom = endRect.bottom.toFloat(),
+-                            cornerR = endRadius,
+-                        ),
+-                )
+-            val pathProvider = { progress: Float, path: PathWrapper ->
+-                path.path.set(morph.toPath(progress, path.path))
+-                path.estimateBoundsFromPath()
+-            }
+-            return if (useFolderSpringAnimation(target)) {
+-                ClipSpringAnimBuilder(target, pathProvider).toAnim(isReversed)
+-            } else {
+-                ClipAnimBuilder(target, pathProvider).toAnim(isReversed)
+-            }
++            // The SDK build uses the existing rounded reveal for SVG masks.
++            return Circle().createRevealAnimator(target, startRect, endRect, endRadius, isReversed)
+         }
+     }
+ 
+@@ -395,24 +346,7 @@
+             }
+         }
+ 
+-        /**
+-         * Create RoundedRect using RoundedPolygon API. Ensures smoother animation morphing between
+-         * generic polygon by using [RoundedPolygon.Companion.rectangle] directly.
+-         */
+-        fun createRoundedRect(
+-            left: Float,
+-            top: Float,
+-            right: Float,
+-            bottom: Float,
+-            cornerR: Float,
+-        ) =
+-            RoundedPolygon.rectangle(
+-                width = right - left,
+-                height = bottom - top,
+-                centerX = (right - left) / 2,
+-                centerY = (bottom - top) / 2,
+-                rounding = CornerRounding(cornerR),
+-            )
++
+     }
+ 
+     fun <T> useFolderSpringAnimation(target: T): Boolean {

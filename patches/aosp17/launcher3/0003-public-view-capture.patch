@@ -1,0 +1,153 @@
+diff --git a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/NoOpViewCapture.kt b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/NoOpViewCapture.kt
+--- a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/NoOpViewCapture.kt
++++ b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/NoOpViewCapture.kt
+@@ -1,6 +1,6 @@
+ package com.android.app.viewcapture
+ 
+-import android.media.permission.SafeCloseable
++import com.android.launcher3.util.SafeCloseable
+ import android.os.HandlerThread
+ import android.view.View
+ import android.view.Window
+diff --git a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCapture.java b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCapture.java
+--- a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCapture.java
++++ b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCapture.java
+@@ -19,7 +19,7 @@
+ import android.content.ComponentCallbacks2;
+ import android.content.res.Configuration;
+ import android.content.res.Resources;
+-import android.media.permission.SafeCloseable;
++import com.android.launcher3.util.SafeCloseable;
+ import android.os.Handler;
+ import android.os.HandlerThread;
+ import android.os.Looper;
+diff --git a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureAwareWindowManager.kt b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureAwareWindowManager.kt
+--- a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureAwareWindowManager.kt
++++ b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureAwareWindowManager.kt
+@@ -17,12 +17,10 @@
+ package com.android.app.viewcapture
+ 
+ import android.content.Context
+-import android.media.permission.SafeCloseable
++import com.android.launcher3.util.SafeCloseable
+ import android.view.View
+ import android.view.ViewGroup
+-import android.view.Window
+ import android.view.WindowManager
+-import android.view.WindowManagerWrapper
+ 
+ /**
+  * [WindowManager] implementation to enable view tracing. Adds [ViewCapture] to associated window
+@@ -32,12 +30,12 @@
+ internal class ViewCaptureAwareWindowManager(
+     private val context: Context,
+     private val base: WindowManager,
+-) : WindowManagerWrapper(base) {
++) : WindowManager by base {
+ 
+     private var viewCaptureCloseableMap: MutableMap<View, SafeCloseable> = mutableMapOf()
+ 
+     override fun addView(view: View, params: ViewGroup.LayoutParams) {
+-        super.addView(view, params)
++        base.addView(view, params)
+         val viewCaptureCloseable: SafeCloseable =
+             ViewCaptureFactory.getInstance(context).startCapture(view, getViewName(view))
+         viewCaptureCloseableMap[view] = viewCaptureCloseable
+@@ -45,24 +43,17 @@
+ 
+     override fun removeView(view: View?) {
+         removeViewFromCloseableMap(view)
+-        super.removeView(view)
++        base.removeView(view)
+     }
+ 
+     override fun removeViewImmediate(view: View?) {
+         removeViewFromCloseableMap(view)
+-        super.removeViewImmediate(view)
+-    }
+-
+-    override fun createLocalWindowManager(parentWindow: Window): WindowManager {
+-        return ViewCaptureAwareWindowManager(context, base.createLocalWindowManager(parentWindow))
++        base.removeViewImmediate(view)
+     }
+ 
+     private fun getViewName(view: View) = "." + view.javaClass.name
+ 
+     private fun removeViewFromCloseableMap(view: View?) {
+-        if (viewCaptureCloseableMap.containsKey(view)) {
+-            viewCaptureCloseableMap[view]?.close()
+-            viewCaptureCloseableMap.remove(view)
+-        }
++        view?.let { viewCaptureCloseableMap.remove(it)?.close() }
+     }
+ }
+diff --git a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureAwareWindowManagerFactory.kt b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureAwareWindowManagerFactory.kt
+--- a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureAwareWindowManagerFactory.kt
++++ b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureAwareWindowManagerFactory.kt
+@@ -18,7 +18,6 @@
+ 
+ import android.content.Context
+ import android.os.Trace
+-import android.os.Trace.TRACE_TAG_APP
+ import android.view.WindowManager
+ import java.lang.ref.WeakReference
+ import java.util.Collections
+@@ -41,10 +40,9 @@
+      */
+     @JvmStatic
+     fun getInstance(context: Context): WindowManager {
+-        Trace.traceCounter(
+-            TRACE_TAG_APP,
++        Trace.setCounter(
+             "ViewCaptureAwareWindowManagerFactory#instanceMap.size",
+-            instanceMap.size,
++            instanceMap.size.toLong(),
+         )
+ 
+         val cachedWindowManager = instanceMap[context]?.get()
+diff --git a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureFactory.kt b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureFactory.kt
+--- a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureFactory.kt
++++ b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCaptureFactory.kt
+@@ -17,40 +17,18 @@
+ package com.android.app.viewcapture
+ 
+ import android.content.Context
+-import android.os.Process
+-import android.util.Log
+ 
+ /**
+  * Factory to create polymorphic instances of ViewCapture according to build configurations and
+  * flags.
+  */
+ object ViewCaptureFactory {
+-    private val TAG = ViewCaptureFactory::class.java.simpleName
+-    private val instance: ViewCapture by lazy { createInstance() }
+-    private lateinit var appContext: Context
+-
+-    private fun createInstance(): ViewCapture {
+-        return if (!android.os.Build.IS_DEBUGGABLE) {
+-            Log.i(TAG, "instantiating ${NoOpViewCapture::class.java.simpleName}")
+-            NoOpViewCapture()
+-        } else {
+-            Log.i(TAG, "instantiating ${PerfettoViewCapture::class.java.simpleName}")
+-            PerfettoViewCapture(
+-                appContext,
+-                ViewCapture.createAndStartNewLooperExecutor(
+-                    "PerfettoViewCapture",
+-                    Process.THREAD_PRIORITY_FOREGROUND,
+-                ),
+-            )
+-        }
+-    }
++    // The Perfetto backend requires platform tracing APIs.
++    private val instance: ViewCapture by lazy { NoOpViewCapture() }
+ 
+     /** Returns an instance of [ViewCapture]. */
+     @JvmStatic
+     fun getInstance(context: Context): ViewCapture {
+-        if (!this::appContext.isInitialized) {
+-            synchronized(this) { appContext = context.applicationContext }
+-        }
+         return instance
+     }
+ }
