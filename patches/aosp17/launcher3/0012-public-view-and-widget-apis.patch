@@ -1,0 +1,24 @@
+diff --git a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCapture.java b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCapture.java
+--- a/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCapture.java
++++ b/frameworks/libs/systemui/viewcapturelib/src/com/android/app/viewcapture/ViewCapture.java
+@@ -477,8 +477,7 @@
+                 ViewGroup parent = (ViewGroup) view;
+                 // If a view has not changed since the last frame, we will copy
+                 // its children from the last processed frame's data.
+-                if ((view.mPrivateFlags & (PFLAG_INVALIDATED | PFLAG_DIRTY_MASK)) == 0
+-                        && !mIsFirstFrame) {
++                if (!view.isDirty() && !mIsFirstFrame) {
+                     // A negative child count is the signal to copy this view from the last frame.
+                     ref.childCount = -1;
+                     ref.view = view;
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/widget/WidgetManagerHelper.java b/packages/apps/Launcher3/src/com/android/launcher3/widget/WidgetManagerHelper.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/widget/WidgetManagerHelper.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/widget/WidgetManagerHelper.java
+@@ -167,7 +167,6 @@
+     @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+     public RemoteViews loadGeneratedPreview(@NonNull AppWidgetProviderInfo info,
+             int widgetCategory) {
+-        if (!android.appwidget.flags.Flags.generatedPreviews()) return null;
+         return mAppWidgetManager.getWidgetPreview(info.provider, info.getProfile(), widgetCategory);
+     }
+ 

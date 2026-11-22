@@ -1,0 +1,70 @@
+diff --git a/packages/apps/Launcher3/modules/appfunctions/src/com/android/launcher3/appfunctions/workspace/WorkspaceAppFunctions.kt b/packages/apps/Launcher3/modules/appfunctions/src/com/android/launcher3/appfunctions/workspace/WorkspaceAppFunctions.kt
+--- a/packages/apps/Launcher3/modules/appfunctions/src/com/android/launcher3/appfunctions/workspace/WorkspaceAppFunctions.kt
++++ b/packages/apps/Launcher3/modules/appfunctions/src/com/android/launcher3/appfunctions/workspace/WorkspaceAppFunctions.kt
+@@ -15,9 +15,7 @@
+  */
+ package com.android.launcher3.appfunctions.workspace
+ 
+-import androidx.appfunctions.AppFunctionContext
+ import androidx.appfunctions.AppFunctionSerializable
+-import androidx.appfunctions.service.AppFunction
+ 
+ /**
+  * High level [AppFunctions] interface for managing the workspace. It is paramount that the
+@@ -38,11 +36,9 @@
+     /**
+      * Returns the current [WorkspaceSpec] and a [Proof] token for modifications.
+      *
+-     * @param appFunctionContext App function context.
+      * @return [WorkspaceResponse] with workspace and proof.
+      */
+-    @AppFunction(isDescribedByKDoc = true)
+-    suspend fun getCurrentWorkspace(appFunctionContext: AppFunctionContext): WorkspaceResponse {
++    suspend fun getCurrentWorkspace(): WorkspaceResponse {
+         val workspaceSpec = repository.getWorkspace()
+         return WorkspaceResponse(workspaceSpec, Proof.GET_CURRENT_WORKSPACE_PROOF)
+     }
+@@ -50,14 +46,11 @@
+     /**
+      * Lists installed apps. May be truncated; if so, `isTruncated` is true.
+      *
+-     * @param appFunctionContext App function context.
+      * @param orderByUsageStats If true, orders apps by usage; otherwise uses default order for
+      *   personalization.
+      * @return [GetInstalledAppsResponse] with apps list and proof.
+      */
+-    @AppFunction(isDescribedByKDoc = true)
+     suspend fun getInstalledApps(
+-        appFunctionContext: AppFunctionContext,
+         orderByUsageStats: Boolean,
+     ): GetInstalledAppsResponse {
+         val allAppItems = repository.getInstalledApps(orderByUsageStats)
+@@ -70,14 +63,11 @@
+     /**
+      * Lists installed widgets.
+      *
+-     * @param appFunctionContext App function context.
+      * @param orderByUsageStats If true, orders widgets by usage; otherwise uses default order for
+      *   personalization.
+      * @return [GetInstalledWidgetsResponse] with widgets list and proof.
+      */
+-    @AppFunction(isDescribedByKDoc = true)
+     suspend fun getInstalledWidgets(
+-        appFunctionContext: AppFunctionContext,
+         orderByUsageStats: Boolean,
+     ): GetInstalledWidgetsResponse {
+         val allWidgetItems = repository.getInstalledWidgets(orderByUsageStats)
+@@ -90,13 +80,10 @@
+     /**
+      * Removes an item or folder from the workspace or hotseat, or an app from a folder.
+      *
+-     * @param appFunctionContext App function context.
+      * @param target The specification of the item to remove.
+      * @return [WorkspaceUpdateResult] with the updated workspace state and a new proof.
+      */
+-    @AppFunction(isDescribedByKDoc = true)
+     suspend fun removeItem(
+-        appFunctionContext: AppFunctionContext,
+         target: RemoveItemParamsSpec,
+     ): WorkspaceUpdateResult {
+         return mutationManager.removeItem(target)

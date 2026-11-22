@@ -1,0 +1,52 @@
+diff --git a/frameworks/libs/systemui/animationlib/src/com/android/app/animation/InterpolatorsAndroidX.java b/frameworks/libs/systemui/animationlib/src/com/android/app/animation/InterpolatorsAndroidX.java
+--- a/frameworks/libs/systemui/animationlib/src/com/android/app/animation/InterpolatorsAndroidX.java
++++ b/frameworks/libs/systemui/animationlib/src/com/android/app/animation/InterpolatorsAndroidX.java
+@@ -18,14 +18,14 @@
+ 
+ import android.graphics.Path;
+ 
+-import androidx.core.animation.AccelerateDecelerateInterpolator;
+-import androidx.core.animation.AccelerateInterpolator;
+-import androidx.core.animation.BounceInterpolator;
+-import androidx.core.animation.DecelerateInterpolator;
+-import androidx.core.animation.Interpolator;
+-import androidx.core.animation.LinearInterpolator;
+-import androidx.core.animation.OvershootInterpolator;
+-import androidx.core.animation.PathInterpolator;
++import android.view.animation.AccelerateDecelerateInterpolator;
++import android.view.animation.AccelerateInterpolator;
++import android.view.animation.BounceInterpolator;
++import android.view.animation.DecelerateInterpolator;
++import android.view.animation.Interpolator;
++import android.view.animation.LinearInterpolator;
++import android.view.animation.OvershootInterpolator;
++import android.view.animation.PathInterpolator;
+ 
+ /**
+  * Utility class to receive interpolators from. (androidx compatible version)
+@@ -33,8 +33,7 @@
+  * This is the androidx compatible version of {@link Interpolators}. Make sure that changes made to
+  * this class are also reflected in {@link Interpolators}.
+  *
+- * Using the androidx versions of {@link androidx.core.animation.ValueAnimator} or
+- * {@link androidx.core.animation.ObjectAnimator} improves animation testability. This file provides
++ * The public SDK build uses platform animation interpolators. This file provides
+  * the androidx compatible versions of the interpolators defined in {@link Interpolators}.
+  * AnimatorTestRule can be used in Tests to manipulate the animation under test (e.g. artificially
+  * advancing the time).
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/graphics/AutomatedIconDelegate.kt b/packages/apps/Launcher3/src/com/android/launcher3/graphics/AutomatedIconDelegate.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/graphics/AutomatedIconDelegate.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/graphics/AutomatedIconDelegate.kt
+@@ -28,9 +28,9 @@
+ import android.os.Looper
+ import android.os.Process
+ import android.os.SystemClock
+-import androidx.core.animation.Animator
+-import androidx.core.animation.AnimatorListenerAdapter
+-import androidx.core.animation.ValueAnimator
++import android.animation.Animator
++import android.animation.AnimatorListenerAdapter
++import android.animation.ValueAnimator
+ import androidx.core.graphics.ColorUtils
+ import androidx.dynamicanimation.animation.DynamicAnimation
+ import androidx.dynamicanimation.animation.FloatValueHolder

@@ -1,0 +1,74 @@
+diff --git a/packages/apps/Launcher3/AndroidManifest.xml b/packages/apps/Launcher3/AndroidManifest.xml
+--- a/packages/apps/Launcher3/AndroidManifest.xml
++++ b/packages/apps/Launcher3/AndroidManifest.xml
+@@ -42,11 +42,6 @@
+         android:largeHeap="@bool/config_largeHeap"
+         android:restoreAnyVersion="true"
+         android:supportsRtl="true" >
+-
+-        <!-- App Functions Metadata -->
+-        <property
+-            android:name="android.app.appfunctions.app_metadata"
+-            android:resource="@xml/app_metadata" />
+ 
+         <!--
+         Main launcher activity. When extending only change the name, and keep all the
+@@ -93,14 +88,5 @@
+             </intent-filter>
+         </activity>
+ 
+-        <service
+-            android:name="androidx.appfunctions.service.ExtensionAppFunctionService"
+-            android:permission="android.permission.BIND_APP_FUNCTION_SERVICE"
+-            android:exported="true">
+-            <intent-filter>
+-                <action android:name="android.app.appfunctions.AppFunctionService" />
+-            </intent-filter>
+-        </service>
+-
+     </application>
+ </manifest>
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/LauncherApplication.java b/packages/apps/Launcher3/src/com/android/launcher3/LauncherApplication.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/LauncherApplication.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/LauncherApplication.java
+@@ -16,22 +16,17 @@
+ package com.android.launcher3;
+ 
+ import android.app.Application;
+-import android.util.Log;
+-import androidx.annotation.NonNull;
+-import androidx.appfunctions.service.AppFunctionConfiguration;
+-import com.android.launcher3.appfunctions.workspace.WorkspaceAppFunctions;
+ import com.android.launcher3.dagger.DaggerLauncherAppComponent;
+ import com.android.launcher3.dagger.LauncherAppComponent;
+ import com.android.launcher3.dagger.LauncherBaseAppComponent;
+ import com.android.launcher3.dagger.LauncherComponentProvider;
+ import com.android.launcher3.util.TraceHelper;
+ 
+-import kotlin.jvm.functions.Function1;
+ 
+ /**
+  * Main application class for Launcher
+  */
+-public class LauncherApplication extends Application implements AppFunctionConfiguration.Provider {
++public class LauncherApplication extends Application {
+ 
+     private volatile LauncherBaseAppComponent mAppComponent;
+     @Override
+@@ -70,16 +65,4 @@
+                         "isSafeMode", () -> getPackageManager().isSafeMode()))
+                 .build();
+     }
+-
+-    @NonNull
+-    @Override
+-    public AppFunctionConfiguration getAppFunctionConfiguration() {
+-        Log.d("LauncherApp", "getAppFunctionConfiguration");
+-        AppFunctionConfiguration.Builder builder = new AppFunctionConfiguration.Builder();
+-        if (Flags.condoPlanner()) {
+-            builder.addEnclosingClassFactory(WorkspaceAppFunctions.class,
+-                    () -> getAppComponent().getWorkspaceAppFunctions());
+-        }
+-        return builder.build();
+-    }
+ }

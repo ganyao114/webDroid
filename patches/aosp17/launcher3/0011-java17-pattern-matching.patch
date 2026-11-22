@@ -1,0 +1,89 @@
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/accessibility/LauncherAccessibilityDelegate.java b/packages/apps/Launcher3/src/com/android/launcher3/accessibility/LauncherAccessibilityDelegate.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/accessibility/LauncherAccessibilityDelegate.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/accessibility/LauncherAccessibilityDelegate.java
+@@ -430,50 +430,43 @@
+         };
+ 
+         Runnable itemBindLogic = () -> {
+-            switch (item) {
+-                case WorkspaceItemFactory workspaceItemFactory -> {
+-                    WorkspaceItemInfo info = workspaceItemFactory.makeWorkspaceItem(mContext);
+-                    info.checkAndApplyAutomationFlag(AutomationRepository.INSTANCE.get(mContext));
+-                    mContext.getModelWriter().addItemToDatabase(info,
+-                            LauncherSettings.Favorites.CONTAINER_DESKTOP,
+-                            screenId, coordinates[0], coordinates[1]);
+-                    bindItem(info, accessibility, wrappedDropCallback);
++            if (item instanceof WorkspaceItemFactory workspaceItemFactory) {
++                WorkspaceItemInfo info = workspaceItemFactory.makeWorkspaceItem(mContext);
++                info.checkAndApplyAutomationFlag(AutomationRepository.INSTANCE.get(mContext));
++                mContext.getModelWriter().addItemToDatabase(info,
++                        LauncherSettings.Favorites.CONTAINER_DESKTOP,
++                        screenId, coordinates[0], coordinates[1]);
++                bindItem(info, accessibility, wrappedDropCallback);
++            } else if (item instanceof PendingAddItemInfo info) {
++                if (info instanceof PendingAddWidgetInfo widgetInfo
++                        && widgetInfo.bindOptions == null) {
++                    widgetInfo.bindOptions = widgetInfo.getDefaultSizeOptions(mContext);
+                 }
+-                case PendingAddItemInfo info -> {
+-                    if (info instanceof PendingAddWidgetInfo widgetInfo
+-                            && widgetInfo.bindOptions == null) {
+-                        widgetInfo.bindOptions = widgetInfo.getDefaultSizeOptions(mContext);
++                mContext.addPendingItem(info, LauncherSettings.Favorites.CONTAINER_DESKTOP,
++                        screenId, coordinates, info.spanX, info.spanY);
++                // For PendingAddItemInfo, the wrappedDropCallback should be called directly
++                // here as there is no subsequent bindItem call.
++                wrappedDropCallback.accept(/* success= */ true);
++            } else if (item instanceof WorkspaceItemInfo workspaceItemInfo) {
++                WorkspaceItemInfo info = workspaceItemInfo.clone();
++                info.checkAndApplyAutomationFlag(AutomationRepository.INSTANCE.get(mContext));
++                mContext.getModelWriter().addItemToDatabase(info,
++                        LauncherSettings.Favorites.CONTAINER_DESKTOP,
++                        screenId, coordinates[0], coordinates[1]);
++                bindItem(info, accessibility, wrappedDropCallback);
++            } else if (item instanceof CollectionInfo ci) {
++                mContext.getModelWriter().addItemToDatabase(ci,
++                        LauncherSettings.Favorites.CONTAINER_DESKTOP, screenId, coordinates[0],
++                        coordinates[1]);
++                AutomationRepository automationRepo =
++                        AutomationRepository.INSTANCE.get(mContext);
++                ci.getContents().forEach(member -> {
++                    if (member instanceof ItemInfoWithIcon iiwi) {
++                        iiwi.checkAndApplyAutomationFlag(automationRepo);
+                     }
+-                    mContext.addPendingItem(info, LauncherSettings.Favorites.CONTAINER_DESKTOP,
+-                            screenId, coordinates, info.spanX, info.spanY);
+-                    // For PendingAddItemInfo, the wrappedDropCallback should be called directly
+-                    // here as there is no subsequent bindItem call.
+-                    wrappedDropCallback.accept(/* success= */ true);
+-                }
+-                case WorkspaceItemInfo workspaceItemInfo -> {
+-                    WorkspaceItemInfo info = workspaceItemInfo.clone();
+-                    info.checkAndApplyAutomationFlag(AutomationRepository.INSTANCE.get(mContext));
+-                    mContext.getModelWriter().addItemToDatabase(info,
+-                            LauncherSettings.Favorites.CONTAINER_DESKTOP,
+-                            screenId, coordinates[0], coordinates[1]);
+-                    bindItem(info, accessibility, wrappedDropCallback);
+-                }
+-                case CollectionInfo ci -> {
+-                    mContext.getModelWriter().addItemToDatabase(ci,
+-                            LauncherSettings.Favorites.CONTAINER_DESKTOP, screenId, coordinates[0],
+-                            coordinates[1]);
+-                    AutomationRepository automationRepo =
+-                            AutomationRepository.INSTANCE.get(mContext);
+-                    ci.getContents().forEach(member -> {
+-                        if (member instanceof ItemInfoWithIcon iiwi) {
+-                            iiwi.checkAndApplyAutomationFlag(automationRepo);
+-                        }
+-                        mContext.getModelWriter().addItemToDatabase(member, ci.id, -1, -1, -1);
+-                    });
+-                    bindItem(ci, accessibility, wrappedDropCallback);
+-                }
+-                default -> {
+-                }
++                    mContext.getModelWriter().addItemToDatabase(member, ci.id, -1, -1, -1);
++                });
++                bindItem(ci, accessibility, wrappedDropCallback);
+             }
+         };
+ 

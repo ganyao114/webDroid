@@ -1,0 +1,417 @@
+diff --git a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/MotionValue.kt b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/MotionValue.kt
+--- a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/MotionValue.kt
++++ b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/MotionValue.kt
+@@ -17,7 +17,6 @@
+ package com.android.mechanics
+ 
+ import androidx.compose.runtime.FloatState
+-import androidx.compose.runtime.annotation.FrequentlyChangingValue
+ import androidx.compose.runtime.derivedStateOf
+ import androidx.compose.runtime.getValue
+ import androidx.compose.runtime.mutableFloatStateOf
+@@ -147,10 +146,10 @@
+ 
+     /** The [MotionSpec] describing the mapping of this [MotionValue]'s input to the output. */
+     // TODO(b/441041846): This should not change frequently
+-    @get:FrequentlyChangingValue val spec: MotionSpec by impl::spec
++    val spec: MotionSpec by impl::spec
+ 
+     /** Animated [output] value. */
+-    @get:FrequentlyChangingValue override val output: Float by impl::computedOutput
++    override val output: Float by impl::computedOutput
+ 
+     /**
+      * [output] value, but without animations.
+@@ -160,14 +159,14 @@
+      * While [isStable], [outputTarget] and [output] are the same value.
+      */
+     // TODO(b/441041846): This should not change frequently
+-    @get:FrequentlyChangingValue override val outputTarget: Float by impl::computedOutputTarget
++    override val outputTarget: Float by impl::computedOutputTarget
+ 
+     /** The [output] exposed as [FloatState]. */
+-    @get:FrequentlyChangingValue override val floatValue: Float by impl::computedOutput
++    override val floatValue: Float by impl::computedOutput
+ 
+     /** Whether an animation is currently running. */
+     // TODO(b/441041846): This should not change frequently
+-    @get:FrequentlyChangingValue override val isStable: Boolean by impl::computedIsStable
++    override val isStable: Boolean by impl::computedIsStable
+ 
+     /**
+      * Whether the output can change its value.
+@@ -178,7 +177,7 @@
+      * changes. This can be used to avoid unnecessary work like recomposition or re-measurement.
+      */
+     // TODO(b/441041846): This should not change frequently
+-    @get:FrequentlyChangingValue val isOutputFixed: Boolean by impl::computedIsOutputFixed
++    val isOutputFixed: Boolean by impl::computedIsOutputFixed
+ 
+     /**
+      * The current value for the [SemanticKey].
+@@ -186,15 +185,13 @@
+      * `null` if not defined in the spec.
+      */
+     // TODO(b/441041846): This should not change frequently
+-    @FrequentlyChangingValue
+-    override operator fun <T> get(key: SemanticKey<T>): T? {
++    override operator fun <T> get(key: SemanticKey<T>): T? {
+         return impl.computedSemanticState(key)
+     }
+ 
+     /** The current segment used to compute the output. */
+     // TODO(b/441041846): This should not change frequently
+-    @get:FrequentlyChangingValue
+-    override val segmentKey: SegmentKey
++    override val segmentKey: SegmentKey
+         get() = impl.currentComputedValues.segment.key
+ 
+     /**
+diff --git a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/behavior/VerticalExpandContainerSpec.kt b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/behavior/VerticalExpandContainerSpec.kt
+--- a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/behavior/VerticalExpandContainerSpec.kt
++++ b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/behavior/VerticalExpandContainerSpec.kt
+@@ -14,12 +14,9 @@
+  * limitations under the License.
+  */
+ 
+-@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
+ 
+ package com.android.mechanics.behavior
+ 
+-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+-import androidx.compose.material3.MotionScheme
+ import androidx.compose.ui.unit.Density
+ import androidx.compose.ui.unit.Dp
+ import androidx.compose.ui.unit.dp
+@@ -35,6 +32,7 @@
+ import com.android.mechanics.spec.SegmentKey
+ import com.android.mechanics.spec.builder.directionalMotionSpec
+ import com.android.mechanics.spring.SpringParameters
++import com.android.mechanics.view.ViewMaterialSprings
+ 
+ /** Motion spec for a vertically expandable container. */
+ class VerticalExpandContainerSpec(
+@@ -50,11 +48,12 @@
+     val detachSpring: SpringParameters = Defaults.DetachSpring,
+     val opacitySpring: SpringParameters = Defaults.OpacitySpring,
+ ) {
+-    fun createHeightSpec(motionScheme: MotionScheme, density: Density): MotionSpec {
++    fun createHeightSpec(
++        density: Density,
++        spatialSpring: SpringParameters = ViewMaterialSprings.Default.Spatial.default,
++    ): MotionSpec {
+         // TODO: michschn@ - replace with MagneticDetach
+         return with(density) {
+-            val spatialSpring = SpringParameters(motionScheme.defaultSpatialSpec())
+-
+             val detachSpec =
+                 directionalMotionSpec(
+                     initialMapping = Mapping.Zero,
+@@ -109,7 +108,6 @@
+ 
+     fun createWidthSpec(
+         intrinsicWidth: Float,
+-        motionScheme: MotionScheme,
+         density: Density,
+     ): MotionSpec {
+         return with(density) {
+@@ -126,7 +124,7 @@
+         }
+     }
+ 
+-    fun createAlphaSpec(motionScheme: MotionScheme, density: Density): MotionSpec {
++    fun createAlphaSpec(density: Density): MotionSpec {
+         return with(density) {
+             MotionSpec(
+                 directionalMotionSpec(opacitySpring, initialMapping = Mapping.Zero) {
+diff --git a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/effects/MagneticDetach.kt b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/effects/MagneticDetach.kt
+--- a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/effects/MagneticDetach.kt
++++ b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/effects/MagneticDetach.kt
+@@ -14,11 +14,9 @@
+  * limitations under the License.
+  */
+ 
+-@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
+ 
+ package com.android.mechanics.effects
+ 
+-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+ import androidx.compose.ui.unit.Dp
+ import androidx.compose.ui.unit.dp
+ import com.android.mechanics.haptics.BreakpointHaptics
+diff --git a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/spec/builder/MotionBuilderContext.kt b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/spec/builder/MotionBuilderContext.kt
+--- a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/spec/builder/MotionBuilderContext.kt
++++ b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/spec/builder/MotionBuilderContext.kt
+@@ -14,13 +14,9 @@
+  * limitations under the License.
+  */
+ 
+-@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
+ 
+ package com.android.mechanics.spec.builder
+ 
+-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.MotionScheme
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.remember
+ import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
+@@ -28,6 +24,7 @@
+ import androidx.compose.ui.platform.LocalDensity
+ import androidx.compose.ui.unit.Density
+ import com.android.mechanics.spring.SpringParameters
++import com.android.mechanics.view.ViewMaterialSprings
+ 
+ /**
+  * Device / scheme specific context for building motion specs.
+@@ -79,12 +76,11 @@
+     val stabilityThreshold: Float,
+ )
+ 
+-/** [MotionBuilderContext] based on the current [Density] and [MotionScheme]. */
++/** [MotionBuilderContext] based on the current [Density] and the standard Material spring tokens. */
+ @Composable
+ fun rememberMotionBuilderContext(): MotionBuilderContext {
+     val density = LocalDensity.current
+-    val motionScheme = MaterialTheme.motionScheme
+-    return remember(density, motionScheme) { ComposeMotionBuilderContext(motionScheme, density) }
++    return remember(density) { ComposeMotionBuilderContext(density) }
+ }
+ 
+ /**
+@@ -93,32 +89,11 @@
+  * This should be read when the node is attached.
+  */
+ fun CompositionLocalConsumerModifierNode.motionBuilderContext(): ComposeMotionBuilderContext {
+-    return ComposeMotionBuilderContext(
+-        motionScheme = currentValueOf(MaterialTheme.LocalMotionScheme),
+-        density = currentValueOf(LocalDensity),
+-    )
++    return ComposeMotionBuilderContext(currentValueOf(LocalDensity))
+ }
+ 
+-/**
+- * [MotionBuilderContext] based on Material 3 MotionScheme.
+- *
+- * Note: This will throw if the MotionScheme uses AnimationSpecs other than SpringSpecs.
+- */
+-class ComposeMotionBuilderContext(motionScheme: MotionScheme, density: Density) :
+-    MotionBuilderContext, Density by density {
+-
+-    override val spatial =
+-        MaterialSprings(
+-            SpringParameters(motionScheme.defaultSpatialSpec<Float>()),
+-            SpringParameters(motionScheme.fastSpatialSpec<Float>()),
+-            SpringParameters(motionScheme.slowSpatialSpec<Float>()),
+-            MotionBuilderContext.StableThresholdSpatial,
+-        )
+-    override val effects =
+-        MaterialSprings(
+-            SpringParameters(motionScheme.defaultEffectsSpec<Float>()),
+-            SpringParameters(motionScheme.fastEffectsSpec<Float>()),
+-            SpringParameters(motionScheme.slowEffectsSpec<Float>()),
+-            MotionBuilderContext.StableThresholdEffects,
+-        )
++// Material 3 1.3 supplies no MotionScheme. Reuse the upstream standard spring tokens.
++class ComposeMotionBuilderContext(density: Density) : MotionBuilderContext, Density by density {
++    override val spatial = ViewMaterialSprings.Default.Spatial
++    override val effects = ViewMaterialSprings.Default.Effects
+ }
+diff --git a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/spring/MaterialSpringParameters.kt b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/spring/MaterialSpringParameters.kt
+--- a/frameworks/libs/systemui/mechanics/src/com/android/mechanics/spring/MaterialSpringParameters.kt
++++ b/frameworks/libs/systemui/mechanics/src/com/android/mechanics/spring/MaterialSpringParameters.kt
+@@ -13,14 +13,12 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
+-@file:OptIn(ExperimentalMaterial3ExpressiveApi::class)
+ 
+ package com.android.mechanics.spring
+ 
+ import androidx.compose.animation.core.FiniteAnimationSpec
+ import androidx.compose.animation.core.SpringSpec
+-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+-import androidx.compose.material3.MaterialTheme
++import com.android.mechanics.view.ViewMaterialSprings
+ import androidx.compose.runtime.Composable
+ 
+ /** Converts a [SpringSpec] into its [SpringParameters] equivalent. */
+@@ -28,9 +26,8 @@
+     with(springSpec) { SpringParameters(stiffness, dampingRatio) }
+ 
+ /**
+- * Converts a [FiniteAnimationSpec] from the [MotionScheme] into its [SpringParameters] equivalent.
++ * Converts a [FiniteAnimationSpec] from the Material motion system into its [SpringParameters] equivalent.
+  */
+-@ExperimentalMaterial3ExpressiveApi
+ fun SpringParameters(animationSpec: FiniteAnimationSpec<out Any>): SpringParameters {
+     check(animationSpec is SpringSpec) {
+         "animationSpec is expected to be a SpringSpec, but is $animationSpec"
+@@ -40,10 +37,10 @@
+ 
+ @Composable
+ fun defaultSpatialSpring(): SpringParameters {
+-    return SpringParameters(MaterialTheme.motionScheme.defaultSpatialSpec())
++    return ViewMaterialSprings.Default.Spatial.default
+ }
+ 
+ @Composable
+ fun defaultEffectSpring(): SpringParameters {
+-    return SpringParameters(MaterialTheme.motionScheme.defaultEffectsSpec())
++    return ViewMaterialSprings.Default.Effects.default
+ }
+diff --git a/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/components/WidgetsSearchBar.kt b/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/components/WidgetsSearchBar.kt
+--- a/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/components/WidgetsSearchBar.kt
++++ b/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/components/WidgetsSearchBar.kt
+@@ -13,6 +13,8 @@
+  * See the License for the specific language governing permissions and
+  * limitations under the License.
+  */
++
++@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+ 
+ package com.android.launcher3.widgetpicker.ui.components
+ 
+diff --git a/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/components/floatingsheet/TitledFloatingSheet.kt b/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/components/floatingsheet/TitledFloatingSheet.kt
+--- a/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/components/floatingsheet/TitledFloatingSheet.kt
++++ b/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/components/floatingsheet/TitledFloatingSheet.kt
+@@ -17,6 +17,7 @@
+ package com.android.launcher3.widgetpicker.ui.components.floatingsheet
+ 
+ import androidx.compose.animation.core.AnimationSpec
++import androidx.compose.animation.core.spring
+ import androidx.compose.foundation.background
+ import androidx.compose.foundation.gestures.detectTapGestures
+ import androidx.compose.foundation.layout.Box
+@@ -32,8 +33,6 @@
+ import androidx.compose.foundation.layout.widthIn
+ import androidx.compose.foundation.layout.windowInsetsPadding
+ import androidx.compose.foundation.shape.RoundedCornerShape
+-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+-import androidx.compose.material3.MaterialTheme
+ import androidx.compose.material3.Surface
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.LaunchedEffect
+@@ -88,7 +87,6 @@
+  *   completed.
+  * @param content the content to be displayed below the [title] and [description]
+  */
+-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+ @Composable
+ fun TitledFloatingSheet(
+     modifier: Modifier = Modifier,
+@@ -101,7 +99,7 @@
+     content: @Composable () -> Unit,
+ ) {
+     val scope = rememberCoroutineScope()
+-    val animSpec: AnimationSpec<Float> = MaterialTheme.motionScheme.slowSpatialSpec()
++    val animSpec: AnimationSpec<Float> = spring(dampingRatio = 0.9f, stiffness = 300f)
+     val sheetState = remember { SheetDismissState(expandCollapseAnimationSpec = animSpec) }
+     var scrimAlpha by remember { mutableFloatStateOf(0f) }
+ 
+diff --git a/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/theme/WidgetPickerTextStyles.kt b/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/theme/WidgetPickerTextStyles.kt
+--- a/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/theme/WidgetPickerTextStyles.kt
++++ b/packages/apps/Launcher3/modules/widgetpicker/src/com/android/launcher3/widgetpicker/ui/theme/WidgetPickerTextStyles.kt
+@@ -16,7 +16,6 @@
+ 
+ package com.android.launcher3.widgetpicker.ui.theme
+ 
+-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+ import androidx.compose.material3.MaterialTheme
+ import androidx.compose.runtime.Composable
+ import androidx.compose.runtime.Immutable
+@@ -110,12 +109,11 @@
+  * Default [TextStyle]s that can either be used as-is in host theme or used a reference when
+  * defining your own [LocalWidgetPickerTextStyles].
+  */
+-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+ @Composable
+ fun defaultWidgetPickerTextStyles() =
+     WidgetPickerTextStyles(
+         // Titled bottom sheet
+-        sheetTitle = MaterialTheme.typography.headlineSmallEmphasized,
++        sheetTitle = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Medium),
+         sheetDescription = MaterialTheme.typography.bodyMedium,
+ 
+         // Expandable list headers
+@@ -126,7 +124,7 @@
+ 
+         // Clickable List headers
+         selectedListHeaderTitle =
+-            MaterialTheme.typography.titleMediumEmphasized.copy(fontWeight = FontWeight.Medium),
++            MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Medium),
+         unSelectedListHeaderTitle =
+             MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Normal),
+         selectedListHeaderSubTitle =
+@@ -145,7 +143,7 @@
+ 
+         // Floating toolbar
+         toolbarUnSelectedTabLabel = MaterialTheme.typography.labelLarge,
+-        toolbarSelectedTabLabel = MaterialTheme.typography.labelLargeEmphasized,
++        toolbarSelectedTabLabel = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium),
+ 
+         // Search bar
+         searchBarPlaceholderText =
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/organizer/creation/screen/ui/foldercreator/FolderCreator.kt b/packages/apps/Launcher3/src/com/android/launcher3/organizer/creation/screen/ui/foldercreator/FolderCreator.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/organizer/creation/screen/ui/foldercreator/FolderCreator.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/organizer/creation/screen/ui/foldercreator/FolderCreator.kt
+@@ -49,7 +49,7 @@
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.draw.clip
+ import androidx.compose.ui.graphics.asImageBitmap
+-import androidx.compose.ui.platform.LocalResources
++import androidx.compose.ui.platform.LocalContext
+ import androidx.compose.ui.res.colorResource
+ import androidx.compose.ui.res.dimensionResource
+ import androidx.compose.ui.res.stringResource
+@@ -60,7 +60,7 @@
+ @Composable
+ fun FolderCreator(viewModel: FolderCreatorViewModel, onDismiss: () -> Unit) {
+     val state by viewModel.state.collectAsState()
+-    val resources = LocalResources.current
++    val resources = LocalContext.current.resources
+ 
+     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+     ModalBottomSheet(
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/organizer/creation/screen/ui/workspaceorganizer/WorkspaceOrganizer.kt b/packages/apps/Launcher3/src/com/android/launcher3/organizer/creation/screen/ui/workspaceorganizer/WorkspaceOrganizer.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/organizer/creation/screen/ui/workspaceorganizer/WorkspaceOrganizer.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/organizer/creation/screen/ui/workspaceorganizer/WorkspaceOrganizer.kt
+@@ -28,7 +28,8 @@
+ import androidx.compose.foundation.layout.fillMaxSize
+ import androidx.compose.foundation.layout.height
+ import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.plus
++import androidx.compose.foundation.layout.calculateEndPadding
++import androidx.compose.foundation.layout.calculateStartPadding
+ import androidx.compose.foundation.layout.width
+ import androidx.compose.foundation.layout.wrapContentSize
+ import androidx.compose.foundation.layout.wrapContentWidth
+@@ -59,6 +60,7 @@
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.graphics.asImageBitmap
++import androidx.compose.ui.platform.LocalLayoutDirection
+ import androidx.compose.ui.res.colorResource
+ import androidx.compose.ui.text.TextStyle
+ import androidx.compose.ui.unit.Dp
+@@ -117,12 +119,19 @@
+     onNavigateToSpaceCreator: () -> Unit,
+ ) {
+     val pages: List<WorkspacePage> by viewModel.workspacePages.collectAsState()
++    val direction = LocalLayoutDirection.current
++    val sidePadding = WorkspaceOrganizerDimens.contentSidePadding
+     LazyVerticalGrid(
+         columns = GridCells.Fixed(2),
+         horizontalArrangement = spacedBy(WorkspaceOrganizerDimens.workspaceOrganizerSpacing),
+         verticalArrangement = spacedBy(WorkspaceOrganizerDimens.workspaceOrganizerSpacing),
+         contentPadding =
+-            padding.plus(PaddingValues(horizontal = WorkspaceOrganizerDimens.contentSidePadding)),
++            PaddingValues(
++                start = padding.calculateStartPadding(direction) + sidePadding,
++                top = padding.calculateTopPadding(),
++                end = padding.calculateEndPadding(direction) + sidePadding,
++                bottom = padding.calculateBottomPadding(),
++            ),
+         modifier = Modifier.fillMaxSize().consumeWindowInsets(padding),
+     ) {
+         itemsIndexed(pages, key = { _, item -> item.screenId }) { index, item ->

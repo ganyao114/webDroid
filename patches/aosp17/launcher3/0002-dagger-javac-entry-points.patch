@@ -1,0 +1,54 @@
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/dagger/LauncherComponentProvider.kt b/packages/apps/Launcher3/src/com/android/launcher3/dagger/LauncherComponentProvider.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/dagger/LauncherComponentProvider.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/dagger/LauncherComponentProvider.kt
+@@ -39,7 +39,7 @@
+ 
+         // Create a new component
+         return Holder(
+-                DaggerLauncherAppComponent.builder()
++                LauncherAppComponent.newBuilder()
+                     .appContext(app)
+                     .setSafeModeEnabled(true)
+                     .build() as LauncherAppComponent,
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/preview/LauncherPreviewRenderer.java b/packages/apps/Launcher3/src/com/android/launcher3/preview/LauncherPreviewRenderer.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/preview/LauncherPreviewRenderer.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/preview/LauncherPreviewRenderer.java
+@@ -97,6 +97,11 @@
+         implements WorkspaceLayoutManager, LayoutInflater.Factory2,
+         LauncherBindableItemsContainer, BgDataModel.Callbacks {
+ 
++    // Refer to the generated Dagger type after the Kotlin sources have compiled.
++    static PreviewContext.PreviewAppComponent.Builder newComponentBuilder() {
++        return DaggerPreviewContext_PreviewAppComponent.builder();
++    }
++
+     public final CompletableFuture<View> initialRender = new CompletableFuture<>();
+ 
+     private final Handler mUiHandler;
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/preview/PreviewContext.kt b/packages/apps/Launcher3/src/com/android/launcher3/preview/PreviewContext.kt
+--- a/packages/apps/Launcher3/src/com/android/launcher3/preview/PreviewContext.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/preview/PreviewContext.kt
+@@ -89,7 +89,7 @@
+             if (isTwoPanel) selectionForWorkspaceScreen(closestEvenPageId, closestEvenPageId + 1)
+             else selectionForWorkspaceScreen(workspacePageId)
+ 
+-        val builder = DaggerPreviewContext_PreviewAppComponent.builder().bindPrefs(prefs)
++        val builder = LauncherPreviewRenderer.newComponentBuilder().bindPrefs(prefs)
+         builder.bindLoaderParams(
+             LoaderParams(
+                 workspaceSelection = selectionQuery,
+diff --git a/packages/apps/Launcher3/src_no_quickstep/com/android/launcher3/dagger/LauncherAppComponent.java b/packages/apps/Launcher3/src_no_quickstep/com/android/launcher3/dagger/LauncherAppComponent.java
+--- a/packages/apps/Launcher3/src_no_quickstep/com/android/launcher3/dagger/LauncherAppComponent.java
++++ b/packages/apps/Launcher3/src_no_quickstep/com/android/launcher3/dagger/LauncherAppComponent.java
+@@ -24,6 +24,11 @@
+ @LauncherAppSingleton
+ @Component(modules = LauncherAppModule.class)
+ public interface LauncherAppComponent extends LauncherBaseAppComponent {
++    // The SDK build runs javac's Dagger processor after Kotlin compilation.
++    static Builder newBuilder() {
++        return DaggerLauncherAppComponent.builder();
++    }
++
+     /** Builder for aosp LauncherAppComponent. */
+     @Component.Builder
+     interface Builder extends LauncherBaseAppComponent.Builder {
