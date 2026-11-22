@@ -18,6 +18,12 @@
 #include <utility>
 #include <vector>
 
+namespace android {
+int register_android_content_res_ApkAssets(JNIEnv*);
+int register_android_content_XmlBlock(JNIEnv*);
+int register_android_content_StringBlock(JNIEnv*);
+}
+
 namespace {
 
 using wa::interp::ScopedHandleScope;
@@ -41,6 +47,8 @@ using Minimum = std::pair<std::string_view, size_t>;
 constexpr Minimum kFrameworkClasses[] = {
     {"Landroid/content/ComponentName;", 20},
     {"Landroid/content/IntentFilter;", 80},
+    {"Landroid/content/res/ApkAssets;", 35},
+    {"Landroid/content/res/XmlBlock$Parser;", 45},
     {"Landroid/graphics/BaseCanvas;", 70},
     {"Landroid/graphics/Canvas;", 110},
     {"Landroid/graphics/Color;", 40},
@@ -56,6 +64,8 @@ constexpr Minimum kFrameworkClasses[] = {
     {"Landroid/os/Message;", 25},
     {"Landroid/os/MessageQueue;", 40},
     {"Landroid/view/Gravity;", 10},
+    {"Landroid/view/LayoutInflater;", 30},
+    {"Lcom/android/internal/R$styleable;", 1},
     {"Llibcore/util/HexEncoding;", 10},
 };
 constexpr Minimum kServiceClasses[] = {
@@ -154,16 +164,18 @@ void Dispatch(Vm& vm) {
     std::cout << "Executed upstream Looper, Handler and MessageQueue, delivered 2, 1, 3, 4\n";
 }
 
-// Test peer state uses the upstream JNI signatures. Only the translation and
-// path verbs exercised by FrameworkProbe are registered here.
+// Test peer state uses the upstream graphics JNI signatures.
 thread_local std::vector<wa_canvas_xy_t> translations;
 thread_local std::vector<std::vector<wa_path_verb_t>> paths;
 struct PaintPeer {
     uint32_t argb = 0xff000000;
     jint flags = 0;
+    float text_size = 0;
 };
 thread_local std::vector<PaintPeer> paints;
 thread_local wa_canvas_t* active_canvas = nullptr;
+thread_local wa_bitmap_store_t* active_bitmaps = nullptr;
+constexpr uint32_t kBitmapId = 1;
 
 jlong InitMatrix(JNIEnv*, jclass, jlong source) {
     const auto translation = source ? translations.at(source - 1) : wa_canvas_xy_t{};
@@ -247,6 +259,10 @@ void SetPaintColor(JNIEnv*, jclass, jlong handle, jint argb) {
     paints.at(handle - 1).argb = static_cast<uint32_t>(argb);
 }
 
+void SetTextSize(JNIEnv*, jclass, jlong handle, jfloat size) {
+    paints.at(handle - 1).text_size = size;
+}
+
 jint FixtureLocaleId(JNIEnv*, jclass, jlong, jstring) {
     return 1;
 }
@@ -264,6 +280,65 @@ void DrawPath(JNIEnv* env, jclass, jlong canvas_handle, jlong path_handle, jlong
     if (canvas != active_canvas || wa_canvas_draw_path(canvas, verbs.data(), verbs.size(),
             WA_PATH_NONZERO, {color, WA_PAINT_FILL, 0}) != WA_SF_OK) {
         env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Path recording failed");
+    }
+}
+
+void DrawRoundRect(JNIEnv* env, jclass, jlong handle, jfloat left, jfloat top,
+                   jfloat right, jfloat bottom, jfloat rx, jfloat ry, jlong paint_handle) {
+    auto* canvas = reinterpret_cast<wa_canvas_t*>(static_cast<intptr_t>(handle));
+    const wa_paint_t paint{paints.at(paint_handle - 1).argb, WA_PAINT_FILL, 0};
+    if (canvas != active_canvas
+            || wa_canvas_draw_round_rect(canvas, {{left, top, right, bottom}, rx, ry}, paint) != WA_SF_OK) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Round rect recording failed");
+    }
+}
+
+void DrawText(JNIEnv* env, jclass, jlong handle, jstring text, jint start, jint end,
+              jfloat x, jfloat y, jint, jlong paint_handle) {
+    auto* canvas = reinterpret_cast<wa_canvas_t*>(static_cast<intptr_t>(handle));
+    if (canvas != active_canvas || start != 0 || end != env->GetStringLength(text)) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Unexpected text draw arguments");
+        return;
+    }
+    const char* chars = env->GetStringUTFChars(text, nullptr);
+    if (!chars) return;
+    const auto& paint = paints.at(paint_handle - 1);
+    const wa_canvas_text_t draw{0, static_cast<uint32_t>(std::strlen(chars)), x, y, 0,
+        paint.text_size, 400, 0, paint.argb, 0};
+    const auto result = wa_canvas_draw_text(canvas, &draw, chars);
+    env->ReleaseStringUTFChars(text, chars);
+    if (result != WA_SF_OK) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Text recording failed");
+    }
+}
+
+void DrawPixels(JNIEnv* env, jclass, jlong handle, jintArray colors, jint offset, jint stride,
+                jfloat x, jfloat y, jint width, jint height, jboolean has_alpha, jlong paint_handle) {
+    auto* canvas = reinterpret_cast<wa_canvas_t*>(static_cast<intptr_t>(handle));
+    if (canvas != active_canvas || width != 2 || height != 2 || paint_handle != 0) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Unexpected bitmap draw arguments");
+        return;
+    }
+    std::array<uint8_t, 16> rgba{};
+    for (jint row = 0; row < height; ++row) {
+        std::array<jint, 2> argb{};
+        env->GetIntArrayRegion(colors, offset + row * stride, width, argb.data());
+        if (env->ExceptionCheck()) return;
+        for (jint col = 0; col < width; ++col) {
+            const auto pixel = static_cast<uint32_t>(argb[col]);
+            const auto index = 4 * (row * width + col);
+            rgba[index] = pixel >> 16;
+            rgba[index + 1] = pixel >> 8;
+            rgba[index + 2] = pixel;
+            rgba[index + 3] = has_alpha ? pixel >> 24 : 255;
+        }
+    }
+    const auto w = static_cast<float>(width);
+    const auto h = static_cast<float>(height);
+    const wa_canvas_bitmap_t draw{kBitmapId, WA_MASK_RECT, {0, 0, w, h}, {x, y, x + w, y + h}, 0, 1};
+    if (wa_bitmap_put(active_bitmaps, kBitmapId, width, height, width * 4, rgba.data()) != WA_SF_OK
+            || wa_canvas_draw_bitmap(canvas, &draw) != WA_SF_OK) {
+        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), "Bitmap recording failed");
     }
 }
 
@@ -294,13 +369,17 @@ void Draw(Vm& vm, uint32_t argb) {
                                   "(Landroid/graphics/Canvas;J)Ljava/lang/Runnable;"));
     Register(vm, "android/graphics/BaseCanvas",
              Method<DrawColor>(vm, "nDrawColor", "(JII)V"),
-             Method<DrawPath>(vm, "nDrawPath", "(JJJ)V"));
+             Method<DrawPath>(vm, "nDrawPath", "(JJJ)V"),
+             Method<DrawRoundRect>(vm, "nDrawRoundRect", "(JFFFFFFJ)V"),
+             Method<DrawText>(vm, "nDrawText", "(JLjava/lang/String;IIFFIJ)V"),
+             Method<DrawPixels>(vm, "nDrawBitmap", "(J[IIIFFIIZJ)V"));
     Register(vm, "android/graphics/Paint",
              Method<InitPaint>(vm, "nInit", "()J"),
              Method<RetainPeer>(vm, "nRegisterNativeAllocation", "(Landroid/graphics/Paint;J)V"),
              Method<SetPaintFlags>(vm, "nSetFlags", "(JI)V"),
              Method<PaintFlags>(vm, "nGetFlags", "(J)I"),
              Method<SetPaintColor>(vm, "nSetColor", "(JI)V"),
+             Method<SetTextSize>(vm, "nSetTextSize", "(JF)V"),
              Method<FixtureLocaleId>(vm, "nSetTextLocales", "(JLjava/lang/String;)I"),
              Method<SetPaintOption>(vm, "nSetElegantTextHeight", "(JI)V"),
              Method<UiFontChangeEnabled>(vm, "isUiFontChangeEnabled", "(J)Z"));
@@ -325,6 +404,7 @@ void Draw(Vm& vm, uint32_t argb) {
     auto* canvas = wa_canvas_begin(surface.get(), layer.layer_id);
     Require(canvas != nullptr, "Cannot record the display list");
     active_canvas = canvas;
+    active_bitmaps = wa_sf_bitmaps(surface.get());
     const auto java_canvas = scope.Hold(vm.NewObject("Landroid/graphics/Canvas;"));
     vm.CallVirtual(java_canvas, "drawARGB", "(IIII)V",
         std::array{Value::Int(0xff), Value::Int(0x24), Value::Int(0x31), Value::Int(0x47)});
@@ -332,9 +412,13 @@ void Draw(Vm& vm, uint32_t argb) {
     vm.CallVirtual(paint, "setColor", "(I)V", std::array{Value::Bits(argb)});
     vm.CallVirtual(java_canvas, "drawPath", "(Landroid/graphics/Path;Landroid/graphics/Paint;)V",
                    std::array{path, Value::Ref(paint)});
+    vm.CallStatic("Lorg/wasmandroid/test/FrameworkProbe;", "drawPrimitives",
+                  "(Landroid/graphics/Canvas;Landroid/graphics/Paint;)V",
+                  std::array{Value::Ref(java_canvas), Value::Ref(paint)});
     active_canvas = nullptr;
+    active_bitmaps = nullptr;
     Require(wa_canvas_end(canvas) == WA_SF_OK && wa_sf_commit(surface.get()) == WA_SF_OK,
-            "SurfaceFlinger could not publish the translated path");
+            "SurfaceFlinger could not publish the display list");
     const auto release = [&surface](const wa_sf_frame_packet_t* frame) {
         wa_sf_frame_release(surface.get(), frame);
     };
@@ -354,8 +438,9 @@ void Draw(Vm& vm, uint32_t argb) {
     list += background.byte_size;
     const size_t remaining = entry->list_size - background.byte_size;
     const auto record = ReadRecord<wa_canvas_record_t>(list, remaining, 0);
-    Require(record.opcode == WA_CANVAS_DRAW_PATH && record.byte_size == remaining,
-            "The frame does not contain one path record after the background");
+    Require(record.opcode == WA_CANVAS_DRAW_PATH && record.byte_size <= remaining
+                && record.byte_size >= sizeof(record) + sizeof(wa_canvas_path_t) + sizeof(uint32_t),
+            "The frame does not contain the path after the background");
     const auto header = ReadRecord<wa_canvas_path_t>(list, record.byte_size, sizeof(record));
     Require(header.paint.argb == argb && header.verb_count == 4 && header.fill_rule == WA_PATH_NONZERO,
             "The path record lost drawing state");
@@ -371,7 +456,47 @@ void Draw(Vm& vm, uint32_t argb) {
     }
     Require(ReadRecord<uint32_t>(list, record.byte_size, record.byte_size - sizeof(uint32_t))
                 == WA_PATH_CLOSE, "The path did not close");
-    std::cout << "Executed upstream Canvas, Matrix, Path and Paint with a verified SurfaceFlinger packet\n";
+    size_t offset = record.byte_size;
+    const auto round = ReadRecord<wa_canvas_record_t>(list, remaining, offset);
+    Require(round.opcode == WA_CANVAS_DRAW_ROUND_RECT
+                && round.byte_size == sizeof(round) + sizeof(wa_canvas_round_draw_t),
+            "Missing round rect record");
+    const auto shape = ReadRecord<wa_canvas_round_draw_t>(list, remaining, offset + sizeof(round));
+    Require(shape.shape.rect.l == 1 && shape.shape.rect.t == 2
+                && shape.shape.rect.r == 14 && shape.shape.rect.b == 15
+                && shape.shape.rx == 2 && shape.shape.ry == 3 && shape.paint.argb == argb,
+            "The round rect record lost geometry or paint state");
+    offset += round.byte_size;
+
+    const auto text = ReadRecord<wa_canvas_record_t>(list, remaining, offset);
+    Require(text.opcode == WA_CANVAS_DRAW_TEXT && text.byte_size <= remaining - offset,
+            "Missing text record");
+    const auto run = ReadRecord<wa_canvas_text_t>(list + offset, text.byte_size, sizeof(text));
+    Require(run.x == 2 && run.y == 10 && run.font_size == 8 && run.argb == argb
+                && run.utf8_len == 4 && run.utf8_offset <= text.byte_size
+                && run.utf8_len <= text.byte_size - run.utf8_offset
+                && std::memcmp(list + offset + run.utf8_offset, "AOSP", 4) == 0,
+            "The text record lost its content, paint state or baseline");
+    offset += text.byte_size;
+
+    const auto bitmap = ReadRecord<wa_canvas_record_t>(list, remaining, offset);
+    Require(bitmap.opcode == WA_CANVAS_DRAW_BITMAP && bitmap.byte_size == remaining - offset
+                && bitmap.byte_size == sizeof(bitmap) + sizeof(wa_canvas_bitmap_t),
+            "Missing bitmap record");
+    const auto blit = ReadRecord<wa_canvas_bitmap_t>(list, remaining, offset + sizeof(bitmap));
+    Require(blit.bitmap_id == kBitmapId && blit.src.r == 2 && blit.src.b == 2
+                && blit.dst.l == 8 && blit.dst.t == 9 && blit.dst.r == 10 && blit.dst.b == 11,
+            "The bitmap record lost the source and destination geometry");
+    auto* store = wa_sf_bitmaps(surface.get());
+    const auto release_bitmap = [store](const wa_bitmap_view_t* image) { wa_bitmap_release(store, image); };
+    const std::unique_ptr<const wa_bitmap_view_t, decltype(release_bitmap)> image(
+        wa_bitmap_acquire(store, blit.bitmap_id), release_bitmap);
+    constexpr std::array<uint8_t, 16> expected{
+        0x12, 0x34, 0x56, 0xff, 0x32, 0x63, 0x94, 0x80, 0x65, 0x43, 0x21, 0xff, 0x10, 0x20, 0x30, 0xff};
+    Require(image && image->byte_size == expected.size()
+                && std::memcmp(wa_bitmap_pixels(image.get()), expected.data(), expected.size()) == 0,
+            "The bitmap upload lost pixels, stride or alpha");
+    std::cout << "Executed upstream Canvas, Matrix, Path and Paint with verified path, round rect, text and bitmap records\n";
 }
 
 void Execute(Vm& vm) {
@@ -438,6 +563,49 @@ void Execute(Vm& vm) {
     Draw(vm, static_cast<uint32_t>(argb.i()));
 }
 
+void ReadFrameworkResources(Vm& vm, const char* framework_res) {
+    auto* env = vm.JniEnv();
+    Require(env->PushLocalFrame(32) == JNI_OK, "Cannot allocate a resource JNI frame");
+    for (auto register_natives : {android::register_android_content_StringBlock,
+                                 android::register_android_content_XmlBlock,
+                                 android::register_android_content_res_ApkAssets}) {
+        Require(register_natives(env) == JNI_OK, "Cannot register upstream resource JNI");
+    }
+    env->PopLocalFrame(nullptr);
+
+    ScopedHandleScope scope(vm);
+    constexpr auto apk_type = "Landroid/content/res/ApkAssets;";
+    constexpr auto inflater_type = "Landroid/view/LayoutInflater;";
+    constexpr auto scan_layout = "(Lorg/xmlpull/v1/XmlPullParser;)V";
+    constexpr auto load_apk = "(Ljava/lang/String;)Landroid/content/res/ApkAssets;";
+    constexpr auto open_xml = "(Ljava/lang/String;)Landroid/content/res/XmlResourceParser;";
+    const auto path = scope.Hold(Value::Ref(vm.NewString(framework_res)));
+    const auto assets = scope.Hold(vm.CallStatic(apk_type, "loadFromPath", load_apk, std::array{path}));
+    Require(vm.StringUtf8(vm.CallVirtual(assets.ref(), "getAssetPath", "()Ljava/lang/String;").ref())
+                == framework_res, "ApkAssets loaded an unexpected file");
+    const auto layout = scope.Hold(Value::Ref(vm.NewString("res/layout/simple_list_item_1.xml")));
+    const auto parser = scope.Hold(vm.CallVirtual(assets.ref(), "openXml", open_xml, std::array{layout}));
+    const std::array parser_args{parser};
+    vm.CallStatic(inflater_type, "advanceToRootNode", scan_layout, parser_args);
+    Require(vm.CallStatic("Lorg/wasmandroid/test/FrameworkProbe;", "checkLayoutAttributes",
+                          "(Landroid/content/res/XmlResourceParser;)Z", parser_args).i(),
+            "The framework binary layout disagrees with its generated resource IDs");
+    vm.CallStatic(inflater_type, "consumeChildElements", scan_layout, parser_args);
+    Require(vm.CallVirtual(parser.ref(), "getEventType", "()I").i() == 3 // END_TAG
+                && vm.CallVirtual(parser.ref(), "next", "()I").i() == 1, // END_DOCUMENT
+            "LayoutInflater did not consume the complete layout element");
+    vm.CallVirtual(parser.ref(), "close", "()V");
+    vm.CallVirtual(assets.ref(), "close", "()V");
+    Require(vm.GetMethodStats(apk_type, "loadFromPath", load_apk).interpreted == 1
+            && vm.GetMethodStats(inflater_type, "advanceToRootNode", scan_layout).interpreted == 1
+            && vm.GetMethodStats(inflater_type, "consumeChildElements", scan_layout).interpreted == 1
+            && vm.NativeCalls(apk_type) >= 4
+            && vm.NativeCalls("Landroid/content/res/XmlBlock;") >= 4
+            && vm.NativeCalls("Landroid/content/res/StringBlock;") > 0,
+            "The framework layout did not use upstream resource JNI and Java bytecode");
+    std::cout << "Traversed upstream simple_list_item_1 binary XML with ApkAssets, XmlBlock and LayoutInflater\n";
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -450,14 +618,18 @@ int main(int argc, char** argv) {
         if (mode == "verify") {
             Verify(argv[2], kFrameworkClasses);
             Verify(argv[3], kServiceClasses);
-        } else if (mode == "execute") {
-            Require(argc == 5, "Expected the runtime test fixture DEX");
+        } else if (mode == "execute" || mode == "resources") {
+            Require(argc == (mode == "resources" ? 6 : 5), "Expected runtime fixture inputs");
             Vm vm;
             try {
                 vm.LoadDexFile(argv[2]);
                 vm.LoadDexFile(argv[3]);
                 vm.LoadDexFile(argv[4]);
-                Execute(vm);
+                if (mode == "resources") {
+                    ReadFrameworkResources(vm, argv[5]);
+                } else {
+                    Execute(vm);
+                }
             } catch (const wa::interp::ManagedException&) {
                 throw std::runtime_error(vm.ExceptionSummary());
             }

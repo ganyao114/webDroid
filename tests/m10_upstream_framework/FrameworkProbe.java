@@ -1,17 +1,47 @@
 package org.wasmandroid.test;
 
 import android.content.IntentFilter;
+import android.content.res.XmlResourceParser;
+import android.graphics.Canvas;
+import android.graphics.Paint;
 import android.graphics.Matrix;
 import android.graphics.Path;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 
+import com.android.internal.R;
 import com.android.server.IntentResolver;
 
 import java.util.ArrayList;
 
 public final class FrameworkProbe {
+    public static boolean checkLayoutAttributes(XmlResourceParser parser) throws Exception {
+        String android = "http://schemas.android.com/apk/res/android";
+        if (parser.getEventType() != XmlResourceParser.START_TAG || parser.getDepth() != 1
+                || !"TextView".equals(parser.getName())
+                || parser.getAttributeResourceValue(android, "id", 0) != R.id.text1
+                || parser.getAttributeIntValue(android, "layout_width", 0) != -1
+                || parser.getAttributeIntValue(android, "layout_height", 0) != -2) {
+            return false;
+        }
+        int width = R.styleable.ViewGroup_Layout[R.styleable.ViewGroup_Layout_layout_width];
+        for (int i = 0; i < parser.getAttributeCount(); i++) {
+            if (parser.getAttributeNameResource(i) == width) {
+                return "layout_width".equals(parser.getAttributeName(i));
+            }
+        }
+        return false;
+    }
+
+    public static void drawPrimitives(Canvas canvas, Paint paint) {
+        canvas.drawRoundRect(1, 2, 14, 15, 2, 3, paint);
+        paint.setTextSize(8);
+        canvas.drawText("AOSP", 2, 10, paint);
+        int[] colors = {0, 0xff123456, 0x80326394, 0, 0xff654321, 0xff102030};
+        canvas.drawBitmap(colors, 1, 3, 8f, 9f, 2, 2, true, null);
+    }
+
     private static final class Receiver implements Handler.Callback {
         private int delivered;
 
