@@ -2,6 +2,7 @@ import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
 
 const launcherPackage = 'com.android.launcher3';
 const launcherActivity = `${launcherPackage}.Launcher`;
+const systemUiClass = 'com.android.systemui.statusbar.phone.PhoneStatusBarView';
 const cubePackage = 'org.wasmandroid.cube';
 const cubeActivity = `${cubePackage}.CubeActivity`;
 const cubeLabel = 'WasmAndroid 3D Cube';
@@ -54,7 +55,7 @@ export async function runLauncher3E2E(options = {}) {
   const { signal } = listeners;
   const milestones = createMilestones();
   const result = { ok: false, page_errors: pageErrors };
-  let host, error;
+  let host, error, recents = 0;
 
   function fail(failure) {
     error ??= failure instanceof Error ? failure : new Error(String(failure));
@@ -113,6 +114,26 @@ export async function runLauncher3E2E(options = {}) {
     return canvasPoint(label.x, label.y);
   }
 
+  async function tapSystemUi(button, keyCode, navigated) {
+    const before = host.state();
+    const target = before.systemUiButtons[button];
+    requireMatch(target, `SystemUI did not lay out the ${button} button`);
+    await checkpoint(`systemui-${button}`, { point: canvasPoint(target.x, target.y) });
+    await waitFor(`SystemUI ${button} KeyEvent delivery`, () => {
+      const state = host.state();
+      return state.systemUiKeyEvents === before.systemUiKeyEvents + 2 &&
+        state.systemUiLastKeyCode === keyCode && state.systemUiLastKeyFlags === 0x48 && navigated(state);
+    });
+  }
+
+  async function openDrawer() {
+    await checkpoint('open-allapps', { point: center(allApps) });
+    return waitFor('the fully open All Apps drawer', () => {
+      const state = host.state();
+      return state.drawerOpen && state.drawerProgress >= 0.99 && state;
+    });
+  }
+
   try {
     host = new LauncherHost({ ...options, canvas: launcherSurface.querySelector('canvas'), appSurface,
       surfaceHost: launcherSurface, backend: params.get('backend') ?? 'auto',
@@ -120,7 +141,7 @@ export async function runLauncher3E2E(options = {}) {
         device.dataset.phase = phase;
         launcherSurface.inert = phase !== 'launcher';
         appSurface.inert = phase !== 'app';
-      }, onError: fail });
+      }, onRecents: () => { ++recents; }, onError: fail });
     home.addEventListener('click', () => host.navigate('home'), { signal });
     back.addEventListener('click', () => host.navigate('back'), { signal });
     allApps.addEventListener('click', () => host.openAllApps(), { signal });
@@ -128,10 +149,16 @@ export async function runLauncher3E2E(options = {}) {
     await waitFrames(24);
     const initial = host.state();
     Object.assign(result, { booted: initial.booted, package: initial.package, activity: initial.activity,
+      system_ui_mounted: initial.systemUiMounted, system_ui_class: initial.systemUiClass,
       installed_apps: initial.installedApps, page_count: initial.pageCount, isolated: crossOriginIsolated,
       boot_ms: host.bootMs, native_boot_ms: initial.bootMs });
     requireMatch(initial.booted && initial.activity === launcherActivity && initial.package === launcherPackage,
       'AOSP 17 Launcher3 did not boot');
+    requireMatch(initial.systemUiMounted === true && initial.systemUiClass === systemUiClass,
+      'AOSP 17 SystemUI phone bars did not mount');
+    const statusLabels = host.labels().filter(({ y }) => y < 24 * host.size().densityDpi / 160);
+    requireMatch(statusLabels.some(({ text }) => /^\d\d:\d\d$/.test(text)) &&
+      statusLabels.some(({ text }) => text === '100%'), 'SystemUI clock and battery did not draw');
     requireMatch(initial.workspacePage === 0 && initial.pageCount >= 2 && !initial.drawerOpen,
       'Launcher3 did not start on the first workspace page');
 
@@ -179,11 +206,14 @@ export async function runLauncher3E2E(options = {}) {
     requireMatch(result.workspace_swiped, 'The pointer gesture did not scroll smoothly to workspace page 1');
     requireMatch(swipeStats.avg_fps >= 50 && extraRasters <= 24, 'Workspace swipe missed its FPS or atlas budget');
 
-    await checkpoint('open-allapps', { point: center(allApps) });
-    const opened = await waitFor('the fully open All Apps drawer', () => {
-      const state = host.state();
-      return state.drawerOpen && state.drawerProgress >= 0.99 && state;
-    });
+    await openDrawer();
+    await tapSystemUi('back', 4, state => !state.drawerOpen && state.drawerProgress <= 0.01);
+    await openDrawer();
+    await tapSystemUi('home', 3, state =>
+      state.workspacePage === 0 && !state.drawerOpen && state.drawerProgress <= 0.01);
+    await tapSystemUi('recents', 187, () => recents === 1);
+    result.system_ui_navigation = true;
+    const opened = await openDrawer();
     result.allapps_opened = true;
     result.allapps_unfiltered = opened.searchResults;
     await checkpoint('focus-search', { point: labelPoint('Search apps') });

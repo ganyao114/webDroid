@@ -13,16 +13,17 @@ extern "C" {
 // Typical lifecycle in a browser worker or native host:
 //   1. wa_system_launcher_create(width, height, density_dpi, "en-US")
 //   2. wa_system_launcher_load_framework_dex(fw_dex, fw_len)
-//   3. wa_system_launcher_set_framework_res_apk(android_jar_bytes, jar_len) [optional]
+//   3. wa_system_launcher_set_framework_res_apk(framework_res_bytes, res_len)
 //   4. wa_system_launcher_install_apk("wa_cube_app.apk", cube_bytes, cube_len) [1..N installed apps]
-//   5. wa_system_launcher_boot_apk("Launcher3.apk", launcher_bytes, launcher_len)
-//   6. Per Choreographer vsync (60 Hz):
+//   5. wa_system_launcher_load_systemui_apk("SystemUI-upstream.apk", systemui_bytes, systemui_len)
+//   6. wa_system_launcher_boot_apk("Launcher3.apk", launcher_bytes, launcher_len)
+//   7. Per Choreographer vsync (60 Hz):
 //        wa_system_launcher_tick(frame_time_ns)
 //      Compositor reads wa_sf_frame_acquire(wa_system_launcher_sf_ctx(), ...).
 //      Browser input pushes MotionEvent/KeyEvent/IME into wa_sf_input(wa_system_launcher_sf_ctx()).
-//   7. Poll wa_system_launcher_consume_launch(json, cap) to detect when the user
+//   8. Poll wa_system_launcher_consume_launch(json, cap) to detect when the user
 //      tapped an app icon in Launcher3 (e.g. "org.wasmandroid.cube/.CubeActivity").
-//   8. Call wa_system_launcher_send_home() or wa_system_launcher_resume() when
+//   9. Call wa_system_launcher_send_home() or wa_system_launcher_resume() when
 //      returning from a launched app to Launcher3.
 
 int32_t wa_system_launcher_create(int32_t width, int32_t height, int32_t density_dpi,
@@ -42,6 +43,10 @@ int32_t wa_system_launcher_set_framework_res_apk(const uint8_t* apk_bytes, size_
 // ignored when the APK manifest supplies real strings/icons.
 int32_t wa_system_launcher_install_apk(const char* name, const uint8_t* apk_bytes, size_t apk_len);
 
+// Mounts the upstream com.android.systemui package before boot. Its DEX and
+// resources are used to inflate the real phone bars into the Launcher window.
+int32_t wa_system_launcher_load_systemui_apk(const char* name, const uint8_t* apk_bytes, size_t apk_len);
+
 // Mounts Launcher3.apk, loads its classes.dex, registers aosp17_core_jni +
 // aosp17_ui_jni natives, and launches com.android.launcher3.Launcher through
 // real onCreate -> onStart -> onResume + initial measure/layout/draw frame.
@@ -59,11 +64,18 @@ int32_t wa_system_launcher_resume(void);
 int32_t wa_system_launcher_send_home(void);
 int32_t wa_system_launcher_send_back(void);
 
+// Switches SystemUI between three-button navigation (0, default) and the
+// upstream gestural navigation handle (1).
+int32_t wa_system_launcher_set_gesture_navigation(int32_t enabled);
+// Returns 1 once per pending SystemUI Recents request, or 0 when idle.
+int32_t wa_system_launcher_consume_recents(void);
+
 // Copies JSON describing the latest Launcher3 state into out:
 //   {"booted":true,"package":"com.android.launcher3","activity":"com.android.launcher3.Launcher",
 //    "frames":120,"lastFrameMs":1.42,"avgFrameMs":1.35,"p95FrameMs":1.80,
 //    "installedApps":8,"workspacePage":0,"pageCount":2,"drawerOpen":false,
 //    "drawerProgress":0.0,"searchQuery":"","lastDrawCommands":184,
+//    "systemUiMounted":true,"systemUiClass":"com.android.systemui.statusbar.phone.PhoneStatusBarView",
 //    "gcLive":412,"gcCollections":3,"inputEventsProcessed":14,"launchCount":0}
 int32_t wa_system_launcher_state_json(char* out, size_t cap);
 

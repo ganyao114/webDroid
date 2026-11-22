@@ -7,12 +7,13 @@ import {
   Action, FramePacket, Ime, INPUT_SIZE, Input, Memory, Op, Surface, checkedRecordSize,
 } from '../../web/surfaceflinger/abi.mjs';
 
-const [glue, dex, resources, launcher, ...apps] = process.argv.slice(2);
+const [glue, dex, resources, launcher, systemUi, ...apps] = process.argv.slice(2);
 assert.match(process.version, /^v26\./);
 const wasm = await readFile(glue.replace(/\.mjs$/, '.wasm'));
 const { default: createRuntime } = await import(pathToFileURL(glue));
 const module = await createRuntime({ wasmBinary: wasm, printErr: console.error });
 const memory = new Memory(module);
+assert.equal(memory.buffer.byteLength, 128 * 1024 * 1024);
 const encoder = new TextEncoder();
 const capacity = 4096;
 const scratch = module._malloc(capacity);
@@ -92,19 +93,19 @@ function drag(x, y, dx, dy) {
   motion(Action.UP, x + dx, y + dy, 15);
 }
 
-function inspectFrame() {
+function inspectFrame(width = 960, height = 660) {
   const pointer = module._wa_sf_frame_acquire(scene);
   assert(pointer);
   try {
     const frame = new FramePacket(memory).read(pointer);
-    assert.equal(frame.count, 3);
-    assert.deepEqual([frame.width, frame.height, frame.density], [960, 660, 160]);
+    assert.equal(frame.count, 2);
+    assert.deepEqual([frame.width, frame.height, frame.density], [width, height, 160]);
     const layers = new Map();
     for (let i = 0; i < frame.count; ++i) {
       const layer = frame.layer(i);
       assert.equal(memory.u32(layer + 80), Surface.DISPLAY_LIST);
       assert.equal(memory.i32(layer + 8), i);
-      const info = { ops: new Set(), texts: [], draws: 0 };
+      const info = { ops: new Set(), texts: [], paths: [], gestureHandle: false };
       layers.set(i, info);
       const begin = frame.list(layer), end = begin + memory.u32(layer + 92);
       let transform = [1, 0, 0, 1, 0, 0];
@@ -132,8 +133,17 @@ function inspectFrame() {
           if (x >= 0 && x < frame.width && y >= 0 && y < frame.height)
             info.texts.push({ text, x, y });
         }
+        if (op === Op.PATH && size >= 36 && memory.u32(at + 24) === 1 && memory.u32(at + 4) >>> 24) {
+          const x = arg(6), y = arg(7);
+          info.paths.push({ x, y, windowY: translate(x, y)[5] });
+        }
+        if (op === Op.ROUND) {
+          const [,,,, left, top] = translate(arg(0), arg(1));
+          const [,,,, right, bottom] = translate(arg(2), arg(3));
+          info.gestureHandle ||= top > height - 32 && bottom <= height && right - left > 60 &&
+            bottom - top <= 8 && arg(4) > 0 && (memory.u32(at + 28) >>> 24) !== 0;
+        }
         info.ops.add(op);
-        if (op >= Op.COLOR) info.draws++;
         at += size;
       }
       assert.equal(stack.length, 0);
@@ -142,6 +152,30 @@ function inspectFrame() {
   } finally {
     module._wa_sf_frame_release(scene, pointer);
   }
+}
+
+function verifySystemUiFrame(window, height, gestural = false) {
+  const hasPath = (x, y, top, bottom) => window.paths.some(path =>
+    Math.abs(path.x - x) < 0.0001 && Math.abs(path.y - y) < 0.0001 && path.windowY >= top && path.windowY < bottom);
+  assert(window.texts.some(({ text, y }) => y < 24 && /^\d\d:\d\d$/.test(text)), 'SystemUI Clock text');
+  assert(window.texts.some(({ text, y }) => y < 24 && text === '100%') && hasPath(3.5, 2, 0, 24),
+    'SystemUI battery text and perimeter');
+  assert(hasPath(12.659, 7.45, 0, 24) && hasPath(14.749, 0, 0, 24), 'SystemUI network vectors');
+  const icons = [[15.5417, 1.66669], [10.0001, 18.3334], [4.47634, 2.5]];
+  assert.deepEqual(icons.map(([x, y]) => hasPath(x, y, height - 48, height)), Array(3).fill(!gestural));
+  if (gestural) assert(window.gestureHandle, 'Upstream NavigationHandle rounded rectangle');
+}
+
+function tapSystemUi(button, code, height, frames = 1) {
+  const before = state();
+  const center = before.systemUiButtons[button];
+  assert(center && center.y > height - 48 && center.y < height);
+  tap(center.x, center.y);
+  tick(frames);
+  const after = state();
+  assert.equal(after.systemUiKeyEvents, before.systemUiKeyEvents + 2);
+  assert.equal(after.systemUiLastKeyCode, code);
+  assert.equal(after.systemUiLastKeyFlags, 0x48);
 }
 
 function textPosition(text) {
@@ -172,6 +206,7 @@ async function verifyLocale(locale, hint, query, cubeLabel) {
     await load('load_framework_dex', dex);
     await load('set_framework_res_apk', resources);
     for (const app of apps) await load('install_apk', app, true);
+    await load('load_systemui_apk', systemUi, true);
     await load('boot_apk', launcher, true);
 
     const boot = state();
@@ -179,22 +214,24 @@ async function verifyLocale(locale, hint, query, cubeLabel) {
     assert.equal(boot.booted, true);
     assert.equal(boot.package, 'com.android.launcher3');
     assert.equal(boot.activity, 'com.android.launcher3.Launcher');
+    assert.equal(boot.systemUiMounted, true);
+    assert.equal(boot.systemUiClass, 'com.android.systemui.statusbar.phone.PhoneStatusBarView');
     assert(boot.installedApps >= 6 && boot.lastDrawCommands >= 40);
     assert.equal(boot.pageCount, 2);
     const frame = inspectFrame();
     assert(frame.get(0).ops.has(Op.GRADIENT) && frame.get(0).ops.has(Op.PATH));
     assert(frame.get(1).ops.has(Op.ROUND) && frame.get(1).ops.has(Op.PATH) && frame.get(1).ops.has(Op.TEXT));
-    assert(frame.get(2).texts.some(({ text }) => /^\d\d:\d\d$/.test(text)));
-    assert(frame.get(2).ops.has(Op.ROUND));
+    verifySystemUiFrame(frame.get(1), 660);
 
     tick(60);
     const home = state();
     console.log(JSON.stringify({ locale, phase: 'home-60', ...home }));
-    assert(home.avgFrameMs < 4 && home.p95FrameMs < 6, 'Home frame budget');
-    const firstPage = new Set(inspectFrame().get(1).texts.map(entry => entry.text));
+    assert(home.avgFrameMs < 2.5 && home.p95FrameMs < 6, 'Home frame budget');
+    const firstPage = new Set(inspectFrame().get(1).texts.filter(entry => entry.y >= 24).map(entry => entry.text));
     assert(firstPage.size > 0);
     verifySwipe(0, 1);
-    assert(inspectFrame().get(1).texts.some(entry => !firstPage.has(entry.text)), 'Real app label on second page');
+    assert(inspectFrame().get(1).texts.some(entry => entry.y >= 24 && !firstPage.has(entry.text)),
+      'Real app label on second page');
     verifySwipe(1, 0);
 
     drag(520, 530, 0, -240);
@@ -229,10 +266,9 @@ async function verifyLocale(locale, hint, query, cubeLabel) {
     });
     assert.equal(module._wa_system_launcher_consume_launch(scratch, capacity), 0);
 
-    ok(module._wa_system_launcher_send_home(), 'send home');
     const beforeGc = state();
     ok(module._wa_system_art_gc_collect(), 'explicit GC');
-    tick(15);
+    tapSystemUi('home', 3, 660, 15);
     const final = state();
     console.log(JSON.stringify({ locale, phase: 'interactive-120', ...final }));
     assert.equal(final.frames, 120);
@@ -243,7 +279,7 @@ async function verifyLocale(locale, hint, query, cubeLabel) {
     assert.equal(final.launchCount, 1);
     assert(final.gcCollections > beforeGc.gcCollections && final.gcReclaimed > 0);
     assert(final.inputEventsProcessed >= 18 && final.lastDrawCommands >= 40);
-    assert(final.avgFrameMs < 4 && final.p95FrameMs < 6, 'Interactive frame budget');
+    assert(final.avgFrameMs < 3 && final.p95FrameMs < 6, 'Interactive frame budget');
     ok(module._wa_system_launcher_pause(), 'pause');
     tick();
     assert.equal(state().frames, 120);
@@ -263,6 +299,25 @@ async function verifyLocale(locale, hint, query, cubeLabel) {
     }
     ok(module._wa_system_launcher_tick(now), 'retry frame');
     assert.equal(state().frames, 123);
+    ok(module._wa_system_launcher_resize(720, 540, 160), 'resize');
+    tick();
+    verifySystemUiFrame(inspectFrame(720, 540).get(1), 540);
+    drag(390, 420, 0, -220);
+    tick(12);
+    assert(state().drawerOpen);
+    tapSystemUi('back', 4, 540, 15);
+    assert.equal(state().drawerOpen, false);
+    tapSystemUi('recents', 187, 540);
+    assert.equal(module._wa_system_launcher_consume_recents(), 1);
+    assert.equal(module._wa_system_launcher_consume_recents(), 0);
+    ok(module._wa_system_launcher_set_gesture_navigation(1), 'enable gestural SystemUI');
+    tick();
+    assert(state().systemUiGestural);
+    verifySystemUiFrame(inspectFrame(720, 540).get(1), 540, true);
+    ok(module._wa_system_launcher_set_gesture_navigation(0), 'restore three-button SystemUI');
+    tick();
+    verifySystemUiFrame(inspectFrame(720, 540).get(1), 540);
+    tapSystemUi('home', 3, 540);
   } finally {
     module._wa_system_launcher_destroy();
     assert.equal(module._wa_system_launcher_sf_ctx(), 0);

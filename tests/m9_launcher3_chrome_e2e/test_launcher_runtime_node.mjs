@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { LauncherAbi, frameTimeNs } from '../../web/launcher/abi_helpers.mjs';
-import { loadAndroidSystem, loadLauncherAssets } from '../../web/launcher/assets.mjs';
+import { loadAndroidSystem, loadLauncherAssets, systemUiName } from '../../web/launcher/assets.mjs';
 import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
 import { mountLauncherPlayground } from '../../web/shell/launcher_playground.mjs';
 import { createMilestones, runLauncher3E2E } from './launcher3_e2e.mjs';
@@ -68,6 +68,8 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
     await put(hostBuild, 'tests/m6_apk_chrome_e2e/wa_cube_app.apk', Uint8Array.of(3, 253));
     await put(hostBuild, 'tests/m8_aosp17_launcher3_apk/apk/Launcher3.apk', Uint8Array.of(6, 250));
     for (const name of fixtureNames) await put(hostBuild, `tests/m9_aosp17_launcher3_boot/apps/${name}`, Uint8Array.of(4, 252));
+    await assert.rejects(stageM9Browser(staged, { wasmBuild, hostBuild }), /SystemUI-upstream\.apk/);
+    await put(hostBuild, `tests/m9_aosp17_launcher3_boot/apk/${systemUiName}`, Uint8Array.of(7, 249));
     await stageM9Browser(staged, { wasmBuild, hostBuild });
     const files = await readdir(staged, { recursive: true });
     for (const name of files.filter(path => path.endsWith('.mjs'))) {
@@ -90,11 +92,20 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
     assert.equal(system.locateFile(wasmFile), new URL(wasmFile, base).href);
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async url => new Response(await readFile(url));
+    globalThis.fetch = async url => {
+      try { return new Response(await readFile(url)); }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        return new Response(null, { status: 404 });
+      }
+    };
     try {
       const assets = await loadLauncherAssets({ base });
       assert.deepEqual(assets.apks.map(({ name }) => name), ['wa_cube_app.apk', ...fixtureNames]);
       assert.deepEqual(assets.resources, Uint8Array.of(2, 254));
+      assert.deepEqual(assets.systemUi, Uint8Array.of(7, 249));
+      await rm(new URL(systemUiName, base));
+      await assert.rejects(loadLauncherAssets({ base }), /Could not fetch SystemUI-upstream\.apk \(HTTP 404\)/);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -113,6 +124,7 @@ test('honors i64 vsync time, NUL-terminated state/error and launch buffer owners
   try {
     abi.create({ width: 960, height: 660, densityDpi: 160 }, 'zh-CN');
     assert.equal(abi.state().booted, false);
+    assert.equal(abi.state().systemUiMounted, false);
     assert.equal(abi.consumeLaunch(), null);
     assert.throws(() => abi.installApk('坏.apk', Uint8Array.of(99, 1)), /-22.*无效 APK/);
     assert.throws(() => abi.installApk('bad\0.apk', Uint8Array.of(5, 250)), /Invalid launcher C string/);
@@ -175,6 +187,7 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
           break;
         case 'open-allapps': document.querySelector('[data-nav="all-apps"]').click(); break;
         case 'focus-search': case 'launch-cube':
+        case 'systemui-back': case 'systemui-home': case 'systemui-recents':
           pointer(canvas, 'pointerdown', point, browser.time());
           await browser.step();
           pointer(canvas, 'pointerup', point, browser.time());
@@ -197,8 +210,9 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert(globalThis.__waM9LauncherResult, 'Page did not publish its final result');
     const report = await journey;
     assert.equal(report.ok, true, report.error);
-    assert.deepEqual(steps, ['screenshot-home', 'swipe-workspace', 'open-allapps', 'focus-search', 'type-search',
-      'screenshot-allapps', 'launch-cube', 'screenshot-app', 'return-home']);
+    assert.deepEqual(steps, ['screenshot-home', 'swipe-workspace', 'open-allapps', 'systemui-back', 'open-allapps',
+      'systemui-home', 'systemui-recents', 'open-allapps', 'focus-search', 'type-search', 'screenshot-allapps',
+      'launch-cube', 'screenshot-app', 'return-home']);
     assert.deepEqual(screenshots.map(({ phase }) => phase), ['launcher', 'launcher', 'app']);
     assert.deepEqual(screenshots.map(({ state }) => state.searchQuery), ['', 'Cube', 'Cube']);
     assert.equal(report.frames, 120);
@@ -208,6 +222,9 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.equal(report.backend, 'webgl2');
     assert.match(report.fallback_reason, /WebGPU is unavailable/);
     assert.equal(report.search_query, 'Cube');
+    assert.equal(report.system_ui_mounted, true);
+    assert.equal(report.system_ui_class, 'com.android.systemui.statusbar.phone.PhoneStatusBarView');
+    assert.equal(report.system_ui_navigation, true);
     assert(report.cube_frames >= 10);
     assert.equal(report.cube_tier0_fallbacks, 0);
     assert.equal(report.cube.audio_frames, 140);
@@ -215,12 +232,32 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.deepEqual(report.page_errors, []);
     assert.deepEqual(fake.events.filter(event => event.kind === 3).map(event => event.text), ['', 'Cu', 'Cube']);
     assert(fake.events.some(event => event.action === 2 && event.dx < 0 && event.vx < -100));
-    assert.deepEqual(fake.calls.slice(0, 6).map(([call]) => call), ['create', 'framework', 'resources', 'install', 'install', 'boot']);
+    assert.deepEqual(fake.calls.slice(0, 7).map(([call]) => call),
+      ['create', 'framework', 'resources', 'install', 'install', 'systemui', 'boot']);
     assert(browser.workers[0].didShutdown && browser.workers[0].terminated);
   } finally {
     await globalThis.__waM9Launcher?.close();
     delete globalThis.__waM9Launcher;
     delete globalThis.__waM9LauncherResult;
+    browser.close();
+  }
+  assert.equal(fake.allocations.size, 0);
+});
+
+test('selects the upstream gestural layout through the launcher ABI after mounting SystemUI', async () => {
+  const document = documentFrom(e2eHtml), browser = installBrowser(document);
+  const fake = mockLauncherWasm();
+  const host = new LauncherHost({ ...fake.options, canvas: document.querySelector('canvas'),
+    appSurface: document.querySelector('.wa-app-surface'), gesturalNavigation: true });
+  try {
+    await host.start();
+    await browser.step();
+    assert.deepEqual(fake.calls.slice(-3), [['systemui'], ['boot'], ['gestural', 1]]);
+    assert.equal(host.state().systemUiMounted, true);
+    assert.equal(host.state().systemUiGestural, true);
+    assert.deepEqual(host.state().systemUiButtons, { back: null, home: null, recents: null });
+  } finally {
+    await host.close();
     browser.close();
   }
   assert.equal(fake.allocations.size, 0);
@@ -272,6 +309,7 @@ test('shell controls install, compose CJK, switch locale and recover from a fore
     await browser.ready();
     await ready;
     await browser.step();
+    assert.equal(root.querySelector('[data-stat="system"]').textContent, 'SystemUI + Launcher3');
     root.querySelector('#launcher-form').click();
     assert.equal(device.dataset.form, 'phone');
     canvas.rect = { left: 0, top: 0, width: 390, height: 660 };
@@ -327,9 +365,14 @@ test('shell controls install, compose CJK, switch locale and recover from a fore
     assert.deepEqual(fake.calls.slice(-3), [['pause'], ['resume'], ['home']]);
     await browser.step();
 
-    root.querySelector('[data-nav="recents"]').click();
+    const { x, y } = host.state().systemUiButtons.recents;
+    tap(x, y);
+    await browser.step();
     assert.equal(root.querySelector('.wa-recents').hidden, false);
     assert.equal(root.querySelector('#launcher-recent-app').textContent, 'Extra');
+    root.querySelector('[data-nav="recents"]').click();
+    assert.equal(root.querySelector('.wa-recents').hidden, true);
+    root.querySelector('[data-nav="recents"]').click();
     browser.failNextOpen = true;
     root.querySelector('#launcher-recent-app').click();
     await browser.step();

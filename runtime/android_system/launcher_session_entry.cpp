@@ -33,13 +33,18 @@ using Clock = std::chrono::steady_clock;
 constexpr char kPackage[] = "com.android.launcher3";
 constexpr char kActivity[] = "com.android.launcher3.Launcher";
 constexpr char kUiRuntime[] = "Landroid/app/UiRuntime;";
+constexpr char kSystemUiPackage[] = "com.android.systemui";
+constexpr char kStatusBar[] = "Lcom/android/systemui/statusbar/phone/PhoneStatusBarView;";
+constexpr char kSystemUiHost[] = "Lorg/wasmandroid/launcher/LauncherSystemUi;";
 constexpr char kMain[] = "android.intent.action.MAIN";
 constexpr char kHome[] = "android.intent.category.HOME";
 constexpr char kDefault[] = "android.intent.category.DEFAULT";
-constexpr uint32_t kWallpaperLayer = 1, kLauncherLayer = 2, kBarsLayer = 3;
+constexpr uint32_t kWallpaperLayer = 1, kLauncherLayer = 2;
 constexpr size_t kGcInterval = 4'096;
 constexpr int kMatchDefaultOnly = 0x10000;
 constexpr int kMatchDisabled = 0x200;
+
+#include "systemui_host_dex.inc"
 
 double ElapsedMs(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
@@ -131,113 +136,181 @@ bool Matches(const ApkIntentFilter& filter, const IntentRequest& intent) {
 
 class LauncherDecor {
   public:
-    int32_t Draw(wa_sf_t* sf, const wa_sf_vsync_state_t& tick, const wa::ui_jni::SystemBars& bars) {
+    int32_t Draw(wa_sf_t* sf, const wa_sf_vsync_state_t& tick) const {
         const float width = tick.viewport_w, height = tick.viewport_h;
         const float phase = std::sin(static_cast<double>(tick.frame_time_ns % 24'000'000'000ULL) *
                                      (6.283185307179586 / 24'000'000'000.0));
-        int32_t status = Layer(sf, kWallpaperLayer, 0, width, height, true, [&](wa_canvas_t* canvas) {
-            const wa_canvas_gradient_t sky{{{0, 0, width, height}, 0, 0},
-                                         0xffd6e6fd, 0xff737ba9, 126 + 4 * phase};
-            wa_canvas_draw_linear_gradient(canvas, &sky);
-
-            const float ridge = height * (0.45f + 0.035f * phase);
-            const wa_path_verb_t hill[] = {
-                {WA_PATH_MOVE, {0, ridge + height * 0.19f}},
-                {WA_PATH_CUBIC, {width * 0.30f, ridge - height * 0.2f,
-                                 width * 0.51f, ridge + height * 0.22f, width, ridge}},
-                {WA_PATH_LINE, {width, height}}, {WA_PATH_LINE, {0, height}}, {WA_PATH_CLOSE, {}},
-            };
-            wa_canvas_draw_path(canvas, hill, std::size(hill), WA_PATH_NONZERO,
-                                {0x669c9ddb, WA_PAINT_FILL, 0});
-            const wa_path_verb_t foreground[] = {
-                {WA_PATH_MOVE, {0, height * 0.88f}},
-                {WA_PATH_CUBIC, {width * 0.32f, height * 0.66f, width * 0.58f, height * 1.16f,
-                                 width, height * (0.68f - 0.025f * phase)}},
-                {WA_PATH_LINE, {width, height}}, {WA_PATH_LINE, {0, height}}, {WA_PATH_CLOSE, {}},
-            };
-            wa_canvas_draw_path(canvas, foreground, std::size(foreground), WA_PATH_NONZERO,
-                                {0x77665a9c, WA_PAINT_FILL, 0});
-        });
-        if (status != WA_SF_OK)
-            return status;
-        return Layer(sf, kBarsLayer, 2, width, height, false, [&](wa_canvas_t* canvas) {
-            DrawBars(canvas, width, height, tick.density_dpi / 160.f, bars);
-        });
-    }
-
-  private:
-    template <class Paint>
-    static int32_t Layer(wa_sf_t* sf, uint32_t id, int z, float width, float height, bool opaque,
-                         Paint paint) {
         wa_sf_layer_desc_t layer{};
-        layer.layer_id = id;
-        layer.z_order = z;
+        layer.layer_id = kWallpaperLayer;
+        layer.z_order = 0;
         layer.width = layer.clip_w = width;
         layer.height = layer.clip_h = height;
         layer.scale_x = layer.scale_y = layer.alpha = 1;
-        layer.flags = WA_SF_VISIBLE | WA_SF_CLIP_BOUNDS;
-        if (opaque) layer.flags |= WA_SF_OPAQUE;
+        layer.flags = WA_SF_VISIBLE | WA_SF_CLIP_BOUNDS | WA_SF_OPAQUE;
         layer.surface_kind = WA_SF_SURFACE_DISPLAY_LIST;
         const int32_t result = wa_sf_set_layer(sf, &layer);
         if (result != WA_SF_OK) return result;
-        auto* canvas = wa_canvas_begin(sf, id);
+        auto* canvas = wa_canvas_begin(sf, kWallpaperLayer);
         if (!canvas) return WA_SF_STATE;
-        paint(canvas);
+        const wa_canvas_gradient_t sky{{{0, 0, width, height}, 0, 0},
+                                       0xffd6e6fd, 0xff737ba9, 126 + 4 * phase};
+        wa_canvas_draw_linear_gradient(canvas, &sky);
+
+        const float ridge = height * (0.45f + 0.035f * phase);
+        const wa_path_verb_t hill[] = {
+            {WA_PATH_MOVE, {0, ridge + height * 0.19f}},
+            {WA_PATH_CUBIC, {width * 0.30f, ridge - height * 0.2f,
+                             width * 0.51f, ridge + height * 0.22f, width, ridge}},
+            {WA_PATH_LINE, {width, height}}, {WA_PATH_LINE, {0, height}}, {WA_PATH_CLOSE, {}},
+        };
+        wa_canvas_draw_path(canvas, hill, std::size(hill), WA_PATH_NONZERO,
+                            {0x669c9ddb, WA_PAINT_FILL, 0});
+        const wa_path_verb_t foreground[] = {
+            {WA_PATH_MOVE, {0, height * 0.88f}},
+            {WA_PATH_CUBIC, {width * 0.32f, height * 0.66f, width * 0.58f, height * 1.16f,
+                             width, height * (0.68f - 0.025f * phase)}},
+            {WA_PATH_LINE, {width, height}}, {WA_PATH_LINE, {0, height}}, {WA_PATH_CLOSE, {}},
+        };
+        wa_canvas_draw_path(canvas, foreground, std::size(foreground), WA_PATH_NONZERO,
+                            {0x77665a9c, WA_PAINT_FILL, 0});
         return wa_canvas_end(canvas);
     }
+};
 
-    void DrawBars(wa_canvas_t* canvas, float width, float height, float dp,
-                  const wa::ui_jni::SystemBars& bars) {
-        const auto minute = std::time(nullptr) / 60;
-        if (minute != shown_minute_) {
-            shown_minute_ = minute;
-            const auto seconds = minute * 60;
-            std::tm local{};
-            if (localtime_r(&seconds, &local))
-                std::strftime(clock_, sizeof(clock_), "%H:%M", &local);
-        }
-        const auto ink = bars.appearance & 8 ? 0xff1b2538u : 0xfff8f8ffu;
-        const wa_paint_t fill{ink, WA_PAINT_FILL, 0}, stroke{ink, WA_PAINT_STROKE, 1.4f};
-        wa_canvas_save(canvas);
-        wa_canvas_scale(canvas, dp, dp);
-        const auto text = [&](const char* str, float x, float size) {
-            const wa_canvas_text_t style{
-                .utf8_len = static_cast<uint32_t>(std::strlen(str)), .x = x, .y = 17,
-                .font_size = size, .weight = 600, .align = WA_TEXT_LEFT, .argb = ink,
-                .font_face = WA_FONT_ROBOTO};
-            wa_canvas_draw_text(canvas, &style, str);
+class SystemUi {
+  public:
+    explicit SystemUi(Vm& vm) : vm_(vm), roots_(vm) {}
+
+    void Mount(Object* activity, const char* platform, const char* apk, const char* locale,
+               const wa_sf_vsync_state_t& display) {
+        wa::interp::ScopedHandleScope local(vm_);
+        const std::array args{
+            local.Hold(Value::Ref(activity)), local.Hold(Value::Ref(vm_.NewString(platform))),
+            local.Hold(Value::Ref(vm_.NewString(apk))), local.Hold(Value::Ref(vm_.NewString(locale))),
+            Value::Int(display.viewport_w), Value::Int(display.viewport_h), Value::Int(display.density_dpi),
         };
-        const float right = width / dp, bottom = height / dp;
-        if (bars.status_color >> 24)
-            wa_canvas_draw_rect(canvas, {0, 0, right, 24}, {bars.status_color, WA_PAINT_FILL, 0});
-        if (bars.navigation_color >> 24)
-            wa_canvas_draw_rect(canvas, {0, bottom - 22, right, bottom},
-                               {bars.navigation_color, WA_PAINT_FILL, 0});
-        text(clock_, 16, 13);
-        text("5G", right - 90, 11);
-        for (int i = 0; i < 4; ++i) {
-            const float x = right - 67 + 3 * i;
-            wa_canvas_draw_rect(canvas, {x, 17.f - 2.5f * (i + 1), x + 2, 17}, fill);
-        }
-        const float wifi = right - 43;
-        const wa_path_verb_t waves[] = {
-            {WA_PATH_MOVE, {wifi - 6, 12}}, {WA_PATH_QUAD, {wifi, 6, wifi + 6, 12}},
-            {WA_PATH_MOVE, {wifi - 4, 14}}, {WA_PATH_QUAD, {wifi, 10, wifi + 4, 14}},
-        };
-        wa_canvas_draw_path(canvas, waves, std::size(waves), WA_PATH_NONZERO, stroke);
-        wa_canvas_draw_circle(canvas, wifi, 16, 1.2f, fill);
-        wa_canvas_draw_round_rect(canvas, {{right - 30, 9, right - 15, 17}, 2, 2}, stroke);
-        wa_canvas_draw_round_rect(canvas, {{right - 28, 11, right - 18, 15}, 1, 1}, fill);
-        wa_canvas_draw_rect(canvas, {right - 14, 11, right - 12, 15}, fill);
-        const float center = right * 0.5f, pill = std::min(54.f, center * 0.7f);
-        const uint32_t gesture = bars.appearance & 16 ? 0xff252739u : 0xfff7f7ffu;
-        wa_canvas_draw_round_rect(canvas, {{center - pill, bottom - 12, center + pill, bottom - 8},
-                                          2, 2}, {gesture, WA_PAINT_FILL, 0});
-        wa_canvas_restore(canvas);
+        context_ = roots_.Hold(vm_.CallStatic(kSystemUiHost, "create",
+            "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;III)"
+            "Lorg/wasmandroid/launcher/LauncherSystemUi;", args).ref());
+        auto* overlay = local.Hold(vm_.CallVirtual(context_, "attachOverlay",
+            "()Landroid/widget/FrameLayout;").ref());
+        const std::array mount{Value::Ref(overlay), Value::Ref(context_), Value::Ref(context_)};
+        status_ = roots_.Hold(vm_.CallStatic(kStatusBar, "inflatePhoneBars",
+            "(Landroid/widget/FrameLayout;Landroid/content/Context;Ljava/util/function/Consumer;)"
+            "Lcom/android/systemui/statusbar/phone/PhoneStatusBarView;", mount).ref());
+        auto* status_type = local.Hold(vm_.CallVirtual(status_, "getClass", "()Ljava/lang/Class;").ref());
+        class_name_ = vm_.StringUtf8(vm_.CallVirtual(status_type, "getName", "()Ljava/lang/String;").ref());
+        navigation_ = roots_.Hold(vm_.CallVirtual(status_, "getNavigationBar",
+            "()Lcom/android/systemui/navigationbar/views/NavigationBarView;").ref());
+        clock_ = roots_.Hold(vm_.CallVirtual(status_, "getClock",
+            "()Lcom/android/systemui/statusbar/policy/Clock;").ref());
+        auto* battery = local.Hold(vm_.CallVirtual(status_, "getBatteryMeter",
+            "()Lcom/android/systemui/battery/BatteryMeterView;").ref());
+        const std::array enabled{Value::Int(1)};
+        const std::array charge{Value::Int(100), Value::Int(0)};
+        const std::array signal{Value::Int(4), Value::Int(4)};
+        vm_.CallVirtual(battery, "setForceShowPercent", "(Z)V", enabled);
+        vm_.CallVirtual(battery, "onBatteryLevelChanged", "(IZ)V", charge);
+        vm_.CallVirtual(status_, "setNetworkSignalLevels", "(II)V", signal);
+
+        // The launcher wallpaper and All Apps surface are light behind the status icons.
+        vm_.CallVirtual(clock_, "onColorsChanged", "(Z)V", enabled);
+        const auto tint = vm_.CallVirtual(clock_, "getCurrentTextColor", "()I");
+        const std::array battery_tint{local.Hold(Value::Ref(vm_.NewObject("Ljava/util/ArrayList;"))),
+                                      Value::Float(1), tint};
+        vm_.CallVirtual(battery, "onDarkChanged", "(Ljava/util/ArrayList;FI)V", battery_tint);
+        const std::array signal_tint{Value::Ref(status_), tint};
+        vm_.CallVirtual(context_, "tintSignals", "(Landroid/view/View;I)V", signal_tint);
+        LayoutNavigation();
+        display_ = DisplaySize(display);
     }
 
-    std::time_t shown_minute_ = -1;
-    char clock_[6] = "00:00";
+    void Update(const wa_sf_vsync_state_t& display) {
+        const auto size = DisplaySize(display);
+        if (size != display_) {
+            wa::interp::ScopedHandleScope local(vm_);
+            auto* resources = local.Hold(vm_.CallVirtual(context_, "getResources",
+                "()Landroid/content/res/Resources;").ref());
+            const std::array dimensions{Value::Int(size[0]), Value::Int(size[1]), Value::Int(size[2])};
+            vm_.CallVirtual(resources, "updateDisplay", "(III)V", dimensions);
+            const std::array config{local.Hold(vm_.CallVirtual(resources, "getConfiguration",
+                "()Landroid/content/res/Configuration;"))};
+            vm_.CallVirtual(status_, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", config);
+            vm_.CallVirtual(navigation_, "onConfigurationChanged", "(Landroid/content/res/Configuration;)V", config);
+            if (size[2] != display_[2])
+                vm_.CallVirtual(clock_, "onDensityOrFontScaleChanged", "()V");
+            LayoutNavigation();
+            display_ = size;
+        }
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        const auto minute = std::chrono::duration_cast<std::chrono::minutes>(now);
+        if (minute != shown_minute_) {
+            const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+            const auto seconds = static_cast<std::time_t>(millis / 1000);
+            std::tm local{};
+            localtime_r(&seconds, &local);
+            const std::array time{Value::Long(millis), Value::Int(local.tm_gmtoff / 60), Value::Int(1)};
+            vm_.CallVirtual(clock_, "updateClock", "(JIZ)V", time);
+            shown_minute_ = minute;
+        }
+    }
+
+    void SetGestural(bool enabled) {
+        if (enabled == gestural_) return;
+        const std::array args{Value::Int(enabled ? 2 : 0), Value::Int(0)};
+        vm_.CallVirtual(navigation_, "setNavBarMode", "(IZ)V", args);
+        LayoutNavigation();
+        gestural_ = enabled;
+    }
+
+    int32_t ConsumeRecents() { return vm_.CallVirtual(context_, "consumeRecents", "()Z").i(); }
+
+    std::string Describe() {
+        return std::string(",\"systemUiMounted\":true,\"systemUiClass\":") + Quote(class_name_) +
+            ",\"systemUiGestural\":" + (gestural_ ? "true" : "false") +
+            ",\"systemUiKeyEvents\":" + std::to_string(vm_.CallVirtual(context_, "keyEvents", "()I").i()) +
+            ",\"systemUiLastKeyCode\":" + std::to_string(vm_.CallVirtual(context_, "lastKeyCode", "()I").i()) +
+            ",\"systemUiLastKeyFlags\":" + std::to_string(vm_.CallVirtual(context_, "lastKeyFlags", "()I").i()) +
+            ",\"systemUiButtons\":{\"back\":" + ButtonCenter("getBackButton") +
+            ",\"home\":" + ButtonCenter("getHomeButton") +
+            ",\"recents\":" + ButtonCenter("getRecentsButton") + "}";
+    }
+
+    void Close() {
+        if (context_) vm_.CallVirtual(context_, "close", "()V");
+    }
+
+  private:
+    static std::array<uint32_t, 3> DisplaySize(const wa_sf_vsync_state_t& tick) {
+        return {tick.viewport_w, tick.viewport_h, tick.density_dpi};
+    }
+
+    void LayoutNavigation() {
+        const std::array args{Value::Ref(navigation_), vm_.CallVirtual(navigation_, "getNavBarHeight", "()I")};
+        vm_.CallVirtual(context_, "layoutNavigation", "(Landroid/view/View;I)V", args);
+    }
+
+    std::string ButtonCenter(const char* getter) {
+        wa::interp::ScopedHandleScope local(vm_);
+        auto* dispatcher = local.Hold(vm_.CallVirtual(navigation_, getter,
+            "()Lcom/android/systemui/navigationbar/views/buttons/ButtonDispatcher;").ref());
+        const std::array view{local.Hold(vm_.CallVirtual(dispatcher, "getCurrentView", "()Landroid/view/View;"))};
+        const auto location = vm_.CallStatic(kSystemUiHost, "buttonCenter", "(Landroid/view/View;)J", view).bits();
+        if (!location) return "null";
+        return "{\"x\":" + std::to_string(static_cast<int32_t>(location)) +
+            ",\"y\":" + std::to_string(static_cast<int32_t>(location >> 32)) + "}";
+    }
+
+    Vm& vm_;
+    wa::interp::ScopedHandleScope roots_;
+    Object* context_ = nullptr;
+    Object* status_ = nullptr;
+    Object* navigation_ = nullptr;
+    Object* clock_ = nullptr;
+    std::string class_name_;
+    std::array<uint32_t, 3> display_{};
+    std::chrono::minutes shown_minute_{-1};
+    bool gestural_ = false;
 };
 
 struct InstalledApp {
@@ -255,6 +328,16 @@ struct InstalledApp {
 struct LauncherRuntime {
     Vm vm{wa::interp::Options{.gc_interval = kGcInterval}};
     wa::ui_jni::UiBridge ui;
+    SystemUi system_ui{vm};
+
+    void Close() {
+        try {
+            system_ui.Close();
+        } catch (...) {
+            vm.ClearException();
+        }
+        ui.DestroyActivity(vm);
+    }
 };
 
 struct Session {
@@ -323,8 +406,10 @@ struct Session {
         vm.SetGcPaused(true);
         int32_t status;
         try {
-            if (drain_input && !frame_pending)
-                input_events += runtime->ui.DispatchInputEvents(vm, sf.get());
+            if (!frame_pending) {
+                if (!paused) runtime->system_ui.Update(display);
+                if (drain_input) input_events += runtime->ui.DispatchInputEvents(vm, sf.get());
+            }
             auto tick = display;
             tick.frame_time_ns = nanos;
             tick.frame_number = frames + 1;
@@ -401,6 +486,7 @@ struct Session {
         return std::string("{\"booted\":") + (booted ? "true" : "false")
             + ",\"package\":" + Quote(booted ? kPackage : "")
             + ",\"activity\":" + Quote(booted ? kActivity : "") + numbers
+            + (booted ? runtime->system_ui.Describe() : ",\"systemUiMounted\":false,\"systemUiClass\":\"\"")
             + ",\"searchQuery\":" + Quote(query) + "}";
     }
 
@@ -409,7 +495,7 @@ struct Session {
     std::unique_ptr<wa_sf_t, decltype(&wa_sf_destroy)> sf;
     LauncherDecor decor;
     std::map<std::string, InstalledApp, std::less<>> apps;
-    std::unique_ptr<MountedApk> framework_resource, launcher_apk;
+    std::unique_ptr<MountedApk> framework_resource, launcher_apk, systemui_apk;
     std::vector<uint8_t> framework_dex;
     std::unique_ptr<LauncherRuntime> runtime;
     bool booted = false, paused = false, frame_pending = false;
@@ -481,7 +567,7 @@ int32_t wa_system_launcher_create(int32_t width, int32_t height, int32_t density
 void wa_system_launcher_destroy() {
     if (session && session->booted) {
         Api("Destroy launcher", [] {
-            session->runtime->ui.DestroyActivity(session->runtime->vm);
+            session->runtime->Close();
             return WA_OK;
         });
     }
@@ -535,10 +621,27 @@ int32_t wa_system_launcher_install_apk(const char* name, const uint8_t* bytes, s
     });
 }
 
+int32_t wa_system_launcher_load_systemui_apk(const char* name, const uint8_t* bytes, size_t length) {
+    return Active("Mount SystemUI APK", [&](Session& s) -> int32_t {
+        if (s.booted) return WA_ERR_BUSY;
+        if (!name || !*name || !bytes || !length) return WA_ERR_INVALID;
+        LauncherPackage package;
+        const auto status = wa::system::ReadLauncherPackage({bytes, length}, s.locale.c_str(),
+                                                           s.display.density_dpi, package);
+        if (status != WA_OK) return status;
+        if (package.package != kSystemUiPackage)
+            throw std::invalid_argument("Expected com.android.systemui");
+        s.systemui_apk = std::make_unique<MountedApk>(std::span(bytes, length));
+        return WA_OK;
+    });
+}
+
 int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size_t length) {
     return Active("Boot Launcher3", [&](Session& s) -> int32_t {
         if (s.booted) return WA_ERR_BUSY;
         if (!name || !*name || !bytes || !length || s.framework_dex.empty()) return WA_ERR_INVALID;
+        if (!s.framework_resource || !s.systemui_apk)
+            throw std::invalid_argument("Load framework resources and SystemUI-upstream.apk first");
         const auto start = Clock::now();
         LauncherPackage package;
         std::vector<uint8_t> dex;
@@ -556,13 +659,18 @@ int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size
             s.runtime = std::make_unique<LauncherRuntime>();
             s.runtime->vm.LoadDexFile("aosp17_framework_core.dex", s.framework_dex);
         }
-        auto& [vm, ui] = *s.runtime;
+        auto& [vm, ui, system_ui] = *s.runtime;
         try {
             vm.LoadDexFile(std::string(name) + "!classes.dex", std::move(dex));
+            vm.LoadDexFile("LauncherSystemUi.dex", {std::begin(kLauncherSystemUiDex), std::end(kLauncherSystemUiDex)});
+            const std::string systemui_path = s.systemui_apk->path();
+            vm.LoadApkDexFiles(systemui_path);
+            if (!vm.DexLocation(kStatusBar).starts_with(systemui_path + '!'))
+                throw std::runtime_error("PhoneStatusBarView was not loaded from the SystemUI APK");
             ui.RegisterNatives(vm);
             ui.BindSurfaceFlinger(s.sf.get(), kLauncherLayer);
-            ui.SetFrameDecorator([&s](auto* sf, const auto& tick, const auto& bars) {
-                return s.decor.Draw(sf, tick, bars);
+            ui.SetFrameDecorator([&s](auto* sf, const auto& tick, const auto&) {
+                return s.decor.Draw(sf, tick);
             });
             ui.SetPackageCallbacks({
                 .query_activities = [&s](const auto& request) { return s.Query(request); },
@@ -577,7 +685,9 @@ int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size
             ui.LaunchActivity(vm, {.apk_path = apk->path(), .class_name = kActivity, .locale = s.locale,
                 .density_dpi = static_cast<int>(s.display.density_dpi),
                 .width = static_cast<int>(s.display.viewport_w), .height = static_cast<int>(s.display.viewport_h),
-                .framework_resource_apk = s.framework_resource ? s.framework_resource->path() : ""});
+                .framework_resource_apk = s.framework_resource->path()});
+            system_ui.Mount(s.Activity(), s.framework_resource->path(), s.systemui_apk->path(),
+                            s.locale.c_str(), s.display);
             status = s.Draw(0, false);
             if (status != WA_OK || !s.app_commands)
                 throw std::runtime_error("Launcher3 did not present its initial draw tree (" +
@@ -594,10 +704,13 @@ int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size
             }
         } catch (const wa::interp::ManagedException&) {
             const auto error = vm.ExceptionSummary();
+            vm.ClearException();
+            try { s.runtime->Close(); } catch (...) {}
             s.runtime.reset();
             s.frame_pending = false;
             throw std::runtime_error(error);
         } catch (...) {
+            try { s.runtime->Close(); } catch (...) {}
             s.runtime.reset();
             s.frame_pending = false;
             throw;
@@ -654,6 +767,20 @@ int32_t wa_system_launcher_resume() {
 
 int32_t wa_system_launcher_send_home() { return Navigate("Send Home", "sendHome"); }
 int32_t wa_system_launcher_send_back() { return Navigate("Send Back", "sendBack"); }
+
+int32_t wa_system_launcher_set_gesture_navigation(int32_t enabled) {
+    return Active("Set SystemUI navigation mode", [&](Session& s) -> int32_t {
+        if (enabled != 0 && enabled != 1) return WA_ERR_INVALID;
+        s.runtime->system_ui.SetGestural(enabled);
+        return WA_OK;
+    }, true);
+}
+
+int32_t wa_system_launcher_consume_recents() {
+    return Active("Consume SystemUI Recents", [](Session& s) {
+        return s.runtime->system_ui.ConsumeRecents();
+    }, true);
+}
 
 int32_t wa_system_launcher_state_json(char* out, size_t cap) {
     return Active("Read launcher state", [&](Session& s) { return CopyText(s.Describe(), out, cap); });
