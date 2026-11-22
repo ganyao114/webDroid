@@ -302,7 +302,7 @@ libcore/luni/src/main/java/libcore/api/IntraCoreApi.java
 libcore/luni/src/main/java/libcore/util/NonNull.java
 libcore/luni/src/main/java/libcore/util/Nullable.java
 
-# Phase 3 W1: upstream View, ViewGroup, TextView, Display, IME, Accessibility
+# Phase 3 W1: upstream Display and AccessibilityManager
 frameworks/base/core/java/android/view/Display.java
 frameworks/base/core/java/android/view/DisplayInfo.java
 frameworks/base/core/java/android/view/DisplayAddress.java
@@ -311,7 +311,6 @@ frameworks/base/core/java/android/view/FrameRateVelocityPoint.java
 frameworks/base/core/java/android/hardware/display/BrightnessInfo.java
 frameworks/base/core/java/android/hardware/display/DeviceProductInfo.java
 frameworks/base/core/java/android/hardware/OverlayProperties.java
-frameworks/base/core/java/android/os/HandlerExecutor.java
 frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java
 frameworks/base/core/java/android/view/accessibility/AccessibilityRequestPreparer.java
 

@@ -28,12 +28,13 @@ ROOT = TOOLS.parent.parent
 PROFILE = ROOT / "patches/aosp17/settings"
 PREFERENCE_LINK = PROFILE / "PreferenceLink.java"
 FRAMEWORK_ADAPTERS = (
-    TOOLS / "framework_build/java/android/app/Fragment.java",
+    ROOT / "patches/aosp17/frameworks_base/patches/859-embedded-fragment-host.patch",
     TOOLS / "framework_build/java/org/wasmandroid/ui/PreferenceGridView.java",
     TOOLS / "framework_build/java/org/wasmandroid/ui/PreferenceRuntime.java",
 )
 SETTINGS = Path("packages/apps/Settings")
 BASE = Path("frameworks/base")
+FRAMEWORK_FRAGMENT = BASE / "core/java/android/app/Fragment.java"
 SETTINGSLIB = BASE / "packages/SettingsLib"
 TAG = "android-17.0.0_r1"
 PACKAGE = "com.android.settings"
@@ -407,8 +408,12 @@ def dex_report(path):
 
 
 def build(args, stage):
+    compatibility_inputs = {
+        FRAMEWORK_FRAGMENT.as_posix(): args.aosp_root / FRAMEWORK_FRAGMENT,
+        **{path.relative_to(ROOT).as_posix(): path for path in (PREFERENCE_LINK, *FRAMEWORK_ADAPTERS)},
+    }
     inputs = {Path(__file__).resolve(), TOOLS / "build_pm_dex.py", TOOLS / "build_upstream_systemui.py",
-              PROFILE / "sources.txt", PROFILE / "resources.txt", PREFERENCE_LINK, *FRAMEWORK_ADAPTERS}
+              PROFILE / "sources.txt", PROFILE / "resources.txt", *compatibility_inputs.values()}
     tools = ("aapt2", "android_jar", "apksigner", "d8", "java", "javac", "zipalign")
     inputs.update(getattr(args, name) for name in tools)
     for name in ("d8", "apksigner"):
@@ -449,8 +454,7 @@ def build(args, stage):
         "resource_inputs": resource_inputs, "patches": patches,
         "linked_manifest_sha256": file_digest(stage / "AndroidManifest.xml"),
         "adapted_dependency_archives": adapted,
-        "compatibility_inputs": {str(path.relative_to(ROOT)): file_digest(path)
-                                 for path in (PREFERENCE_LINK, *FRAMEWORK_ADAPTERS)},
+        "compatibility_inputs": {name: file_digest(path) for name, path in compatibility_inputs.items()},
         "apk": count_report(apk), "dex": {path.name: dex_report(path) for path in dex},
         "toolchain": {name: count_report(getattr(args, name)) for name in tools},
         "dependency_archives": {

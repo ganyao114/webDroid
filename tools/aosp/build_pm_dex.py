@@ -48,11 +48,11 @@ def run(*command):
         raise ValueError(f"{command[0]} exited with status {result.returncode}")
 
 
-def write_jar(path, entries):
+def write_jar(path, entries, *, compression=zipfile.ZIP_STORED):
     # Explicitly write entries in lexical order with fixed ZIP metadata.
     with zipfile.ZipFile(path, "w") as jar:
         for name, content in sorted(entries.items()):
-            jar.writestr(zipfile.ZipInfo(name), content)
+            jar.writestr(zipfile.ZipInfo(name), content, compress_type=compression)
 
 
 def sdk_declarations(data, fields=(), methods=()):

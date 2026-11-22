@@ -23,7 +23,7 @@ const module = await createRuntime({
 });
 const memory = new Memory(module);
 const linearMemoryBytes = 256 * 1024 * 1024;
-const minimumHeadroom = 32 * 1024 * 1024;
+const minimumHeadroom = 40 * 1024 * 1024;
 assert.equal(memory.buffer.byteLength, linearMemoryBytes);
 assert.deepEqual(apps.map(path => basename(path)), [cubeName, ...systemAppNames]);
 const encoder = new TextEncoder();
@@ -588,7 +588,7 @@ try {
   }
   const headroomBytes = linearMemoryBytes - peakHeapEndBytes;
   console.log(JSON.stringify({ peakWasmHeapEndBytes: peakHeapEndBytes, linearMemoryBytes, headroomBytes }));
-  assert(headroomBytes >= minimumHeadroom, 'Launcher3 must leave at least 32 MiB of linear memory available');
+  assert(headroomBytes >= minimumHeadroom, 'Launcher3 must leave at least 40 MiB of linear memory available');
 } finally {
   module._free(event);
   module._free(scratch);
