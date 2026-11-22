@@ -31,6 +31,27 @@ try {
     onCanvasChanged: bindInput,
     onError: fail,
   });
+  const measure = new OffscreenCanvas(1, 1).getContext('2d');
+  const titles = ['Apps', 'Modes', 'Communal', 'WasmAndroid 3D Cube', '系统设置'];
+  const fonts = [
+    'system-ui, "Noto Sans CJK SC", "Apple Color Emoji", sans-serif',
+    'Roboto, "Noto Sans", "Noto Sans CJK SC", system-ui, "Apple Color Emoji", sans-serif',
+  ];
+  for (const [face, family] of fonts.entries()) {
+    for (const weight of [400, 500, 700]) {
+      for (const size of [13, 16, 20, 24, 32]) {
+        measure.font = `${weight} ${size}px ${family}`;
+        titles.forEach((title, index) => {
+          const metrics = measure.measureText(title);
+          const actual = Math.max(metrics.width, metrics.actualBoundingBoxRight);
+          const reserved = runtime._m7_demo_measure_title(scene, index, size, weight, face);
+          if (!(actual > 0 && reserved >= actual)) {
+            throw new Error(`Font width for "${title}" at ${measure.font}: ${reserved} < ${actual}`);
+          }
+        });
+      }
+    }
+  }
   bindInput(compositor.canvas);
   api.snapshot = () => ({
     ...demoState(compositor.memory, runtime),

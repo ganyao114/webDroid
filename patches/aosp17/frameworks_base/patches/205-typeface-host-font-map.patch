@@ -1,0 +1,180 @@
+--- a/frameworks/base/graphics/java/android/graphics/Typeface.java
++++ b/frameworks/base/graphics/java/android/graphics/Typeface.java
+@@ -33,21 +33,15 @@
+ import android.graphics.fonts.FontFamily;
+ import android.graphics.fonts.FontStyle;
+ import android.graphics.fonts.FontVariationAxis;
+-import android.graphics.fonts.SystemFonts;
+-import android.icu.util.ULocale;
+ import android.os.Build;
+ import android.os.ParcelFileDescriptor;
+ import android.os.SharedMemory;
+-import android.os.SystemProperties;
+ import android.os.Trace;
+-import android.provider.FontRequest;
+-import android.provider.FontsContract;
+ import android.ravenwood.annotation.RavenwoodReplace;
+ import android.system.ErrnoException;
+ import android.system.OsConstants;
+ import android.text.FontConfig;
+ import android.util.ArrayMap;
+-import android.util.Base64;
+ import android.util.Log;
+ import android.util.LongSparseArray;
+ import android.util.LruCache;
+@@ -62,7 +56,6 @@
+ import dalvik.annotation.optimization.CriticalNative;
+ import dalvik.annotation.optimization.FastNative;
+ 
+-import libcore.util.NativeAllocationRegistry;
+ 
+ import java.io.ByteArrayOutputStream;
+ import java.io.File;
+@@ -97,11 +90,7 @@
+     /** @hide */
+     public static final boolean ENABLE_LAZY_TYPEFACE_INITIALIZATION = true;
+ 
+-    private static class NoImagePreloadHolder {
+-        static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                        Typeface.class.getClassLoader(), nativeGetReleaseFunc());
+-    }
++    private static native long nCreateHostFamily(String name, int weight, boolean italic);
+ 
+     /** The default NORMAL typeface object */
+     public static final Typeface DEFAULT;
+@@ -403,25 +392,7 @@
+             if (systemFontFamilyName != null && hasFontFamily(systemFontFamilyName)) {
+                 return Typeface.create(systemFontFamilyName, NORMAL);
+             }
+-            // Downloadable font
+-            List<List<String>> givenCerts = providerEntry.getCerts();
+-            List<List<byte[]>> certs = new ArrayList<>();
+-            if (givenCerts != null) {
+-                for (int i = 0; i < givenCerts.size(); i++) {
+-                    List<String> certSet = givenCerts.get(i);
+-                    List<byte[]> byteArraySet = new ArrayList<>();
+-                    for (int j = 0; j < certSet.size(); j++) {
+-                        byteArraySet.add(Base64.decode(certSet.get(j), Base64.DEFAULT));
+-                    }
+-                    certs.add(byteArraySet);
+-                }
+-            }
+-            // Downloaded font and it wasn't cached, request it again and return a
+-            // default font instead (nothing we can do now).
+-            FontRequest request = new FontRequest(providerEntry.getAuthority(),
+-                    providerEntry.getPackage(), providerEntry.getQuery(), certs);
+-            Typeface typeface = FontsContract.getFontSync(request);
+-            return typeface == null ? DEFAULT : typeface;
++            return DEFAULT;
+         }
+ 
+         Typeface typeface = findFromCache(mgr, path);
+@@ -433,8 +404,7 @@
+         try {
+             FontFamily.Builder familyBuilder = null;
+             for (final FontFileResourceEntry fontFile : filesEntry.getEntries()) {
+-                final Font.Builder fontBuilder = new Font.Builder(Font.Builder.createBuffer(mgr, fontFile.getFileName(),
+-                        false /* isAsset */, AssetManager.COOKIE_UNKNOWN))
++                final Font.Builder fontBuilder = new Font.Builder(mgr, fontFile.getFileName())
+                         .setTtcIndex(fontFile.getTtcIndex())
+                         .setFontVariationSettings(fontFile.getVariationSettings());
+                 if (fontFile.getWeight() != Typeface.RESOLVE_BY_FONT_TABLE) {
+@@ -619,7 +589,7 @@
+          */
+         public Builder(@NonNull AssetManager assetManager, @NonNull String path, boolean isAsset,
+                 int cookie) {
+-            mFontBuilder = new Font.Builder(Font.Builder.createBuffer(assetManager, path, isAsset, cookie));
++            mFontBuilder = new Font.Builder(assetManager, path);
+             mAssetManager = assetManager;
+             mPath = path;
+         }
+@@ -722,13 +692,8 @@
+          */
+         private static String createAssetUid(final AssetManager mgr, String path, int ttcIndex,
+                 @Nullable FontVariationAxis[] axes, int weight, int italic, String fallback) {
+-            final SparseArray<String> pkgs = mgr.getAssignedPackageIdentifiers();
+-            final StringBuilder builder = new StringBuilder();
+-            final int size = pkgs.size();
+-            for (int i = 0; i < size; i++) {
+-                builder.append(pkgs.valueAt(i));
+-                builder.append("-");
+-            }
++                        final StringBuilder builder = new StringBuilder();
++            builder.append(System.identityHashCode(mgr)).append('-');
+             builder.append(path);
+             builder.append("-");
+             builder.append(Integer.toString(ttcIndex));
+@@ -1339,7 +1304,7 @@
+         }
+ 
+         native_instance = ni;
+-        mCleaner = NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, native_instance);
++        mCleaner = () -> {}; // Host typefaces are immutable value handles.
+         mStyle = nativeGetStyle(ni);
+         mWeight = nativeGetWeight(ni);
+         mSystemFontFamilyName = systemFontFamilyName;
+@@ -1691,37 +1656,7 @@
+ 
+     /** @hide */
+     public static void init() {
+-        // Preload Roboto-Regular.ttf in Zygote for improving app launch performance.
+-        preloadFontFile("/system/fonts/Roboto-Regular.ttf");
+-        preloadFontFile("/system/fonts/RobotoStatic-Regular.ttf");
+-
+-        String locale = SystemProperties.get("persist.sys.locale", "en-US");
+-        String script = ULocale.addLikelySubtags(ULocale.forLanguageTag(locale)).getScript();
+-
+-        // The feature flag cannot be referred from Zygote. Use legacy fonts.xml for preloading font
+-        // files.
+-        // TODO(nona): Use new XML file once the feature is fully launched.
+-        FontConfig config = SystemFonts.getSystemPreinstalledFontConfigFromLegacyXml();
+-        for (int i = 0; i < config.getFontFamilies().size(); ++i) {
+-            FontConfig.FontFamily family = config.getFontFamilies().get(i);
+-            if (!family.getLocaleList().isEmpty()) {
+-                nativeRegisterLocaleList(family.getLocaleList().toLanguageTags());
+-            }
+-            boolean loadFamily = false;
+-            for (int j = 0; j < family.getLocaleList().size(); ++j) {
+-                String fontScript = ULocale.addLikelySubtags(
+-                        ULocale.forLocale(family.getLocaleList().get(j))).getScript();
+-                loadFamily = fontScript.equals(script);
+-                if (loadFamily) {
+-                    break;
+-                }
+-            }
+-            if (loadFamily) {
+-                for (int j = 0; j < family.getFontList().size(); ++j) {
+-                    preloadFontFile(family.getFontList().get(j).getFile().getAbsolutePath());
+-                }
+-            }
+-        }
++        loadPreinstalledSystemFontMap();
+     }
+ 
+     private static void preloadFontFile(String filePath) {
+@@ -1766,11 +1701,19 @@
+ 
+     /** @hide */
+     public static void loadPreinstalledSystemFontMap() {
+-        final FontConfig fontConfig = SystemFonts.getSystemPreinstalledFontConfig();
+-        final Map<String, FontFamily[]> fallback = SystemFonts.buildSystemFallback(fontConfig);
+-        final Map<String, Typeface> typefaceMap =
+-                SystemFonts.buildSystemTypefaces(fontConfig, fallback);
+-        setSystemFontMap(typefaceMap);
++        synchronized (SYSTEM_FONT_MAP_LOCK) {
++            if (sDefaultTypeface != null) return;
++            Map<String, Typeface> families = new ArrayMap<>();
++            String[] names = {"sans-serif", "serif", "monospace", "system-ui",
++                    "sans-serif-thin", "sans-serif-light", "sans-serif-medium",
++                    "sans-serif-bold", "sans-serif-black", "sans-serif-condensed"};
++            int[] weights = {400, 400, 400, 400, 100, 300, 500, 700, 900, 400};
++            for (int i = 0; i < names.length; ++i) {
++                String name = names[i];
++                families.put(name, new Typeface(nCreateHostFamily(name, weights[i], false), name));
++            }
++            setSystemFontMap(families);
++        }
+     }
+ 
+     /**

@@ -100,6 +100,7 @@ class SurfaceFlingerCompositor {
   bind(backend) {
     this.backend = backend;
     this.renderer = new DisplayListRenderer(this.memory, this.scene, backend, this);
+    this.renderer.atlas.calibrateFonts(this.memory, this.scene);
     if (backend.lost) {
       backend.device.addEventListener('uncapturederror', event => {
         if (!this.closed && this.backend === backend) {

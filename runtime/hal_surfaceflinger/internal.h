@@ -1,7 +1,7 @@
 #ifndef WA_SURFACEFLINGER_INTERNAL_H
 #define WA_SURFACEFLINGER_INTERNAL_H
 
-#include "wasmandroid/surfaceflinger.h"
+#include "font_advances.h"
 
 #include <stddef.h>
 
@@ -46,6 +46,7 @@ struct wa_sf {
     wa_input_ring_t input;
     wa_sf_vsync_t vsync;
     wa_font_metric_t fonts[WA_FONT_FACE_COUNT][WA_FONT_WEIGHT_COUNT];
+    wa_font_advances_t advances[WA_FONT_FACE_COUNT][WA_FONT_WEIGHT_COUNT];
     wa_codec_requests_t codec_requests;
     wa_codec_events_t codec_events;
     wa_webview_requests_t webview_requests;

@@ -1,4 +1,5 @@
-#include "native_methods.h"
+#include "native_graphics.h"
+#include "software_raster.h"
 
 #include <algorithm>
 #include <cmath>
@@ -298,9 +299,60 @@ jfloatArray ParsePathData(JNIEnv* env, jclass, jstring text) {
 
 } // namespace
 
+#include "path_geometry.inc"
+
 void RegisterPath(interp::Vm& vm) {
-    Register(vm, "android/graphics/Path",
-             Method<ParsePathData>(vm, "nativeParsePathData", "(Ljava/lang/String;)[F"));
+    constexpr const char* name = "android/graphics/Path";
+    if (!RegisterIfDeclared(vm, name, Method<InitPath>(vm, "nInit", "()J"))) {
+        Register(vm, name, Method<ParsePathData>(vm, "nativeParsePathData", "(Ljava/lang/String;)[F"));
+        return;
+    }
+    Register(vm, name, Method<NewPath>(vm, "nInit", "(J)J"),
+             Method<RetainPeer<PathGeometry, &State::paths>>(vm, "nRegisterNativeAllocation",
+                                                             "(Landroid/graphics/Path;J)V"),
+             Method<PathFinalizer>(vm, "nGetFinalizer", "()J"),
+             Method<SetPath>(vm, "nSet", "(JJ)V"),
+             Method<ResetPath>(vm, "nReset", "(J)V"),
+             Method<ResetPath>(vm, "nRewind", "(J)V"),
+             Method<IsPathEmpty>(vm, "nIsEmpty", "(J)Z"),
+             Method<PathConvex>(vm, "nIsConvex", "(J)Z"),
+             Method<IsPathRect>(vm, "nIsRect", "(JLandroid/graphics/RectF;)Z"),
+             Method<PathBounds>(vm, "nComputeBounds", "(JLandroid/graphics/RectF;)V"),
+             Method<ReservePath>(vm, "nIncReserve", "(JI)V"),
+             Method<GetFillType>(vm, "nGetFillType", "(J)I"),
+             Method<SetFillType>(vm, "nSetFillType", "(JI)V"),
+             Method<PathGeneration>(vm, "nGetGenerationID", "(J)I"),
+             Method<EditPath<&PathGeometry::Move, false, jfloat, jfloat>>(vm, "nMoveTo", "(JFF)V"),
+             Method<EditPath<&PathGeometry::Move, true, jfloat, jfloat>>(vm, "nRMoveTo", "(JFF)V"),
+             Method<EditPath<&PathGeometry::Line, false, jfloat, jfloat>>(vm, "nLineTo", "(JFF)V"),
+             Method<EditPath<&PathGeometry::Line, true, jfloat, jfloat>>(vm, "nRLineTo", "(JFF)V"),
+             Method<EditPath<&PathGeometry::Quad, false, jfloat, jfloat, jfloat, jfloat>>(vm, "nQuadTo", "(JFFFF)V"),
+             Method<EditPath<&PathGeometry::Quad, true, jfloat, jfloat, jfloat, jfloat>>(vm, "nRQuadTo", "(JFFFF)V"),
+             Method<AddConic<false>>(vm, "nConicTo", "(JFFFFF)V"),
+             Method<AddConic<true>>(vm, "nRConicTo", "(JFFFFF)V"),
+             Method<EditPath<&PathGeometry::Cubic, false, jfloat, jfloat, jfloat, jfloat, jfloat, jfloat>>(vm, "nCubicTo", "(JFFFFFF)V"),
+             Method<EditPath<&PathGeometry::Cubic, true, jfloat, jfloat, jfloat, jfloat, jfloat, jfloat>>(vm, "nRCubicTo", "(JFFFFFF)V"),
+             Method<ArcPath>(vm, "nArcTo", "(JFFFFFFZ)V"),
+             Method<EditPath<&PathGeometry::Close>>(vm, "nClose", "(J)V"),
+             Method<AddShape<&PathGeometry::Rect>>(vm, "nAddRect", "(JFFFFI)V"),
+             Method<AddShape<&PathGeometry::Oval>>(vm, "nAddOval", "(JFFFFI)V"),
+             Method<AddCircle>(vm, "nAddCircle", "(JFFFI)V"),
+             Method<AddArc>(vm, "nAddArc", "(JFFFFFF)V"),
+             Method<AddRoundRect>(vm, "nAddRoundRect", "(JFFFFFFI)V"),
+             Method<AddRoundRectArray>(vm, "nAddRoundRect", "(JFFFF[FI)V"),
+             Method<AddPath>(vm, "nAddPath", "(JJ)V"),
+             Method<AddPathOffset>(vm, "nAddPath", "(JJFF)V"),
+             Method<AddPathMatrix>(vm, "nAddPath", "(JJJ)V"),
+             Method<OffsetPath>(vm, "nOffset", "(JFF)V"),
+             Method<SetLastPoint>(vm, "nSetLastPoint", "(JFF)V"),
+             Method<TransformPathTo>(vm, "nTransform", "(JJJ)V"),
+             Method<TransformPath>(vm, "nTransform", "(JJ)V"),
+             Method<PathOp>(vm, "nOp", "(JJIJ)Z"),
+             Method<ApproximatePath>(vm, "nApproximate", "(JF)[F"),
+             Method<InterpolatePath>(vm, "nInterpolate", "(JJFJ)Z"),
+             Method<PathInterpolatable>(vm, "nIsInterpolatable", "(JJ)Z"),
+             Method<PathFromData>(vm, "nCreateFromPathData", "(Ljava/lang/String;)J"));
+    RegisterIfDeclared(vm, name, Method<ParsePathData>(vm, "nativeParsePathData", "(Ljava/lang/String;)[F"));
 }
 
 } // namespace wa::ui_jni::detail
