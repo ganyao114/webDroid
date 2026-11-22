@@ -153,7 +153,7 @@ export class LauncherHost {
     const active = () => this.#phase === 'launcher';
     const writer = {
       write: (kind, action, time, pointer, key, meta, x, y, ...rest) => {
-        if (this.#phase === 'app' && kind === Input.MOTION && action <= Action.CANCEL) {
+        if (this.#active && kind === Input.MOTION && action <= Action.CANCEL) {
           try {
             const nav = session.abi.touchNavigation(action, time, x, y);
             if (nav === androidHome) this.navigate('home');
@@ -279,6 +279,7 @@ export class LauncherHost {
   pixels() { return this.#session.compositor.pixels(); }
   state() { return this.#session?.ready ? this.#session.abi.state() : null; }
   labels() { return this.#session?.ready ? sceneLabels(this.#module, this.#session.scene) : []; }
+  appLabels() { return this.#active?.foreground.labels() ?? []; }
 
   installApk(filename, bytes) {
     if (!this.#session?.ready) throw new Error('Launcher3 is still starting');
@@ -370,9 +371,16 @@ export class LauncherHost {
     const active = this.#active;
     this.#active = undefined;
     if (!active) return;
-    const closed = Promise.resolve(active.foreground.close()).catch(error => this.onError?.(error));
-    this.#retiring.add(closed);
-    void closed.finally(() => this.#retiring.delete(closed));
+    try {
+      const shutdown = active.foreground.close();
+      if (shutdown) {
+        const closed = shutdown.catch(error => this.onError?.(error));
+        this.#retiring.add(closed);
+        void closed.finally(() => this.#retiring.delete(closed));
+      }
+    } catch (error) {
+      this.onError?.(error);
+    }
   }
 
   #returnHome() {

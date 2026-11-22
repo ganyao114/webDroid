@@ -19,39 +19,13 @@ foreach(tool IN ITEMS aapt2 zipalign apksigner)
         CACHE FILEPATH "SDK 36 ${tool}")
 endforeach()
 
-set(builder "${wa_root}/tools/aosp/build_upstream_systemui.py")
-set(patches "${wa_root}/patches/aosp17/systemui")
-file(GLOB patch_files CONFIGURE_DEPENDS "${patches}/*.patch")
-file(GLOB_RECURSE resource_files CONFIGURE_DEPENDS LIST_DIRECTORIES false
-    "${AOSP17_SOURCE_DIR}/frameworks/base/packages/SystemUI/res/*"
-    "${AOSP17_SOURCE_DIR}/frameworks/base/packages/SystemUI/res-keyguard/*"
-    "${AOSP17_SOURCE_DIR}/frameworks/base/packages/SystemUI/res-product/*"
-    "${AOSP17_SOURCE_DIR}/frameworks/base/packages/SettingsLib/res/*"
-    "${AOSP17_SOURCE_DIR}/frameworks/base/core/res/res/values*/config.xml"
-    "${AOSP17_SOURCE_DIR}/frameworks/base/core/res/res/values*/dimens.xml"
-    "${AOSP17_SOURCE_DIR}/frameworks/libs/systemui/dynamiccolors/res/*")
-file(GLOB kotlin_compiler_files CONFIGURE_DEPENDS "${WA_SYSTEMUI_DEPS_DIR}/kotlinc/*.jar")
-
-set(output "${CMAKE_CURRENT_BINARY_DIR}/apk")
-set(apk "${output}/SystemUI-upstream.apk")
-set(provenance "${output}/systemui_provenance.json")
 get_target_property(framework_dex aosp17_framework_core WA_FRAMEWORK_DEX)
 get_target_property(framework_jar aosp17_framework_core WA_FRAMEWORK_CLASSES)
-set(build_command
-    "${Python3_EXECUTABLE}" "${builder}" --aosp-root "${AOSP17_SOURCE_DIR}"
-    --deps-dir "${WA_SYSTEMUI_DEPS_DIR}" --out-dir "${output}"
-    --java "${WA_JAVA_EXECUTABLE}" --javac "${WA_JAVAC_EXECUTABLE}"
-    --aapt2 "${WA_AAPT2_EXECUTABLE}" --d8 "${WA_D8_EXECUTABLE}"
-    --zipalign "${WA_ZIPALIGN_EXECUTABLE}" --apksigner "${WA_APKSIGNER_EXECUTABLE}"
-    --android-jar "${WA_ANDROID_JAR}")
-add_custom_command(OUTPUT "${apk}" "${provenance}"
-    COMMAND ${build_command} --depfile "${output}/systemui.d"
-    DEPENDS "${builder}" "${patches}/sources.txt" "${patches}/resources.txt"
-        ${patch_files} ${resource_files} ${kotlin_compiler_files}
-    DEPFILE "${output}/systemui.d"
-    COMMENT "Compiling and signing the upstream SystemUI phone bars"
-    VERBATIM)
-add_custom_target(aosp17_systemui_apk ALL DEPENDS "${apk}" "${provenance}")
+if(NOT TARGET wa_upstream_systemui_apk)
+    set(wa_launcher_output "${CMAKE_CURRENT_BINARY_DIR}/apk")
+    include("${wa_root}/runtime/android_system/UpstreamLauncher.cmake")
+endif()
+set(apk "${WA_SYSTEMUI_APK}")
 
 cmake_path(CONVERT "${framework_jar};${WA_ANDROID_JAR}" TO_NATIVE_PATH_LIST fixture_classpath)
 set(fixture "${CMAKE_CURRENT_BINARY_DIR}/render-fixture")
@@ -76,7 +50,7 @@ add_custom_command(OUTPUT "${fixture_apk}" "${fixture_dex}"
 add_custom_target(m10_systemui_render_fixture DEPENDS "${fixture_apk}" "${fixture_dex}")
 
 add_executable(test_m10_upstream_systemui test_systemui.cpp)
-add_dependencies(test_m10_upstream_systemui aosp17_systemui_apk m10_systemui_render_fixture)
+add_dependencies(test_m10_upstream_systemui wa_upstream_systemui_apk m10_systemui_render_fixture)
 target_link_libraries(test_m10_upstream_systemui PRIVATE aosp17_ui_jni aosp17_libandroidfw)
 
 if(EMSCRIPTEN)
@@ -93,15 +67,17 @@ if(EMSCRIPTEN)
         -sSTACK_SIZE=2097152 "-sEXPORTED_RUNTIME_METHODS=FS,callMain")
     set(run_systemui_test "${WA_NODE_EXECUTABLE}" "${CMAKE_CURRENT_LIST_DIR}/run_wasm.mjs"
         "$<TARGET_FILE:test_m10_upstream_systemui>")
+    set(runtime_test test_m10_upstream_systemui_wasm)
 else()
     set(run_systemui_test "$<TARGET_FILE:test_m10_upstream_systemui>")
+    set(runtime_test m10_systemui_runtime)
 endif()
 
-add_test(NAME m10_systemui_reproducible COMMAND ${build_command} --check)
+add_test(NAME m10_systemui_reproducible COMMAND ${wa_build_systemui} --check)
 add_test(NAME m10_systemui_zipaligned COMMAND "${WA_ZIPALIGN_EXECUTABLE}" -c -P 16 4 "${apk}")
 add_test(NAME m10_systemui_signed COMMAND "${WA_APKSIGNER_EXECUTABLE}" verify "${apk}")
 add_test(NAME m10_systemui_resources COMMAND ${run_systemui_test} resources "${apk}")
 add_test(NAME m10_systemui_dex COMMAND ${run_systemui_test} dex "${apk}")
-add_test(NAME m10_systemui_runtime COMMAND ${run_systemui_test} runtime "${apk}" "${framework_dex}"
+add_test(NAME ${runtime_test} COMMAND ${run_systemui_test} runtime "${apk}" "${framework_dex}"
     "${WA_ANDROID_JAR}" "${fixture_apk}" "${fixture_dex}")
-set_tests_properties(m10_systemui_runtime PROPERTIES RUN_SERIAL TRUE)
+set_tests_properties(${runtime_test} PROPERTIES RUN_SERIAL TRUE)

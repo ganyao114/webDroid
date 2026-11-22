@@ -2,6 +2,7 @@ import { encoder, Memory } from '../surfaceflinger/abi.mjs';
 import { createSurfaceFlingerCompositor } from '../surfaceflinger/compositor.mjs';
 import { attachAndroidInput } from '../surfaceflinger/input_ime.mjs';
 import { frameTimeNs } from './abi_helpers.mjs';
+import { sceneLabels } from './scene_labels.mjs';
 
 const textCapacity = 16 * 1024;
 const busy = -16;
@@ -125,6 +126,7 @@ export class ForegroundJavaApk {
   #size;
   #state;
   #tap;
+  #shutdown;
   #closed = false;
   #finishPending = false;
   #ready = false;
@@ -143,6 +145,7 @@ export class ForegroundJavaApk {
     if (assets.fallbackDex) abi.load('load_framework_fallback_dex', assets.fallbackDex);
     abi.load('set_framework_res_apk', assets.resources);
     for (const [name, data] of packages ?? []) {
+      // boot_apk adds the active APK to the catalog with its application resources.
       if (name !== launch.apkName) abi.install(name, data);
     }
     abi.boot(launch.apkName, bytes, launch.activity);
@@ -153,6 +156,7 @@ export class ForegroundJavaApk {
     const host = this.#host = doc.createElement('div');
     Object.assign(host.style, { position: 'absolute', inset: '0', overflow: 'hidden' });
     const canvas = doc.createElement('canvas');
+    canvas.tabIndex = 0;
     canvas.setAttribute('aria-label', launch.label || launch.activity);
     Object.assign(canvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', objectFit: 'fill' });
     host.append(canvas);
@@ -213,22 +217,32 @@ export class ForegroundJavaApk {
 
   stats() { return { ...this.#compositor?.stats(), ...this.#state }; }
 
+  labels() { return this.#ready && !this.#closed ? sceneLabels(this.#abi.module, this.#abi.scene) : []; }
+
   holdFrame() { this.#compositor?.stop(); }
 
   close() {
+    if (this.#closed) return this.#shutdown;
     this.#closed = true;
     this.#host?.remove();
-    this.#input?.dispose();
-    if (this.#creating) return this.#creating.catch(() => {}).then(() => this.#dispose());
+    if (this.#creating) {
+      this.#shutdown = this.#creating.catch(() => {}).then(() => this.#dispose());
+      return this.#shutdown;
+    }
     this.#dispose();
   }
 
   #dispose() {
+    const abi = this.#abi, compositor = this.#compositor, input = this.#input;
+    this.#abi = this.#compositor = this.#input = this.#host = this.#state = this.#tap = undefined;
     try {
-      this.#compositor?.dispose();
+      input?.dispose();
     } finally {
-      this.#abi?.dispose();
-      this.#abi = this.#compositor = this.#input = this.#host = undefined;
+      try {
+        compositor?.dispose();
+      } finally {
+        abi?.dispose();
+      }
     }
   }
 }

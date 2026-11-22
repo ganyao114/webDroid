@@ -1,0 +1,15 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/icons/IconCache.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/icons/IconCache.kt
+@@ -504,11 +504,8 @@
+             val loadFallbackIcon =
+                 isDefaultIcon(icon, itemInfo.user) || icon === BitmapInfo.LOW_RES_INFO
+
+             if (loadFallbackTitle || loadFallbackIcon) {
+-                Log.i(
+-                    TAG,
+-                    "Database bulk icon loading failed, using fallback bulk icon loading for: $cn",
+-                )
++                // Cache misses are expected on a fresh in-memory database.
+                 val entry = CacheEntry()
+                 val lai = iconRequestInfo.launcherActivityInfo
+

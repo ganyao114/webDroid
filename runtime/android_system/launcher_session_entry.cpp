@@ -737,114 +737,138 @@ int32_t wa_system_launcher_load_systemui_apk(const char* name, const uint8_t* by
     });
 }
 
+namespace {
+
+int32_t StageLauncherApk(Session& s, const char* name, const uint8_t* bytes, size_t length) {
+    if (s.booted) return WA_ERR_BUSY;
+    if (!name || !*name || !bytes || !length) return WA_ERR_INVALID;
+    if (s.framework_dex.empty() || s.fallback_dex.empty())
+        throw std::invalid_argument("Load the core and upstream framework DEX files first");
+    if (!s.framework_resource || !s.systemui_apk)
+        throw std::invalid_argument("Load framework resources and SystemUI-upstream.apk first");
+    LauncherPackage package;
+    auto status = wa::system::ReadLauncherPackage({bytes, length}, s.locale.c_str(),
+                                                 s.display.density_dpi, package);
+    if (status != WA_OK) return status;
+    if (package.package != kPackage || !std::ranges::any_of(package.activities, [](const auto& activity) {
+            return activity.name == kActivity && activity.enabled && activity.exported &&
+                std::ranges::any_of(activity.filters, [](const auto& filter) {
+                    return Contains(filter.actions, kMain) && Contains(filter.categories, kHome);
+                });
+        })) return WA_ERR_INVALID;
+    s.launcher_apk = std::make_unique<MountedApk>(std::span(bytes, length));
+    return WA_OK;
+}
+
+int32_t BootLauncher(Session& s) {
+    if (s.booted) return WA_ERR_BUSY;
+    if (!s.launcher_apk) throw std::invalid_argument("Mount Launcher3-upstream.apk first");
+    const auto start = Clock::now();
+    auto apk = std::move(s.launcher_apk);
+    if (!s.runtime) {
+        auto next = std::make_unique<LauncherRuntime>();
+        next->vm.LoadDexFile("aosp17_framework_core.dex", s.framework_dex);
+        next->vm.LoadFallbackDexFile("aosp17_upstream_framework.dex", s.fallback_dex);
+        s.runtime = std::move(next);
+    }
+    auto& [vm, ui, system_ui] = *s.runtime;
+    size_t dex_count = 0, class_count = 0;
+    double dex_load_ms;
+    try {
+        vm.LoadDexFile("LauncherSystemUi.dex", {std::begin(kLauncherSystemUiDex), std::end(kLauncherSystemUiDex)});
+        const auto dex_start = Clock::now();
+        vm.LoadApkDexFiles(apk->path());
+        dex_load_ms = ElapsedMs(dex_start);
+        const auto launcher_prefix = std::string(apk->path()) + '!';
+        for (const auto& dex : vm.GetDexStats().files) {
+            if (!dex.location.starts_with(launcher_prefix)) continue;
+            ++dex_count;
+            class_count += dex.class_definitions;
+        }
+        if (!std::ranges::all_of(std::array{kLauncher, kLauncherApplication, kDagger},
+                [&](auto descriptor) { return vm.DexLocation(descriptor).starts_with(launcher_prefix); })) {
+            throw std::runtime_error("Expected an upstream Launcher3 APK with LauncherApplication and Dagger");
+        }
+        const std::string systemui_path = s.systemui_apk->path();
+        vm.LoadApkDexFiles(systemui_path, /*fallback=*/true);
+        if (!vm.DexLocation(kStatusBar).starts_with(systemui_path + '!'))
+            throw std::runtime_error("PhoneStatusBarView was not loaded from the SystemUI APK");
+        ui.RegisterNatives(vm);
+        ui.BindSurfaceFlinger(s.sf.get(), kLauncherLayer);
+        ui.SetFrameDecorator([&s](auto* sf, const auto& tick, const auto&) {
+            return s.decor.Draw(sf, tick);
+        });
+        ui.SetPackageCallbacks({
+            .query_activities = [&s](const auto& request) { return s.Query(request); },
+            .get_application = [&s](auto name, uint64_t flags, int32_t user) -> std::optional<PackageActivity> {
+                const auto app = s.apps.find(name);
+                if (user || app == s.apps.end() || (!app->second.info.enabled && !(flags & kMatchDisabled)))
+                    return std::nullopt;
+                return app->second.Describe();
+            },
+            .start_activity = [&s](const auto& request) { return s.Launch(request); },
+        });
+        ui.LaunchActivity(vm, {.apk_path = apk->path(), .class_name = kActivity, .locale = s.locale,
+            .density_dpi = static_cast<int>(s.display.density_dpi),
+            .width = static_cast<int>(s.display.viewport_w), .height = static_cast<int>(s.display.viewport_h),
+            .framework_resource_apk = s.framework_resource->path()});
+        system_ui.Mount(s.Activity(), s.systemui_apk->path(), s.locale.c_str(), s.display);
+        wa::interp::ScopedHandleScope roots(vm);
+        auto* activity = roots.Hold(s.Activity());
+        auto* workspace = roots.Hold(vm.CallVirtual(activity, "getWorkspace",
+            "()Lcom/android/launcher3/Workspace;").ref());
+        auto* model = roots.Hold(vm.CallVirtual(activity, "getModel",
+            "()Lcom/android/launcher3/LauncherModel;").ref());
+        // Drain ready model callbacks before reporting HOME as booted.
+        bool loaded = false;
+        for (int attempt = 0; attempt < 8 && !loaded; ++attempt) {
+            const auto status = s.Draw(0, false);
+            if (status != WA_OK)
+                throw std::runtime_error("Launcher3 initial frame failed (" + std::to_string(status) + ")");
+            loaded = vm.CallVirtual(model, "isModelLoaded", "()Z").i() &&
+                     !vm.CallVirtual(activity, "isWorkspaceLoading", "()Z").i();
+        }
+        if (!loaded || !s.app_commands || vm.CallVirtual(workspace, "getChildCount", "()I").i() == 0)
+            throw std::runtime_error("Launcher3 did not bind its workspace");
+        vm.Collect();
+    } catch (const wa::interp::ManagedException&) {
+        const auto error = GuestError(vm);
+        vm.ClearException();
+        try { s.runtime->Close(); } catch (...) {}
+        s.runtime.reset();
+        s.frame_pending = false;
+        throw std::runtime_error(error);
+    } catch (...) {
+        try { s.runtime->Close(); } catch (...) {}
+        s.runtime.reset();
+        s.frame_pending = false;
+        throw;
+    }
+    s.launcher_apk = std::move(apk);
+    s.launcher_dex_files = dex_count;
+    s.launcher_class_definitions = class_count;
+    s.launcher_dex_load_ms = dex_load_ms;
+    s.boot_ms = ElapsedMs(start);
+    s.booted = true;
+    std::vector<uint8_t>().swap(s.framework_dex);
+    std::vector<uint8_t>().swap(s.fallback_dex);
+    return WA_OK;
+}
+
+}  // namespace
+
+int32_t wa_system_launcher_stage_apk(const char* name, const uint8_t* bytes, size_t length) {
+    return Active("Mount Launcher3 APK", [&](Session& s) { return StageLauncherApk(s, name, bytes, length); });
+}
+
+int32_t wa_system_launcher_boot_staged_apk() {
+    return Active("Boot Launcher3", BootLauncher);
+}
+
 int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size_t length) {
-    return Active("Boot Launcher3", [&](Session& s) -> int32_t {
-        if (s.booted) return WA_ERR_BUSY;
-        if (!name || !*name || !bytes || !length) return WA_ERR_INVALID;
-        if (s.framework_dex.empty() || s.fallback_dex.empty())
-            throw std::invalid_argument("Load the core and upstream framework DEX files first");
-        if (!s.framework_resource || !s.systemui_apk)
-            throw std::invalid_argument("Load framework resources and SystemUI-upstream.apk first");
-        const auto start = Clock::now();
-        LauncherPackage package;
-        auto status = wa::system::ReadLauncherPackage({bytes, length}, s.locale.c_str(),
-                                                     s.display.density_dpi, package);
-        if (status != WA_OK) return status;
-        if (package.package != kPackage || !std::ranges::any_of(package.activities, [](const auto& activity) {
-                return activity.name == kActivity && activity.enabled && activity.exported &&
-                    std::ranges::any_of(activity.filters, [](const auto& filter) {
-                        return Contains(filter.actions, kMain) && Contains(filter.categories, kHome);
-                    });
-            })) return WA_ERR_INVALID;
-        auto apk = std::make_unique<MountedApk>(std::span(bytes, length));
-        if (!s.runtime) {
-            auto next = std::make_unique<LauncherRuntime>();
-            next->vm.LoadDexFile("aosp17_framework_core.dex", s.framework_dex);
-            next->vm.LoadFallbackDexFile("aosp17_upstream_framework.dex", s.fallback_dex);
-            s.runtime = std::move(next);
-        }
-        auto& [vm, ui, system_ui] = *s.runtime;
-        size_t dex_count = 0, class_count = 0;
-        double dex_load_ms;
-        try {
-            vm.LoadDexFile("LauncherSystemUi.dex", {std::begin(kLauncherSystemUiDex), std::end(kLauncherSystemUiDex)});
-            const auto dex_start = Clock::now();
-            vm.LoadApkDexFiles(apk->path());
-            dex_load_ms = ElapsedMs(dex_start);
-            const auto launcher_prefix = std::string(apk->path()) + '!';
-            for (const auto& dex : vm.GetDexStats().files) {
-                if (!dex.location.starts_with(launcher_prefix)) continue;
-                ++dex_count;
-                class_count += dex.class_definitions;
-            }
-            if (!std::ranges::all_of(std::array{kLauncher, kLauncherApplication, kDagger},
-                    [&](auto descriptor) { return vm.DexLocation(descriptor).starts_with(launcher_prefix); })) {
-                throw std::runtime_error("Expected an upstream Launcher3 APK with LauncherApplication and Dagger");
-            }
-            const std::string systemui_path = s.systemui_apk->path();
-            vm.LoadApkDexFiles(systemui_path, /*fallback=*/true);
-            if (!vm.DexLocation(kStatusBar).starts_with(systemui_path + '!'))
-                throw std::runtime_error("PhoneStatusBarView was not loaded from the SystemUI APK");
-            ui.RegisterNatives(vm);
-            ui.BindSurfaceFlinger(s.sf.get(), kLauncherLayer);
-            ui.SetFrameDecorator([&s](auto* sf, const auto& tick, const auto&) {
-                return s.decor.Draw(sf, tick);
-            });
-            ui.SetPackageCallbacks({
-                .query_activities = [&s](const auto& request) { return s.Query(request); },
-                .get_application = [&s](auto name, uint64_t flags, int32_t user) -> std::optional<PackageActivity> {
-                    const auto app = s.apps.find(name);
-                    if (user || app == s.apps.end() || (!app->second.info.enabled && !(flags & kMatchDisabled)))
-                        return std::nullopt;
-                    return app->second.Describe();
-                },
-                .start_activity = [&s](const auto& request) { return s.Launch(request); },
-            });
-            ui.LaunchActivity(vm, {.apk_path = apk->path(), .class_name = kActivity, .locale = s.locale,
-                .density_dpi = static_cast<int>(s.display.density_dpi),
-                .width = static_cast<int>(s.display.viewport_w), .height = static_cast<int>(s.display.viewport_h),
-                .framework_resource_apk = s.framework_resource->path()});
-            system_ui.Mount(s.Activity(), s.systemui_apk->path(), s.locale.c_str(), s.display);
-            wa::interp::ScopedHandleScope roots(vm);
-            auto* activity = roots.Hold(s.Activity());
-            auto* workspace = roots.Hold(vm.CallVirtual(activity, "getWorkspace",
-                "()Lcom/android/launcher3/Workspace;").ref());
-            auto* model = roots.Hold(vm.CallVirtual(activity, "getModel",
-                "()Lcom/android/launcher3/LauncherModel;").ref());
-            // Drain ready model callbacks before reporting HOME as booted.
-            bool loaded = false;
-            for (int attempt = 0; attempt < 8 && !loaded; ++attempt) {
-                status = s.Draw(0, false);
-                if (status != WA_OK)
-                    throw std::runtime_error("Launcher3 initial frame failed (" + std::to_string(status) + ")");
-                loaded = vm.CallVirtual(model, "isModelLoaded", "()Z").i() &&
-                         !vm.CallVirtual(activity, "isWorkspaceLoading", "()Z").i();
-            }
-            if (!loaded || !s.app_commands || vm.CallVirtual(workspace, "getChildCount", "()I").i() == 0)
-                throw std::runtime_error("Launcher3 did not bind its workspace");
-            vm.Collect();
-        } catch (const wa::interp::ManagedException&) {
-            const auto error = GuestError(vm);
-            vm.ClearException();
-            try { s.runtime->Close(); } catch (...) {}
-            s.runtime.reset();
-            s.frame_pending = false;
-            throw std::runtime_error(error);
-        } catch (...) {
-            try { s.runtime->Close(); } catch (...) {}
-            s.runtime.reset();
-            s.frame_pending = false;
-            throw;
-        }
-        s.launcher_apk = std::move(apk);
-        s.launcher_dex_files = dex_count;
-        s.launcher_class_definitions = class_count;
-        s.launcher_dex_load_ms = dex_load_ms;
-        s.boot_ms = ElapsedMs(start);
-        s.booted = true;
-        std::vector<uint8_t>().swap(s.framework_dex);
-        std::vector<uint8_t>().swap(s.fallback_dex);
-        return WA_OK;
+    return Active("Boot Launcher3", [&](Session& s) {
+        const auto status = StageLauncherApk(s, name, bytes, length);
+        return status == WA_OK ? BootLauncher(s) : status;
     });
 }
 

@@ -74,22 +74,11 @@ add_custom_command(OUTPUT "${m11_compressed}" "${m11_invalid}"
     VERBATIM)
 add_custom_target(m11_dex_archives DEPENDS "${m11_compressed}" "${m11_invalid}")
 add_dependencies(test_m11_upstream_launcher3_runtime m11_dex_archives)
-set(m11_test_apps "${CMAKE_CURRENT_BINARY_DIR}/apps")
-set(m11_app_builder "${m11_repo}/tests/m9_aosp17_launcher3_boot/build_apps.py")
-set(WA_AAPT2_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/aapt2" CACHE FILEPATH "SDK 36 aapt2")
-set(m11_test_apks)
-foreach(m11_app IN ITEMS settings browser gallery calculator clock)
-    list(APPEND m11_test_apks "${m11_test_apps}/${m11_app}.apk")
-endforeach()
-add_custom_command(OUTPUT ${m11_test_apks}
-    COMMAND "${Python3_EXECUTABLE}" "${m11_app_builder}"
-        --out "${m11_test_apps}" --aapt2 "${WA_AAPT2_EXECUTABLE}" --android-jar "${WA_ANDROID_JAR}"
-        --javac "${WA_JAVAC_EXECUTABLE}" --d8 "${WA_D8_EXECUTABLE}"
-    DEPENDS "${m11_app_builder}" "${WA_AAPT2_EXECUTABLE}" "${WA_ANDROID_JAR}"
-        "${WA_JAVAC_EXECUTABLE}" "${WA_D8_EXECUTABLE}"
-    VERBATIM)
-add_custom_target(m11_upstream_launcher3_test_apks DEPENDS ${m11_test_apks})
-add_dependencies(test_m11_upstream_launcher3_runtime m11_upstream_launcher3_test_apks)
+if(NOT TARGET wa_upstream_builtin_apps)
+    include("${m11_repo}/runtime/android_system/UpstreamLauncher.cmake")
+endif()
+get_target_property(m11_test_apps wa_upstream_builtin_apps WA_BUILTIN_APPS_DIR)
+add_dependencies(test_m11_upstream_launcher3_runtime wa_upstream_builtin_apps)
 if(m11_dependencies)
     add_dependencies(test_m11_upstream_launcher3_runtime ${m11_dependencies})
 endif()
@@ -116,7 +105,8 @@ endif()
 foreach(m11_mode IN ITEMS load-verified load-trusted execute activity)
     set(m11_activity_args)
     if(m11_mode STREQUAL "activity")
-        set(m11_activity_args --browser "${m11_test_apps}/browser.apk" --gallery "${m11_test_apps}/gallery.apk")
+        set(m11_activity_args --browser "${m11_test_apps}/Browser2-upstream.apk"
+            --clock "${m11_test_apps}/DeskClock-upstream.apk")
     endif()
     add_test(NAME m11_upstream_launcher3_${m11_mode} COMMAND ${m11_test_command}
         "${m11_mode}" --apk "${m11_apk}" --core "${m11_core_dex}"

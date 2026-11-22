@@ -13,7 +13,7 @@ ctest --test-dir build-w14-host -R '^test_m14_upstream_apps$' --output-on-failur
 
 emcmake cmake -S . -B build-w14-wasm -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 cmake --build build-w14-wasm --target m14_upstream_apps_test_inputs
-ctest --test-dir build-w14-wasm -R '^test_m14_upstream_apps$' --output-on-failure
+ctest --test-dir build-w14-wasm -R '^test_m14_upstream_apps_wasm$' --output-on-failure
 ```
 
 `wa_upstream_builtin_apps` builds the APKs and provenance on their own. The APK driver copies tagged inputs to a temporary directory, applies the app patches there, and verifies the offline test signatures and ZIP alignment. Its report records the source revision, patch hashes and line counts, resource and source counts, and APK hashes and DEX counts. It reports missing dependency archives and exits nonzero if any requested APK fails.
@@ -22,13 +22,13 @@ ctest --test-dir build-w14-wasm -R '^test_m14_upstream_apps$' --output-on-failur
 python3 tools/aosp/build_upstream_apps.py --out-dir build/upstream-apps
 ```
 
-Use `--app Browser2 --app Music` for a subset. The native executable and the Wasm verifier take the core DEX, fallback DEX, framework resource APK, APK directory, and an optional list of app names. The Wasm verifier takes the generated `android_system.mjs` before those arguments. CTest runs all four by default.
+Use `--app Browser2 --app Music` for a subset. The native executable and the Wasm verifier take the core DEX, fallback DEX, framework resource APK, APK directory, and an optional list of app names. The Wasm verifier takes the generated `android_system.mjs` before those arguments. CTest also passes `--settings` and `--cube` APK paths to the Wasm verifier, which installs the six-package catalog in each Java session and verifies the Settings Apps and Display pages.
 
 DeskClock and Gallery2 use the cached Android-specific Lifecycle, Activity and SavedState artifacts also used for Launcher3. The default Gradle cache is `~/.gradle/caches/modules-2/files-2.1`. Pass `--gradle-cache` to the APK driver to use a different cache. The driver records the archive paths and hashes in the provenance report.
 
 ## Browser launch
 
-The M9 browser stager discovers the signed APKs in the build's `upstream-apps` directory and writes their filenames to `launcher-assets.json`. For manual staging, put the APKs beside the other assets and list their names in the manifest's `fixtures` array. The launcher reads the package icon and component from each APK. Each Java launch gets a distinct Wasm module and SurfaceFlinger scene for touch, IME, and display-list rendering. Browser2 uses the existing sandboxed iframe provider. Pages must allow framing under the embedding site's cross-origin policy.
+The M9 browser stager requires the signed Settings APK and all four signed APKs in the build's `upstream-apps` directory. The launcher reads the localized label, icon, and component from each APK. Browser2's launcher Activity uses the upstream “WebView Browser Tester” label in both English and Simplified Chinese. Each Java launch gets a distinct Wasm module and SurfaceFlinger scene for touch, IME, and display-list rendering. Browser2 uses the existing sandboxed iframe provider. Pages must allow framing under the embedding site's cross-origin policy.
 
 At this release tag, Music's Java launcher class is an empty upstream entry point. Its patch registers that class and inflates the upstream audio preview layout using the upstream `no_tracks_title` string when launched without a track.
 

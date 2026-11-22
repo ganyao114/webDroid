@@ -216,7 +216,8 @@ Object* FindText(Vm& vm, Object* node, std::string_view title, Object* text_clas
     return nullptr;
 }
 
-void CheckRuntime(const char* apk, const char* framework, const char* resources, uint32_t width, uint32_t height) {
+void CheckRuntime(const char* apk, const char* framework, const char* fallback, const char* resources,
+                  uint32_t width, uint32_t height) {
     Vm vm({.gc_interval = 4'096, .verify_dex = false, .capture_exception_stack = true});
     std::unique_ptr<wa_sf_t, decltype(&wa_sf_destroy)> sf(wa_sf_create(), wa_sf_destroy);
     Require(sf != nullptr, "Create SurfaceFlinger");
@@ -236,6 +237,7 @@ void CheckRuntime(const char* apk, const char* framework, const char* resources,
     });
     try {
         vm.LoadDexFile(framework);
+        vm.LoadFallbackDexFile(fallback);
         auto start = Clock::now();
         vm.LoadApkDexFiles(apk);
         const double load_ms = Milliseconds(start);
@@ -436,10 +438,10 @@ void CheckRuntime(const char* apk, const char* framework, const char* resources,
 
 int main(int argc, char** argv) {
     try {
-        Require(argc == 4, "Usage: test_m14_upstream_settings APK framework.dex framework-resources.apk");
+        Require(argc == 5, "Usage: test_m14_upstream_settings APK core.dex upstream.dex framework-resources.apk");
         CheckResources(argv[1]);
-        CheckRuntime(argv[1], argv[2], argv[3], 960, 660);
-        CheckRuntime(argv[1], argv[2], argv[3], 448, 896);
+        CheckRuntime(argv[1], argv[2], argv[3], argv[4], 960, 660);
+        CheckRuntime(argv[1], argv[2], argv[3], argv[4], 448, 896);
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Settings verification failed: " << error.what() << '\n';

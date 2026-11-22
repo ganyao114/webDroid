@@ -17,6 +17,10 @@
 #include <stdexcept>
 #include <utility>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/heap.h>
+#endif
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -314,13 +318,18 @@ struct Session {
             draw_commands, input_events, gc.live, gc.collections, dex_files, dex_classes,
             icon_resource, catalog.size(), vm.InterpretedMethodCount(activity_descriptor),
             vm.InterpretedMethodCount(application_descriptor), on_create, on_start, on_resume);
-        return std::string("{\"booted\":") + (booted ? "true" : "false") +
+        auto state = std::string("{\"booted\":") + (booted ? "true" : "false") +
             ",\"finishing\":" + (finishing ? "true" : "false") +
             ",\"imeFocused\":" + (ime_focused ? "true" : "false") +
             ",\"package\":" + Quote(package_name) + ",\"activity\":" + Quote(activity_class) +
             ",\"application\":" + Quote(application_class) +
             ",\"iconName\":" + Quote(icon_name) + ",\"iconLoaded\":" + (icon_loaded ? "true" : "false") +
-            numbers + "}";
+            numbers;
+#ifdef __EMSCRIPTEN__
+        state += ",\"wasmLinearBytes\":" + std::to_string(emscripten_get_heap_size()) +
+            ",\"wasmHeapEndBytes\":" + std::to_string(reinterpret_cast<uintptr_t>(sbrk(0)));
+#endif
+        return state + "}";
     }
 
     wa_sf_vsync_state_t display;

@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -72,12 +73,7 @@ struct Inputs {
     std::string framework;
     std::string framework_resources;
     std::string browser_apk;
-    std::string gallery_apk;
-};
-
-struct Fixture {
-    PackageActivity activity;
-    uint32_t icon_background;
+    std::string clock_apk;
 };
 
 void Require(bool condition, std::string_view message) {
@@ -94,7 +90,7 @@ Inputs ParseInputs(int argc, char** argv) {
         else if (flag == "--framework") inputs.framework = argv[index + 1];
         else if (flag == "--framework-resources") inputs.framework_resources = argv[index + 1];
         else if (flag == "--browser") inputs.browser_apk = argv[index + 1];
-        else if (flag == "--gallery") inputs.gallery_apk = argv[index + 1];
+        else if (flag == "--clock") inputs.clock_apk = argv[index + 1];
         else throw std::runtime_error("Unrecognized option " + std::string(flag));
     }
     Require(argc % 2 == 0 && !inputs.apk.empty() && !inputs.core.empty() && !inputs.framework.empty() &&
@@ -736,10 +732,10 @@ void TestExecution(Vm& vm, const Inputs& inputs) {
 struct DrawCommands {
     std::array<size_t, 4> counts{};
     std::vector<std::string> labels;
-    std::array<bool, 2> fixture_icons{};
+    std::set<uint32_t> visible_bitmaps;
 };
 
-DrawCommands ReadDrawCommands(wa_sf_t* sf, const std::array<Fixture, 2>& fixtures) {
+DrawCommands ReadDrawCommands(wa_sf_t* sf) {
     auto release = [sf](const wa_sf_frame_packet_t* packet) { wa_sf_frame_release(sf, packet); };
     std::unique_ptr<const wa_sf_frame_packet_t, decltype(release)> packet(wa_sf_frame_acquire(sf), release);
     Require(packet && packet->magic == WA_SF_FRAME_MAGIC && packet->abi_version == WA_SF_ABI_VERSION &&
@@ -782,15 +778,10 @@ DrawCommands ReadDrawCommands(wa_sf_t* sf, const std::array<Fixture, 2>& fixture
                     "A bitmap draw references pixels in the frame store");
             if (!(draw.alpha > 0)) continue;
             const auto* pixels = wa_bitmap_pixels(view.get());
-            for (uint32_t y = 0; y < view->height; ++y) {
-                for (uint32_t x = 0; x < view->width; ++x) {
-                    const auto* rgba = pixels + size_t(y) * view->stride + size_t(x) * 4;
-                    if (rgba[3] != 255) continue;
-                    const uint32_t color = 0xff000000 | (uint32_t(rgba[0]) << 16) | (uint32_t(rgba[1]) << 8) | rgba[2];
-                    for (size_t i = 0; i < fixtures.size(); ++i) {
-                        commands.fixture_icons[i] |= color == fixtures[i].icon_background;
-                    }
-                }
+            for (size_t i = 3; i < view->byte_size; i += 4) {
+                if (!pixels[i]) continue;
+                commands.visible_bitmaps.insert(draw.bitmap_id);
+                break;
             }
         }
     }
@@ -822,51 +813,45 @@ void CheckLauncherMotion(Vm& vm, UiBridge& bridge, wa_sf_t* sf, double event_tim
     std::cout << "Down and up reached upstream DragLayer and Workspace\n";
 }
 
-Fixture ReadTestApk(Vm& vm, const Inputs& inputs, const std::string& apk) {
+PackageActivity ReadTestApk(Vm& vm, const Inputs& inputs, const std::string& apk, const char* label_name = nullptr) {
     ScopedHandleScope roots(vm);
     auto* resources = OpenResources(vm, roots, inputs, apk);
     auto* manifest = ReadManifest(vm, roots, resources, apk);
     auto* info = roots.Hold(vm.ReadField(manifest, "info", "Landroid/content/pm/ApplicationInfo;").ref());
-    auto label_id = vm.ReadField(info, "labelRes", "I");
+    const auto pkg = vm.StringUtf8(vm.ReadField(info, "packageName", "Ljava/lang/String;").ref());
+    const auto label_id = label_name ? vm.CallVirtual(resources, "getIdentifier",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
+        std::array{Value::Ref(roots.Hold(vm.NewString(label_name))),
+                   Value::Ref(roots.Hold(vm.NewString("string"))),
+                   Value::Ref(roots.Hold(vm.NewString(pkg)))}) : vm.ReadField(info, "labelRes", "I");
     PackageActivity activity{
-        vm.StringUtf8(vm.ReadField(info, "packageName", "Ljava/lang/String;").ref()),
+        pkg,
         vm.StringUtf8(vm.ReadField(manifest, "activity", "Ljava/lang/String;").ref()),
         vm.StringUtf8(vm.CallVirtual(resources, "getString", "(I)Ljava/lang/String;",
                                     std::array{label_id}).ref()),
         apk,
         static_cast<uint32_t>(vm.ReadField(info, "icon", "I").i()),
     };
-    const auto icon_background = vm.CallVirtual(resources, "getIdentifier",
-        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
-        std::array{Value::Ref(roots.Hold(vm.NewString("icon_background"))),
-                   Value::Ref(roots.Hold(vm.NewString("color"))),
-                   Value::Ref(roots.Hold(vm.NewString(activity.package_name)))});
-    const auto color = static_cast<uint32_t>(vm.CallVirtual(resources, "getColor", "(I)I", std::array{icon_background}).i());
     vm.CallVirtual(resources, "close", "()V");
     Require(activity.icon_resource != 0 && !activity.label.empty(), "Installed test APK has a label and icon");
-    return {std::move(activity), color};
+    return activity;
 }
 
-std::array<Fixture, 2> InstallTestApks(Vm& vm, UiBridge& bridge, const Inputs& inputs) {
-    Require(!inputs.browser_apk.empty() && !inputs.gallery_apk.empty(),
-            "Activity test requires --browser and --gallery APKs");
-    const std::array fixtures{ReadTestApk(vm, inputs, inputs.browser_apk), ReadTestApk(vm, inputs, inputs.gallery_apk)};
-    const std::array apps{fixtures[0].activity, fixtures[1].activity};
+std::array<PackageActivity, 2> InstallTestApks(Vm& vm, UiBridge& bridge, const Inputs& inputs) {
+    Require(!inputs.browser_apk.empty() && !inputs.clock_apk.empty(),
+            "Activity test requires --browser and --clock APKs");
+    const std::array apps{ReadTestApk(vm, inputs, inputs.browser_apk, "title_activity_browser"),
+                          ReadTestApk(vm, inputs, inputs.clock_apk)};
     bridge.SetPackageCallbacks({
         .query_activities = [apps](const IntentRequest& request) {
             std::vector<PackageActivity> matches;
             if (request.user_id != 0) return matches;
-            constexpr std::array categories{"android.intent.category.APP_BROWSER", "android.intent.category.APP_GALLERY"};
-            for (size_t i = 0; i < apps.size(); ++i) {
-                const auto& app = apps[i];
+            for (const auto& app : apps) {
                 if ((request.package_name && request.package_name != app.package_name) ||
                     (request.activity_name && request.activity_name != app.activity_name)) continue;
                 if (request.activity_name ||
                     (request.action == "android.intent.action.MAIN" &&
-                     ((request.categories.size() == 1 && request.categories.front() == "android.intent.category.LAUNCHER") ||
-                      std::ranges::all_of(request.categories, [&](const auto& category) {
-                          return category == categories[i] || category == "android.intent.category.DEFAULT";
-                      })))) {
+                     request.categories.size() == 1 && request.categories.front() == "android.intent.category.LAUNCHER")) {
                     matches.push_back(app);
                 }
             }
@@ -879,10 +864,10 @@ std::array<Fixture, 2> InstallTestApks(Vm& vm, UiBridge& bridge, const Inputs& i
             return app == apps.end() ? std::nullopt : std::optional<PackageActivity>(*app);
         },
     });
-    return fixtures;
+    return apps;
 }
 
-void CheckBoundIcon(Vm& vm, Object* cell_layout, const Fixture& fixture) {
+void CheckBoundIcon(Vm& vm, Object* cell_layout, const PackageActivity& app) {
     ScopedHandleScope roots(vm);
     auto* items = roots.Hold(vm.CallVirtual(cell_layout, "getShortcutsAndWidgets",
         "()Lcom/android/launcher3/ShortcutAndWidgetContainer;")).ref();
@@ -896,19 +881,19 @@ void CheckBoundIcon(Vm& vm, Object* cell_layout, const Fixture& fixture) {
         if (!item || item->type->descriptor != "Lcom/android/launcher3/model/data/WorkspaceItemInfo;") continue;
         auto* component = roots.Hold(vm.CallVirtual(item, "getTargetComponent", "()Landroid/content/ComponentName;")).ref();
         if (!component || vm.StringUtf8(vm.CallVirtual(component, "getPackageName", "()Ljava/lang/String;").ref()) !=
-                              fixture.activity.package_name) continue;
+                              app.package_name) continue;
         auto* title = roots.Hold(vm.ReadField(item, "title", "Ljava/lang/CharSequence;").ref());
-        Require(vm.StringUtf8(vm.CallVirtual(component, "getClassName", "()Ljava/lang/String;").ref()) == fixture.activity.activity_name &&
-                    title && vm.StringUtf8(vm.CallVirtual(title, "toString", "()Ljava/lang/String;").ref()) == fixture.activity.label &&
+        Require(vm.StringUtf8(vm.CallVirtual(component, "getClassName", "()Ljava/lang/String;").ref()) == app.activity_name &&
+                    title && vm.StringUtf8(vm.CallVirtual(title, "toString", "()Ljava/lang/String;").ref()) == app.label &&
                     vm.CallVirtual(view, "getIcon", "()Lcom/android/launcher3/icons/FastBitmapDrawable;").ref(),
                 "Bound BubbleTextView retains the installed activity label and icon");
         return;
     }
-    throw std::runtime_error("Launcher did not bind " + fixture.activity.label + " into the expected CellLayout");
+    throw std::runtime_error("Launcher did not bind " + app.label + " into the expected CellLayout");
 }
 
 void TestActivity(Vm& vm, UiBridge& bridge, wa_sf_t* sf, const Inputs& inputs) {
-    const auto fixtures = InstallTestApks(vm, bridge, inputs);
+    const auto apps = InstallTestApks(vm, bridge, inputs);
     bridge.LaunchActivity(vm, {.apk_path = inputs.apk,
                                .class_name = "com.android.launcher3.Launcher",
                                .width = 448, .height = 896,
@@ -962,8 +947,8 @@ void TestActivity(Vm& vm, UiBridge& bridge, wa_sf_t* sf, const Inputs& inputs) {
                                          std::array{Value::Int(0)})).ref();
     Require(cell && cell->type->descriptor == "Lcom/android/launcher3/CellLayout;" && hotseat,
             "Launcher bound the first workspace page and hotseat");
-    CheckBoundIcon(vm, hotseat, fixtures[0]);
-    CheckBoundIcon(vm, cell, fixtures[1]);
+    CheckBoundIcon(vm, hotseat, apps[0]);
+    CheckBoundIcon(vm, cell, apps[1]);
     const auto initial_draws = vm.GetInstanceMethodStats(kViewRoot, "performDraw", kDraw).interpreted;
     const auto start = Clock::now();
     for (uint32_t i = 0; i < kFrames; ++i) draw();
@@ -973,23 +958,22 @@ void TestActivity(Vm& vm, UiBridge& bridge, wa_sf_t* sf, const Inputs& inputs) {
     Executed(vm, kViewRoot, "performDraw", kDraw);
     Require(vm.GetInstanceMethodStats(kViewRoot, "performDraw", kDraw).interpreted - initial_draws == kFrames,
             "Measured frames executed draw");
-    const auto commands = ReadDrawCommands(sf, fixtures);
+    const auto commands = ReadDrawCommands(sf);
     std::cout << kFrames << " rendered Launcher frames, " << std::setprecision(9) << elapsed / kFrames << " ms/frame"
               << ", round_rect=" << commands.counts[0] << ", path=" << commands.counts[1]
               << ", text=" << commands.counts[2] << ", bitmap=" << commands.counts[3] << '\n';
     Require(commands.counts[0] > 0 && commands.counts[2] > 0 && commands.counts[3] > 0 &&
-                std::ranges::all_of(commands.fixture_icons, [](bool present) { return present; }) &&
-                std::ranges::find(commands.labels, fixtures[1].activity.label) != commands.labels.end(),
+                commands.visible_bitmaps.size() >= apps.size() &&
+                std::ranges::find(commands.labels, apps[1].label) != commands.labels.end(),
             "HOME draws rounded rectangles, both APK icons and the Workspace label");
     CheckLauncherMotion(vm, bridge, sf, (frame + 1) * kFrameInterval / 1e6);
 
-    vm.CallVirtual(workspace, "addExtraEmptyScreens", "()V");
-    draw();
+    Require(vm.CallVirtual(workspace, "getPageCount", "()I").i() == 2, "Both default workspace pages were loaded");
     vm.CallVirtual(workspace, "showPageIndicatorAtCurrentScroll", "()V");
     draw();
-    const auto pages = ReadDrawCommands(sf, fixtures);
+    const auto pages = ReadDrawCommands(sf);
     Executed(vm, "Lcom/android/launcher3/pageindicators/PageIndicatorDots;", "onDraw", kDraw);
-    Require(pages.counts[0] > commands.counts[0], "Upstream PageIndicatorDots drew the workspace pagination");
+    Require(pages.counts[0] >= commands.counts[0], "Upstream PageIndicatorDots retained the workspace pagination");
     std::cout << "Two-page HOME round_rect=" << pages.counts[0] << '\n';
 
     auto* state_manager = roots.Hold(vm.CallVirtual(activity, "getStateManager",
@@ -998,7 +982,7 @@ void TestActivity(Vm& vm, UiBridge& bridge, wa_sf_t* sf, const Inputs& inputs) {
     vm.CallVirtual(state_manager, "goToState", "(Lcom/android/launcher3/statemanager/BaseState;Z)V",
                    std::array{Value::Ref(all_apps), Value::Int(0)});
     draw();
-    const auto drawer = ReadDrawCommands(sf, fixtures);
+    const auto drawer = ReadDrawCommands(sf);
     Executed(vm, "Lcom/android/launcher3/allapps/ActivityAllAppsContainerView;", "drawOnScrimWithScaleAndBottomOffset",
              "(Landroid/graphics/Canvas;FI)V");
     Require(std::ranges::all_of(drawer.counts, [](size_t count) { return count > 0; }),

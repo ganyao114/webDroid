@@ -2,11 +2,13 @@ export const buildUrl = new URL('../../build/', import.meta.url);
 export const launcherName = 'Launcher3-upstream.apk';
 export const systemUiName = 'SystemUI-upstream.apk';
 export const cubeName = 'wa_cube_app.apk';
+export const settingsName = 'Settings-upstream.apk';
 export const frameworkDexName = 'aosp17_framework_core.dex';
 export const fallbackDexName = 'aosp17_upstream_framework.dex';
 export const resourcesName = 'framework-res.apk';
 export const manifestName = 'launcher-assets.json';
-export const fixtureNames = ['settings.apk', 'browser.apk', 'gallery.apk', 'calculator.apk', 'clock.apk'];
+export const systemAppNames = [settingsName, 'DeskClock-upstream.apk', 'Browser2-upstream.apk',
+  'Gallery2-upstream.apk', 'Music-upstream.apk'];
 
 export async function loadAndroidSystem({ base = buildUrl } = {}) {
   const { default: createSystem } = await import(new URL('android_system.mjs', base).href);
@@ -24,10 +26,9 @@ export async function loadLauncherAssets({ base = buildUrl, signal } = {}) {
     return new Uint8Array(await (await get(name)).arrayBuffer());
   }
 
-  // The Chrome stager lists additional build fixtures and the framework resource APK.
   const configuration = await get(manifestName, true);
   const assets = configuration ? await configuration.json() : {};
-  const names = [cubeName, ...(assets.fixtures ?? fixtureNames)];
+  const names = [cubeName, ...systemAppNames];
   const [frameworkDex, fallbackDex, launcher, systemUi, resources, apks] = await Promise.all([
     bytes(frameworkDexName), bytes(fallbackDexName), bytes(launcherName), bytes(systemUiName),
     bytes(assets.resources ?? resourcesName),

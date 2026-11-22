@@ -42,10 +42,9 @@ ctest --test-dir build-m12-w2-wasm -V
 The project also supports `add_subdirectory(tests/m11_upstream_launcher3_runtime)`
 from a parent CMake project. The test executable accepts `--apk`, `--core`,
 `--framework`, and `--framework-resources` paths.
-The `activity` mode also takes `--browser` and `--gallery` fixture APK paths.
-CTest builds the fixtures with the existing M9 APK builder and supplies both
-paths. The package catalog reads the fixtures' binary manifests and loads icons
-by their APK resource IDs.
+The `activity` mode also takes `--browser` and `--clock` APK paths. CTest builds
+the upstream Browser2 and DeskClock APKs and supplies both paths. The package
+catalog reads the APK manifests and loads icons by their resource IDs.
 
 ## Wave 12 runtime
 
@@ -66,17 +65,17 @@ and checks `onCreate`, `onStart`, and `onResume`. It checks the compiled
 `R.layout.launcher` hierarchy from `LauncherRootView` through `DragLayer`,
 `Workspace`, `Hotseat`, `PageIndicatorDotsWithArrows`, `ScrimView`, and
 `LauncherAllAppsContainerView`. The real model loads the default favorites and
-binds Browser in Hotseat and Gallery on Workspace. The SurfaceFlinger bitmap
-store contains the color values from both APK icons, and the HOME text command
-contains the Gallery label read from its APK.
+binds Browser2 in Hotseat and DeskClock on Workspace. The SurfaceFlinger
+frame references the rendered APK icons and contains the Clock label read
+from its APK.
 
 After model binding, the test times 60 calls to `UiBridge::DoFrame` at 448 × 896
 and 160 dpi using simulated 60 Hz ticks. It verifies `performMeasure`,
 `performLayout`, and 60 calls to `performDraw`. The wall time covers guest
 invalidation, interpreter execution, and publishing the SurfaceFlinger display
 list. The test dispatches a down/up pair and verifies both events cross
-`DragLayer` and that `Workspace` intercepts and handles the tap. It also adds
-an empty page through Workspace's API and verifies the pagination dots. The
+`DragLayer` and that `Workspace` intercepts and handles the tap. It verifies both
+default workspace pages and the pagination dots. The
 upstream All Apps state emits all four required opcodes in the same frame.
 
 | Runtime | HOME frames | Mean ms/frame | Workspace touch | M11 CTest |

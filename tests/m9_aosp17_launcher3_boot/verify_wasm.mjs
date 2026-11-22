@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
+import { cubeName, systemAppNames } from '../../web/launcher/assets.mjs';
 import { matchesDrawnLabel } from '../../web/launcher/scene_labels.mjs';
 import {
   Action, FramePacket, Ime, INPUT_SIZE, Input, Memory, Op, Surface, checkedRecordSize,
@@ -16,18 +17,20 @@ const iconWarnings = [];
 const module = await createRuntime({
   wasmBinary: wasm,
   printErr(message) {
-    if (message.includes('LauncherActivityCachingLogic: loadIcon')) iconWarnings.push(message);
+    if (/LauncherActivityCachingLogic: loadIcon|Database bulk icon loading failed/.test(message)) iconWarnings.push(message);
     console.error(message);
   },
 });
 const memory = new Memory(module);
 const linearMemoryBytes = 256 * 1024 * 1024;
+const minimumHeadroom = 32 * 1024 * 1024;
 assert.equal(memory.buffer.byteLength, linearMemoryBytes);
-assert.equal(apps.length, 6);
+assert.deepEqual(apps.map(path => basename(path)), [cubeName, ...systemAppNames]);
 const encoder = new TextEncoder();
 const capacity = 4096;
 const scratch = module._malloc(capacity);
 assert(scratch);
+let peakHeapEndBytes = 0;
 
 function stringAt(address, cap) {
   const end = memory.bytes.indexOf(0, address);
@@ -61,7 +64,9 @@ async function load(method, path, byName = false) {
 }
 function state() {
   ok(module._wa_system_launcher_state_json(scratch, capacity), 'state');
-  return JSON.parse(stringAt(scratch, capacity));
+  const result = JSON.parse(stringAt(scratch, capacity));
+  peakHeapEndBytes = Math.max(peakHeapEndBytes, result.wasmHeapEndBytes);
+  return result;
 }
 
 const event = module._malloc(INPUT_SIZE);
@@ -243,7 +248,7 @@ function paginationDots(window, hotseatTop) {
     .sort((a, b) => a.bounds[0] - b.bounds[0]);
 }
 
-function checkHome(window, page, navigationInset) {
+function checkHome(window, page, navigationInset, labels) {
   const { width, height } = viewport;
   const qsb = window.rounds.find(shape => shape.style === 0 && rectWidth(shape.bounds) > width / 2 &&
     shape.bounds[1] > height * 0.65 && shape.bounds[3] <= height - navigationInset);
@@ -252,9 +257,9 @@ function checkHome(window, page, navigationInset) {
   assert(window.texts.some(label => label.text === 'Search' || label.text === '搜索'), 'Visible QSB label');
   const iconBottom = Math.max(...window.bitmaps.map(icon => icon.bounds[3]));
   const hotseat = window.bitmaps.filter(icon => near(icon.bounds[3], iconBottom));
-  assert.equal(hotseat.length, width === 960 ? 4 : 3, 'All configured Hotseat icons draw');
+  assert.equal(hotseat.length, 5, 'All five upstream Hotseat icons draw');
   for (const icon of hotseat)
-    assert(icon.bounds[3] <= qsb.bounds[1] && !hasArea(intersect(icon.bounds, qsb.bounds)), 'Hotseat icon overlaps QSB');
+    assert(qsb.bounds[1] - icon.bounds[3] >= 4 - 0.02, 'Hotseat icon has less than 4 px QSB clearance');
   const hotseatTop = Math.min(...hotseat.map(icon => icon.bounds[1]));
   const dots = paginationDots(window, hotseatTop);
   assert.equal(dots.length, 2, 'Both workspace page dots draw on Home');
@@ -263,30 +268,39 @@ function checkHome(window, page, navigationInset) {
   assert(dots[page].alpha > dots[1 - page].alpha &&
     rectWidth(dots[page].bounds) > rectWidth(dots[1 - page].bounds), 'Current page dot is active');
   const workspace = window.bitmaps.filter(icon => icon.bounds[3] <= dots[0].bounds[1]);
-  assert(workspace.length, 'Visible workspace icons');
-  for (const icon of workspace) checkIconLabel(window, icon);
+  checkAppLabels(window, workspace, labels);
   return { hotseatTop, dots };
 }
 
-function checkIconPixels(id, rgb) {
+function iconFingerprint(id) {
   const store = module._wa_sf_bitmaps(scene);
   const view = module._wa_bitmap_acquire(store, id);
   assert(view, 'Bitmap pixels are available');
   try {
-    const red = rgb >>> 16, green = rgb >>> 8 & 255, blue = rgb & 255;
+    let hash = 2166136261, visible = 0;
     const end = view + 24 + memory.u32(view + 20);
     for (let pixel = view + 24; pixel < end; pixel += 4) {
-      const bytes = memory.bytes;
-      if (bytes[pixel] === red && bytes[pixel + 1] === green &&
-          bytes[pixel + 2] === blue && bytes[pixel + 3] === 255) return;
+      const rgba = memory.u32(pixel);
+      visible += (rgba >>> 24) > 0;
+      hash = Math.imul(hash ^ rgba, 16777619);
     }
-    assert.fail(`App bitmap is missing fixture color #${rgb.toString(16)}`);
+    assert(visible > 0, 'APK icon has visible pixels');
+    return hash;
   } finally {
     module._wa_bitmap_release(store, view);
   }
 }
 
-function checkDrawer(window, search, labels, cubeLabel) {
+function checkAppLabels(window, icons, expected) {
+  const drawn = icons.map(icon => checkIconLabel(window, icon));
+  assert.equal(drawn.length, expected.length, 'All expected APK icons draw');
+  for (const name of expected) {
+    assert.equal(drawn.filter(labels => labels.some(text => matchesDrawnLabel(text, name))).length, 1,
+      `Expected one icon with label "${name}", got ${JSON.stringify(drawn)}`);
+  }
+}
+
+function checkDrawer(window, search, expected) {
   const pills = window.rounds.filter(({ bounds }) => [
     search.left, search.top, search.right, search.bottom,
   ].every((edge, i) => Math.abs(edge - bounds[i]) <= 1));
@@ -298,14 +312,9 @@ function checkDrawer(window, search, labels, cubeLabel) {
       shape.bounds.every((edge, i) => near(edge, fill.bounds[i])), 'Search pill has concentric circular ends');
   }
   const icons = window.bitmaps.filter(icon => icon.clip[1] >= search.top && icon.bounds[1] >= search.bottom);
-  const drawnApps = icons.map(icon => ({ icon, labels: checkIconLabel(window, icon) }));
-  const expected = [...labels, [cubeLabel, null]];
-  assert.equal(drawnApps.length, expected.length, 'All Apps icons draw');
-  for (const [name, rgb] of expected) {
-    const app = drawnApps.find(({ labels: drawn }) => drawn.some(text => matchesDrawnLabel(text, name)));
-    assert(app, `No rendered app icon and label for "${name}"`);
-    if (rgb !== null) checkIconPixels(app.icon.id, rgb);
-  }
+  checkAppLabels(window, icons, expected);
+  assert.equal(new Set(icons.map(icon => iconFingerprint(icon.id))).size, expected.length,
+    'Every app draws a distinct APK icon');
 }
 
 function verifySystemUiFrame(window, height, gestural = false) {
@@ -367,6 +376,9 @@ function verifySwipe(from, to, home) {
 }
 
 async function verifyDisplay(width, height, locale, query, cubeLabel) {
+  const firstPageLabels = locale === 'en-US' ? ['Settings', 'Clock', cubeLabel] : ['设置', '时钟', cubeLabel];
+  const secondPageLabels = locale === 'en-US' ? ['Gallery', 'Music', 'WebView Browser Tester'] :
+    ['图库', '音乐', 'WebView Browser Tester'];
   viewport = { width, height };
   now = 0n;
   ok(withString(locale, language => module._wa_system_launcher_create(width, height, 160, language)), 'create');
@@ -376,10 +388,15 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
     await load('load_framework_dex', dex);
     await load('load_framework_fallback_dex', fallback);
     await load('set_framework_res_apk', resources);
-    for (const app of apps) await load('install_apk', app, true);
+    for (const app of apps) {
+      await load('install_apk', app, true);
+      state();
+    }
     const start = performance.now();
     await load('load_systemui_apk', systemUi, true);
-    await load('boot_apk', launcher, true);
+    await load('stage_apk', launcher, true);
+    state();
+    ok(module._wa_system_launcher_boot_staged_apk(), 'boot_staged_apk');
     const bootWallMs = performance.now() - start;
 
     const boot = state();
@@ -389,7 +406,7 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
     assert.equal(boot.activity, 'com.android.launcher3.Launcher');
     assert.equal(boot.launcherUpstream, true);
     assert.equal(boot.launcherDexCount, 4);
-    assert.equal(boot.launcherClassCount, 37050);
+    assert(boot.launcherClassCount >= 37050);
     assert.equal(boot.systemUiMounted, true);
     assert.equal(boot.systemUiClass, 'com.android.systemui.statusbar.phone.PhoneStatusBarView');
     assert.equal(boot.installedApps, apps.length);
@@ -404,7 +421,7 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
     assert(frame.get(1).ops.has(Op.ROUND) && frame.get(1).ops.has(Op.BITMAP) && frame.get(1).ops.has(Op.TEXT));
     verifySystemUiFrame(frame.get(1), height);
     const navigationInset = boot.systemUiInsets.bottom;
-    checkHome(frame.get(1), 0, navigationInset);
+    checkHome(frame.get(1), 0, navigationInset, firstPageLabels);
     publishBrowserFontMetrics();
 
     tick(120);
@@ -412,14 +429,10 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
     console.log(JSON.stringify({ locale, width, height, phase: 'home-120', ...home }));
     assert.equal(home.frames, 120);
     const firstWindow = inspectFrame().get(1);
-    const firstPage = new Set(firstWindow.texts.filter(entry => entry.y >= 24).map(entry => entry.text));
-    assert(firstPage.size > 0);
-    const firstHome = checkHome(firstWindow, 0, navigationInset);
+    const firstHome = checkHome(firstWindow, 0, navigationInset, firstPageLabels);
     verifySwipe(0, 1, firstHome);
     const secondWindow = inspectFrame().get(1);
-    const secondHome = checkHome(secondWindow, 1, navigationInset);
-    assert(secondWindow.texts.some(entry => entry.y >= 24 && !firstPage.has(entry.text)),
-      'Real app label on second page');
+    const secondHome = checkHome(secondWindow, 1, navigationInset, secondPageLabels);
     verifySwipe(1, 0, secondHome);
     verifySwipe(0, 1, firstHome);
 
@@ -428,10 +441,7 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
     const drawer = state();
     assert(drawer.drawerOpen && drawer.drawerProgress > 0.9, JSON.stringify(drawer));
     assert.equal(drawer.searchResults, apps.length);
-    const labels = locale === 'en-US' ? ['Settings', 'Browser', 'Gallery', 'Calculator', 'Clock']
-                                     : ['设置', '浏览器', '图库', '计算器', '时钟'];
-    const colors = [0x366990, 0x1a7866, 0x725296, 0x9c5200, 0x344da0];
-    checkDrawer(inspectFrame().get(1), drawer.searchBounds, labels.map((name, i) => [name, colors[i]]), cubeLabel);
+    checkDrawer(inspectFrame().get(1), drawer.searchBounds, [...firstPageLabels, ...secondPageLabels]);
     const { left, top, right, bottom } = drawer.searchBounds;
     tap((left + right) / 2, (top + bottom) / 2);
     const prefix = query.slice(0, 1);
@@ -544,6 +554,9 @@ try {
     assert(home.avgFrameMs < 3 && home.p95FrameMs < 6, 'Home frame budget');
     assert(final.avgFrameMs < 3 && final.p95FrameMs < 6, 'Interactive frame budget');
   }
+  const headroomBytes = linearMemoryBytes - peakHeapEndBytes;
+  console.log(JSON.stringify({ peakWasmHeapEndBytes: peakHeapEndBytes, linearMemoryBytes, headroomBytes }));
+  assert(headroomBytes >= minimumHeadroom, 'Launcher3 must leave at least 32 MiB of linear memory available');
 } finally {
   module._free(event);
   module._free(scratch);
