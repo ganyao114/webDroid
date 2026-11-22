@@ -156,3 +156,97 @@ frameworks/base/core/java/android/content/pm/LauncherUserInfo.java
 @patch 0020-local-long-sparse-array.patch
 libcore/ojluni/src/main/java/java/util/concurrent/CompletionException.java
 libcore/ojluni/src/main/java/java/util/concurrent/CopyOnWriteArraySet.java
+
+# Phase 1 W3: upstream animation, os, content, net, util
+# Animation package.
+frameworks/base/core/java/android/animation/AnimationHandler.java
+frameworks/base/core/java/android/animation/Animator.java
+frameworks/base/core/java/android/animation/AnimatorInflater.java
+frameworks/base/core/java/android/animation/AnimatorListenerAdapter.java
+frameworks/base/core/java/android/animation/AnimatorSet.java
+frameworks/base/core/java/android/animation/BidirectionalTypeConverter.java
+frameworks/base/core/java/android/animation/FloatArrayEvaluator.java
+frameworks/base/core/java/android/animation/FloatEvaluator.java
+frameworks/base/core/java/android/animation/FloatKeyframeSet.java
+frameworks/base/core/java/android/animation/IntArrayEvaluator.java
+frameworks/base/core/java/android/animation/IntEvaluator.java
+frameworks/base/core/java/android/animation/IntKeyframeSet.java
+frameworks/base/core/java/android/animation/Keyframe.java
+frameworks/base/core/java/android/animation/KeyframeSet.java
+frameworks/base/core/java/android/animation/Keyframes.java
+frameworks/base/core/java/android/animation/LayoutTransition.java
+frameworks/base/core/java/android/animation/ObjectAnimator.java
+frameworks/base/core/java/android/animation/PathKeyframes.java
+frameworks/base/core/java/android/animation/PropertyValuesHolder.java
+frameworks/base/core/java/android/animation/RevealAnimator.java
+frameworks/base/core/java/android/animation/StateListAnimator.java
+frameworks/base/core/java/android/animation/TimeAnimator.java
+frameworks/base/core/java/android/animation/TypeConverter.java
+frameworks/base/core/java/android/animation/ValueAnimator.java
+
+# Message loop, parcelable containers, and OS helpers.
+frameworks/base/core/java/android/os/BadParcelableException.java
+frameworks/base/core/java/android/os/BadTypeParcelableException.java
+frameworks/base/core/java/android/os/BaseBundle.java
+frameworks/base/core/java/android/os/Bundle.java
+frameworks/base/core/java/android/os/Handler.java
+frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
+frameworks/base/core/java/android/os/Looper.java
+frameworks/base/core/java/android/os/Message.java
+frameworks/base/core/java/android/os/PatternMatcher.java
+frameworks/base/core/java/android/os/SimpleClock.java
+frameworks/base/core/java/android/os/SystemClock.java
+frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
+frameworks/base/core/java/android/os/TraceNameSupplier.java
+frameworks/base/core/java/android/os/UserHandle.java
+
+# Component identity, intent matching, and URI handling.
+frameworks/base/core/java/android/content/ActivityNotFoundException.java
+frameworks/base/core/java/android/content/ComponentName.java
+frameworks/base/core/java/android/content/ContextWrapper.java
+frameworks/base/core/java/android/content/Intent.java
+frameworks/base/core/java/android/content/IntentFilter.java
+frameworks/base/core/java/android/content/UriRelativeFilter.java
+frameworks/base/core/java/android/content/UriRelativeFilterGroup.java
+frameworks/base/core/java/android/net/Uri.java
+frameworks/base/core/java/android/net/UriCodec.java
+
+# Properties, display metrics, and shared utility implementations.
+frameworks/base/core/java/android/util/Property.java
+frameworks/base/core/java/android/util/ReflectiveProperty.java
+frameworks/base/core/java/android/util/IntProperty.java
+frameworks/base/core/java/android/util/FloatProperty.java
+frameworks/base/core/java/android/util/PathParser.java
+frameworks/base/core/java/android/util/DisplayMetrics.java
+frameworks/base/core/java/android/util/MathUtils.java
+frameworks/base/core/java/com/android/internal/util/FastMath.java
+
+# Upstream dependencies of the subsystems above.
+frameworks/base/core/java/android/util/LongArray.java
+frameworks/base/core/java/android/util/Printer.java
+frameworks/base/core/java/android/util/AndroidException.java
+frameworks/base/core/java/android/util/AndroidRuntimeException.java
+frameworks/base/core/java/android/content/res/ConstantState.java
+frameworks/base/core/java/android/util/proto/EncodedBuffer.java
+frameworks/base/core/java/android/util/proto/ProtoOutputStream.java
+frameworks/base/core/java/android/util/proto/ProtoStream.java
+frameworks/base/core/java/android/util/proto/ProtoParseException.java
+frameworks/base/core/java/com/android/internal/util/IndentingPrintWriter.java
+frameworks/base/core/java/android/util/IndentingPrintWriter.java
+frameworks/base/core/java/android/util/StateSet.java
+frameworks/base/core/java/android/util/NoSuchPropertyException.java
+
+# Patches for the embedded platform and SDK boundaries.
+@patch 0301-cooperative-message-loop.patch
+@patch 0302-parcelable-core-edges.patch
+@patch 0303-platform-utility-edges.patch
+@patch 0304-local-bundle-parcel.patch
+@patch 0305-local-user-identity.patch
+@patch 0306-local-intent-filter-edges.patch
+@patch 0307-embedded-context-wrapper.patch
+@patch 0308-local-uri-platform-edges.patch
+@patch 0309-embedded-animation-scheduling.patch
+@patch 0310-reflective-animation-properties.patch
+@patch 0311-embedded-animator-resources.patch
+@patch 0312-embedded-path-data.patch
+@patch 0313-embedded-intent-platform-edges.patch

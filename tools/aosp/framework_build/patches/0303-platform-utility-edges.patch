@@ -1,0 +1,259 @@
+--- a/frameworks/base/core/java/android/content/res/ConstantState.java
++++ b/frameworks/base/core/java/android/content/res/ConstantState.java
+@@ -15,7 +15,6 @@
+ */
+ package android.content.res;
+ 
+-import android.content.pm.ActivityInfo.Config;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ 
+ /**
+@@ -37,7 +36,7 @@
+      * Return a bit mask of configuration changes that will impact
+      * this resource (and thus require completely reloading it).
+      */
+-    abstract public @Config int getChangingConfigurations();
++    abstract public int getChangingConfigurations();
+ 
+     /**
+      * Create a new instance without supplying resources the caller
+--- a/frameworks/base/core/java/android/util/DisplayMetrics.java
++++ b/frameworks/base/core/java/android/util/DisplayMetrics.java
+@@ -16,14 +16,11 @@
+ 
+ package android.util;
+ 
+-import static com.android.window.flags.Flags.FLAG_DENSITY_390_API;
+-
+-import android.annotation.FlaggedApi;
++
+ import android.annotation.IntDef;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.res.FontScaleConverter;
+-import android.os.SystemProperties;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ import android.view.WindowManager;
+ 
+@@ -188,7 +185,6 @@
+      * This is not a density that applications should target, instead relying
+      * on the system to scale their {@link #DENSITY_XXHIGH} assets for them.
+      */
+-    @FlaggedApi(FLAG_DENSITY_390_API)
+     public static final int DENSITY_390 = 390;
+ 
+     /**
+@@ -506,11 +502,7 @@
+     }
+ 
+     private static int getDeviceDensity() {
+-        // qemu.sf.lcd_density can be used to override ro.sf.lcd_density
+-        // when running in the emulator, allowing for dynamic configurations.
+-        // The reason for this is that ro.sf.lcd_density is write-once and is
+-        // set by the init process when it parses build.prop before anything else.
+-        return SystemProperties.getInt("qemu.sf.lcd_density",
+-                SystemProperties.getInt("ro.sf.lcd_density", DENSITY_DEFAULT));
++        // Resources and displays apply the host-supplied density to each metrics instance.
++        return DENSITY_DEFAULT;
+     }
+ }
+--- a/frameworks/base/core/java/android/util/LongArray.java
++++ b/frameworks/base/core/java/android/util/LongArray.java
+@@ -21,7 +21,6 @@
+ import android.os.Build;
+ 
+ import com.android.internal.util.ArrayUtils;
+-import com.android.internal.util.Preconditions;
+ 
+ import java.util.Arrays;
+ 
+@@ -39,7 +38,10 @@
+ 
+     private  LongArray(long[] array, int size) {
+         mValues = array;
+-        mSize = Preconditions.checkArgumentInRange(size, 0, array.length, "size");
++        if (size < 0 || size > array.length) {
++            throw new IllegalArgumentException("size out of range: " + size);
++        }
++        mSize = size;
+     }
+ 
+     /**
+@@ -82,7 +84,9 @@
+      * created from the current content of this LongArray padded with 0s.
+      */
+     public void resize(int newSize) {
+-        Preconditions.checkArgumentNonnegative(newSize);
++        if (newSize < 0) {
++            throw new IllegalArgumentException("Negative size");
++        }
+         if (newSize <= mValues.length) {
+             Arrays.fill(mValues, newSize, mValues.length, 0);
+         } else {
+@@ -109,7 +113,9 @@
+         ensureCapacity(1);
+         int rightSegment = mSize - index;
+         mSize++;
+-        ArrayUtils.checkBounds(mSize, index);
++        if (index < 0 || index >= mSize) {
++            throw new ArrayIndexOutOfBoundsException(index);
++        }
+ 
+         if (rightSegment != 0) {
+             // Move by 1 all values from the right of 'index'
+@@ -170,7 +176,9 @@
+      */
+     @UnsupportedAppUsage
+     public long get(int index) {
+-        ArrayUtils.checkBounds(mSize, index);
++        if (index < 0 || index >= mSize) {
++            throw new ArrayIndexOutOfBoundsException(index);
++        }
+         return mValues[index];
+     }
+ 
+@@ -178,7 +186,9 @@
+      * Sets the value at the specified position in this array.
+      */
+     public void set(int index, long value) {
+-        ArrayUtils.checkBounds(mSize, index);
++        if (index < 0 || index >= mSize) {
++            throw new ArrayIndexOutOfBoundsException(index);
++        }
+         mValues[index] = value;
+     }
+ 
+@@ -200,7 +210,9 @@
+      * Removes the value at the specified index from this array.
+      */
+     public void remove(int index) {
+-        ArrayUtils.checkBounds(mSize, index);
++        if (index < 0 || index >= mSize) {
++            throw new ArrayIndexOutOfBoundsException(index);
++        }
+         System.arraycopy(mValues, index + 1, mValues, index, mSize - index - 1);
+         mSize--;
+     }
+--- a/frameworks/base/core/java/android/util/MathUtils.java
++++ b/frameworks/base/core/java/android/util/MathUtils.java
+@@ -19,6 +19,8 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.graphics.Rect;
+ 
++import java.lang.Math;
++
+ /**
+  * A class that contains utility methods related to numbers.
+  *
+@@ -142,11 +144,11 @@
+     }
+ 
+     public static float acos(float value) {
+-        return (float) Math.acos(value);
++        return (float) Math.atan2(Math.sqrt((1.0 - value) * (1.0 + value)), value);
+     }
+ 
+     public static float asin(float value) {
+-        return (float) Math.asin(value);
++        return (float) Math.atan2(value, Math.sqrt((1.0 - value) * (1.0 + value)));
+     }
+ 
+     public static float atan(float value) {
+@@ -291,6 +293,12 @@
+             return;
+         }
+         float maxSize = Math.max(outToResize.width(), outToResize.height());
+-        outToResize.scale(largestSide / maxSize);
++        float scale = largestSide / maxSize;
++        if (scale != 1.0f) {
++            outToResize.set((int) (outToResize.left * scale + 0.5f),
++                    (int) (outToResize.top * scale + 0.5f),
++                    (int) (outToResize.right * scale + 0.5f),
++                    (int) (outToResize.bottom * scale + 0.5f));
++        }
+     }
+ }
+--- a/frameworks/base/core/java/android/util/StateSet.java
++++ b/frameworks/base/core/java/android/util/StateSet.java
+@@ -18,7 +18,7 @@
+ 
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ 
+-import com.android.internal.R;
++import android.R;
+ 
+ /**
+  * State sets are arrays of positive ints where each element
+@@ -79,21 +79,7 @@
+     };
+ 
+     static {
+-        if ((VIEW_STATE_IDS.length / 2) != R.styleable.ViewDrawableStates.length) {
+-            throw new IllegalStateException(
+-                    "VIEW_STATE_IDs array length does not match ViewDrawableStates style array");
+-        }
+-
+-        final int[] orderedIds = new int[VIEW_STATE_IDS.length];
+-        for (int i = 0; i < R.styleable.ViewDrawableStates.length; i++) {
+-            final int viewState = R.styleable.ViewDrawableStates[i];
+-            for (int j = 0; j < VIEW_STATE_IDS.length; j += 2) {
+-                if (VIEW_STATE_IDS[j] == viewState) {
+-                    orderedIds[i * 2] = viewState;
+-                    orderedIds[i * 2 + 1] = VIEW_STATE_IDS[j + 1];
+-                }
+-            }
+-        }
++        final int[] orderedIds = VIEW_STATE_IDS;
+ 
+         final int NUM_BITS = VIEW_STATE_IDS.length / 2;
+         VIEW_STATE_SETS = new int[1 << NUM_BITS][];
+--- a/frameworks/base/core/java/android/util/proto/ProtoStream.java
++++ b/frameworks/base/core/java/android/util/proto/ProtoStream.java
+@@ -17,7 +17,6 @@
+ package android.util.proto;
+ 
+ import android.annotation.IntDef;
+-import android.annotation.LongDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ 
+@@ -62,26 +61,6 @@
+      * Encoding</a>
+      */
+     @Retention(RetentionPolicy.SOURCE)
+-    @LongDef({
+-        FIELD_TYPE_UNKNOWN,
+-        FIELD_TYPE_DOUBLE,
+-        FIELD_TYPE_FLOAT,
+-        FIELD_TYPE_INT64,
+-        FIELD_TYPE_UINT64,
+-        FIELD_TYPE_INT32,
+-        FIELD_TYPE_FIXED64,
+-        FIELD_TYPE_FIXED32,
+-        FIELD_TYPE_BOOL,
+-        FIELD_TYPE_STRING,
+-        FIELD_TYPE_MESSAGE,
+-        FIELD_TYPE_BYTES,
+-        FIELD_TYPE_UINT32,
+-        FIELD_TYPE_ENUM,
+-        FIELD_TYPE_SFIXED32,
+-        FIELD_TYPE_SFIXED64,
+-        FIELD_TYPE_SINT32,
+-        FIELD_TYPE_SINT64,
+-    })
+     public @interface FieldType {}
+ 
+ 
+@@ -92,12 +71,6 @@
+      * Encoding</a>
+      */
+     @Retention(RetentionPolicy.SOURCE)
+-    @LongDef({
+-        FIELD_COUNT_UNKNOWN,
+-        FIELD_COUNT_SINGLE,
+-        FIELD_COUNT_REPEATED,
+-        FIELD_COUNT_PACKED,
+-    })
+     public @interface FieldCount {}
+ 
+     /**
