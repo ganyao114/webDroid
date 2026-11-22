@@ -1,0 +1,235 @@
+--- a/src/com/android/gallery3d/app/VideoUtils.java
++++ b/src/com/android/gallery3d/app/VideoUtils.java
+@@ -28,8 +28,8 @@
+ 
+ import com.android.gallery3d.common.ApiHelper;
+ import com.android.gallery3d.util.SaveVideoFileInfo;
+-import com.coremedia.iso.IsoFile;
+-import com.coremedia.iso.boxes.TimeToSampleBox;
++import com.coremedia.iso.boxes.Container;
++import com.googlecode.mp4parser.FileDataSourceImpl;
+ import com.googlecode.mp4parser.authoring.Movie;
+ import com.googlecode.mp4parser.authoring.Track;
+ import com.googlecode.mp4parser.authoring.builder.DefaultMp4Builder;
+@@ -37,12 +37,9 @@
+ import com.googlecode.mp4parser.authoring.tracks.CroppedTrack;
+ 
+ import java.io.File;
+-import java.io.FileNotFoundException;
+ import java.io.FileOutputStream;
+ import java.io.IOException;
+-import java.io.RandomAccessFile;
+ import java.nio.ByteBuffer;
+-import java.nio.channels.FileChannel;
+ import java.util.Arrays;
+ import java.util.HashMap;
+ import java.util.LinkedList;
+@@ -79,23 +76,23 @@
+     }
+ 
+     private static void startMuteUsingMp4Parser(String filePath,
+-            SaveVideoFileInfo dstFileInfo) throws FileNotFoundException, IOException {
++            SaveVideoFileInfo dstFileInfo) throws IOException {
+         File dst = dstFileInfo.mFile;
+         File src = new File(filePath);
+-        RandomAccessFile randomAccessFile = new RandomAccessFile(src, "r");
+-        Movie movie = MovieCreator.build(randomAccessFile.getChannel());
+-
+-        // remove all tracks we will create new tracks from the old
+-        List<Track> tracks = movie.getTracks();
+-        movie.setTracks(new LinkedList<Track>());
+-
+-        for (Track track : tracks) {
+-            if (track.getHandler().equals("vide")) {
+-                movie.addTrack(track);
+-            }
+-        }
+-        writeMovieIntoFile(dst, movie);
+-        randomAccessFile.close();
++        try (FileDataSourceImpl input = new FileDataSourceImpl(src)) {
++            Movie movie = MovieCreator.build(input);
++
++            // remove all tracks we will create new tracks from the old
++            List<Track> tracks = movie.getTracks();
++            movie.setTracks(new LinkedList<Track>());
++
++            for (Track track : tracks) {
++                if (track.getHandler().equals("vide")) {
++                    movie.addTrack(track);
++                }
++            }
++            writeMovieIntoFile(dst, movie);
++        }
+     }
+ 
+     private static void writeMovieIntoFile(File dst, Movie movie)
+@@ -104,13 +101,10 @@
+             dst.createNewFile();
+         }
+ 
+-        IsoFile out = new DefaultMp4Builder().build(movie);
+-        FileOutputStream fos = new FileOutputStream(dst);
+-        FileChannel fc = fos.getChannel();
+-        out.getBox(fc); // This one build up the memory.
+-
+-        fc.close();
+-        fos.close();
++        Container out = new DefaultMp4Builder().build(movie);
++        try (FileOutputStream output = new FileOutputStream(dst)) {
++            out.writeContainer(output.getChannel());
++        }
+     }
+ 
+     /**
+@@ -233,73 +227,61 @@
+     }
+ 
+     private static void trimUsingMp4Parser(File src, File dst, int startMs, int endMs)
+-            throws FileNotFoundException, IOException {
+-        RandomAccessFile randomAccessFile = new RandomAccessFile(src, "r");
+-        Movie movie = MovieCreator.build(randomAccessFile.getChannel());
+-
+-        // remove all tracks we will create new tracks from the old
+-        List<Track> tracks = movie.getTracks();
+-        movie.setTracks(new LinkedList<Track>());
+-
+-        double startTime = startMs / 1000;
+-        double endTime = endMs / 1000;
+-
+-        boolean timeCorrected = false;
+-
+-        // Here we try to find a track that has sync samples. Since we can only
+-        // start decoding at such a sample we SHOULD make sure that the start of
+-        // the new fragment is exactly such a frame.
+-        for (Track track : tracks) {
+-            if (track.getSyncSamples() != null && track.getSyncSamples().length > 0) {
+-                if (timeCorrected) {
+-                    // This exception here could be a false positive in case we
+-                    // have multiple tracks with sync samples at exactly the
+-                    // same positions. E.g. a single movie containing multiple
+-                    // qualities of the same video (Microsoft Smooth Streaming
+-                    // file)
+-                    throw new RuntimeException(
+-                            "The startTime has already been corrected by" +
+-                            " another track with SyncSample. Not Supported.");
+-                }
+-                startTime = correctTimeToSyncSample(track, startTime, false);
+-                endTime = correctTimeToSyncSample(track, endTime, true);
+-                timeCorrected = true;
+-            }
+-        }
+-
+-        for (Track track : tracks) {
+-            long currentSample = 0;
+-            double currentTime = 0;
+-            long startSample = -1;
+-            long endSample = -1;
+-
+-            for (int i = 0; i < track.getDecodingTimeEntries().size(); i++) {
+-                TimeToSampleBox.Entry entry = track.getDecodingTimeEntries().get(i);
+-                for (int j = 0; j < entry.getCount(); j++) {
+-                    // entry.getDelta() is the amount of time the current sample
+-                    // covers.
+-
++            throws IOException {
++        try (FileDataSourceImpl input = new FileDataSourceImpl(src)) {
++            Movie movie = MovieCreator.build(input);
++
++            // remove all tracks we will create new tracks from the old
++            List<Track> tracks = movie.getTracks();
++            movie.setTracks(new LinkedList<Track>());
++
++            double startTime = startMs / 1000;
++            double endTime = endMs / 1000;
++
++            boolean timeCorrected = false;
++
++            // Here we try to find a track that has sync samples. Since we can only
++            // start decoding at such a sample we SHOULD make sure that the start of
++            // the new fragment is exactly such a frame.
++            for (Track track : tracks) {
++                if (track.getSyncSamples() != null && track.getSyncSamples().length > 0) {
++                    if (timeCorrected) {
++                        // This exception here could be a false positive in case we
++                        // have multiple tracks with sync samples at exactly the
++                        // same positions. E.g. a single movie containing multiple
++                        // qualities of the same video (Microsoft Smooth Streaming
++                        // file)
++                        throw new RuntimeException(
++                                "The startTime has already been corrected by" +
++                                " another track with SyncSample. Not Supported.");
++                    }
++                    startTime = correctTimeToSyncSample(track, startTime, false);
++                    endTime = correctTimeToSyncSample(track, endTime, true);
++                    timeCorrected = true;
++                }
++            }
++
++            for (Track track : tracks) {
++                long currentSample = 0;
++                double currentTime = 0;
++                long startSample = -1;
++                long endSample = -1;
++
++                for (long duration : track.getSampleDurations()) {
++                    if (currentTime > endTime) {
++                        break;
++                    }
+                     if (currentTime <= startTime) {
+-                        // current sample is still before the new starttime
+                         startSample = currentSample;
+                     }
+-                    if (currentTime <= endTime) {
+-                        // current sample is after the new start time and still
+-                        // before the new endtime
+-                        endSample = currentSample;
+-                    } else {
+-                        // current sample is after the end of the cropped video
+-                        break;
+-                    }
+-                    currentTime += (double) entry.getDelta()
+-                            / (double) track.getTrackMetaData().getTimescale();
++                    endSample = currentSample;
++                    currentTime += (double) duration / track.getTrackMetaData().getTimescale();
+                     currentSample++;
+                 }
+-            }
+-            movie.addTrack(new CroppedTrack(track, startSample, endSample));
+-        }
+-        writeMovieIntoFile(dst, movie);
+-        randomAccessFile.close();
++                movie.addTrack(new CroppedTrack(track, startSample, endSample));
++            }
++            writeMovieIntoFile(dst, movie);
++        }
+     }
+ 
+     private static double correctTimeToSyncSample(Track track, double cutHere,
+@@ -307,19 +289,14 @@
+         double[] timeOfSyncSamples = new double[track.getSyncSamples().length];
+         long currentSample = 0;
+         double currentTime = 0;
+-        for (int i = 0; i < track.getDecodingTimeEntries().size(); i++) {
+-            TimeToSampleBox.Entry entry = track.getDecodingTimeEntries().get(i);
+-            for (int j = 0; j < entry.getCount(); j++) {
+-                if (Arrays.binarySearch(track.getSyncSamples(), currentSample + 1) >= 0) {
+-                    // samples always start with 1 but we start with zero
+-                    // therefore +1
+-                    timeOfSyncSamples[Arrays.binarySearch(
+-                            track.getSyncSamples(), currentSample + 1)] = currentTime;
+-                }
+-                currentTime += (double) entry.getDelta()
+-                        / (double) track.getTrackMetaData().getTimescale();
+-                currentSample++;
+-            }
++        for (long duration : track.getSampleDurations()) {
++            // MP4 sync samples are one-based.
++            int syncIndex = Arrays.binarySearch(track.getSyncSamples(), currentSample + 1);
++            if (syncIndex >= 0) {
++                timeOfSyncSamples[syncIndex] = currentTime;
++            }
++            currentTime += (double) duration / track.getTrackMetaData().getTimescale();
++            currentSample++;
+         }
+         double previous = 0;
+         for (double timeOfSyncSample : timeOfSyncSamples) {

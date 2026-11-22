@@ -170,6 +170,20 @@ export function mockLauncherWasm() {
       return p;
     },
     _free(p) { if (p) assert(allocations.delete(p), `Unknown allocation ${p}`); },
+    _wa_system_open_apk(bytes, size) {
+      const app = launchers.get(HEAPU8[bytes]);
+      if (!app || size !== 2) return 0;
+      const name = textEncoder.encode(app.package);
+      const info = module._malloc(36 + name.length + 1);
+      u32(info, info + 36);
+      u32(info + 28, 0);
+      u32(info + 32, HEAPU8[bytes] === 3 || HEAPU8[bytes] === 5 ? 1024 : 0);
+      HEAPU8.set(name, info + 36);
+      HEAPU8[info + 36 + name.length] = 0;
+      return info;
+    },
+    _wa_system_apk_info: apk => apk,
+    _wa_system_close_apk: apk => module._free(apk),
     _wa_system_launcher_create(width, height, density, lang) {
       assert(!state);
       locale = string(lang);

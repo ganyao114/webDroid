@@ -1,0 +1,44 @@
+--- a/src/com/android/deskclock/DeskClockApplication.kt
++++ b/src/com/android/deskclock/DeskClockApplication.kt
+@@ -37,16 +37,22 @@
+ 
+         DataModel.dataModel.init(applicationContext, prefs)
+         UiDataModel.uiDataModel.init(applicationContext, prefs)
++        if (isEmbedded) return
+         Controller.getController().setContext(applicationContext)
+         Controller.getController().addEventTracker(LogEventTracker(applicationContext))
+     }
+ 
+     companion object {
++        internal val isEmbedded = "true" == System.getProperty("org.wasmandroid.foreground")
++
+         /**
+          * Returns the default [SharedPreferences] instance from the underlying storage context.
+          */
+         @TargetApi(Build.VERSION_CODES.N)
+-        private fun getDefaultSharedPreferences(context: Context): SharedPreferences {
++        internal fun getDefaultSharedPreferences(context: Context): SharedPreferences {
++            if (isEmbedded) {
++                return context.getSharedPreferences("${context.packageName}_preferences", Context.MODE_PRIVATE)
++            }
+             val storageContext: Context
+             if (Utils.isNOrLater) {
+                 // All N devices have split storage areas. Migrate the existing preferences
+--- a/src/com/android/deskclock/data/DataModel.kt
++++ b/src/com/android/deskclock/data/DataModel.kt
+@@ -35,6 +35,7 @@
+ import androidx.annotation.Keep
+ import androidx.annotation.StringRes
+ 
++import com.android.deskclock.DeskClockApplication
+ import com.android.deskclock.Predicate
+ import com.android.deskclock.R
+ import com.android.deskclock.Utils
+@@ -188,6 +189,7 @@
+         if (mContext !== context) {
+             mContext = context.applicationContext
+             mTimeModel = TimeModel(mContext!!)
++            if (DeskClockApplication.isEmbedded) return
+             mWidgetModel = WidgetModel(prefs)
+             mNotificationModel = NotificationModel()
+             mRingtoneModel = RingtoneModel(mContext!!, prefs)

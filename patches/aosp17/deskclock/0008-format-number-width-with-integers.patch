@@ -1,0 +1,11 @@
+--- a/src/com/android/deskclock/uidata/FormattedStringModel.kt
++++ b/src/com/android/deskclock/uidata/FormattedStringModel.kt
+@@ -64,7 +64,7 @@
+      * @throws IllegalArgumentException if `value` is negative
+      */
+     fun getFormattedNumber(value: Int): String {
+-        val length = if (value == 0) 1 else Math.log10(value.toDouble()).toInt() + 1
++        val length = value.toString().length
+         return getFormattedNumber(false, value, length)
+     }
+ 

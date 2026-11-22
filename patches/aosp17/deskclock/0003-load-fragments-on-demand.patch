@@ -1,0 +1,27 @@
+--- a/src/com/android/deskclock/uidata/UiDataModel.kt
++++ b/src/com/android/deskclock/uidata/UiDataModel.kt
+@@ -35,17 +35,18 @@
+ class UiDataModel private constructor() {
+     /** Identifies each of the primary tabs within the application.  */
+     enum class Tab(
+-        val fragmentClass: Class<*>,
++        private val fragmentClass: () -> Class<*>,
+         @param:DrawableRes val iconResId: Int,
+         @param:StringRes val labelResId: Int
+     ) {
+-        ALARMS(AlarmClockFragment::class.java, R.drawable.ic_tab_alarm, R.string.menu_alarm),
+-        CLOCKS(ClockFragment::class.java, R.drawable.ic_tab_clock, R.string.menu_clock),
+-        TIMERS(TimerFragment::class.java, R.drawable.ic_tab_timer, R.string.menu_timer),
+-        STOPWATCH(StopwatchFragment::class.java,
++        ALARMS({ AlarmClockFragment::class.java }, R.drawable.ic_tab_alarm, R.string.menu_alarm),
++        CLOCKS({ ClockFragment::class.java }, R.drawable.ic_tab_clock, R.string.menu_clock),
++        TIMERS({ TimerFragment::class.java }, R.drawable.ic_tab_timer, R.string.menu_timer),
++        STOPWATCH({ StopwatchFragment::class.java },
+                 R.drawable.ic_tab_stopwatch, R.string.menu_stopwatch);
+ 
+-        val fragmentClassName: String = fragmentClass.name
++        val fragmentClassName: String
++            get() = fragmentClass().name
+     }
+ 
+     private var mContext: Context? = null

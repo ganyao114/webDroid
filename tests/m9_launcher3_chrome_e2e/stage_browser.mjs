@@ -17,8 +17,10 @@ const m1 = 'tests/m1_chrome_ndk_cube';
 const fixtureRoot = 'tests/m9_aosp17_launcher3_boot/apps';
 const systemRoot = 'runtime/android_system';
 const provenanceName = 'upstream_provenance.json';
+const builtInNames = ['DeskClock', 'Browser2', 'Music', 'Gallery2'].map(name => `${name}-upstream.apk`);
 const shellFiles = ['index.html', 'launcher.css', 'launcher_playground.mjs', 'runtime.mjs', 'elf_inspector.mjs'];
-const launcherFiles = ['abi_helpers.mjs', 'assets.mjs', 'foreground_apk.mjs', 'launcher_host.mjs', 'scene_labels.mjs'];
+const launcherFiles = ['abi_helpers.mjs', 'assets.mjs', 'foreground_apk.mjs', 'foreground_java_apk.mjs',
+  'launcher_host.mjs', 'scene_labels.mjs'];
 const sfFiles = ['abi', 'atlas_cache', 'backend_common', 'compositor', 'display_list', 'input_ime',
   'mediacodec_bridge', 'shaders', 'webgl2_backend', 'webgpu_backend', 'webview_iframe'];
 
@@ -36,7 +38,14 @@ async function firstFile(paths, required = true) {
 export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostBuild } = {}) {
   const builds = [wasmBuild, hostBuild].filter(Boolean).map(dir => resolve(dir));
   const artifact = (paths, required) => firstFile(builds.flatMap(dir => paths.map(path => join(dir, path))), required);
-  const [cube, launcher, systemUi, dex, fallback, resources, ...fixtures] = await Promise.all([
+  const builtIns = (await Promise.all(builtInNames.map(async name => ({
+    name,
+    path: await artifact([name, `upstream-apps/${name}`, `${systemRoot}/upstream-apps/${name}`], false),
+  })))).filter(({ path }) => path);
+  const apps = builtIns.length ? builtIns : await Promise.all(fixtureNames.map(async name => ({
+    name, path: await artifact([name, `apps/${name}`, `${fixtureRoot}/${name}`]),
+  })));
+  const [cube, launcher, systemUi, dex, fallback, resources] = await Promise.all([
     artifact([cubeName, `${m6}/${cubeName}`]),
     artifact([launcherName, `${systemRoot}/launcher/${launcherName}`, `apk/${launcherName}`]),
     artifact([systemUiName, `${systemRoot}/launcher/${systemUiName}`, `tests/m9_aosp17_launcher3_boot/apk/${systemUiName}`,
@@ -45,7 +54,6 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
       `aosp17-ui/${frameworkDexName}`, `tests/m8_aosp17_ui_framework/aosp17-ui/${frameworkDexName}`]),
     artifact([fallbackDexName, `${systemRoot}/upstream-framework/${fallbackDexName}`]),
     artifact([resourcesName, `${systemRoot}/upstream-framework/framework-res-upstream.apk`]),
-    ...fixtureNames.map(name => artifact([name, `apps/${name}`, `${fixtureRoot}/${name}`])),
     // stageM6Browser also validates and copies the two unified module files.
   ]);
   const provenancePath = join(dirname(launcher), provenanceName);
@@ -65,7 +73,7 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
     [launcher, `build/${launcherName}`], [systemUi, `build/${systemUiName}`],
     [provenancePath, `build/${provenanceName}`], [dex, `build/${frameworkDexName}`],
     [fallback, `build/${fallbackDexName}`], [resources, `build/${resourcesName}`],
-    ...fixtures.map((path, index) => [path, `build/${fixtureNames[index]}`])];
+    ...apps.map(({ name, path }) => [path, `build/${name}`])];
   for (const name of ['libndk_gles3_cube_armv7a.so', 'libndk_gles3_cube_arm64.so']) {
     const file = await artifact([name, `${m6}/ndk/${name}`, `${m1}/ndk/${name}`], false);
     if (file) copies.push([file, `build/${name}`]);
@@ -79,7 +87,7 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
   const failures = results.filter(result => result.status === 'rejected');
   if (failures.length) throw new Error(failures.map(({ reason }) => reason.message).join('\n'));
   await writeFile(join(root, 'build', manifestName), JSON.stringify({
-    fixtures: fixtureNames, resources: resourcesName, launcherSources,
+    fixtures: apps.map(({ name }) => name), resources: resourcesName, launcherSources,
   }));
 }
 

@@ -1,0 +1,128 @@
+--- a/res/layout/desk_clock.xml
++++ b/res/layout/desk_clock.xml
+@@ -15,41 +15,32 @@
+   limitations under the License.
+   -->
+ 
+-<androidx.coordinatorlayout.widget.CoordinatorLayout
++<LinearLayout
+     xmlns:android="http://schemas.android.com/apk/res/android"
+-    xmlns:app="http://schemas.android.com/apk/res-auto"
+     xmlns:tools="http://schemas.android.com/tools"
+     android:id="@+id/content"
+     android:layout_width="match_parent"
+     android:layout_height="match_parent"
+-    android:fitsSystemWindows="true"
+-    app:statusBarBackground="@null">
++    android:orientation="vertical">
+ 
+-    <com.google.android.material.appbar.AppBarLayout
++    <LinearLayout
+         android:layout_width="match_parent"
+         android:layout_height="wrap_content"
+-        android:background="@null"
+-        app:elevation="0dp">
++        android:orientation="vertical">
+ 
+-        <androidx.appcompat.widget.Toolbar
++        <FrameLayout
+             android:id="@+id/toolbar"
+             android:layout_width="match_parent"
+             android:layout_height="wrap_content"
+-            app:contentInsetStart="0dp"
+             tools:ignore="RtlSymmetry">
+ 
+-            <com.google.android.material.tabs.TabLayout
++            <LinearLayout
+                 android:id="@+id/tabs"
+                 android:layout_width="match_parent"
+-                android:layout_height="match_parent"
+-                app:tabGravity="fill"
+-                app:tabIndicatorColor="@android:color/transparent"
+-                app:tabMaxWidth="0dp"
+-                app:tabMode="fixed"
+-                app:tabPaddingEnd="0dp"
+-                app:tabPaddingStart="0dp" />
++                android:layout_height="?android:attr/actionBarSize"
++                android:orientation="horizontal" />
+ 
+-        </androidx.appcompat.widget.Toolbar>
++        </FrameLayout>
+ 
+         <View
+             android:id="@+id/tab_hairline"
+@@ -59,14 +50,14 @@
+             android:background="@color/hairline"
+             android:importantForAccessibility="no" />
+ 
+-    </com.google.android.material.appbar.AppBarLayout>
++    </LinearLayout>
+ 
+     <FrameLayout
+         android:layout_width="match_parent"
+-        android:layout_height="match_parent"
+-        app:layout_behavior="@string/appbar_scrolling_view_behavior">
++        android:layout_height="0dp"
++        android:layout_weight="1">
+ 
+-        <androidx.viewpager.widget.ViewPager
++        <FrameLayout
+             android:id="@+id/desk_clock_pager"
+             android:layout_width="match_parent"
+             android:layout_height="match_parent"
+@@ -82,8 +73,7 @@
+         android:layout_height="wrap_content"
+         android:layout_gravity="bottom"
+         android:baselineAligned="false"
+-        android:orientation="horizontal"
+-        app:layout_behavior="com.android.deskclock.widget.toast.SnackbarSlidingBehavior">
++        android:orientation="horizontal">
+ 
+         <FrameLayout
+             android:layout_width="0dp"
+@@ -101,14 +91,14 @@
+ 
+         </FrameLayout>
+ 
+-        <com.google.android.material.floatingactionbutton.FloatingActionButton
++        <ImageButton
+             android:id="@+id/fab"
+-            android:layout_width="wrap_content"
+-            android:layout_height="wrap_content"
++            android:layout_width="56dp"
++            android:layout_height="56dp"
+             android:layout_gravity="center"
+             android:layout_margin="@dimen/fab_margin"
+-            app:borderWidth="0dp"
+-            app:elevation="@dimen/fab_elevation" />
++            android:background="?android:attr/selectableItemBackgroundBorderless"
++            android:scaleType="centerInside" />
+ 
+         <FrameLayout
+             android:layout_width="0dp"
+@@ -128,4 +118,4 @@
+ 
+     </LinearLayout>
+ 
+-</androidx.coordinatorlayout.widget.CoordinatorLayout>
++</LinearLayout>
+--- a/res/layout/main_clock_frame.xml
++++ b/res/layout/main_clock_frame.xml
+@@ -18,6 +18,7 @@
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     android:layout_width="match_parent"
+     android:layout_height="wrap_content"
++    android:layout_gravity="center_horizontal"
+     android:gravity="center_horizontal">
+ 
+     <!-- Left gutter. -->
+@@ -35,8 +36,7 @@
+ 
+         <FrameLayout
+             android:layout_width="wrap_content"
+-            android:layout_height="0dp"
+-            android:layout_weight="1">
++            android:layout_height="wrap_content">
+ 
+             <com.android.deskclock.AnalogClock
+                 android:id="@+id/analog_clock"
