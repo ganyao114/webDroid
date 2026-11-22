@@ -26,6 +26,7 @@ import android.view.Choreographer;
 import android.view.Display;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
+import com.android.internal.policy.PhoneLayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -199,7 +200,7 @@ public final class UiRuntime {
                 return search;
             }
             if (LAYOUT_INFLATER_SERVICE.equals(name)) {
-                if (inflater == null) inflater = new LayoutInflater(this);
+                if (inflater == null) inflater = new PhoneLayoutInflater(this);
                 return inflater;
             }
             if (LAUNCHER_APPS_SERVICE.equals(name)) {

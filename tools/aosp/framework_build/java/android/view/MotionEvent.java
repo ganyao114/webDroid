@@ -1,5 +1,8 @@
 package android.view;
 
+import android.os.Parcel;
+import android.os.Parcelable;
+
 import java.util.ArrayList;
 
 public final class MotionEvent extends InputEvent {
@@ -17,6 +20,7 @@ public final class MotionEvent extends InputEvent {
     private final long downTime;
     private long eventTime;
     private int action, metaState, buttonState, edgeFlags, actionButton, flags;
+    private int deviceId;
     private final int[] ids;
     private float[] x, y;
     private float pressure = 1f, size = 1f;
@@ -42,22 +46,28 @@ public final class MotionEvent extends InputEvent {
                                      float size, int meta, float xPrecision, float yPrecision, int device, int edges) {
         MotionEvent event = obtain(downTime, time, action, x, y, meta);
         event.pressure = pressure; event.size = size; event.edgeFlags = edges;
+        event.deviceId = device;
         return event;
     }
     public static MotionEvent obtain(MotionEvent source) { return copy(source, true); }
     public static MotionEvent obtainNoHistory(MotionEvent source) { return copy(source, false); }
     private static MotionEvent copy(MotionEvent source, boolean history) {
         MotionEvent event = new MotionEvent(source.downTime, source.eventTime, source.action,
-                source.ids, source.x, source.y, source.metaState);
+                source.ids.clone(), source.x.clone(), source.y.clone(), source.metaState);
         event.offsetX = source.offsetX; event.offsetY = source.offsetY;
         event.hScroll = source.hScroll; event.vScroll = source.vScroll;
         event.pressure = source.pressure; event.size = source.size;
         event.edgeFlags = source.edgeFlags; event.buttonState = source.buttonState;
         event.actionButton = source.actionButton; event.flags = source.flags;
+        event.deviceId = source.deviceId;
         event.setSource(source.getSource());
+        event.setDisplayId(source.getDisplayId());
+        event.setTainted(source.isTainted());
         if (history && source.history != null) {
             event.history = new ArrayList<>();
-            for (Sample sample : source.history) event.history.add(sample);
+            for (Sample sample : source.history) {
+                event.history.add(new Sample(sample.time, sample.x.clone(), sample.y.clone()));
+            }
         }
         return event;
     }
@@ -70,7 +80,9 @@ public final class MotionEvent extends InputEvent {
     }
 
     @Override public long getEventTime() { return eventTime; }
-    public long getEventTimeNanos() { return eventTime * 1_000_000; }
+    @Override public int getDeviceId() { return deviceId; }
+    @Override public MotionEvent copy() { return obtain(this); }
+    @Override public void cancel() { action = ACTION_CANCEL; }
     public long getDownTime() { return downTime; }
     public int getAction() { return action; }
     public int getActionMasked() { return action & ACTION_MASK; }
@@ -133,4 +145,73 @@ public final class MotionEvent extends InputEvent {
         this.x = new float[] {x - offsetX}; this.y = new float[] {y - offsetY};
         this.pressure = pressure; this.size = size; this.metaState |= metaState;
     }
+
+    @Override public void writeToParcel(Parcel out, int parcelFlags) {
+        out.writeInt(PARCEL_TOKEN_MOTION_EVENT);
+        out.writeLong(downTime);
+        out.writeLong(eventTime);
+        out.writeInt(action);
+        out.writeIntArray(ids);
+        out.writeFloatArray(x);
+        out.writeFloatArray(y);
+        out.writeInt(metaState);
+        out.writeInt(deviceId);
+        out.writeInt(getSource());
+        out.writeInt(getDisplayId());
+        out.writeBoolean(isTainted());
+        out.writeInt(buttonState);
+        out.writeInt(edgeFlags);
+        out.writeInt(actionButton);
+        out.writeInt(flags);
+        out.writeFloat(pressure);
+        out.writeFloat(size);
+        out.writeFloat(offsetX);
+        out.writeFloat(offsetY);
+        out.writeFloat(hScroll);
+        out.writeFloat(vScroll);
+        out.writeInt(getHistorySize());
+        if (history != null) {
+            for (Sample sample : history) {
+                out.writeLong(sample.time);
+                out.writeFloatArray(sample.x);
+                out.writeFloatArray(sample.y);
+            }
+        }
+    }
+
+    public static final Parcelable.Creator<MotionEvent> CREATOR =
+            new Parcelable.Creator<MotionEvent>() {
+        @Override public MotionEvent createFromParcel(Parcel in) {
+            if (in.readInt() != PARCEL_TOKEN_MOTION_EVENT) {
+                throw new android.os.BadParcelableException("Expected a motion event");
+            }
+            MotionEvent event = new MotionEvent(in.readLong(), in.readLong(), in.readInt(),
+                    in.createIntArray(), in.createFloatArray(), in.createFloatArray(), in.readInt());
+            event.deviceId = in.readInt();
+            event.setSource(in.readInt());
+            event.setDisplayId(in.readInt());
+            event.setTainted(in.readBoolean());
+            event.buttonState = in.readInt();
+            event.edgeFlags = in.readInt();
+            event.actionButton = in.readInt();
+            event.flags = in.readInt();
+            event.pressure = in.readFloat();
+            event.size = in.readFloat();
+            event.offsetX = in.readFloat();
+            event.offsetY = in.readFloat();
+            event.hScroll = in.readFloat();
+            event.vScroll = in.readFloat();
+            int count = in.readInt();
+            if (count > 0) {
+                event.history = new ArrayList<>();
+                for (int i = 0; i < count; i++) {
+                    event.history.add(new Sample(in.readLong(), in.createFloatArray(),
+                            in.createFloatArray()));
+                }
+            }
+            return event;
+        }
+
+        @Override public MotionEvent[] newArray(int size) { return new MotionEvent[size]; }
+    };
 }

@@ -24,9 +24,11 @@ jlong StoreGradient(JNIEnv* env, jlong matrix, jint kind, jint tile, std::array<
             if (kind == 1) {
                 const auto end = MapPoint(*m, geometry[2], geometry[3]);
                 gradient.geometry = {start[0], start[1], end[0], end[1]};
-            } else {
+            } else if (kind == 2) {
                 const auto edge = MapPoint(*m, geometry[0] + geometry[2], geometry[1]);
                 gradient.geometry = {start[0], start[1], std::hypot(edge[0] - start[0], edge[1] - start[1]), 0};
+            } else {
+                gradient.geometry = {start[0], start[1], 0, 0};
             }
         }
         return Peers<GradientData, &State::gradients>(*state).Insert(std::move(gradient));
@@ -40,6 +42,10 @@ jlong CreateLinearGradient(JNIEnv* env, jobject, jlong matrix, jfloat x, jfloat 
 jlong CreateRadialGradient(JNIEnv* env, jclass, jlong matrix, jfloat, jfloat, jfloat, jfloat x,
                            jfloat y, jfloat radius, jlongArray colors, jfloatArray positions, jint tile, jlong) {
     return StoreGradient(env, matrix, 2, tile, {x, y, radius, 0}, colors, positions);
+}
+jlong CreateSweepGradient(JNIEnv* env, jclass, jlong matrix, jfloat x, jfloat y,
+                          jlongArray colors, jfloatArray positions, jlong) {
+    return StoreGradient(env, matrix, 3, 0, {x, y, 0, 0}, colors, positions);
 }
 void ReleaseShader(JNIEnv* env, jclass, jlong id) {
     if (auto* state = GetState(env); state && state->gradients) state->gradients->Erase(id);
@@ -106,13 +112,65 @@ uint32_t FilterColor(const PaintData& paint, uint32_t color) {
         const uint32_t alpha = ((tint >> 24) * (color >> 24) + 127) / 255;
         return tint & 0xffffffu | alpha << 24;
     }
-    if (mode == 9 && tint >> 24 == 255) { // Opaque SRC_ATOP
-        return tint & 0xffffffu | color & 0xff000000u;
+    const float sa = (tint >> 24) / 255.f, da = (color >> 24) / 255.f;
+    float src = 1.f, dst = 1.f;
+    switch (mode) {
+    case 0: return 0; // CLEAR
+    case 1: return tint;
+    case 2: return color;
+    case 3: dst = 1 - sa; break;
+    case 4: src = 1 - da; break;
+    case 6: src = 0; dst = sa; break;
+    case 7: src = 1 - da; dst = 0; break;
+    case 8: src = 0; dst = 1 - sa; break;
+    case 9: src = da; dst = 1 - sa; break;
+    case 10: src = 1 - da; dst = sa; break;
+    case 11: src = 1 - da; dst = 1 - sa; break;
+    default: break;
     }
-    return color;
+    const float alpha = mode == 13 ? sa * da : mode >= 14 ? sa + da - sa * da
+                                                                : std::min(1.f, src * sa + dst * da);
+    if (!(alpha > 0)) return 0;
+    uint32_t result = static_cast<uint32_t>(std::lround(255 * alpha)) << 24;
+    for (unsigned shift : {0u, 8u, 16u}) {
+        const float s = ((tint >> shift) & 255) / 255.f, d = ((color >> shift) & 255) / 255.f;
+        float value = s * src * sa + d * dst * da;
+        if (mode == 13) {
+            value = s * d * alpha;
+        } else if (mode >= 14) {
+            float blend = s;
+            switch (mode) {
+            case 14: blend = s + d - s * d; break;
+            case 15: blend = d < .5f ? 2 * s * d : 1 - 2 * (1 - s) * (1 - d); break;
+            case 16: blend = std::min(s, d); break;
+            case 17: blend = std::max(s, d); break;
+            case 18: blend = d == 0 ? 0 : s == 1 ? 1 : std::min(1.f, d / (1 - s)); break;
+            case 19: blend = d == 1 ? 1 : s == 0 ? 0 : 1 - std::min(1.f, (1 - d) / s); break;
+            case 20: blend = s < .5f ? 2 * s * d : 1 - 2 * (1 - s) * (1 - d); break;
+            case 21: {
+                const float curve = d <= .25f ? ((16 * d - 12) * d + 4) * d : std::sqrt(d);
+                blend = s <= .5f ? d - (1 - 2 * s) * d * (1 - d) : d + (2 * s - 1) * (curve - d);
+                break;
+            }
+            case 22: blend = std::abs(d - s); break;
+            case 23: blend = s + d - 2 * s * d; break;
+            case 24: blend = s * d; break;
+            }
+            value = s * sa * (1 - da) + d * da * (1 - sa) + blend * sa * da;
+        }
+        result |= static_cast<uint32_t>(std::lround(255 * std::clamp(value / alpha, 0.f, 1.f))) << shift;
+    }
+    return result;
+}
+
+void RetainColorFilter(JNIEnv*, jclass, jobject, jlong) {
+    // Blend filters encode the mode and color in the handle itself.
 }
 
 void RegisterPaintEffects(interp::Vm& vm) {
+    if (vm.HasClass("Landroid/graphics/ColorFilter;"))
+        RegisterIfDeclared(vm, "android/graphics/ColorFilter",
+            Method<RetainColorFilter>(vm, "nRegisterNativeAllocation", "(Landroid/graphics/ColorFilter;J)V"));
     if (RegisterIfDeclared(vm, "android/graphics/Color", Method<RgbToHsv>(vm, "nativeRGBToHSV", "(III[F)V")))
         Register(vm, "android/graphics/Color", Method<HsvToColor>(vm, "nativeHSVToColor", "(I[F)I"));
     if (vm.HasClass("Landroid/graphics/LinearGradient;") &&
@@ -125,6 +183,9 @@ void RegisterPaintEffects(interp::Vm& vm) {
     if (vm.HasClass("Landroid/graphics/RadialGradient;"))
         RegisterIfDeclared(vm, "android/graphics/RadialGradient",
             Method<CreateRadialGradient>(vm, "nativeCreate", "(JFFFFFF[J[FIJ)J"));
+    if (vm.HasClass("Landroid/graphics/SweepGradient;"))
+        RegisterIfDeclared(vm, "android/graphics/SweepGradient",
+            Method<CreateSweepGradient>(vm, "nativeCreate", "(JFF[J[FJ)J"));
     if (vm.HasClass("Landroid/graphics/BlurMaskFilter;") &&
         RegisterIfDeclared(vm, "android/graphics/BlurMaskFilter",
             Method<CreateBlurMask>(vm, "nativeConstructor", "(FI)J"))) {

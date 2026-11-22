@@ -406,7 +406,13 @@ export class LauncherHost {
     const nextCanvas = this.canvas.cloneNode(false);
     this.canvas.replaceWith(nextCanvas);
     this.canvas = nextCanvas;
-    this.#initialization = this.#boot();
+    // A locale change restarts Android. Start with a fresh linear heap so a
+    // previous session's large APK allocations cannot fragment the next boot.
+    this.#module = undefined;
+    this.#initialization = (async () => {
+      this.#module = await this.loadSystem();
+      if (!this.#abort.signal.aborted) await this.#boot();
+    })();
     try {
       await this.#initialization;
     } catch (error) {

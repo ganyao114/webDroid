@@ -433,6 +433,7 @@ void DrawGradient(JNIEnv* env, jclass, jfloat l, jfloat t, jfloat r, jfloat b, j
 #include "paint.inc"
 #include "paint_effects.inc"
 #include "recording_canvas.inc"
+#include "vector_drawable.inc"
 
 void RegisterCanvas(interp::Vm& vm) {
     if (!RegisterModernCanvas(vm)) Register(vm, "android/graphics/Canvas", Method<Shape>(vm, "nativeShape", "(IFFFFFFIIF)V"),

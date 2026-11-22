@@ -2,11 +2,23 @@
 #include "software_raster.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <numbers>
 #include <stdexcept>
 
 namespace wa::ui_jni::detail {
+
+struct SvgPathData {
+    struct Command {
+        char verb;
+        bool explicit_verb;
+        uint8_t count = 0;
+        std::array<float, 7> values{};
+    };
+    std::vector<Command> commands;
+};
+
 namespace {
 
 struct Point {
@@ -36,7 +48,7 @@ class PathData {
   public:
     explicit PathData(std::string_view input) : input_(input) {}
 
-    std::vector<float> Parse() {
+    std::vector<float> Parse(SvgPathData* data = nullptr) {
         char command = 0;
         Space();
         while (cursor_ < input_.size()) {
@@ -44,6 +56,7 @@ class PathData {
             const bool changed = IsLetter(next);
             if (changed)
                 command = input_[cursor_++];
+            if (data) raw_ = &data->commands.emplace_back(SvgPathData::Command{command, changed});
             if (commands_.empty() && Upper(command) != 'M')
                 Invalid();
             const bool relative = command != Upper(command);
@@ -173,7 +186,11 @@ class PathData {
         }
         if (!std::isfinite(value))
             Invalid();
-        return minus ? -value : value;
+        return Record(minus ? -value : value);
+    }
+    double Record(double value) {
+        if (raw_) raw_->values[raw_->count++] = static_cast<float>(value);
+        return value;
     }
     bool Flag() {
         Separator();
@@ -181,7 +198,7 @@ class PathData {
         if (flag != '0' && flag != '1')
             Invalid();
         ++cursor_;
-        return flag == '1';
+        return Record(flag == '1') != 0;
     }
     Point Coordinate(bool relative) {
         Point point{Number(), Number()};
@@ -277,7 +294,133 @@ class PathData {
     Point current_, contour_, control_;
     char previous_ = 0;
     std::vector<float> commands_;
+    SvgPathData::Command* raw_ = nullptr;
 };
+
+PathGeometry MakeGeometry(std::span<const float> commands) {
+    PathGeometry path;
+    path.verbs.reserve(commands.size() / 7);
+    for (size_t i = 0; i < commands.size(); i += 7) {
+        const auto* p = commands.data() + i + 1;
+        switch (static_cast<int>(commands[i])) {
+        case WA_PATH_MOVE: path.Move(p[0], p[1]); break;
+        case WA_PATH_LINE: path.Line(p[0], p[1]); break;
+        case WA_PATH_QUAD: path.Quad(p[0], p[1], p[2], p[3]); break;
+        case WA_PATH_CUBIC: path.Cubic(p[0], p[1], p[2], p[3], p[4], p[5]); break;
+        case WA_PATH_CLOSE: path.Close(); break;
+        }
+    }
+    return path;
+}
+
+std::string SvgString(const SvgPathData& data) {
+    std::string text;
+    for (const auto& command : data.commands) {
+        if (command.explicit_verb) text.push_back(command.verb);
+        for (uint8_t i = 0; i < command.count; ++i) {
+            text.push_back(' ');
+            if (Upper(command.verb) == 'A' && (i == 3 || i == 4)) {
+                text.push_back(command.values[i] != 0 ? '1' : '0');
+            } else {
+                char number[32];
+                const auto end = std::to_chars(number, number + sizeof(number), command.values[i]);
+                text.append(number, end.ptr);
+            }
+        }
+    }
+    return text;
+}
+
+SvgPathData* GetSvgData(JNIEnv* env, jlong id) {
+    return Peer<SvgPathData, &State::svg_paths>(env, id);
+}
+
+jlong StoreSvgData(JNIEnv* env, SvgPathData data = {}) {
+    auto* state = GetState(env);
+    return state ? Peers<SvgPathData, &State::svg_paths>(*state).Insert(std::move(data)) : 0;
+}
+
+jlong CreateEmptySvgData(JNIEnv* env, jclass) {
+    return CallSafely(env, [&] { return StoreSvgData(env); });
+}
+jlong CopySvgData(JNIEnv* env, jclass, jlong source) {
+    return CallSafely(env, [&]() -> jlong {
+        if (const auto* src = GetSvgData(env, source)) return StoreSvgData(env, *src);
+        return 0;
+    });
+}
+jlong CreateSvgData(JNIEnv* env, jclass, jstring text, jint) {
+    return CallSafely(env, [&]() -> jlong {
+        const auto utf8 = Utf8(env, text);
+        if (env->ExceptionCheck()) return 0;
+        SvgPathData data;
+        try {
+            PathData(utf8).Parse(&data);
+        } catch (const std::invalid_argument&) {
+            return 0;
+        }
+        return StoreSvgData(env, std::move(data));
+    });
+}
+void SetSvgData(JNIEnv* env, jclass, jlong dest, jlong source) {
+    CallSafely(env, [&] {
+        auto* out = GetSvgData(env, dest);
+        const auto* in = GetSvgData(env, source);
+        if (out && in) *out = *in;
+    });
+}
+bool CanMorph(const SvgPathData& from, const SvgPathData& to) {
+    return std::ranges::equal(from.commands, to.commands, [](const auto& a, const auto& b) {
+        return a.verb == b.verb && a.explicit_verb == b.explicit_verb && a.count == b.count;
+    });
+}
+jboolean CanMorphSvgData(JNIEnv* env, jclass, jlong from, jlong to) {
+    const auto* a = GetSvgData(env, from);
+    const auto* b = GetSvgData(env, to);
+    return a && b && CanMorph(*a, *b);
+}
+jboolean InterpolateSvgData(JNIEnv* env, jclass, jlong dest, jlong from, jlong to, jfloat fraction) {
+    return CallSafely(env, [&]() -> jboolean {
+        auto* out = GetSvgData(env, dest);
+        const auto* a = GetSvgData(env, from);
+        const auto* b = GetSvgData(env, to);
+        if (!out || !a || !b || !CanMorph(*a, *b)) return false;
+        if (out != a && out != b) *out = *a;
+        for (size_t i = 0; i < out->commands.size(); ++i)
+            for (uint8_t j = 0; j < out->commands[i].count; ++j)
+                out->commands[i].values[j] = std::lerp(a->commands[i].values[j], b->commands[i].values[j], fraction);
+        return true;
+    });
+}
+
+jlong PathFromData(JNIEnv* env, jclass, jstring text) {
+    return CallSafely(env, [&]() -> jlong {
+        auto* state = GetState(env);
+        if (!state) return 0;
+        auto geometry = ParseSvgPath(env, text);
+        return geometry ? Peers<PathGeometry, &State::paths>(*state).Insert(std::move(*geometry)) : 0;
+    });
+}
+
+void ReplaceGeometry(PathGeometry& path, PathGeometry geometry) {
+    geometry.fill = path.fill;
+    geometry.generation = path.generation == INT32_MAX ? 1 : path.generation + 1;
+    path = std::move(geometry);
+}
+void ParseStringForPath(JNIEnv* env, jclass, jlong id, jstring text, jint) {
+    CallSafely(env, [&] {
+        if (auto* path = Path(env, id)) {
+            if (auto geometry = ParseSvgPath(env, text)) ReplaceGeometry(*path, std::move(*geometry));
+        }
+    });
+}
+void CreatePathFromSvgData(JNIEnv* env, jclass, jlong id, jlong data) {
+    CallSafely(env, [&] {
+        if (auto* path = Path(env, id)) {
+            if (auto geometry = PathFromSvgData(env, data)) ReplaceGeometry(*path, std::move(*geometry));
+        }
+    });
+}
 
 jfloatArray ParsePathData(JNIEnv* env, jclass, jstring text) {
     return CallSafely(env, [&]() -> jfloatArray {
@@ -299,9 +442,44 @@ jfloatArray ParsePathData(JNIEnv* env, jclass, jstring text) {
 
 } // namespace
 
+std::optional<PathGeometry> ParseSvgPath(JNIEnv* env, jstring text) {
+    auto input = Utf8(env, text);
+    if (env->ExceptionCheck()) return std::nullopt;
+    try {
+        return MakeGeometry(PathData(input).Parse());
+    } catch (const std::invalid_argument& error) {
+        Throw(env, "java/lang/IllegalArgumentException", error.what());
+        return std::nullopt;
+    }
+}
+
+std::optional<PathGeometry> PathFromSvgData(JNIEnv* env, jlong handle) {
+    const auto* data = GetSvgData(env, handle);
+    if (!data) return std::nullopt;
+    try {
+        return MakeGeometry(PathData(SvgString(*data)).Parse());
+    } catch (const std::invalid_argument& error) {
+        Throw(env, "java/lang/IllegalArgumentException", error.what());
+        return std::nullopt;
+    }
+}
+
 #include "path_geometry.inc"
 
 void RegisterPath(interp::Vm& vm) {
+    if (vm.HasClass("Landroid/util/PathParser;")) {
+        Register(vm, "android/util/PathParser",
+                 Method<ParseStringForPath>(vm, "nParseStringForPath", "(JLjava/lang/String;I)V"),
+                 Method<CreateSvgData>(vm, "nCreatePathDataFromString", "(Ljava/lang/String;I)J"),
+                 Method<CreatePathFromSvgData>(vm, "nCreatePathFromPathData", "(JJ)V"),
+                 Method<CreateEmptySvgData>(vm, "nCreateEmptyPathData", "()J"),
+                 Method<CopySvgData>(vm, "nCreatePathData", "(J)J"),
+                 Method<InterpolateSvgData>(vm, "nInterpolatePathData", "(JJJF)Z"),
+                 Method<RetainPeer<SvgPathData, &State::svg_paths>>(vm, "nRegisterPathData",
+                     "(Landroid/util/PathParser$PathData;J)V"),
+                 Method<CanMorphSvgData>(vm, "nCanMorph", "(JJ)Z"),
+                 Method<SetSvgData>(vm, "nSetPathData", "(JJ)V"));
+    }
     constexpr const char* name = "android/graphics/Path";
     if (!RegisterIfDeclared(vm, name, Method<InitPath>(vm, "nInit", "()J"))) {
         Register(vm, name, Method<ParsePathData>(vm, "nativeParsePathData", "(Ljava/lang/String;)[F"));

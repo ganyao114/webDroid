@@ -516,7 +516,8 @@ void CheckRuntime(const char* apk, const char* upstream, const char* framework, 
                       args);
         bridge.LaunchActivity(vm, {.apk_path = fixture_apk,
                                    .class_name = "org.wasmandroid.tests.systemui.RenderActivity",
-                                   .density_dpi = 160, .width = kWidth, .height = kHeight});
+                                   .density_dpi = 160, .width = kWidth, .height = kHeight,
+                                   .framework_resource_apk = platform});
         auto* host = roots.Hold(vm.CallStatic(kFixture, "host", "()Landroid/widget/FrameLayout;").ref());
         const std::array mount_args{
             Value::Ref(host),

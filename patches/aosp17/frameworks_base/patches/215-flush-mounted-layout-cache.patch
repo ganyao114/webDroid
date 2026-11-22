@@ -1,0 +1,11 @@
+--- a/frameworks/base/core/java/android/content/res/Resources.java
++++ b/frameworks/base/core/java/android/content/res/Resources.java
+@@ -346,6 +346,8 @@
+             mMountedSystem = null;
+         }
+         if (mOwnedAssets != null) {
++            // Release cached XML blocks and their native references before closing the mount.
++            flushLayoutCache();
+             mOwnedAssets.close();
+             mOwnedAssets = null;
+         }

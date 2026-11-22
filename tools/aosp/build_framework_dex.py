@@ -12,8 +12,8 @@ import tempfile
 import zipfile
 
 sys.dont_write_bytecode = True
-from build_pm_dex import run, write_depfile, write_jar
-from build_upstream_framework_dex import apply_patch, dex_from_jar, stage_java
+from build_pm_dex import dex_profile, run, write_depfile, write_jar
+from build_upstream_framework_dex import apply_patch, dex_entries, dex_from_jar, stage_java
 from framework_build.generate_unicode import generate as generate_unicode
 
 HERE = Path(__file__).resolve().parent
@@ -141,6 +141,9 @@ def build(args, stage):
     compatibility = stage / "compatibility-classes.jar"
     write_jar(compatibility, {name: data for name, data in entries.items() if name not in primary})
     dex_from_jar(args, stage, compatibility, Path(DEX).stem, [args.upstream_classes])
+    primary_types = {"L" + name.removesuffix(".class") + ";" for name in primary}
+    for dex in dex_entries(stage / DEX):
+        dex_profile(dex, set(), primary_types)
     write_jar(stage / JAR, entries | primary)
     return inputs, len(upstream)
 

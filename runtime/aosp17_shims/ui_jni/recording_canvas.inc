@@ -345,7 +345,8 @@ const GradientData* PaintGradient(JNIEnv* env, const CanvasTarget& canvas, const
     return canvas.state->gradients->Get(env, paint.shader);
 }
 
-void SoftwarePath(JNIEnv* env, const CanvasTarget& canvas, const PathGeometry& path, const PaintData& paint) {
+void SoftwarePath(JNIEnv* env, const CanvasTarget& canvas, const PathGeometry& path, const PaintData& paint,
+                  std::span<const jint> clip = {}, const GradientData* vector_gradient = nullptr) {
     auto dst = RasterPixels(*canvas.bitmap);
     auto transform = RasterTransform(canvas.data->frame);
     Object verbs;
@@ -356,7 +357,7 @@ void SoftwarePath(JNIEnv* env, const CanvasTarget& canvas, const PathGeometry& p
     }
     const auto color = DisplayPaint(canvas, paint).argb;
     Object geometry, stops, colors;
-    const auto* gradient = PaintGradient(env, canvas, paint);
+    const auto* gradient = vector_gradient ? vector_gradient : PaintGradient(env, canvas, paint);
     if (env->ExceptionCheck()) return;
     if (gradient) {
         for (auto coordinate : gradient->geometry) geometry.elements.push_back(Value::Float(coordinate));
@@ -373,7 +374,7 @@ void SoftwarePath(JNIEnv* env, const CanvasTarget& canvas, const PathGeometry& p
         Value::Int(gradient ? gradient->type : 0), Value::Int(gradient ? gradient->tile : 0),
         Value::Ref(&geometry), Value::Ref(&stops), Value::Ref(&colors), Value::Int(paint.style), Value::Float(paint.stroke_width),
         Value::Int(paint.cap), Value::Int(paint.join), Value::Float(paint.miter)};
-    interp::software_raster::DrawPath(interp::JniBridge::From(env).Vm(), nullptr, args);
+    interp::software_raster::DrawPathWithClip(interp::JniBridge::From(env).Vm(), args, clip);
     StoreRasterPixels(*canvas.bitmap, dst);
 }
 
@@ -396,6 +397,30 @@ void EmitPath(JNIEnv* env, const CanvasTarget& canvas, const PathGeometry& path,
                                        path.fill >= 2 ? WA_PATH_EVEN_ODD : path.fill, style);
         });
     }
+}
+
+void MaskCanvasBitmap(JNIEnv* env, jclass, jlong bitmap_id, jlong path_id) {
+    CallSafely(env, [&] {
+        auto* bitmap = Bitmap(env, bitmap_id);
+        const auto* path = Path(env, path_id);
+        if (!bitmap || !path || bitmap->immutable || bitmap->recycled) return;
+        BitmapData mask;
+        mask.width = bitmap->width;
+        mask.height = bitmap->height;
+        mask.pixels.resize(bitmap->pixels.size());
+        CanvasData data;
+        data.width = mask.width;
+        data.height = mask.height;
+        data.Reset();
+        const CanvasTarget target{GetState(env), &data, &mask};
+        SoftwarePath(env, target, *path, PaintData{});
+        if (env->ExceptionCheck()) return;
+        for (size_t i = 0; i < mask.pixels.size(); ++i) {
+            const auto alpha = (uint32_t(mask.pixels[i]) >> 24) / 255.f;
+            bitmap->pixels[i] = Opacity(bitmap->pixels[i], alpha);
+        }
+        bitmap->Changed();
+    });
 }
 
 void DrawCanvasColor(JNIEnv* env, jclass, jlong id, jint color, jint mode) {
@@ -707,6 +732,55 @@ const PaintData* BitmapPaint(JNIEnv* env, jlong paint) {
     return paint ? Paint(env, paint) : &fallback;
 }
 
+struct PatchSpan {
+    float from, to, dst_from, dst_to;
+};
+
+std::vector<PatchSpan> PartitionPatch(std::span<const int32_t> divisions, float size,
+                                      float start, float end, float density) {
+    float stretch = 0;
+    for (size_t i = 0; i < divisions.size(); i += 2)
+        stretch += std::min<float>(size, divisions[i + 1]) - std::min<float>(size, divisions[i]);
+    const float fixed = size - stretch, extent = end - start;
+    const float fixed_scale = fixed > 0 ? std::min(density, extent / fixed) : density;
+    const float stretch_scale = stretch > 0 ? std::max(0.f, extent - fixed * fixed_scale) / stretch : 0;
+    std::vector<PatchSpan> spans;
+    spans.reserve(divisions.size() + 1);
+    float from = 0, dst = start;
+    for (size_t i = 0; i <= divisions.size(); ++i) {
+        const float to = i == divisions.size() ? size : std::min<float>(size, divisions[i]);
+        const float next = i == divisions.size() ? end :
+            std::min(end, dst + (to - from) * (i % 2 ? stretch_scale : fixed_scale));
+        if (to > from && next > dst) spans.push_back({from, to, dst, next});
+        from = to;
+        dst = next;
+    }
+    return spans;
+}
+
+void DrawCanvasNinePatch(JNIEnv* env, jclass, jlong id, jlong bitmap, jlong chunk, jfloat left,
+                         jfloat top, jfloat right, jfloat bottom, jlong paint, jint screen_density,
+                         jint bitmap_density) {
+    CallSafely(env, [&] {
+        const auto canvas = Canvas(env, id);
+        const auto* image = Bitmap(env, bitmap);
+        const auto* patch = Peer<NinePatchData, &State::nine_patches>(env, chunk);
+        const auto* p = BitmapPaint(env, paint);
+        if (!canvas || !image || !patch || !p || !(right > left && bottom > top)) return;
+        const float density = screen_density > 0 && bitmap_density > 0
+            ? float(screen_density) / bitmap_density : 1;
+        const auto x = PartitionPatch(patch->x_divisions, image->width, left, right, density);
+        const auto y = PartitionPatch(patch->y_divisions, image->height, top, bottom, density);
+        for (const auto& row : y) {
+            for (const auto& col : x) {
+                if (canvas.state->result != WA_SF_OK) return;
+                PaintBitmap(env, canvas, *image, bitmap, {col.from, row.from, col.to, row.to},
+                            {col.dst_from, row.dst_from, col.dst_to, row.dst_to}, *p);
+            }
+        }
+    });
+}
+
 void DrawCanvasBitmapRect(JNIEnv* env, jclass, jlong id, jlong bitmap, jfloat sl, jfloat st, jfloat sr,
                           jfloat sb, jfloat dl, jfloat dt, jfloat dr, jfloat db, jlong paint, jint, jint) {
     CallSafely(env, [&] {
@@ -828,8 +902,10 @@ bool RegisterModernCanvas(interp::Vm& vm) {
              Method<ClipCanvasRound>(vm, "nClipRoundRect", "(JFFFFFF)Z"),
              Method<DrawCanvasGradient>(vm, "nDrawLinearGradient", "(JFFFFFIIF)V"),
              Method<DrawCanvasMaskedBitmap>(vm, "nDrawMaskedBitmap", "(JJFFFFFFFFJIF)V"));
+    RegisterIfDeclared(vm, name, Method<MaskCanvasBitmap>(vm, "nMaskBitmap", "(JJ)V"));
     Register(vm, "android/graphics/BaseCanvas",
              Method<DrawCanvasColor>(vm, "nDrawColor", "(JII)V"),
+             Method<DrawCanvasNinePatch>(vm, "nDrawNinePatch", "(JJJFFFFJII)V"),
              Method<DrawCanvasColorLong>(vm, "nDrawColor", "(JJJI)V"),
              Method<DrawCanvasPaint>(vm, "nDrawPaint", "(JJ)V"),
              Method<DrawCanvasPoint>(vm, "nDrawPoint", "(JFFJ)V"),

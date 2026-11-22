@@ -573,6 +573,7 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     detail::RegisterMatrix(vm);
     detail::RegisterPath(vm);
     detail::RegisterBitmaps(vm);
+    detail::RegisterVectors(vm);
     detail::bindings.emplace(env, state_.get());
     state_->env = env;
     state_->vm = &vm;

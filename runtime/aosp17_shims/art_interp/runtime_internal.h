@@ -133,6 +133,7 @@ struct Class {
   LinkState link_state = LinkState::Unlinked;
   InitState init_state = InitState::Uninitialized;
   size_t instance_slots = 0;
+  uint64_t native_calls = 0;
   std::map<std::string, Field> fields;
   std::vector<Field*> field_order;
   std::map<std::string, Method> methods;

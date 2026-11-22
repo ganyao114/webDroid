@@ -22,10 +22,14 @@ struct MatrixStore;
 template <class T> class GraphicsPeers;
 struct PaintData;
 struct BitmapData;
+struct NinePatchData;
 struct GradientData;
 struct FontVariation;
 struct PathGeometry;
 struct CanvasData;
+struct SvgPathData;
+struct VectorNode;
+struct VectorTree;
 
 struct State {
     JNIEnv* env = nullptr;
@@ -56,10 +60,15 @@ struct State {
     std::shared_ptr<MatrixStore> matrices;
     std::shared_ptr<GraphicsPeers<PaintData>> paints;
     std::shared_ptr<GraphicsPeers<BitmapData>> bitmaps;
+    std::shared_ptr<GraphicsPeers<NinePatchData>> nine_patches;
     std::shared_ptr<GraphicsPeers<GradientData>> gradients;
     std::shared_ptr<GraphicsPeers<FontVariation>> variations;
     std::shared_ptr<GraphicsPeers<PathGeometry>> paths;
+    std::shared_ptr<GraphicsPeers<SvgPathData>> svg_paths;
     std::shared_ptr<GraphicsPeers<CanvasData>> canvases;
+    std::shared_ptr<GraphicsPeers<std::shared_ptr<VectorNode>>> vector_nodes;
+    std::shared_ptr<GraphicsPeers<VectorTree>> vector_trees;
+    std::array<jfieldID, 4> vector_bounds_fields{};
     uint64_t recording_serial = 0;
     jlong default_typeface = 0;
 
@@ -122,5 +131,6 @@ void RegisterCanvas(interp::Vm& vm);
 void RegisterMatrix(interp::Vm& vm);
 void RegisterPath(interp::Vm& vm);
 void RegisterBitmaps(interp::Vm& vm);
+void RegisterVectors(interp::Vm& vm);
 
 } // namespace wa::ui_jni::detail

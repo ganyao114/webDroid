@@ -135,6 +135,9 @@ struct PathGeometry {
     bool Empty() const;
 };
 
+std::optional<PathGeometry> ParseSvgPath(JNIEnv* env, jstring text);
+std::optional<PathGeometry> PathFromSvgData(JNIEnv* env, jlong handle);
+
 struct BitmapData {
     jint width = 0, height = 0, config = 5;
     bool has_alpha = true, premultiplied = true, immutable = false, mipmap = false, recycled = false;
@@ -144,6 +147,11 @@ struct BitmapData {
 
     void Changed() { generation = generation == INT32_MAX ? 1 : generation + 1; }
     jint PutColor(uint32_t color) const;
+};
+
+struct NinePatchData {
+    std::vector<int32_t> x_divisions;
+    std::vector<int32_t> y_divisions;
 };
 
 struct GradientData {

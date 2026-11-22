@@ -1,0 +1,514 @@
+--- a/frameworks/base/graphics/java/android/graphics/drawable/VectorDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/VectorDrawable.java
+@@ -47,20 +47,16 @@
+ import android.util.Xml;
+ 
+ import com.android.internal.R;
+-import com.android.internal.util.VirtualRefBasePtr;
+ 
+ import dalvik.annotation.optimization.FastNative;
+-import dalvik.system.VMRuntime;
+ 
+ import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+ 
+ import java.io.IOException;
+-import java.nio.ByteBuffer;
+-import java.nio.ByteOrder;
+ import java.util.ArrayList;
+ import java.util.Map;
+-import java.util.Stack;
++import java.util.ArrayDeque;
+ 
+ /**
+  * This lets you create a drawable based on an XML vector graphic.
+@@ -427,32 +423,20 @@
+         final long colorFilterNativeInstance = colorFilter == null ? 0 :
+                 colorFilter.getNativeInstance();
+         boolean canReuseCache = mVectorState.canReuseCache();
+-        int pixelCount = nDraw(mVectorState.getNativeRenderer(), canvas.getNativeCanvasWrapper(),
+-                colorFilterNativeInstance, mTmpBounds, needMirroring(),
+-                canReuseCache);
+-        if (pixelCount == 0) {
+-            // Invalid canvas matrix or drawable bounds. This would not affect existing bitmap
+-            // cache, if any.
+-            return;
+-        }
+-
+-        int deltaInBytes;
+-        // Track different bitmap cache based whether the canvas is hw accelerated. By doing so,
+-        // we don't over count bitmap cache allocation: if the input canvas is always of the same
+-        // type, only one bitmap cache is allocated.
+-        if (canvas.isHardwareAccelerated()) {
+-            // Each pixel takes 4 bytes.
+-            deltaInBytes = (pixelCount - mVectorState.mLastHWCachePixelCount) * 4;
+-            mVectorState.mLastHWCachePixelCount = pixelCount;
+-        } else {
+-            // Each pixel takes 4 bytes.
+-            deltaInBytes = (pixelCount - mVectorState.mLastSWCachePixelCount) * 4;
+-            mVectorState.mLastSWCachePixelCount = pixelCount;
+-        }
+-        if (deltaInBytes > 0) {
+-            VMRuntime.getRuntime().registerNativeAllocation(deltaInBytes);
+-        } else if (deltaInBytes < 0) {
+-            VMRuntime.getRuntime().registerNativeFree(-deltaInBytes);
++        nDraw(mVectorState.getNativeRenderer(), canvas.getNativeCanvasWrapper(),
++                colorFilterNativeInstance, mTmpBounds, needMirroring(), canReuseCache);
++    }
++
++    private static final class NativeTree {
++        private long mHandle;
++        NativeTree(long handle) {
++            mHandle = handle;
++            nRegisterTree(this, handle);
++        }
++        long get() { return mHandle; }
++        void release() {
++            nReleaseTree(mHandle);
++            mHandle = 0;
+         }
+     }
+ 
+@@ -710,17 +694,11 @@
+             if (mVectorState.mRootGroup != null || mVectorState.mNativeTree != null) {
+                 // This VD has been used to display other VD resource content, clean up.
+                 if (mVectorState.mRootGroup != null) {
+-                    // Subtract the native allocation for all the nodes.
+-                    VMRuntime.getRuntime().registerNativeFree(
+-                            mVectorState.mRootGroup.getNativeSize());
+                     // Remove child nodes' reference to tree
+                     mVectorState.mRootGroup.setTree(null);
+                 }
+                 mVectorState.mRootGroup = new VGroup();
+                 if (mVectorState.mNativeTree != null) {
+-                    // Subtract the native allocation for the tree wrapper, which contains root node
+-                    // as well as rendering related data.
+-                    VMRuntime.getRuntime().registerNativeFree(mVectorState.NATIVE_ALLOCATION_SIZE);
+                     mVectorState.mNativeTree.release();
+                 }
+                 mVectorState.createNativeTree(mVectorState.mRootGroup);
+@@ -822,7 +800,7 @@
+ 
+         // Use a stack to help to build the group tree.
+         // The top of the stack is always the current group.
+-        final Stack<VGroup> groupStack = new Stack<VGroup>();
++        final ArrayDeque<VGroup> groupStack = new ArrayDeque<VGroup>();
+         groupStack.push(state.mRootGroup);
+ 
+         int eventType = parser.getEventType();
+@@ -940,7 +918,7 @@
+         Insets mOpticalInsets = Insets.NONE;
+         String mRootName = null;
+         VGroup mRootGroup;
+-        VirtualRefBasePtr mNativeTree = null;
++        NativeTree mNativeTree = null;
+ 
+         int mDensity = DisplayMetrics.DENSITY_DEFAULT;
+         final ArrayMap<String, Object> mVGTargetsMap = new ArrayMap<>();
+@@ -952,11 +930,6 @@
+         boolean mCachedAutoMirrored;
+         boolean mCacheDirty;
+ 
+-        // Since sw canvas and hw canvas uses different bitmap caches, we track the allocation of
+-        // these bitmaps separately.
+-        int mLastSWCachePixelCount = 0;
+-        int mLastHWCachePixelCount = 0;
+-
+         final static Property<VectorDrawableState, Float> ALPHA =
+                 new FloatProperty<VectorDrawableState>("alpha") {
+                     @Override
+@@ -976,11 +949,6 @@
+             }
+             return null;
+         }
+-
+-        // This tracks the total native allocation for all the nodes.
+-        private int mAllocationOfAllNodes = 0;
+-
+-        private static final int NATIVE_ALLOCATION_SIZE = 316;
+ 
+         // If copy is not null, deep copy the given VectorDrawableState. Otherwise, create a
+         // native vector drawable tree with an empty root group.
+@@ -1012,26 +980,20 @@
+         }
+ 
+         private void createNativeTree(VGroup rootGroup) {
+-            mNativeTree = new VirtualRefBasePtr(nCreateTree(rootGroup.mNativePtr));
+-            // Register tree size
+-            VMRuntime.getRuntime().registerNativeAllocation(NATIVE_ALLOCATION_SIZE);
++            mNativeTree = new NativeTree(nCreateTree(rootGroup.mNativePtr));
+         }
+ 
+         // Create a new native tree with the given root group, and copy the properties from the
+         // given VectorDrawableState's native tree.
+         private void createNativeTreeFromCopy(VectorDrawableState copy, VGroup rootGroup) {
+-            mNativeTree = new VirtualRefBasePtr(nCreateTreeFromCopy(
++            mNativeTree = new NativeTree(nCreateTreeFromCopy(
+                     copy.mNativeTree.get(), rootGroup.mNativePtr));
+-            // Register tree size
+-            VMRuntime.getRuntime().registerNativeAllocation(NATIVE_ALLOCATION_SIZE);
+         }
+ 
+         // This should be called every time after a new RootGroup and all its subtrees are created
+         // (i.e. in constructors of VectorDrawableState and in inflate).
+         void onTreeConstructionFinished() {
+             mRootGroup.setTree(mNativeTree);
+-            mAllocationOfAllNodes = mRootGroup.getNativeSize();
+-            VMRuntime.getRuntime().registerNativeAllocation(mAllocationOfAllNodes);
+         }
+ 
+         long getNativeRenderer() {
+@@ -1137,14 +1099,6 @@
+             return mRootGroup.onStateChange(stateSet);
+         }
+ 
+-        @Override
+-        public void finalize() throws Throwable {
+-            super.finalize();
+-            int bitmapCacheSize = mLastHWCachePixelCount * 4 + mLastSWCachePixelCount * 4;
+-            VMRuntime.getRuntime().registerNativeFree(NATIVE_ALLOCATION_SIZE
+-                    + mAllocationOfAllNodes + bitmapCacheSize);
+-        }
+-
+         /**
+          * setAlpha() and getAlpha() are used mostly for animation purpose. Return true if alpha
+          * has changed.
+@@ -1169,7 +1123,6 @@
+         private static final int TRANSLATE_Y_INDEX = 6;
+         private static final int TRANSFORM_PROPERTY_COUNT = 7;
+ 
+-        private static final int NATIVE_ALLOCATION_SIZE = 100;
+ 
+         private static final Map<String, Integer> sPropertyIndexMap = Map.of(
+                 "translateX", TRANSLATE_X_INDEX,
+@@ -1317,6 +1270,7 @@
+                 targetsMap.put(mGroupName, this);
+             }
+             mNativePtr = nCreateGroup(copy.mNativePtr);
++            nRegisterNode(this, mNativePtr);
+ 
+             final ArrayList<VObject> children = copy.mChildren;
+             for (int i = 0; i < children.size(); i++) {
+@@ -1343,6 +1297,7 @@
+ 
+         public VGroup() {
+             mNativePtr = nCreateGroup();
++            nRegisterNode(this, mNativePtr);
+         }
+ 
+         Property getProperty(String propertyName) {
+@@ -1365,7 +1320,7 @@
+         }
+ 
+         @Override
+-        public void setTree(VirtualRefBasePtr treeRoot) {
++        public void setTree(NativeTree treeRoot) {
+             super.setTree(treeRoot);
+             for (int i = 0; i < mChildren.size(); i++) {
+                 mChildren.get(i).setTree(treeRoot);
+@@ -1460,16 +1415,6 @@
+         }
+ 
+         @Override
+-        int getNativeSize() {
+-            // Return the native allocation needed for the subtree.
+-            int size = NATIVE_ALLOCATION_SIZE;
+-            for (int i = 0; i < mChildren.size(); i++) {
+-                size += mChildren.get(i).getNativeSize();
+-            }
+-            return size;
+-        }
+-
+-        @Override
+         public boolean canApplyTheme() {
+             if (mThemeAttrs != null) {
+                 return true;
+@@ -1602,7 +1547,8 @@
+      * Common Path information for clip path and normal path.
+      */
+     static abstract class VPath extends VObject {
+-        protected PathParser.PathData mPathData = null;
++        private PathParser.PathData mPathData;
++        String mPathString;
+ 
+         String mPathName;
+         int mChangingConfigurations;
+@@ -1635,8 +1581,11 @@
+         public VPath(VPath copy) {
+             mPathName = copy.mPathName;
+             mChangingConfigurations = copy.mChangingConfigurations;
++            mPathString = copy.mPathString;
+             mPathData = copy.mPathData == null ? null : new PathParser.PathData(copy.mPathData);
+         }
++
++        void clearParsedPathData() { mPathData = null; }
+ 
+         public String getPathName() {
+             return mPathName;
+@@ -1645,13 +1594,21 @@
+         /* Setters and Getters, used by animator from AnimatedVectorDrawable. */
+         @SuppressWarnings("unused")
+         public PathParser.PathData getPathData() {
++            if (mPathData == null && mPathString != null) {
++                mPathData = new PathParser.PathData(mPathString);
++            }
+             return mPathData;
+         }
+ 
+         // TODO: Move the PathEvaluator and this setter and the getter above into native.
+         @SuppressWarnings("unused")
+         public void setPathData(PathParser.PathData pathData) {
+-            mPathData.setPathData(pathData);
++            if (mPathData == null) {
++                mPathData = new PathParser.PathData(pathData);
++            } else {
++                mPathData.setPathData(pathData);
++            }
++            mPathString = null;
+             if (isTreeValid()) {
+                 nSetPathData(getNativePtr(), mPathData.getNativePtr());
+             }
+@@ -1663,15 +1620,16 @@
+      */
+     private static class VClipPath extends VPath {
+         private final long mNativePtr;
+-        private static final int NATIVE_ALLOCATION_SIZE = 120;
+ 
+         public VClipPath() {
+             mNativePtr = nCreateClipPath();
++            nRegisterNode(this, mNativePtr);
+         }
+ 
+         public VClipPath(VClipPath copy) {
+             super(copy);
+             mNativePtr = nCreateClipPath(copy.mNativePtr);
++            nRegisterNode(this, mNativePtr);
+         }
+ 
+         @Override
+@@ -1712,11 +1670,6 @@
+             return false;
+         }
+ 
+-        @Override
+-        int getNativeSize() {
+-            return NATIVE_ALLOCATION_SIZE;
+-        }
+-
+         private void updateStateFromTypedArray(TypedArray a) {
+             // Account for any configuration changes.
+             mChangingConfigurations |= a.getChangingConfigurations();
+@@ -1729,7 +1682,8 @@
+ 
+             final String pathDataString = a.getString(R.styleable.VectorDrawableClipPath_pathData);
+             if (pathDataString != null) {
+-                mPathData = new PathParser.PathData(pathDataString);
++                mPathString = pathDataString;
++                clearParsedPathData();
+                 nSetPathString(mNativePtr, pathDataString, pathDataString.length());
+             }
+         }
+@@ -1753,7 +1707,6 @@
+         private static final int FILL_TYPE_INDEX = 11;
+         private static final int TOTAL_PROPERTY_COUNT = 12;
+ 
+-        private static final int NATIVE_ALLOCATION_SIZE = 264;
+         // Property map for animatable attributes.
+         private static final Map<String, Integer> sPropertyIndexMap = Map.of(
+                 "strokeWidth", STROKE_WIDTH_INDEX,
+@@ -1880,6 +1833,12 @@
+                 "trimPathEnd", TRIM_PATH_END,
+                 "trimPathOffset", TRIM_PATH_OFFSET);
+ 
++        private int readProperty(int index) {
++            int offset = index * 4;
++            return (mPropertyData[offset] & 0xff) | (mPropertyData[offset + 1] & 0xff) << 8
++                    | (mPropertyData[offset + 2] & 0xff) << 16 | mPropertyData[offset + 3] << 24;
++        }
++
+         // Temp array to store property data obtained from native getter.
+         private byte[] mPropertyData;
+         /////////////////////////////////////////////////////
+@@ -1892,11 +1851,13 @@
+ 
+         public VFullPath() {
+             mNativePtr = nCreateFullPath();
++            nRegisterNode(this, mNativePtr);
+         }
+ 
+         public VFullPath(VFullPath copy) {
+             super(copy);
+             mNativePtr = nCreateFullPath(copy.mNativePtr);
++            nRegisterNode(this, mNativePtr);
+             mThemeAttrs = copy.mThemeAttrs;
+             mStrokeColors = copy.mStrokeColors;
+             mFillColors = copy.mFillColors;
+@@ -1963,11 +1924,6 @@
+         }
+ 
+         @Override
+-        int getNativeSize() {
+-            return NATIVE_ALLOCATION_SIZE;
+-        }
+-
+-        @Override
+         public long getNativePtr() {
+             return mNativePtr;
+         }
+@@ -1995,20 +1951,18 @@
+                 throw new RuntimeException("Error: inconsistent property count");
+             }
+ 
+-            ByteBuffer properties = ByteBuffer.wrap(mPropertyData);
+-            properties.order(ByteOrder.nativeOrder());
+-            float strokeWidth = properties.getFloat(STROKE_WIDTH_INDEX * 4);
+-            int strokeColor = properties.getInt(STROKE_COLOR_INDEX * 4);
+-            float strokeAlpha = properties.getFloat(STROKE_ALPHA_INDEX * 4);
+-            int fillColor =  properties.getInt(FILL_COLOR_INDEX * 4);
+-            float fillAlpha = properties.getFloat(FILL_ALPHA_INDEX * 4);
+-            float trimPathStart = properties.getFloat(TRIM_PATH_START_INDEX * 4);
+-            float trimPathEnd = properties.getFloat(TRIM_PATH_END_INDEX * 4);
+-            float trimPathOffset = properties.getFloat(TRIM_PATH_OFFSET_INDEX * 4);
+-            int strokeLineCap =  properties.getInt(STROKE_LINE_CAP_INDEX * 4);
+-            int strokeLineJoin = properties.getInt(STROKE_LINE_JOIN_INDEX * 4);
+-            float strokeMiterLimit = properties.getFloat(STROKE_MITER_LIMIT_INDEX * 4);
+-            int fillType = properties.getInt(FILL_TYPE_INDEX * 4);
++            float strokeWidth = Float.intBitsToFloat(readProperty(STROKE_WIDTH_INDEX));
++            int strokeColor = readProperty(STROKE_COLOR_INDEX);
++            float strokeAlpha = Float.intBitsToFloat(readProperty(STROKE_ALPHA_INDEX));
++            int fillColor =  readProperty(FILL_COLOR_INDEX);
++            float fillAlpha = Float.intBitsToFloat(readProperty(FILL_ALPHA_INDEX));
++            float trimPathStart = Float.intBitsToFloat(readProperty(TRIM_PATH_START_INDEX));
++            float trimPathEnd = Float.intBitsToFloat(readProperty(TRIM_PATH_END_INDEX));
++            float trimPathOffset = Float.intBitsToFloat(readProperty(TRIM_PATH_OFFSET_INDEX));
++            int strokeLineCap =  readProperty(STROKE_LINE_CAP_INDEX);
++            int strokeLineJoin = readProperty(STROKE_LINE_JOIN_INDEX);
++            float strokeMiterLimit = Float.intBitsToFloat(readProperty(STROKE_MITER_LIMIT_INDEX));
++            int fillType = readProperty(FILL_TYPE_INDEX);
+             Shader fillGradient = null;
+             Shader strokeGradient = null;
+             // Account for any configuration changes.
+@@ -2025,7 +1979,8 @@
+ 
+             final String pathString = a.getString(R.styleable.VectorDrawablePath_pathData);
+             if (pathString != null) {
+-                mPathData = new PathParser.PathData(pathString);
++                mPathString = pathString;
++                clearParsedPathData();
+                 nSetPathString(mNativePtr, pathString, pathString.length());
+             }
+ 
+@@ -2247,11 +2202,11 @@
+     }
+ 
+     abstract static class VObject {
+-        VirtualRefBasePtr mTreePtr = null;
++        NativeTree mTreePtr = null;
+         boolean isTreeValid() {
+             return mTreePtr != null && mTreePtr.get() != 0;
+         }
+-        void setTree(VirtualRefBasePtr ptr) {
++        void setTree(NativeTree ptr) {
+             mTreePtr = ptr;
+         }
+         abstract long getNativePtr();
+@@ -2261,9 +2216,12 @@
+         abstract boolean onStateChange(int[] state);
+         abstract boolean isStateful();
+         abstract boolean hasFocusStateSpecified();
+-        abstract int getNativeSize();
+         abstract Property getProperty(String propertyName);
+     }
++
++    private static native void nRegisterNode(VObject node, long handle);
++    private static native void nRegisterTree(NativeTree tree, long handle);
++    private static native void nReleaseTree(long handle);
+ 
+     private static native int nDraw(long rendererPtr, long canvasWrapperPtr,
+             long colorFilterPtr, Rect bounds, boolean needsMirroring, boolean canReuseCache);
+--- a/frameworks/base/graphics/java/android/graphics/ColorFilter.java
++++ b/frameworks/base/graphics/java/android/graphics/ColorFilter.java
+@@ -16,8 +16,6 @@
+ 
+ package android.graphics;
+ 
+-import libcore.util.NativeAllocationRegistry;
+-
+ /**
+  * A color filter can be used with a {@link Paint} to modify the color of
+  * each pixel drawn with that paint. This is an abstract class that should
+@@ -25,12 +23,6 @@
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class ColorFilter {
+-
+-    private static class NoImagePreloadHolder {
+-        public static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                ColorFilter.class.getClassLoader(), nativeGetFinalizer());
+-    }
+ 
+     /**
+      * @deprecated Use subclass constructors directly instead.
+@@ -56,12 +48,12 @@
+                 // Note: we must check for null here, since it's possible for createNativeInstance()
+                 // to return nullptr if the native SkColorFilter would be a no-op at draw time.
+                 // See native implementations of subclass create methods for more info.
+-                NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, mNativeInstance);
++                nRegisterNativeAllocation(this, mNativeInstance);
+             }
+         }
+         return mNativeInstance;
+ 
+     }
+ 
+-    private static native long nativeGetFinalizer();
++    private static native void nRegisterNativeAllocation(ColorFilter filter, long handle);
+ }
+--- a/frameworks/base/core/java/android/util/PathParser.java
++++ b/frameworks/base/core/java/android/util/PathParser.java
+@@ -70,10 +70,12 @@
+         long mNativePathData = 0;
+         public PathData() {
+             mNativePathData = nCreateEmptyPathData();
++            nRegisterPathData(this, mNativePathData);
+         }
+ 
+         public PathData(PathData data) {
+             mNativePathData = nCreatePathData(data.mNativePathData);
++            nRegisterPathData(this, mNativePathData);
+         }
+ 
+         public PathData(String pathString) {
+@@ -81,6 +83,7 @@
+             if (mNativePathData == 0) {
+                 throw new IllegalArgumentException("Invalid pathData: " + pathString);
+             }
++            nRegisterPathData(this, mNativePathData);
+         }
+ 
+         public long getNativePtr() {
+@@ -97,14 +100,6 @@
+             nSetPathData(mNativePathData, source.mNativePathData);
+         }
+ 
+-        @Override
+-        protected void finalize() throws Throwable {
+-            if (mNativePathData != 0) {
+-                nFinalize(mNativePathData);
+-                mNativePathData = 0;
+-            }
+-            super.finalize();
+-        }
+     }
+ 
+     /**
+@@ -139,7 +134,7 @@
+     private static native boolean nInterpolatePathData(long outDataPtr, long fromDataPtr,
+             long toDataPtr, float fraction);
+     @FastNative
+-    private static native void nFinalize(long nativePtr);
++    private static native void nRegisterPathData(PathData owner, long nativePtr);
+     @FastNative
+     private static native boolean nCanMorph(long fromDataPtr, long toDataPtr);
+     @FastNative

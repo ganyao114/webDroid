@@ -395,11 +395,30 @@ jobject DecodeImage(JNIEnv* env, std::span<const uint8_t> bytes, jobject options
     }
     jbyteArray patch = nullptr;
     if (!chunk.empty()) {
-        patch = env->NewByteArray(chunk.size());
+        std::vector<uint8_t> patch_data(chunk.begin(), chunk.end());
+        const auto x_count = chunk[1], y_count = chunk[2];
+        if (patch_data.size() >= 32u + 4u * (x_count + y_count + chunk[3]) &&
+            (out_w != width || out_h != height)) {
+            const auto scale_word = [&](size_t at, int dest, int source) {
+                const auto value = static_cast<int32_t>(Read32(patch_data.data() + at));
+                if (value < 0) return;
+                const auto scaled = static_cast<uint32_t>((int64_t(value) * dest + source / 2) / source);
+                for (unsigned byte = 0; byte < 4; ++byte)
+                    patch_data[at + byte] = static_cast<uint8_t>(scaled >> (24 - 8 * byte));
+            };
+            for (size_t at : {12u, 16u}) scale_word(at, out_w, width);
+            for (size_t at : {20u, 24u}) scale_word(at, out_h, height);
+            for (size_t i = 0; i < x_count; ++i) scale_word(32 + i * 4, out_w, width);
+            for (size_t i = 0; i < y_count; ++i) scale_word(32 + (x_count + i) * 4, out_h, height);
+        }
+        patch = env->NewByteArray(patch_data.size());
         if (!patch) return nullptr;
-        env->SetByteArrayRegion(patch, 0, chunk.size(), reinterpret_cast<const jbyte*>(chunk.data()));
-        if (padding) SetRect(env, padding, {float(Read32(chunk.data() + 12)), float(Read32(chunk.data() + 20)),
-                                           float(Read32(chunk.data() + 16)), float(Read32(chunk.data() + 24))});
+        env->SetByteArrayRegion(patch, 0, patch_data.size(), reinterpret_cast<const jbyte*>(patch_data.data()));
+        if (padding) {
+            const auto edge = [&](size_t at) { return static_cast<float>(static_cast<int32_t>(
+                Read32(patch_data.data() + at))); };
+            SetRect(env, padding, {edge(12), edge(20), edge(16), edge(24)});
+        }
     }
     return env->ExceptionCheck() ? nullptr : WrapBitmap(env, std::move(bitmap), -1, patch);
 }
@@ -506,6 +525,37 @@ jboolean IsNinePatch(JNIEnv* env, jclass, jbyteArray chunk) {
     return x && y && !(x & 1) && !(y & 1) && env->GetArrayLength(chunk) >= 32 + 4 * (x + y + colors);
 }
 
+jlong CreateNinePatch(JNIEnv* env, jclass cls, jbyteArray chunk) {
+    return CallSafely(env, [&]() -> jlong {
+        if (!IsNinePatch(env, cls, chunk)) {
+            Throw(env, "java/lang/IllegalArgumentException", "Invalid nine-patch chunk");
+            return 0;
+        }
+        std::vector<uint8_t> bytes(env->GetArrayLength(chunk));
+        env->GetByteArrayRegion(chunk, 0, bytes.size(), reinterpret_cast<jbyte*>(bytes.data()));
+        if (env->ExceptionCheck()) return 0;
+        NinePatchData patch;
+        size_t cursor = 32;
+        for (auto [count, divisions] : {std::pair{bytes[1], &patch.x_divisions},
+                                       std::pair{bytes[2], &patch.y_divisions}}) {
+            divisions->reserve(count);
+            for (uint8_t i = 0; i < count; ++i, cursor += 4)
+                divisions->push_back(static_cast<int32_t>(Read32(bytes.data() + cursor)));
+            if (divisions->front() < 0 || !std::ranges::is_sorted(*divisions)) {
+                Throw(env, "java/lang/IllegalArgumentException", "Invalid nine-patch divisions");
+                return 0;
+            }
+        }
+        auto* state = GetState(env);
+        return state ? Peers<NinePatchData, &State::nine_patches>(*state).Insert(std::move(patch)) : 0;
+    });
+}
+
+jlong NinePatchTransparentRegion(JNIEnv*, jclass, jlong, jlong, jobject) {
+    // Keep the whole drawable in the compositor's damage region.
+    return 0;
+}
+
 void RegisterModernBitmaps(interp::Vm& vm) {
     constexpr const char* bitmap = "android/graphics/Bitmap";
     Register(vm, bitmap,
@@ -553,8 +603,16 @@ void RegisterModernBitmaps(interp::Vm& vm) {
              Method<DecodeAsset>(vm, "nativeDecodeAsset", "(JLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;"),
              Method<DecodeFile>(vm, "nDecodeFile", "(Ljava/lang/String;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;"),
              Method<Seekable>(vm, "nativeIsSeekable", "(Ljava/io/FileDescriptor;)Z"));
-    if (vm.HasClass("Landroid/graphics/NinePatch;"))
-        Register(vm, "android/graphics/NinePatch", Method<IsNinePatch>(vm, "isNinePatchChunk", "([B)Z"));
+    if (vm.HasClass("Landroid/graphics/NinePatch;")) {
+        constexpr auto nine_patch = "android/graphics/NinePatch";
+        Register(vm, nine_patch,
+                 Method<IsNinePatch>(vm, "isNinePatchChunk", "([B)Z"),
+                 Method<CreateNinePatch>(vm, "validateNinePatchChunk", "([B)J"),
+                 Method<NinePatchTransparentRegion>(vm, "nativeGetTransparentRegion", "(JJLandroid/graphics/Rect;)J"));
+        RegisterIfDeclared(vm, nine_patch,
+            Method<RetainPeer<NinePatchData, &State::nine_patches>>(vm, "nRetainChunk",
+                "(Landroid/graphics/NinePatch;J)V"));
+    }
 }
 
 } // namespace

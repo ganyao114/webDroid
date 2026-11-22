@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
@@ -42,15 +43,14 @@ void Require(bool condition, std::string_view detail) {
     if (!condition) throw std::runtime_error(std::string(detail));
 }
 
-bool IsDarkOnWhite(uint32_t argb) {
-    const auto alpha = argb >> 24;
-    const auto red = (argb >> 16) & 255;
-    const auto green = (argb >> 8) & 255;
-    const auto blue = argb & 255;
-    // Perceived brightness on the white Settings background, scaled by 1000.
-    const auto brightness = (212u * red + 715u * green + 73u * blue) * alpha
-        + 255'000u * (255u - alpha);
-    return brightness < 135'000u * 255u;
+double ContrastOnWhite(uint32_t argb) {
+    const auto alpha = (argb >> 24) / 255.0;
+    const auto linear = [&](unsigned shift) {
+        const auto channel = 1 - alpha * (1 - ((argb >> shift) & 255) / 255.0);
+        return channel <= 0.04045 ? channel / 12.92 : std::pow((channel + 0.055) / 1.055, 2.4);
+    };
+    const auto luminance = 0.2126 * linear(16) + 0.7152 * linear(8) + 0.0722 * linear(0);
+    return 1.05 / (luminance + 0.05);
 }
 
 double Milliseconds(Clock::time_point start) {
@@ -130,9 +130,9 @@ void CheckResources(const char* path) {
         }
     });
     Require(package && launch_filter, "Upstream package and homepage MAIN/LAUNCHER activity");
-    const auto mipmap = assets.GetResourceId("mipmap/ic_launcher_settings", {}, std::string(kPackage));
-    Require(mipmap && icon == *mipmap, "Manifest uses the upstream Settings mipmap");
-    Require(ResourceString(assets, icon).ends_with("ic_launcher_settings.png"), "Launcher icon is a real PNG");
+    const auto themed = assets.GetResourceId("drawable/themed_icon_settings", {}, std::string(kPackage));
+    Require(themed && icon == *themed, "Manifest uses the upstream Settings gear");
+    Require(ResourceString(assets, icon).ends_with("themed_icon_settings.xml"), "Launcher icon is a vector");
 
     for (const auto& [locale, title] : std::array<std::pair<const char*, const char*>, 2>{
             {{"en-US", "Settings"}, {"zh-CN", "设置"}}}) {
@@ -193,7 +193,7 @@ Frame ReadFrame(wa_sf_t* sf) {
             Require(record.byte_size >= sizeof(record) + sizeof(path), "Complete path command header");
             std::memcpy(&path, command + sizeof(record), sizeof(path));
             ++frame.paths;
-            frame.dark_paths += IsDarkOnWhite(path.paint.argb);
+            frame.dark_paths += ContrastOnWhite(path.paint.argb) >= 4.5;
         }
         if (record.opcode != WA_CANVAS_DRAW_TEXT) continue;
         wa_canvas_text_t text{};
@@ -230,15 +230,19 @@ void CheckIconContrast(Vm& vm, Object* drawable, int size, std::string_view name
                                                                Value::Int(size), Value::Int(size)});
     vm.CallVirtual(drawable, "draw", "(Landroid/graphics/Canvas;)V", std::array{Value::Ref(canvas)});
     size_t dark = 0;
+    double peak = 0;
     for (int y = 0; y < size; ++y) {
         for (int x = 0; x < size; ++x) {
             const auto argb = static_cast<uint32_t>(vm.CallVirtual(bitmap, "getPixel", "(II)I",
                                                                    std::array{Value::Int(x), Value::Int(y)}).i());
-            dark += IsDarkOnWhite(argb);
+            const auto contrast = ContrastOnWhite(argb);
+            peak = std::max(peak, contrast);
+            dark += contrast >= 4.5;
         }
     }
+    std::cout << name << " contrast on white " << peak << ":1, pixels at 4.5:1 or above "
+              << dark << '/' << size * size << '\n';
     Require(dark >= static_cast<size_t>(size * size / 20), std::string(name) + " has a dark foreground");
-    std::cout << name << " dark foreground pixels " << dark << '/' << size * size << '\n';
 }
 
 void CheckHomepageIconContrast(Vm& vm, Object* activity) {
@@ -258,11 +262,16 @@ void CheckHomepageIconContrast(Vm& vm, Object* activity) {
     vm.CallVirtual(theme, "applyStyle", "(IZ)V", std::array{id("Theme.Material.Light", "style", "android"),
                                                            Value::Int(1)});
     auto* vector_class = ClassForName(vm, roots, "android.graphics.drawable.VectorDrawable");
+    auto* image = roots.Hold(vm.NewObject("Landroid/widget/ImageView;", "(Landroid/content/Context;)V",
+                                          std::array{Value::Ref(activity)}));
     for (const auto* name : {"ic_settings_wireless_filled", "ic_apps_filled", "ic_settings_display_filled"}) {
         auto* drawable = roots.Hold(vm.CallVirtual(resources, "getDrawable",
             "(ILandroid/content/res/Resources$Theme;)Landroid/graphics/drawable/Drawable;",
             std::array{id(name, "drawable", "com.android.settings"), Value::Ref(theme)}).ref());
         Require(drawable && IsInstance(vm, drawable, vector_class), name);
+        // Match the enabled drawable state of a Settings category row.
+        vm.CallVirtual(image, "setImageDrawable", "(Landroid/graphics/drawable/Drawable;)V",
+                       std::array{Value::Ref(drawable)});
         CheckIconContrast(vm, drawable, 24, name);
     }
 }
@@ -339,12 +348,12 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
         auto* icon = roots.Hold(vm.CallVirtual(package, "loadIcon",
                                                "(Landroid/content/pm/PackageManager;)Landroid/graphics/drawable/Drawable;",
                                                std::array{Value::Ref(pm)}).ref());
-        auto* bitmap_class = ClassForName(vm, roots, "android.graphics.drawable.BitmapDrawable");
+        auto* vector_class = ClassForName(vm, roots, "android.graphics.drawable.VectorDrawable");
         Require(icon && !vm.CallVirtual(pm, "isDefaultApplicationIcon", "(Landroid/graphics/drawable/Drawable;)Z",
-                                        std::array{Value::Ref(icon)}).i() && IsInstance(vm, icon, bitmap_class),
-                "ApplicationInfo.loadIcon decodes the upstream mipmap");
+                                        std::array{Value::Ref(icon)}).i() && IsInstance(vm, icon, vector_class),
+                "ApplicationInfo.loadIcon inflates the upstream gear");
         Require(vm.CallVirtual(icon, "getIntrinsicWidth", "()I").i() > 1, "Launcher art has positive width");
-        CheckIconContrast(vm, icon, 48, "mipmap/ic_launcher_settings");
+        CheckIconContrast(vm, icon, 48, "drawable/themed_icon_settings");
         CheckHomepageIconContrast(vm, activity);
 
         auto* window = roots.Hold(vm.CallVirtual(activity, "getWindow", "()Landroid/view/Window;").ref());
@@ -367,6 +376,8 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
         Require(home.paths >= 4, "Upstream homepage vector paths rendered");
         Require(home.dark_paths >= 3, "Settings homepage draws high-contrast path colors");
 
+        // Let the homepage's initial drawable and layout transitions finish.
+        for (int i = 0; i < 30; ++i) draw();
         constexpr auto view_root = "Landroid/view/ViewRootImpl;";
         constexpr auto draw_signature = "(Landroid/graphics/Canvas;)V";
         const auto draw_count = [&] {

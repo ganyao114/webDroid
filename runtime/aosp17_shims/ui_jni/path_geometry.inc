@@ -342,33 +342,6 @@ void SetLastPoint(JNIEnv* env, jclass, jlong id, jfloat x, jfloat y) {
         path->Move(x, y);
     });
 }
-jlong PathFromData(JNIEnv* env, jclass, jstring text) {
-    return CallSafely(env, [&]() -> jlong {
-        auto* state = GetState(env);
-        if (!state) return 0;
-        const auto utf8 = Utf8(env, text);
-        if (env->ExceptionCheck()) return 0;
-        try {
-            const auto commands = PathData(utf8).Parse();
-            PathGeometry path;
-            for (size_t i = 0; i < commands.size(); i += 7) {
-                const auto* p = commands.data() + i + 1;
-                switch (static_cast<int>(commands[i])) {
-                case WA_PATH_MOVE: path.Move(p[0], p[1]); break;
-                case WA_PATH_LINE: path.Line(p[0], p[1]); break;
-                case WA_PATH_QUAD: path.Quad(p[0], p[1], p[2], p[3]); break;
-                case WA_PATH_CUBIC: path.Cubic(p[0], p[1], p[2], p[3], p[4], p[5]); break;
-                case WA_PATH_CLOSE: path.Close(); break;
-                }
-            }
-            return Peers<PathGeometry, &State::paths>(*state).Insert(std::move(path));
-        } catch (const std::invalid_argument& error) {
-            Throw(env, "java/lang/IllegalArgumentException", error.what());
-            return 0;
-        }
-    });
-}
-
 std::vector<interp::Value> PathValues(const PathGeometry& path) {
     std::vector<interp::Value> values;
     values.reserve(path.verbs.size() * 7);

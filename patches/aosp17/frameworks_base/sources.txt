@@ -35,6 +35,7 @@ frameworks/base/core/java/android/util/Half.java
 frameworks/base/core/java/android/util/IntArray.java
 frameworks/base/core/java/android/util/IndentingPrintWriter.java
 frameworks/base/core/java/android/util/LongArray.java
+frameworks/base/core/java/android/util/LruCache.java
 frameworks/base/core/java/android/util/LongSparseLongArray.java
 frameworks/base/core/java/android/util/MapCollections.java
 frameworks/base/core/java/android/util/MathUtils.java
@@ -59,18 +60,23 @@ frameworks/base/core/java/android/view/DisplayAdjustments.java
 frameworks/base/core/java/android/view/InputEvent.java
 frameworks/base/core/java/android/view/LayoutInflater.java
 frameworks/base/core/java/android/view/ViewHierarchyEncoder.java
+frameworks/base/core/java/com/android/internal/policy/PhoneLayoutInflater.java
 frameworks/base/core/java/com/android/internal/util/ArrayUtils.java
 frameworks/base/core/java/com/android/internal/util/FastMath.java
 frameworks/base/core/java/com/android/internal/util/FastPrintWriter.java
 frameworks/base/core/java/com/android/internal/util/GrowingArrayUtils.java
 frameworks/base/core/java/com/android/internal/util/IndentingPrintWriter.java
 frameworks/base/graphics/java/android/graphics/BaseCanvas.java
+frameworks/base/graphics/java/android/graphics/Bitmap.java
+frameworks/base/graphics/java/android/graphics/BitmapFactory.java
 frameworks/base/graphics/java/android/graphics/BitmapShader.java
 frameworks/base/graphics/java/android/graphics/BlendMode.java
+frameworks/base/graphics/java/android/graphics/BlendModeColorFilter.java
 frameworks/base/graphics/java/android/graphics/BlurMaskFilter.java
 frameworks/base/graphics/java/android/graphics/Canvas.java
 frameworks/base/graphics/java/android/graphics/Color.java
 frameworks/base/graphics/java/android/graphics/ColorFilter.java
+frameworks/base/graphics/java/android/graphics/ColorSpace.java
 frameworks/base/graphics/java/android/graphics/ComposeShader.java
 frameworks/base/graphics/java/android/graphics/DrawFilter.java
 frameworks/base/graphics/java/android/graphics/Insets.java
@@ -131,9 +137,11 @@ com/android/modules/utils/TypedXmlSerializer.java
 org/xmlpull/v1/XmlSerializer.java
 
 [java-base]
+libcore/ojluni/src/main/java/java/io/InputStream.java
 libcore/ojluni/src/main/java/java/lang/Runnable.java
 libcore/ojluni/src/main/java/java/util/function/BiConsumer.java
 libcore/ojluni/src/main/java/java/util/function/BiFunction.java
+libcore/ojluni/src/main/java/java/util/function/DoubleUnaryOperator.java
 
 [services]
 frameworks/base/services/core/java/com/android/server/IntentResolver.java
@@ -192,6 +200,7 @@ android/annotation/TestApi.java
 android/annotation/UiContext.java
 android/annotation/UiThread.java
 android/annotation/UserIdInt.java
+android/annotation/WorkerThread.java
 android/annotation/XmlRes.java
 android/compat/annotation/ChangeId.java
 android/compat/annotation/Disabled.java
@@ -265,3 +274,18 @@ patches/123-mounted-app-locale-boundary.patch
 patches/124-resource-sdk-version-boundary.patch
 patches/125-mounted-system-asset-set-boundary.patch
 patches/126-color-state-set-boot-library-boundary.patch
+patches/201-canvas-host-window.patch
+patches/202-svg-path-data.patch
+patches/203-bitmap-host-allocation.patch
+patches/204-bitmap-factory-host-io.patch
+patches/205-typeface-host-font-map.patch
+patches/206-colorspace-software-boundary.patch
+patches/207-font-cache-sdk-map.patch
+patches/208-canvas-optional-runtime-shader.patch
+patches/209-guest-input-event.patch
+patches/210-vector-native-peers.patch
+patches/211-embedded-view-creation.patch
+patches/212-adaptive-icon-software-mask.patch
+patches/213-solid-ripple-on-host.patch
+patches/214-host-resource-drawables.patch
+patches/215-flush-mounted-layout-cache.patch

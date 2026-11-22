@@ -1,0 +1,26 @@
+--- a/frameworks/base/core/java/android/view/LayoutInflater.java
++++ b/frameworks/base/core/java/android/view/LayoutInflater.java
+@@ -597,6 +597,9 @@
+         }
+     }
+ 
++    private static native View nativeCreateView(String name, Context context, AttributeSet attrs)
++            throws ClassNotFoundException;
++
+     private static final ClassLoader BOOT_CLASS_LOADER = LayoutInflater.class.getClassLoader();
+ 
+     private final boolean verifyClassLoader(Constructor<? extends View> constructor) {
+@@ -667,6 +670,13 @@
+             throws ClassNotFoundException, InflateException {
+         Objects.requireNonNull(viewContext);
+         Objects.requireNonNull(name);
++        if (mFilter == null) {
++            View view = nativeCreateView(prefix == null ? name : prefix + name, viewContext, attrs);
++            if (view instanceof ViewStub) {
++                ((ViewStub) view).setLayoutInflater(cloneInContext(viewContext));
++            }
++            return view;
++        }
+         Constructor<? extends View> constructor = sConstructorMap.get(name);
+         if (constructor != null && !verifyClassLoader(constructor)) {
+             constructor = null;

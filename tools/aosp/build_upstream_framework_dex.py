@@ -64,7 +64,9 @@ HIDDEN_METHODS = {
         ("hasReadWriteHelper", "()Z", False),
         ("pushAllowFds", "(Z)Z", False),
         ("readString8", "()Ljava/lang/String;", False),
+        ("readArrayMap", "(Landroid/util/ArrayMap;Ljava/lang/ClassLoader;)V", False),
         ("restoreAllowFds", "(Z)V", False),
+        ("writeArrayMap", "(Landroid/util/ArrayMap;)V", False),
         ("writeArrayMapInternal", "(Landroid/util/ArrayMap;)V", False),
         ("writeString8", "(Ljava/lang/String;)V", False),
     )),
@@ -128,9 +130,6 @@ HIDDEN_METHODS = {
     )),
     "android/animation/AnimatorSet": ("frameworks/base/core/java/android/animation/AnimatorSet.java", (
         ("canReverse", "()Z", False),
-    )),
-    "android/os/StrictMode": ("frameworks/base/core/java/android/os/StrictMode.java", (
-        ("noteResourceMismatch", "(Ljava/lang/Object;)V", True),
     )),
     "android/graphics/text/MeasuredText": ("frameworks/base/graphics/java/android/graphics/text/MeasuredText.java", (
         ("getChars", "()[C", False),
@@ -624,6 +623,9 @@ def build(args, stage):
         annotation_files.append(file)
         generated.append(record)
     annotation_files.extend(compile_only_platform_sources(args, stage / "platform-api", inputs))
+    thread_context = Path(__file__).with_name("framework_build") / "boot_api/org/wasmandroid/ui/ThreadContext.java"
+    annotation_files.append(thread_context)
+    inputs.add(thread_context)
     annotation_files.append(stage_java(stage / "platform-api",
         "com/google/errorprone/annotations/CompileTimeConstant.java",
         b"package com.google.errorprone.annotations;\npublic @interface CompileTimeConstant {}\n"))

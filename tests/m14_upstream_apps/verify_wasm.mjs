@@ -7,7 +7,7 @@ import { Action, FramePacket, Ime, Input, Memory, Op, Ring, Surface, WebViewActi
 import { AndroidInputWriter } from '../../web/surfaceflinger/input_ime.mjs';
 
 const apps = {
-  Settings: ['com.android.settings', 'homepage.SettingsHomepageActivity', 'mipmap/ic_launcher_settings',
+  Settings: ['com.android.settings', 'homepage.SettingsHomepageActivity', 'drawable/themed_icon_settings',
     'Search Settings'],
   DeskClock: ['com.android.deskclock', 'DeskClock', 'mipmap/ic_launcher_alarmclock', 'Clock',
     'com.android.deskclock.DeskClockApplication'],

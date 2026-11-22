@@ -238,8 +238,11 @@ inline uint32_t SampleGradient(int type, int tile, Values geometry, Values stops
     const double dx = geometry[2].f() - geometry[0].f(), dy = geometry[3].f() - geometry[1].f();
     const double length = dx * dx + dy * dy;
     t = length == 0 ? 1 : (x * dx + y * dy) / length;
-  } else {
+  } else if (type == 2) {
     t = std::hypot(x, y) / geometry[2].f();
+  } else {
+    t = std::atan2(y, x) / (2 * std::numbers::pi);
+    if (t < 0) t += 1;
   }
   if (!std::isfinite(t)) return 0;
   if (tile == 1) t -= std::floor(t);
@@ -263,7 +266,7 @@ inline uint32_t SampleGradient(int type, int tile, Values geometry, Values stops
   return color;
 }
 
-inline Value DrawPath(Runtime& vm, Object*, Values args) {
+inline Value DrawPathWithClip(Runtime& vm, Values args, std::span<const int32_t> mask) {
   auto& pixels = vm.NonNull(args[0].ref()).elements;
   const int width = args[1].i(), height = args[2].i(), count = args[4].i(), rule = args[5].i();
   const auto& path = vm.NonNull(args[3].ref()).elements;
@@ -286,7 +289,7 @@ inline Value DrawPath(Runtime& vm, Object*, Values args) {
     geometry = vm.NonNull(args[13].ref()).elements;
     stops = vm.NonNull(args[14].ref()).elements;
     colors = vm.NonNull(args[15].ref()).elements;
-    if (gradient < 1 || gradient > 2 || tile < 0 || tile > 3 || geometry.size() != 4 ||
+    if (gradient < 1 || gradient > 3 || tile < 0 || tile > 3 || geometry.size() != 4 ||
         stops.size() < 2 || stops.size() != colors.size()) {
       vm.Fail("Ljava/lang/IllegalArgumentException;", "Invalid software gradient parameters");
     }
@@ -303,6 +306,10 @@ inline Value DrawPath(Runtime& vm, Object*, Values args) {
   const auto draw_pixel = [&](int x, int y, unsigned coverage) {
     if (!InsideClips(transform, x + 0.5, y + 0.5)) return;
     const size_t index = static_cast<size_t>(y) * width + x;
+    if (!mask.empty()) {
+      coverage = (coverage * (static_cast<uint32_t>(mask[index]) >> 24) + 127) / 255;
+      if (coverage == 0) return;
+    }
     uint32_t source = color;
     if (gradient && det != 0) {
       const double px = x + 0.5 - transform[2].f(), py = y + 0.5 - transform[5].f();
@@ -379,6 +386,10 @@ inline Value DrawPath(Runtime& vm, Object*, Values args) {
     }
   }
   return {};
+}
+
+inline Value DrawPath(Runtime& vm, Object*, Values args) {
+  return DrawPathWithClip(vm, args, {});
 }
 
 inline Value ExtractAlpha(Runtime& vm, Object*, Values args) {

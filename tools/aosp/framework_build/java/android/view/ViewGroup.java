@@ -247,6 +247,9 @@ public abstract class ViewGroup extends View implements ViewParent {
     }
 
     public LayoutParams generateLayoutParams(AttributeSet attrs) { return new LayoutParams(getContext(), attrs); }
+    public LayoutParams generateLayoutParams(Context context, AttributeSet attrs) {
+        return generateLayoutParams(attrs);
+    }
     protected LayoutParams generateDefaultLayoutParams() { return new LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT); }
     protected LayoutParams generateLayoutParams(LayoutParams original) { return new LayoutParams(original); }
     protected boolean checkLayoutParams(LayoutParams params) { return params != null; }
