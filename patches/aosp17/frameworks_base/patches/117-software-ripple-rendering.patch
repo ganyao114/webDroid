@@ -1,0 +1,467 @@
+--- a/frameworks/base/graphics/java/android/graphics/drawable/RippleForeground.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/RippleForeground.java
+@@ -21,11 +21,8 @@
+ import android.animation.ObjectAnimator;
+ import android.animation.TimeInterpolator;
+ import android.graphics.Canvas;
+-import android.graphics.CanvasProperty;
+ import android.graphics.Paint;
+-import android.graphics.RecordingCanvas;
+ import android.graphics.Rect;
+-import android.graphics.animation.RenderNodeAnimator;
+ import android.util.FloatProperty;
+ import android.util.MathUtils;
+ import android.view.animation.AnimationUtils;
+@@ -58,12 +55,6 @@
+     private float mClampedStartingX;
+     private float mClampedStartingY;
+ 
+-    // Hardware rendering properties.
+-    private CanvasProperty<Paint> mPropPaint;
+-    private CanvasProperty<Float> mPropRadius;
+-    private CanvasProperty<Float> mPropX;
+-    private CanvasProperty<Float> mPropY;
+-
+     // Target values for tween animations.
+     private float mTargetX = 0;
+     private float mTargetY = 0;
+@@ -79,21 +70,10 @@
+     /** Whether this ripple has finished its exit animation. */
+     private boolean mHasFinishedExit;
+ 
+-    /** Whether we can use hardware acceleration for the exit animation. */
+-    private boolean mUsingProperties;
+-
+     private long mEnterStartedAtMillis;
+ 
+-    private ArrayList<RenderNodeAnimator> mPendingHwAnimators = new ArrayList<>();
+-    private ArrayList<RenderNodeAnimator> mRunningHwAnimators = new ArrayList<>();
+ 
+     private ArrayList<Animator> mRunningSwAnimators = new ArrayList<>();
+-
+-    /**
+-     * If set, force all ripple animations to not run on RenderThread, even if it would be
+-     * available.
+-     */
+-    private final boolean mForceSoftware;
+ 
+     /**
+      * If we have a bound, don't start from 0. Start from 60% of the max out of width and height.
+@@ -104,7 +84,6 @@
+             boolean forceSoftware) {
+         super(owner, bounds);
+ 
+-        mForceSoftware = forceSoftware;
+         mStartingX = startingX;
+         mStartingY = startingY;
+ 
+@@ -116,7 +95,7 @@
+     @Override
+     protected void onTargetRadiusChanged(float targetRadius) {
+         clampStartingPosition();
+-        switchToUiThreadAnimation();
++        invalidateSelf();
+     }
+ 
+     private void drawSoftware(Canvas c, Paint p) {
+@@ -132,28 +111,6 @@
+         }
+     }
+ 
+-    private void startPending(RecordingCanvas c) {
+-        if (!mPendingHwAnimators.isEmpty()) {
+-            for (int i = 0; i < mPendingHwAnimators.size(); i++) {
+-                RenderNodeAnimator animator = mPendingHwAnimators.get(i);
+-                animator.setTarget(c);
+-                animator.start();
+-                mRunningHwAnimators.add(animator);
+-            }
+-            mPendingHwAnimators.clear();
+-        }
+-    }
+-
+-    private void pruneHwFinished() {
+-        if (!mRunningHwAnimators.isEmpty()) {
+-            for (int i = mRunningHwAnimators.size() - 1; i >= 0; i--) {
+-                if (!mRunningHwAnimators.get(i).isRunning()) {
+-                    mRunningHwAnimators.remove(i);
+-                }
+-            }
+-        }
+-    }
+-
+     private void pruneSwFinished() {
+         if (!mRunningSwAnimators.isEmpty()) {
+             for (int i = mRunningSwAnimators.size() - 1; i >= 0; i--) {
+@@ -161,18 +118,6 @@
+                     mRunningSwAnimators.remove(i);
+                 }
+             }
+-        }
+-    }
+-
+-    private void drawHardware(RecordingCanvas c, Paint p) {
+-        startPending(c);
+-        pruneHwFinished();
+-        if (mPropPaint != null) {
+-            mUsingProperties = true;
+-            c.drawCircle(mPropX, mPropY, mPropRadius, mPropPaint);
+-        } else {
+-            mUsingProperties = false;
+-            drawSoftware(c, p);
+         }
+     }
+ 
+@@ -247,61 +192,12 @@
+         mRunningSwAnimators.add(opacity);
+     }
+ 
+-    private void startHardwareEnter() {
+-        if (mForceSoftware) { return; }
+-        mPropX = CanvasProperty.createFloat(getCurrentX());
+-        mPropY = CanvasProperty.createFloat(getCurrentY());
+-        mPropRadius = CanvasProperty.createFloat(getCurrentRadius());
+-        final Paint paint = mOwner.updateRipplePaint();
+-        mPropPaint = CanvasProperty.createPaint(paint);
+-
+-        final RenderNodeAnimator radius = new RenderNodeAnimator(mPropRadius, mTargetRadius);
+-        radius.setDuration(RIPPLE_ORIGIN_DURATION);
+-        radius.setInterpolator(DECELERATE_INTERPOLATOR);
+-        mPendingHwAnimators.add(radius);
+-
+-        final RenderNodeAnimator x = new RenderNodeAnimator(mPropX, mTargetX);
+-        x.setDuration(RIPPLE_ORIGIN_DURATION);
+-        x.setInterpolator(DECELERATE_INTERPOLATOR);
+-        mPendingHwAnimators.add(x);
+-
+-        final RenderNodeAnimator y = new RenderNodeAnimator(mPropY, mTargetY);
+-        y.setDuration(RIPPLE_ORIGIN_DURATION);
+-        y.setInterpolator(DECELERATE_INTERPOLATOR);
+-        mPendingHwAnimators.add(y);
+-
+-        final RenderNodeAnimator opacity = new RenderNodeAnimator(mPropPaint,
+-                RenderNodeAnimator.PAINT_ALPHA, paint.getAlpha());
+-        opacity.setDuration(OPACITY_ENTER_DURATION);
+-        opacity.setInterpolator(LINEAR_INTERPOLATOR);
+-        opacity.setStartValue(0);
+-        mPendingHwAnimators.add(opacity);
+-
+-        invalidateSelf();
+-    }
+-
+-    private void startHardwareExit() {
+-        // Only run a hardware exit if we had a hardware enter to continue from
+-        if (mForceSoftware || mPropPaint == null) return;
+-
+-        final RenderNodeAnimator opacity = new RenderNodeAnimator(mPropPaint,
+-                RenderNodeAnimator.PAINT_ALPHA, 0);
+-        opacity.setDuration(OPACITY_EXIT_DURATION);
+-        opacity.setInterpolator(LINEAR_INTERPOLATOR);
+-        opacity.addListener(mAnimationListener);
+-        opacity.setStartDelay(computeFadeOutDelay());
+-        opacity.setStartValue(mOwner.updateRipplePaint().getAlpha());
+-        mPendingHwAnimators.add(opacity);
+-        invalidateSelf();
+-    }
+-
+     /**
+      * Starts a ripple enter animation.
+      */
+     public final void enter() {
+         mEnterStartedAtMillis = AnimationUtils.currentAnimationTimeMillis();
+         startSoftwareEnter();
+-        startHardwareEnter();
+     }
+ 
+     /**
+@@ -309,7 +205,6 @@
+      */
+     public final void exit() {
+         startSoftwareExit();
+-        startHardwareExit();
+     }
+ 
+     private float getCurrentX() {
+@@ -332,15 +227,8 @@
+      * @param p the paint used to draw the ripple
+      */
+     public void draw(Canvas c, Paint p) {
+-        final boolean hasDisplayListCanvas = !mForceSoftware && c instanceof RecordingCanvas;
+-
+         pruneSwFinished();
+-        if (hasDisplayListCanvas) {
+-            final RecordingCanvas hw = (RecordingCanvas) c;
+-            drawHardware(hw, p);
+-        } else {
+-            drawSoftware(c, p);
+-        }
++        drawSoftware(c, p);
+     }
+ 
+     /**
+@@ -371,49 +259,20 @@
+             mRunningSwAnimators.get(i).end();
+         }
+         mRunningSwAnimators.clear();
+-        for (int i = 0; i < mRunningHwAnimators.size(); i++) {
+-            mRunningHwAnimators.get(i).end();
+-        }
+-        mRunningHwAnimators.clear();
+     }
+ 
+     private void onAnimationPropertyChanged() {
+-        if (!mUsingProperties) {
+-            invalidateSelf();
+-        }
+-    }
+-
+-    private void clearHwProps() {
+-        mPropPaint = null;
+-        mPropRadius = null;
+-        mPropX = null;
+-        mPropY = null;
+-        mUsingProperties = false;
++        invalidateSelf();
+     }
+ 
+     private final AnimatorListenerAdapter mAnimationListener = new AnimatorListenerAdapter() {
+         @Override
+         public void onAnimationEnd(Animator animator) {
+             mHasFinishedExit = true;
+-            pruneHwFinished();
+             pruneSwFinished();
+ 
+-            if (mRunningHwAnimators.isEmpty()) {
+-                clearHwProps();
+-            }
+         }
+     };
+-
+-    private void switchToUiThreadAnimation() {
+-        for (int i = 0; i < mRunningHwAnimators.size(); i++) {
+-            Animator animator = mRunningHwAnimators.get(i);
+-            animator.removeListener(mAnimationListener);
+-            animator.end();
+-        }
+-        mRunningHwAnimators.clear();
+-        clearHwProps();
+-        invalidateSelf();
+-    }
+ 
+     /**
+      * Property for animating radius between its initial and target values.
+--- a/frameworks/base/graphics/java/android/graphics/drawable/RippleAnimationSession.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/RippleAnimationSession.java
+@@ -23,10 +23,7 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.graphics.Canvas;
+-import android.graphics.CanvasProperty;
+ import android.graphics.Paint;
+-import android.graphics.RecordingCanvas;
+-import android.graphics.animation.RenderNodeAnimator;
+ import android.view.animation.AnimationUtils;
+ import android.view.animation.Interpolator;
+ import android.view.animation.LinearInterpolator;
+@@ -48,30 +45,23 @@
+             new PathInterpolator(0.4f, 0f, 0.2f, 1f);
+     private Consumer<RippleAnimationSession> mOnSessionEnd;
+     private final AnimationProperties<Float, Paint> mProperties;
+-    private AnimationProperties<CanvasProperty<Float>, CanvasProperty<Paint>> mCanvasProperties;
+     private Runnable mOnUpdate;
+     private long mStartTime;
+-    private boolean mForceSoftware;
+     private Animator mLoopAnimation;
+     private Animator mCurrentAnimation;
+ 
+     RippleAnimationSession(@NonNull AnimationProperties<Float, Paint> properties,
+             boolean forceSoftware) {
+         mProperties = properties;
+-        mForceSoftware = forceSoftware;
+     }
+ 
+     boolean isForceSoftware() {
+-        return mForceSoftware;
++        return true;
+     }
+ 
+     @NonNull RippleAnimationSession enter(Canvas canvas) {
+         mStartTime = AnimationUtils.currentAnimationTimeMillis();
+-        if (useRTAnimations(canvas)) {
+-            enterHardware((RecordingCanvas) canvas);
+-        } else {
+-            enterSoftware();
+-        }
++        enterSoftware();
+         return this;
+     }
+ 
+@@ -82,8 +72,7 @@
+     }
+ 
+     @NonNull RippleAnimationSession exit(Canvas canvas) {
+-        if (useRTAnimations(canvas)) exitHardware((RecordingCanvas) canvas);
+-        else exitSoftware();
++        exitSoftware();
+         return this;
+     }
+ 
+@@ -100,14 +89,6 @@
+     RippleAnimationSession setOnAnimationUpdated(@Nullable Runnable run) {
+         mOnUpdate = run;
+         return this;
+-    }
+-
+-    private boolean useRTAnimations(Canvas canvas) {
+-        if (mForceSoftware) return false;
+-        if (!canvas.isHardwareAccelerated()) return false;
+-        RecordingCanvas hwCanvas = (RecordingCanvas) canvas;
+-        if (hwCanvas.mNode == null || !hwCanvas.mNode.isAttached()) return false;
+-        return true;
+     }
+ 
+     private void exitSoftware() {
+@@ -143,46 +124,7 @@
+     }
+ 
+     RippleAnimationSession setForceSoftwareAnimation(boolean forceSw) {
+-        mForceSoftware = forceSw;
+-        return this;
+-    }
+-
+-    private void exitHardware(RecordingCanvas canvas) {
+-        AnimationProperties<CanvasProperty<Float>, CanvasProperty<Paint>>
+-                props = getCanvasProperties();
+-        RenderNodeAnimator exit =
+-                new RenderNodeAnimator(props.getProgress(), 1f);
+-        exit.setDuration(EXIT_ANIM_DURATION);
+-        exit.addListener(new AnimatorListener(this) {
+-            @Override
+-            public void onAnimationEnd(Animator animation) {
+-                super.onAnimationEnd(animation);
+-                if (mLoopAnimation != null) mLoopAnimation.cancel();
+-                Consumer<RippleAnimationSession> onEnd = mOnSessionEnd;
+-                if (onEnd != null) onEnd.accept(RippleAnimationSession.this);
+-                if (mCurrentAnimation == exit) mCurrentAnimation = null;
+-            }
+-        });
+-        exit.setTarget(canvas);
+-        exit.setInterpolator(LINEAR_INTERPOLATOR);
+-
+-        long delay = computeDelay();
+-        exit.setStartDelay(delay);
+-        exit.start();
+-        mCurrentAnimation = exit;
+-    }
+-
+-    private void enterHardware(RecordingCanvas canvas) {
+-        AnimationProperties<CanvasProperty<Float>, CanvasProperty<Paint>>
+-                props = getCanvasProperties();
+-        RenderNodeAnimator expand =
+-                new RenderNodeAnimator(props.getProgress(), .5f);
+-        expand.setTarget(canvas);
+-        RenderNodeAnimator loop = new RenderNodeAnimator(props.getNoisePhase(),
+-                mStartTime + MAX_NOISE_PHASE);
+-        loop.setTarget(canvas);
+-        startAnimation(expand, loop);
+-        mCurrentAnimation = expand;
++        return this;
+     }
+ 
+     private void startAnimation(Animator expand, Animator loop) {
+@@ -222,30 +164,10 @@
+     void setRadius(float radius) {
+         mProperties.setRadius(radius);
+         mProperties.getShader().setRadius(radius);
+-        if (mCanvasProperties != null) {
+-            mCanvasProperties.setRadius(CanvasProperty.createFloat(radius));
+-            mCanvasProperties.getShader().setRadius(radius);
+-        }
+     }
+ 
+     @NonNull AnimationProperties<Float, Paint> getProperties() {
+         return mProperties;
+-    }
+-
+-    @NonNull
+-    AnimationProperties<CanvasProperty<Float>, CanvasProperty<Paint>> getCanvasProperties() {
+-        if (mCanvasProperties == null) {
+-            mCanvasProperties = new AnimationProperties<>(
+-                    CanvasProperty.createFloat(mProperties.getX()),
+-                    CanvasProperty.createFloat(mProperties.getY()),
+-                    CanvasProperty.createFloat(mProperties.getMaxRadius()),
+-                    CanvasProperty.createFloat(mProperties.getNoisePhase()),
+-                    CanvasProperty.createPaint(mProperties.getPaint()),
+-                    CanvasProperty.createFloat(mProperties.getProgress()),
+-                    mProperties.getColor(),
+-                    mProperties.getShader());
+-        }
+-        return mCanvasProperties;
+     }
+ 
+     private static class AnimatorListener implements Animator.AnimatorListener {
+--- a/frameworks/base/graphics/java/android/graphics/drawable/RippleDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/RippleDrawable.java
+@@ -36,7 +36,6 @@
+ import android.graphics.Bitmap;
+ import android.graphics.BitmapShader;
+ import android.graphics.Canvas;
+-import android.graphics.CanvasProperty;
+ import android.graphics.Color;
+ import android.graphics.ColorFilter;
+ import android.graphics.Matrix;
+@@ -45,7 +44,6 @@
+ import android.graphics.PixelFormat;
+ import android.graphics.PorterDuff;
+ import android.graphics.PorterDuffColorFilter;
+-import android.graphics.RecordingCanvas;
+ import android.graphics.Rect;
+ import android.graphics.Shader;
+ import android.os.Build;
+@@ -773,10 +771,6 @@
+             float cx = mHotspotBounds.centerX(), cy = mHotspotBounds.centerY();
+             s.getProperties().getShader().setOrigin(cx, cy);
+             s.getProperties().setOrigin(cx, cy);
+-            if (!s.isForceSoftware()) {
+-                s.getCanvasProperties()
+-                        .setOrigin(CanvasProperty.createFloat(cx), CanvasProperty.createFloat(cy));
+-            }
+         }
+     }
+ 
+@@ -885,7 +879,6 @@
+     private void drawPatterned(@NonNull Canvas canvas) {
+         final Rect bounds = mHotspotBounds;
+         final int saveCount = canvas.save(Canvas.CLIP_SAVE_FLAG);
+-        boolean useCanvasProps = !mForceSoftware;
+         if (isBounded()) {
+             canvas.clipRect(getDirtyBounds());
+         }
+@@ -915,12 +908,11 @@
+             w = bounds.width();
+             RippleAnimationSession.AnimationProperties<Float, Paint> properties =
+                     createAnimationProperties(x, y, cx, cy, w, h);
+-            mRunningAnimations.add(new RippleAnimationSession(properties, !useCanvasProps)
++            mRunningAnimations.add(new RippleAnimationSession(properties, true)
+                     .setOnAnimationUpdated(() -> invalidateSelf(false))
+                     .setOnSessionEnd(session -> {
+                         mRunningAnimations.remove(session);
+                     })
+-                    .setForceSoftwareAnimation(!useCanvasProps)
+                     .enter(canvas));
+         }
+         if (shouldExit) {
+@@ -935,13 +927,6 @@
+                 Log.e(TAG, "The RippleDrawable.STYLE_PATTERNED animation is not supported for a "
+                         + "non-hardware accelerated Canvas. Skipping animation.");
+                 break;
+-            } else if (useCanvasProps) {
+-                RippleAnimationSession.AnimationProperties<CanvasProperty<Float>,
+-                        CanvasProperty<Paint>>
+-                        p = s.getCanvasProperties();
+-                RecordingCanvas can = (RecordingCanvas) canvas;
+-                can.drawRipple(p.getX(), p.getY(), p.getMaxRadius(), p.getPaint(),
+-                        p.getProgress(), p.getNoisePhase(), p.getColor(), p.getShader());
+             } else {
+                 RippleAnimationSession.AnimationProperties<Float, Paint> p =
+                         s.getProperties();

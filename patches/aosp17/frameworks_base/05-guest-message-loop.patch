@@ -1,6 +1,802 @@
+--- a/frameworks/base/core/java/android/os/Handler.java
++++ b/frameworks/base/core/java/android/os/Handler.java
+@@ -16,15 +16,12 @@
+ 
+ package android.os;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.ravenwood.annotation.RavenwoodRedirect;
+-import android.ravenwood.annotation.RavenwoodRedirectionClass;
+ import android.util.Log;
+ import android.util.Printer;
+ 
+@@ -88,7 +85,6 @@
+  * See {@code java.util.concurrent} for standard concurrency primitives.
+  */
+ @RavenwoodKeepWholeClass
+-@RavenwoodRedirectionClass("Handler_ravenwood")
+ public class Handler {
+     /*
+      * Set this flag to true to detect anonymous, local or member classes
+@@ -120,7 +116,6 @@
+     /**
+      * Handle system messages here.
+      */
+-    @RavenwoodRedirect(comment = "Allow ravenwood to hook message dispatches.")
+     public void dispatchMessage(@NonNull Message msg) {
+         dispatchMessageImpl(msg);
+     }
+@@ -795,7 +790,7 @@
+             Log.w("Looper", e.getMessage(), e);
+             return false;
+         }
+-        return enqueueMessage(queue, msg, uptimeMillis);
++        return enqueueMessage(queue, msg, uptimeMillis, false);
+     }
+ 
+     /**
+@@ -818,7 +813,7 @@
+             Log.w("Looper", e.getMessage(), e);
+             return false;
+         }
+-        return enqueueMessage(queue, msg, 0);
++        return enqueueMessage(queue, msg, 0, true);
+     }
+ 
+     /**
+@@ -838,12 +833,11 @@
+         return sendMessage(msg);
+     }
+ 
+-    @RavenwoodRedirect(comment = "Allow ravenwood to hook message enqueues.")
+     private static void onBeforeEnqueue(@NonNull MessageQueue queue, @NonNull Message msg,
+             long uptimeMillis) {}
+ 
+     private boolean enqueueMessage(@NonNull MessageQueue queue, @NonNull Message msg,
+-            long uptimeMillis) {
++            long uptimeMillis, boolean atFront) {
+         msg.target = this;
+         msg.workSourceUid = ThreadLocalWorkSource.getUid();
+ 
+@@ -851,7 +845,7 @@
+             msg.setAsynchronous(true);
+         }
+         onBeforeEnqueue(queue, msg, uptimeMillis);
+-        return queue.enqueueMessage(msg, uptimeMillis);
++        return queue.enqueueMessage(msg, uptimeMillis, atFront);
+     }
+ 
+     private Object disallowNullArgumentIfShared(@Nullable Object arg) {
+@@ -915,7 +909,6 @@
+      */
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+     @TestApi
+-    @FlaggedApi(android.os.Flags.FLAG_MAINLINE_VCN_PLATFORM_API)
+     public final void removeEqualMessages(int what, @Nullable Object object) {
+         mQueue.removeEqualMessages(this, what, disallowNullArgumentIfShared(object));
+     }
+@@ -949,7 +942,6 @@
+      */
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+     @TestApi
+-    @FlaggedApi(android.os.Flags.FLAG_MAINLINE_VCN_PLATFORM_API)
+     public final void removeCallbacksAndEqualMessages(@Nullable Object token) {
+         mQueue.removeCallbacksAndEqualMessages(this, disallowNullArgumentIfShared(token));
+     }
+@@ -978,7 +970,6 @@
+      */
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+     @TestApi
+-    @FlaggedApi(android.os.Flags.FLAG_MAINLINE_VCN_PLATFORM_API)
+     public final boolean hasMessagesOrCallbacks() {
+         return mQueue.hasMessages(this);
+     }
+@@ -1059,24 +1050,6 @@
+         + "}";
+     }
+ 
+-    @UnsupportedAppUsage
+-    final IMessenger getIMessenger() {
+-        synchronized (mQueue) {
+-            if (mMessenger != null) {
+-                return mMessenger;
+-            }
+-            mMessenger = new MessengerImpl();
+-            return mMessenger;
+-        }
+-    }
+-
+-    private final class MessengerImpl extends IMessenger.Stub {
+-        public void send(Message msg) {
+-            msg.sendingUid = Binder.getCallingUid();
+-            Handler.this.sendMessage(msg);
+-        }
+-    }
+-
+     private static Message getPostMessage(Runnable r) {
+         Message m = Message.obtain();
+         m.callback = r;
+@@ -1101,8 +1074,6 @@
+     @UnsupportedAppUsage
+     final Callback mCallback;
+     final boolean mAsynchronous;
+-    @UnsupportedAppUsage
+-    IMessenger mMessenger;
+ 
+     /** If it's a shared handler, we disallow certain dangeraous operations. */
+     private final boolean mIsShared;
+--- a/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
++++ b/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
+@@ -21,22 +21,17 @@
+ import android.annotation.Nullable;
+ import android.annotation.SuppressLint;
+ import android.annotation.TestApi;
+-import android.app.ActivityThread;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.ravenwood.annotation.RavenwoodRedirect;
+ import android.util.Log;
+ import android.util.Printer;
+-import android.util.SparseArray;
+ import android.util.proto.ProtoOutputStream;
+ 
+-import dalvik.annotation.optimization.NeverCompile;
+ 
+ import java.io.FileDescriptor;
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+ import java.util.ArrayList;
+-import java.util.concurrent.atomic.AtomicLong;
+ 
+ /**
+  * Low-level class holding the list of messages to be dispatched by a
+@@ -50,24 +45,19 @@
+ public final class MessageQueue {
+     private static final String TAG = "MessageQueue";
+     private static final boolean DEBUG = false;
+-    private static final boolean TRACE = false;
+ 
+     // True if the message queue can be quit.
+     @UnsupportedAppUsage
+     private final boolean mQuitAllowed;
+-
+-    @UnsupportedAppUsage
+-    @SuppressWarnings("unused")
+-    private long mPtr; // used by native code
+ 
+     @UnsupportedAppUsage
+     Message mMessages;
+     private Message mLast;
+     @UnsupportedAppUsage
+     private final ArrayList<IdleHandler> mIdleHandlers = new ArrayList<IdleHandler>();
+-    private SparseArray<FileDescriptorRecord> mFileDescriptorRecords;
+     private IdleHandler[] mPendingIdleHandlers;
+     private boolean mQuitting;
++    private boolean mFinished;
+ 
+     // Indicates whether next() is blocked waiting in pollOnce() with a non-zero timeout.
+     private boolean mBlocked;
+@@ -81,43 +71,24 @@
+     @UnsupportedAppUsage
+     private int mNextBarrierToken;
+ 
++
+     private final Thread mLooperThread;
+ 
+-    private native static long nativeInit();
+-    private native static void nativeDestroy(long ptr);
+-    @UnsupportedAppUsage
+-    private native void nativePollOnce(long ptr, int timeoutMillis); /*non-static for callbacks*/
+-    private native static void nativeWake(long ptr);
+-    private native static boolean nativeIsPolling(long ptr);
+-    private native static void nativeSetFileDescriptorEvents(long ptr, int fd, int events);
+-    private native static void nativeSetSkipEpollWaitForZeroTimeout(long ptr);
+-
+-    MessageQueue(boolean quitAllowed) {
++    MessageQueue(boolean quitAllowed, Thread thread) {
+         mQuitAllowed = quitAllowed;
+-        mPtr = nativeInit();
+-        mLooperThread = Thread.currentThread();
++        mLooperThread = thread;
+     }
+ 
+     Thread getLooperThread() {
+         return mLooperThread;
+     }
+ 
+-    @Override
+-    protected void finalize() throws Throwable {
+-        try {
+-            dispose();
+-        } finally {
+-            super.finalize();
+-        }
+-    }
+-
+-    // Disposes of the underlying message queue.
+-    // Must only be called on the looper thread or the finalizer.
+-    private void dispose() {
+-        if (mPtr != 0) {
+-            nativeDestroy(mPtr);
+-            mPtr = 0;
+-        }
++    private static void requireInstrumentation() {
++        throw new IllegalStateException("This operation requires Android instrumentation");
++    }
++
++    synchronized boolean isFinished() {
++        return mQuitting && (mFinished || mMessages == null);
+     }
+ 
+     static boolean getUseConcurrent() {
+@@ -204,9 +175,7 @@
+     }
+ 
+     private boolean isPollingLocked() {
+-        // If the loop is quitting then it must not be idling.
+-        // We can assume mPtr != 0 when mQuitting is false.
+-        return !mQuitting && nativeIsPolling(mPtr);
++        return !mQuitting && mBlocked;
+     }
+ 
+     /**
+@@ -235,16 +204,7 @@
+     public void addOnFileDescriptorEventListener(@NonNull FileDescriptor fd,
+             @OnFileDescriptorEventListener.Events int events,
+             @NonNull OnFileDescriptorEventListener listener) {
+-        if (fd == null) {
+-            throw new IllegalArgumentException("fd must not be null");
+-        }
+-        if (listener == null) {
+-            throw new IllegalArgumentException("listener must not be null");
+-        }
+-
+-        synchronized (this) {
+-            updateOnFileDescriptorEventListenerLocked(fd, events, listener);
+-        }
++        throw new UnsupportedOperationException("The cooperative queue cannot poll file descriptors");
+     }
+ 
+     /**
+@@ -260,221 +220,97 @@
+      * @see #addOnFileDescriptorEventListener
+      */
+     public void removeOnFileDescriptorEventListener(@NonNull FileDescriptor fd) {
+-        if (fd == null) {
+-            throw new IllegalArgumentException("fd must not be null");
+-        }
+-
+-        synchronized (this) {
+-            updateOnFileDescriptorEventListenerLocked(fd, 0, null);
+-        }
+-    }
+-
+-    private void updateOnFileDescriptorEventListenerLocked(FileDescriptor fd, int events,
+-            OnFileDescriptorEventListener listener) {
+-        final int fdNum = fd.getInt$();
+-
+-        int index = -1;
+-        FileDescriptorRecord record = null;
+-        if (mFileDescriptorRecords != null) {
+-            index = mFileDescriptorRecords.indexOfKey(fdNum);
+-            if (index >= 0) {
+-                record = mFileDescriptorRecords.valueAt(index);
+-                if (record != null && record.mEvents == events) {
+-                    return;
+-                }
+-            }
+-        }
+-
+-        if (events != 0) {
+-            events |= OnFileDescriptorEventListener.EVENT_ERROR;
+-            if (record == null) {
+-                if (mFileDescriptorRecords == null) {
+-                    mFileDescriptorRecords = new SparseArray<FileDescriptorRecord>();
+-                }
+-                record = new FileDescriptorRecord(fd, events, listener);
+-                mFileDescriptorRecords.put(fdNum, record);
+-            } else {
+-                record.mListener = listener;
+-                record.mEvents = events;
+-                record.mSeq += 1;
+-            }
+-            nativeSetFileDescriptorEvents(mPtr, fdNum, events);
+-        } else if (record != null) {
+-            record.mEvents = 0;
+-            mFileDescriptorRecords.removeAt(index);
+-            nativeSetFileDescriptorEvents(mPtr, fdNum, 0);
+-        }
+-    }
+-
+-    // Called from native code.
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    private int dispatchEvents(int fd, int events) {
+-        // Get the file descriptor record and any state that might change.
+-        final FileDescriptorRecord record;
+-        final int oldWatchedEvents;
+-        final OnFileDescriptorEventListener listener;
+-        final int seq;
+-        synchronized (this) {
+-            record = mFileDescriptorRecords.get(fd);
+-            if (record == null) {
+-                return 0; // spurious, no listener registered
+-            }
+-
+-            oldWatchedEvents = record.mEvents;
+-            events &= oldWatchedEvents; // filter events based on current watched set
+-            if (events == 0) {
+-                return oldWatchedEvents; // spurious, watched events changed
+-            }
+-
+-            listener = record.mListener;
+-            seq = record.mSeq;
+-        }
+-
+-        // Invoke the listener outside of the lock.
+-        int newWatchedEvents = listener.onFileDescriptorEvents(
+-                record.mDescriptor, events);
+-        if (newWatchedEvents != 0) {
+-            newWatchedEvents |= OnFileDescriptorEventListener.EVENT_ERROR;
+-        }
+-
+-        // Update the file descriptor record if the listener changed the set of
+-        // events to watch and the listener itself hasn't been updated since.
+-        if (newWatchedEvents != oldWatchedEvents) {
+-            synchronized (this) {
+-                int index = mFileDescriptorRecords.indexOfKey(fd);
+-                if (index >= 0 && mFileDescriptorRecords.valueAt(index) == record
+-                        && record.mSeq == seq) {
+-                    record.mEvents = newWatchedEvents;
+-                    if (newWatchedEvents == 0) {
+-                        mFileDescriptorRecords.removeAt(index);
+-                    }
+-                }
+-            }
+-        }
+-
+-        // Return the new set of events to watch for native code to take care of.
+-        return newWatchedEvents;
+-    }
+-
+-    private static final AtomicLong mMessagesDelivered = new AtomicLong();
++        // The cooperative queue has no registered file descriptors.
++    }
+ 
+     @UnsupportedAppUsage
+-    Message next() {
+-        // Return here if the message loop has already quit and been disposed.
+-        // This can happen if the application tries to restart a looper after quit
+-        // which is not supported.
+-        final long ptr = mPtr;
+-        if (ptr == 0) {
++    Message next(long now) {
++        if (mFinished) {
+             return null;
+         }
+ 
+-        int pendingIdleHandlerCount = -1; // -1 only during first iteration
+-        int nextPollTimeoutMillis = 0;
+-        for (;;) {
+-            if (nextPollTimeoutMillis != 0) {
+-                Binder.flushPendingCommands();
+-            }
+-
+-            nativePollOnce(ptr, nextPollTimeoutMillis);
+-
+-            synchronized (this) {
+-                // Try to retrieve the next message.  Return if found.
+-                final long now = SystemClock.uptimeMillis();
+-                Message prevMsg = null;
+-                Message msg = mMessages;
+-                if (msg != null && msg.target == null) {
+-                    // Stalled by a barrier.  Find the next asynchronous message in the queue.
+-                    do {
+-                        prevMsg = msg;
+-                        msg = msg.next;
+-                    } while (msg != null && !msg.isAsynchronous());
+-                }
+-                if (msg != null) {
+-                    if (now < msg.when) {
+-                        // Next message is not ready.  Set a timeout to wake up when it is ready.
+-                        nextPollTimeoutMillis = (int) Math.min(msg.when - now, Integer.MAX_VALUE);
+-                    } else {
+-                        // Got a message.
+-                        mBlocked = false;
+-                        if (prevMsg != null) {
+-                            prevMsg.next = msg.next;
+-                            if (prevMsg.next == null) {
+-                                mLast = prevMsg;
+-                            }
+-                        } else {
+-                            mMessages = msg.next;
+-                            if (msg.next == null) {
+-                                mLast = null;
+-                            }
+-                        }
+-                        msg.next = null;
+-                        if (DEBUG) Log.v(TAG, "Returning message: " + msg);
+-                        msg.markInUse();
+-                        if (msg.isAsynchronous()) {
+-                            mAsyncMessageCount--;
+-                        }
+-                        if (TRACE) {
+-                            Trace.setCounter("MQ.Delivered", mMessagesDelivered.incrementAndGet());
+-                        }
+-                        return msg;
++        final int pendingIdleHandlerCount;
++        synchronized (this) {
++            Message prevMsg = null;
++            Message msg = mMessages;
++            if (msg != null && msg.target == null) {
++                // Stalled by a barrier.  Find the next asynchronous message in the queue.
++                do {
++                    prevMsg = msg;
++                    msg = msg.next;
++                } while (msg != null && !msg.isAsynchronous());
++            }
++            if (msg != null && msg.when <= now) {
++                // Got a message.
++                mBlocked = false;
++                if (prevMsg != null) {
++                    prevMsg.next = msg.next;
++                    if (prevMsg.next == null) {
++                        mLast = prevMsg;
+                     }
+                 } else {
+-                    // No more messages.
+-                    nextPollTimeoutMillis = -1;
+-                }
+-
+-                // Process the quit message now that all pending messages have been handled.
+-                if (mQuitting) {
+-                    dispose();
+-                    return null;
+-                }
+-
+-                // If first time idle, then get the number of idlers to run.
+-                // Idle handles only run if the queue is empty or if the first message
+-                // in the queue (possibly a barrier) is due to be handled in the future.
+-                if (pendingIdleHandlerCount < 0
+-                        && (mMessages == null || now < mMessages.when)) {
+-                    pendingIdleHandlerCount = mIdleHandlers.size();
+-                }
+-                if (pendingIdleHandlerCount <= 0) {
+-                    // No idle handlers to run.  Loop and wait some more.
+-                    mBlocked = true;
+-                    continue;
+-                }
+-
+-                if (mPendingIdleHandlers == null) {
+-                    mPendingIdleHandlers = new IdleHandler[Math.max(pendingIdleHandlerCount, 4)];
+-                }
+-                mPendingIdleHandlers = mIdleHandlers.toArray(mPendingIdleHandlers);
+-            }
+-
+-            // Run the idle handlers.
+-            // We only ever reach this code block during the first iteration.
++                    mMessages = msg.next;
++                    if (msg.next == null) {
++                        mLast = null;
++                    }
++                }
++                msg.next = null;
++                if (DEBUG) Log.v(TAG, "Returning message: " + msg);
++                msg.markInUse();
++                if (msg.isAsynchronous()) {
++                    mAsyncMessageCount--;
++                }
++
++                return msg;
++            }
++
++            // Process the quit message now that all pending messages have been handled.
++            if (mQuitting) {
++                removeAllMessagesLocked();
++                mFinished = true;
++                return null;
++            }
++
++            // If first time idle, then get the number of idlers to run.
++            // Idle handles only run if the queue is empty or if the first message
++            // in the queue (possibly a barrier) is due to be handled in the future.
++            pendingIdleHandlerCount = (mMessages == null || now < mMessages.when)
++                    ? mIdleHandlers.size() : 0;
++            if (pendingIdleHandlerCount <= 0) {
++                // The next host tick supplies the next opportunity to poll.
++                mBlocked = true;
++                return null;
++            }
++
++            if (mPendingIdleHandlers == null || mPendingIdleHandlers.length < pendingIdleHandlerCount) {
++                mPendingIdleHandlers = new IdleHandler[Math.max(pendingIdleHandlerCount, 4)];
++            }
+             for (int i = 0; i < pendingIdleHandlerCount; i++) {
+-                final IdleHandler idler = mPendingIdleHandlers[i];
+-                mPendingIdleHandlers[i] = null; // release the reference to the handler
+-
+-                boolean keep = false;
+-                try {
+-                    keep = idler.queueIdle();
+-                } catch (Throwable t) {
+-                    Log.wtf(TAG, "IdleHandler threw exception", t);
+-                }
+-
+-                if (!keep) {
+-                    synchronized (this) {
+-                        mIdleHandlers.remove(idler);
+-                    }
+-                }
+-            }
+-
+-            // Reset the idle handler count to 0 so we do not run them again.
+-            pendingIdleHandlerCount = 0;
+-
+-            // While calling an idle handler, a new message could have been delivered
+-            // so go back and look again for a pending message without waiting.
+-            nextPollTimeoutMillis = 0;
+-        }
++                mPendingIdleHandlers[i] = mIdleHandlers.get(i);
++            }
++        }
++
++        // Run the idle handlers.
++        // We only ever reach this code block during the first iteration.
++        for (int i = 0; i < pendingIdleHandlerCount; i++) {
++            final IdleHandler idler = mPendingIdleHandlers[i];
++            mPendingIdleHandlers[i] = null; // release the reference to the handler
++
++            boolean keep = false;
++            try {
++                keep = idler.queueIdle();
++            } catch (Throwable t) {
++                Log.wtf(TAG, "IdleHandler threw exception", t);
++            }
++
++            if (!keep) {
++                synchronized (this) {
++                    mIdleHandlers.remove(idler);
++                }
++            }
++        }
++        // Idle callbacks run once per tick. Work they enqueue is handled on the next tick.
++        return null;
+     }
+ 
+     /**
+@@ -484,7 +320,7 @@
+      * @hide
+      */
+     public @Nullable Message peekLastMessageForTest() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         synchronized (this) {
+             Message lastMsg = null;
+ 
+@@ -506,7 +342,7 @@
+      * @hide
+      */
+     public void resetForTest() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         onResetForTestCalled();
+         synchronized (this) {
+             // This queue is already quitting, so we can't reset its state and continue using it.
+@@ -514,26 +350,15 @@
+                 return;
+             }
+             mIdleHandlers.clear();
+-            removeAllFdRecords();
+             removeAllMessagesLocked();
+             // We reset the sync barrier tokens to reflect the queue's state reset. This helps
+             // ensure that the queue's behavior is deterministic in both individual tests and in a
+             // test suite.
+             resetSyncBarrierTokens();
+-            nativeWake(mPtr);
+-        }
+-    }
+-
+-    @RavenwoodRedirect
++        }
++    }
++
+     private static void onResetForTestCalled() {
+-    }
+-
+-    private void removeAllFdRecords() {
+-        if (mFileDescriptorRecords != null) {
+-            while (mFileDescriptorRecords.size() > 0) {
+-                removeOnFileDescriptorEventListener(mFileDescriptorRecords.valueAt(0).mDescriptor);
+-            }
+-        }
+     }
+ 
+     private void resetSyncBarrierTokens() {
+@@ -559,8 +384,6 @@
+                 removeAllMessagesLocked();
+             }
+ 
+-            // We can assume mPtr != 0 because mQuitting was previously false.
+-            nativeWake(mPtr);
+         }
+     }
+ 
+@@ -593,7 +416,6 @@
+         return onSyncBarrierPosted(postSyncBarrier(SystemClock.uptimeMillis()));
+     }
+ 
+-    @RavenwoodRedirect
+     private int onSyncBarrierPosted(int token) {
+         return token;
+     }
+@@ -684,19 +506,14 @@
+             p.recycleUnchecked();
+ 
+             // If the loop is quitting then it is already awake.
+-            // We can assume mPtr != 0 when mQuitting is false.
+-            if (needWake && !mQuitting) {
+-                nativeWake(mPtr);
+-            }
+         }
+         onSyncBarrierRemoved(token);
+     }
+ 
+-    @RavenwoodRedirect
+     private void onSyncBarrierRemoved(int token) {
+     }
+ 
+-    boolean enqueueMessage(Message msg, long when) {
++    boolean enqueueMessage(Message msg, long when, boolean atFront) {
+         if (msg.target == null) {
+             throw new IllegalArgumentException("Message must have a target.");
+         }
+@@ -717,23 +534,15 @@
+             msg.markInUse();
+             msg.when = when;
+             Message p = mMessages;
+-            boolean needWake;
+-            if (p == null || when == 0 || when < p.when) {
+-                // New head, wake up the event queue if blocked.
++            // Uptime zero is a real timestamp before the first host frame.
++            if (p == null || atFront || when < p.when) {
+                 msg.next = p;
+                 mMessages = msg;
+-                needWake = mBlocked;
+                 if (p == null) {
+                     mLast = mMessages;
+                 }
+             } else {
+-                // Message is to be inserted at tail or middle of queue. Usually we don't have to
+-                // wake up the event queue unless there is a barrier at the head of the queue and
+-                // the message is the earliest asynchronous message in the queue.
+-                needWake = mBlocked && p.target == null && msg.isAsynchronous();
+-
+                 if (when >= mLast.when) {
+-                    needWake = needWake && mAsyncMessageCount == 0;
+                     msg.next = null;
+                     mLast.next = msg;
+                     mLast = msg;
+@@ -746,9 +555,6 @@
+                         if (p == null || when < p.when) {
+                             break;
+                         }
+-                        if (needWake && p.isAsynchronous()) {
+-                            needWake = false;
+-                        }
+                     }
+                     if (p == null) {
+                         /* Inserting at tail of queue */
+@@ -763,10 +569,6 @@
+                 mAsyncMessageCount++;
+             }
+ 
+-            // We can assume mPtr != 0 because mQuitting is false.
+-            if (needWake) {
+-                nativeWake(mPtr);
+-            }
+         }
+         return true;
+     }
+@@ -808,9 +610,6 @@
+                 if (msg.isAsynchronous()) {
+                     mAsyncMessageCount--;
+                 }
+-                if (TRACE) {
+-                    Trace.setCounter("MQ.Delivered", mMessagesDelivered.incrementAndGet());
+-                }
+                 return msg;
+             }
+         }
+@@ -825,7 +624,7 @@
+      */
+     @SuppressLint("VisiblySynchronized") // Legacy MessageQueue synchronizes on this
+     Long peekWhenForTest() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         Message ret = legacyPeekOrPoll(true);
+         return ret != null ? ret.when : null;
+     }
+@@ -839,7 +638,7 @@
+     @SuppressLint("VisiblySynchronized") // Legacy MessageQueue synchronizes on this
+     @Nullable
+     Message pollForTest() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         return legacyPeekOrPoll(false);
+     }
+ 
+@@ -851,7 +650,7 @@
+      * and may not be resumed until after returning from this method.
+      */
+     boolean isBlockedOnSyncBarrier() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         synchronized (this) {
+             Message msg = mMessages;
+             return msg != null && msg.target == null;
+@@ -1253,7 +1052,6 @@
+         }
+     }
+ 
+-    @NeverCompile
+     void dump(Printer pw, String prefix, Handler h) {
+         synchronized (this) {
+             pw.println(prefix + "(MessageQueue is using Legacy implementation)");
+@@ -1270,17 +1068,8 @@
+         }
+     }
+ 
+-    @NeverCompile
+     void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long messageQueueToken = proto.start(fieldId);
+-        synchronized (this) {
+-            for (Message msg = mMessages; msg != null; msg = msg.next) {
+-                msg.dumpDebug(proto, MessageQueueProto.MESSAGES);
+-            }
+-            proto.write(MessageQueueProto.IS_POLLING_LOCKED, isPollingLocked());
+-            proto.write(MessageQueueProto.IS_QUITTING, mQuitting);
+-        }
+-        proto.end(messageQueueToken);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /**
+@@ -1373,27 +1162,6 @@
+         @Events int onFileDescriptorEvents(@NonNull FileDescriptor fd, @Events int events);
+     }
+ 
+-    private static final class FileDescriptorRecord {
+-        public final FileDescriptor mDescriptor;
+-        public int mEvents;
+-        public OnFileDescriptorEventListener mListener;
+-        public int mSeq;
+-
+-        public FileDescriptorRecord(FileDescriptor descriptor,
+-                int events, OnFileDescriptorEventListener listener) {
+-            mDescriptor = descriptor;
+-            mEvents = events;
+-            mListener = listener;
+-        }
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void setLooperDoctor(LooperDoctor d) {
+-        // This version of MessageQueue does not use LooperDoctor
+-    }
+-
+     /**
+      * @hide
+      */
 --- a/frameworks/base/core/java/android/os/Looper.java
 +++ b/frameworks/base/core/java/android/os/Looper.java
-@@ -16,28 +16,18 @@
+@@ -16,28 +16,17 @@
  
  package android.os;
  
@@ -13,12 +809,12 @@
  import android.annotation.NonNull;
  import android.annotation.Nullable;
 -import android.app.compat.CompatChanges;
- import android.compat.annotation.ChangeId;
+-import android.compat.annotation.ChangeId;
 -import android.compat.annotation.EnabledSince;
- import android.compat.annotation.Overridable;
+-import android.compat.annotation.Overridable;
  import android.compat.annotation.UnsupportedAppUsage;
- import android.ravenwood.annotation.RavenwoodRedirect;
- import android.ravenwood.annotation.RavenwoodRedirectionClass;
+-import android.ravenwood.annotation.RavenwoodRedirect;
+-import android.ravenwood.annotation.RavenwoodRedirectionClass;
  import android.util.Log;
  import android.util.Printer;
 -import android.util.Slog;
@@ -26,10 +822,21 @@
  
 -import java.lang.invoke.MethodHandles;
 -import java.lang.invoke.VarHandle;
++import org.wasmandroid.ui.ThreadContext;
++
++import java.util.ArrayList;
  import java.util.Objects;
  
  /**
-@@ -85,24 +75,17 @@
+@@ -71,7 +60,6 @@
+   *  }</pre>
+   */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+-@RavenwoodRedirectionClass("Looper_ravenwood")
+ public final class Looper {
+     /*
+      * API Implementation Note:
+@@ -85,16 +73,10 @@
  
      private static final String TAG = "Looper";
  
@@ -43,60 +850,64 @@
 -    // sThreadLocal.get() will return null unless you've called prepare().
 -    @UnsupportedAppUsage
 -    static final ThreadLocal<Looper> sThreadLocal = new ThreadLocal<Looper>();
-+    // This interpreter has one guest thread per VM.
-+    private static Looper sGuestLooper;
++    // Guest workers take turns on the host thread with their own logical Thread identity.
++    private static Looper sPreparedLooper;
++    private static Looper sDispatchingLooper;
++    private static final ArrayList<Looper> sWorkers = new ArrayList<>();
      @UnsupportedAppUsage
      private static Looper sMainLooper;  // guarded by Looper.class
      private static Observer sObserver;
- 
-     @UnsupportedAppUsage
-     final MessageQueue mQueue;
--    final Thread mThread;
-     private boolean mInLoop;
-+
-+    private static native long nativeClearCallingIdentity();
- 
-     @UnsupportedAppUsage
-     private Printer mLogging;
-@@ -134,7 +117,6 @@
+@@ -133,9 +115,7 @@
+      *
       * @hide
       */
-     @ChangeId
+-    @ChangeId
 -    @EnabledSince(targetSdkVersion = android.os.Build.VERSION_CODES.CINNAMON_BUN)
-     @Overridable // Can be overridden on user builds
+-    @Overridable // Can be overridden on user builds
++    // Can be overridden on user builds
      public static final long LOOPER_CLEARS_THREAD_INTERRUPTED = 458413887L;
  
-@@ -149,10 +131,10 @@
+     /** Initialize the current thread as a looper.
+@@ -149,10 +129,10 @@
      }
  
      private static void prepare(boolean quitAllowed) {
 -        if (sThreadLocal.get() != null) {
-+        if (sGuestLooper != null) {
++        if (myLooper() != null) {
              throw new RuntimeException("Only one Looper may be created per thread");
          }
 -        sThreadLocal.set(new Looper(quitAllowed));
-+        sGuestLooper = new Looper(quitAllowed);
++        sPreparedLooper = new Looper(quitAllowed, Thread.currentThread());
      }
  
      /**
-@@ -213,13 +195,6 @@
-      */
-     public static void setObserver(@Nullable Observer observer) {
+@@ -215,40 +195,17 @@
          sObserver = observer;
--    }
--
+     }
+ 
 -    // On Ravenwood, compat-IDs may not be initialized when it's called,
 -    // so we have a separate check in Looper_ravenwood.
 -    @RavenwoodRedirect(bug = 470164731)
 -    private static boolean isLooperClearsThreadInterruptedEnabled() {
 -        return CompatChanges.isChangeEnabled(LOOPER_CLEARS_THREAD_INTERRUPTED);
-     }
- 
+-    }
+-
      /**
-@@ -235,22 +210,6 @@
+      * Poll and deliver single message, return true if the outer loop should continue.
+      */
+     @SuppressWarnings({"UnusedTokenOfOriginalCallingIdentity",
+             "ClearIdentityCallNotFollowedByTryFinally"})
+     private static boolean loopOnce(final Looper me,
+-            final long ident, final int thresholdOverride) {
+-        Message msg = me.mQueue.next(); // might block
++            final long now, final int thresholdOverride) {
++        Message msg = me.mQueue.next(now);
+         if (msg == null) {
+-            // No message indicates that the message queue is quitting.
++            // The queue is empty, waiting for its next due message, or finished.
              return false;
-         }
- 
+-        }
+-
 -        if (android.os.Flags.perfettoSdkTracingV3() && PerfettoCategories.MQ_CATEGORY.isEnabled()) {
 -            final long messageDelayMs = Math.max(0L, msg.when - SystemClock.uptimeMillis());
 -            com.android.internal.dev.perfetto.sdk.PerfettoTrace
@@ -111,12 +922,10 @@
 -                    .endProto()
 -                    .setTerminatingFlow(msg.eventId)
 -                    .emit();
--        }
--
+         }
+ 
          // This must be in a local variabe, in case a UI event sets the logger
-         final Printer logging = me.mLogging;
-         if (logging != null) {
-@@ -276,8 +235,8 @@
+@@ -276,8 +233,8 @@
          final boolean needStartTime = logSlowDelivery || logSlowDispatch;
          final boolean needEndTime = logSlowDispatch;
  
@@ -127,7 +936,7 @@
          }
  
          final long dispatchStart = needStartTime ? SystemClock.uptimeMillis() : 0;
-@@ -288,17 +247,8 @@
+@@ -288,17 +245,8 @@
          }
          long origWorkSource = ThreadLocalWorkSource.setUid(msg.workSourceUid);
  
@@ -145,7 +954,7 @@
              if (observer != null) {
                  observer.messageDispatched(token, msg);
              }
-@@ -309,24 +259,21 @@
+@@ -309,24 +257,21 @@
              }
              throw exception;
          } finally {
@@ -173,56 +982,54 @@
                      me.mSlowDeliveryDetected = false;
                  }
              } else if (slow) {
-@@ -345,7 +292,7 @@
+@@ -341,21 +286,6 @@
  
-         // Make sure that during the course of dispatching the
-         // identity of the thread wasn't corrupted.
+         if (logging != null) {
+             logging.println("<<<<< Finished to " + msg.target + " " + msg.callback);
+-        }
+-
+-        // Make sure that during the course of dispatching the
+-        // identity of the thread wasn't corrupted.
 -        final long newIdent = Binder.clearCallingIdentity();
-+        final long newIdent = nativeClearCallingIdentity();
-         if (ident != newIdent) {
-             Log.wtf(TAG, "Thread identity changed from 0x"
-                     + Long.toHexString(ident) + " to 0x"
-@@ -353,11 +300,6 @@
-                     + msg.target.getClass().getName() + " "
-                     + msg.callback + " what=" + msg.what);
-         }
+-        if (ident != newIdent) {
+-            Log.wtf(TAG, "Thread identity changed from 0x"
+-                    + Long.toHexString(ident) + " to 0x"
+-                    + Long.toHexString(newIdent) + " while dispatching to "
+-                    + msg.target.getClass().getName() + " "
+-                    + msg.callback + " what=" + msg.what);
+-        }
 -        if (android.os.Flags.perfettoSdkTracingV3() && PerfettoCategories.MQ_CATEGORY.isEnabled()) {
 -            com.android.internal.dev.perfetto.sdk.PerfettoTrace.end(PerfettoCategories.MQ_CATEGORY)
 -                    .emit();
--        }
--
-         msg.recycleUnchecked();
+         }
  
-         return true;
-@@ -376,7 +318,7 @@
+         msg.recycleUnchecked();
+@@ -375,85 +305,68 @@
+         if (me == null) {
              throw new RuntimeException("No Looper; Looper.prepare() wasn't called on this thread.");
          }
-         if (me.mInLoop) {
+-        if (me.mInLoop) {
 -            Slog.w(TAG, "Loop again would have the queued messages be executed"
-+            Log.w(TAG, "Loop again would have the queued messages be executed"
-                     + " before this one completed.");
-         }
- 
-@@ -384,12 +326,12 @@
- 
-         // Make sure the identity of this thread is that of the local process,
-         // and keep track of what that identity token actually is.
+-                    + " before this one completed.");
+-        }
+-
+-        me.mInLoop = true;
+-
+-        // Make sure the identity of this thread is that of the local process,
+-        // and keep track of what that identity token actually is.
 -        Binder.clearCallingIdentity();
 -        final long ident = Binder.clearCallingIdentity();
-+        nativeClearCallingIdentity();
-+        final long ident = nativeClearCallingIdentity();
- 
-         // Allow overriding a threshold with a system prop. e.g.
-         // adb shell 'setprop log.looper.1000.main.slow 1 && stop && start'
+-
+-        // Allow overriding a threshold with a system prop. e.g.
+-        // adb shell 'setprop log.looper.1000.main.slow 1 && stop && start'
 -        final int thresholdOverride = getThresholdOverride();
-+        final int thresholdOverride = -1;
- 
-         me.mSlowDeliveryDetected = false;
- 
-@@ -397,63 +339,6 @@
-             if (!loopOnce(me, ident, thresholdOverride)) {
-                 return;
-             }
+-
+-        me.mSlowDeliveryDetected = false;
+-
+-        for (;;) {
+-            if (!loopOnce(me, ident, thresholdOverride)) {
+-                return;
+-            }
 -        }
 -    }
 -
@@ -280,10 +1087,72 @@
 -                return "RESTRICTED";
 -            default:
 -                return "UNKNOWN";
++        me.dispatchDueMessages(SystemClock.uptimeMillis());
++    }
++
++    static Looper createWorker(Thread thread) {
++        Looper looper = new Looper(true, thread);
++        sWorkers.add(looper);
++        return looper;
++    }
++
++    void prepareWorker(Runnable onPrepared) {
++        Looper previousLooper = sDispatchingLooper;
++        Thread previous = ThreadContext.swap(mThread);
++        sDispatchingLooper = this;
++        try {
++            onPrepared.run();
++        } finally {
++            sDispatchingLooper = previousLooper;
++            ThreadContext.swap(previous);
++        }
++    }
++
++    boolean isFinished() {
++        return mQueue.isFinished();
++    }
++
++    /** Dispatch the messages due in the host clock domain without blocking the frame pump. */
++    public int dispatchDueMessages(long now) {
++        if (mInLoop) {
++            return 0;
++        }
++        Looper previousLooper = sDispatchingLooper;
++        Thread previous = ThreadContext.swap(mThread);
++        sDispatchingLooper = this;
++        mInLoop = true;
++        mSlowDeliveryDetected = false;
++        try {
++            int count = 0;
++            while (count < 1000 && loopOnce(this, now, -1)) {
++                count++;
++            }
++            return count;
++        } finally {
++            mInLoop = false;
++            sDispatchingLooper = previousLooper;
++            ThreadContext.swap(previous);
++        }
++    }
++
++    /** Drive existing cooperative worker queues, then the main queue, once per frame. */
++    public static void dispatchAllDueMessages(long now) {
++        int count = sWorkers.size();
++        for (int i = 0; i < count; i++) {
++            Looper worker = sWorkers.get(i);
++            worker.dispatchDueMessages(now);
++            if (worker.isFinished()) {
++                sWorkers.remove(i--);
++                count--;
++            }
++        }
++        Looper main = getMainLooper();
++        if (main != null) {
++            main.dispatchDueMessages(now);
          }
      }
  
-@@ -464,14 +349,11 @@
+@@ -464,14 +377,11 @@
              return false;
          }
  
@@ -300,20 +1169,26 @@
                  + " h=" + msg.target.getClass().getName() + " c=" + msg.callback
                  + " m=" + msg.what);
          return true;
-@@ -482,7 +364,7 @@
+@@ -482,7 +392,8 @@
       * null if the calling thread is not associated with a Looper.
       */
      public static @Nullable Looper myLooper() {
 -        return sThreadLocal.get();
-+        return sGuestLooper;
++        Looper looper = sDispatchingLooper != null ? sDispatchingLooper : sPreparedLooper;
++        return looper != null && looper.mThread == Thread.currentThread() ? looper : null;
      }
  
      /**
-@@ -496,14 +378,13 @@
+@@ -494,16 +405,16 @@
+         return myLooper().mQueue;
+     }
  
-     private Looper(boolean quitAllowed) {
-         mQueue = new MessageQueue(quitAllowed);
+-    private Looper(boolean quitAllowed) {
+-        mQueue = new MessageQueue(quitAllowed);
 -        mThread = Thread.currentThread();
++    private Looper(boolean quitAllowed, Thread thread) {
++        mThread = thread;
++        mQueue = new MessageQueue(quitAllowed, thread);
      }
  
      /**
@@ -325,7 +1200,17 @@
      }
  
      /**
-@@ -560,7 +441,6 @@
+@@ -519,9 +430,6 @@
+      * null to disable message logging.
+      */
+     public void setMessageLogging(@Nullable Printer printer) {
+-        if (printer != null) {
+-            StrictMode.noteSlowCall("setMessageLogging");
+-        }
+         mLogging = printer;
+     }
+ 
+@@ -560,7 +468,6 @@
       * @see #quitSafely
       */
      public void quit() {
@@ -333,7 +1218,7 @@
          mQueue.quit(false);
      }
  
-@@ -580,7 +460,6 @@
+@@ -580,7 +487,6 @@
       * </p>
       */
      public void quitSafely() {
@@ -341,16 +1226,7 @@
          mQueue.quit(true);
      }
  
-@@ -590,7 +469,7 @@
-      * @return The looper's thread.
-      */
-     public @NonNull Thread getThread() {
--        return mThread;
-+        throw new UnsupportedOperationException("A guest java.lang.Thread object is unavailable");
-     }
- 
-     /**
-@@ -600,48 +479,6 @@
+@@ -600,48 +506,6 @@
       */
      public @NonNull MessageQueue getQueue() {
          return mQueue;
@@ -399,7 +1275,7 @@
      }
  
      /**
-@@ -670,19 +507,12 @@
+@@ -670,19 +534,12 @@
  
      /** @hide */
      public void dumpDebug(ProtoOutputStream proto, long fieldId) {
@@ -421,140 +1297,14 @@
      }
  
      /** @hide */
---- a/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
-+++ b/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
-@@ -21,7 +21,6 @@
- import android.annotation.Nullable;
- import android.annotation.SuppressLint;
- import android.annotation.TestApi;
--import android.app.ActivityThread;
- import android.compat.annotation.UnsupportedAppUsage;
- import android.ravenwood.annotation.RavenwoodKeepWholeClass;
- import android.ravenwood.annotation.RavenwoodRedirect;
-@@ -81,8 +80,9 @@
-     @UnsupportedAppUsage
-     private int mNextBarrierToken;
- 
--    private final Thread mLooperThread;
--
-+
-+    private static native void requireInstrumentation();
-+    private static native int getFileDescriptorNumber(FileDescriptor fd);
-     private native static long nativeInit();
-     private native static void nativeDestroy(long ptr);
-     @UnsupportedAppUsage
-@@ -95,11 +95,10 @@
-     MessageQueue(boolean quitAllowed) {
-         mQuitAllowed = quitAllowed;
-         mPtr = nativeInit();
--        mLooperThread = Thread.currentThread();
-     }
- 
-     Thread getLooperThread() {
--        return mLooperThread;
-+        throw new UnsupportedOperationException("A guest java.lang.Thread object is unavailable");
-     }
- 
-     @Override
-@@ -271,7 +270,7 @@
- 
-     private void updateOnFileDescriptorEventListenerLocked(FileDescriptor fd, int events,
-             OnFileDescriptorEventListener listener) {
--        final int fdNum = fd.getInt$();
-+        final int fdNum = getFileDescriptorNumber(fd);
- 
-         int index = -1;
-         FileDescriptorRecord record = null;
-@@ -356,7 +355,7 @@
-         return newWatchedEvents;
-     }
- 
--    private static final AtomicLong mMessagesDelivered = new AtomicLong();
-+    private static final AtomicLong mMessagesDelivered = TRACE ? new AtomicLong() : null;
- 
-     @UnsupportedAppUsage
-     Message next() {
-@@ -484,7 +483,7 @@
-      * @hide
-      */
-     public @Nullable Message peekLastMessageForTest() {
--        ActivityThread.throwIfNotInstrumenting();
-+        requireInstrumentation();
-         synchronized (this) {
-             Message lastMsg = null;
- 
-@@ -506,7 +505,7 @@
-      * @hide
-      */
-     public void resetForTest() {
--        ActivityThread.throwIfNotInstrumenting();
-+        requireInstrumentation();
-         onResetForTestCalled();
-         synchronized (this) {
-             // This queue is already quitting, so we can't reset its state and continue using it.
-@@ -825,7 +824,7 @@
-      */
-     @SuppressLint("VisiblySynchronized") // Legacy MessageQueue synchronizes on this
-     Long peekWhenForTest() {
--        ActivityThread.throwIfNotInstrumenting();
-+        requireInstrumentation();
-         Message ret = legacyPeekOrPoll(true);
-         return ret != null ? ret.when : null;
-     }
-@@ -839,7 +838,7 @@
-     @SuppressLint("VisiblySynchronized") // Legacy MessageQueue synchronizes on this
-     @Nullable
-     Message pollForTest() {
--        ActivityThread.throwIfNotInstrumenting();
-+        requireInstrumentation();
-         return legacyPeekOrPoll(false);
-     }
- 
-@@ -851,7 +850,7 @@
-      * and may not be resumed until after returning from this method.
-      */
-     boolean isBlockedOnSyncBarrier() {
--        ActivityThread.throwIfNotInstrumenting();
-+        requireInstrumentation();
-         synchronized (this) {
-             Message msg = mMessages;
-             return msg != null && msg.target == null;
-@@ -1272,15 +1271,7 @@
- 
-     @NeverCompile
-     void dumpDebug(ProtoOutputStream proto, long fieldId) {
--        final long messageQueueToken = proto.start(fieldId);
--        synchronized (this) {
--            for (Message msg = mMessages; msg != null; msg = msg.next) {
--                msg.dumpDebug(proto, MessageQueueProto.MESSAGES);
--            }
--            proto.write(MessageQueueProto.IS_POLLING_LOCKED, isPollingLocked());
--            proto.write(MessageQueueProto.IS_QUITTING, mQuitting);
--        }
--        proto.end(messageQueueToken);
-+        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
-     }
- 
-     /**
-@@ -1390,12 +1381,5 @@
-     /**
-      * @hide
-      */
--    public void setLooperDoctor(LooperDoctor d) {
--        // This version of MessageQueue does not use LooperDoctor
--    }
--
--    /**
--     * @hide
--     */
-     public static final long USE_NEW_MESSAGEQUEUE = 421623328L;
- }
 --- a/frameworks/base/core/java/android/os/Message.java
 +++ b/frameworks/base/core/java/android/os/Message.java
-@@ -22,13 +22,10 @@
+@@ -20,15 +20,10 @@
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
  import android.ravenwood.annotation.RavenwoodKeepWholeClass;
- import android.ravenwood.annotation.RavenwoodRedirect;
- import android.ravenwood.annotation.RavenwoodRedirectionClass;
+-import android.ravenwood.annotation.RavenwoodRedirect;
+-import android.ravenwood.annotation.RavenwoodRedirectionClass;
 -import android.util.TimeUtils;
  import android.util.proto.ProtoOutputStream;
  
@@ -565,7 +1315,15 @@
  
  /**
   *
-@@ -136,35 +133,18 @@
+@@ -42,7 +37,6 @@
+  * them from a pool of recycled objects.</p>
+  */
+ @RavenwoodKeepWholeClass
+-@RavenwoodRedirectionClass("Message_ravenwood")
+ public final class Message implements Parcelable {
+ 
+     /**
+@@ -136,35 +130,18 @@
  
      @UnsupportedAppUsage
      /*package*/ volatile int flags;
@@ -608,7 +1366,15 @@
          return true;
      }
  
-@@ -633,19 +613,12 @@
+@@ -426,7 +403,6 @@
+         this.onClear();
+     }
+ 
+-    @RavenwoodRedirect
+     private void onClear() {
+     }
+ 
+@@ -633,19 +609,12 @@
      }
  
      /**
@@ -631,7 +1397,7 @@
      }
  
      /** Constructor (but the preferred way to get a Message is to call {@link #obtain() Message.obtain()}).
-@@ -676,7 +649,7 @@
+@@ -676,7 +645,7 @@
      String toString(long now) {
          StringBuilder b = new StringBuilder();
          b.append("{ when=");
@@ -640,7 +1406,7 @@
  
          if (target != null) {
              if (callback != null) {
-@@ -718,34 +691,7 @@
+@@ -718,34 +687,7 @@
      }
  
      void dumpDebug(ProtoOutputStream proto, long fieldId) {
@@ -676,40 +1442,40 @@
      }
  
      public static final @NonNull Parcelable.Creator<Message> CREATOR
---- a/frameworks/base/core/java/android/os/Handler.java
-+++ b/frameworks/base/core/java/android/os/Handler.java
-@@ -120,7 +120,7 @@
-     /**
-      * Handle system messages here.
-      */
--    @RavenwoodRedirect(comment = "Allow ravenwood to hook message dispatches.")
-+    @RavenwoodRedirect
-     public void dispatchMessage(@NonNull Message msg) {
-         dispatchMessageImpl(msg);
-     }
-@@ -260,7 +260,7 @@
-         mLooper = Looper.myLooper();
-         if (mLooper == null) {
-             throw new RuntimeException(
--                "Can't create handler inside thread " + Thread.currentThread()
-+                "Can't create handler inside the guest thread"
-                         + " that has not called Looper.prepare()");
+@@ -785,9 +727,11 @@
+         } else {
+             dest.writeInt(0);
          }
-         mQueue = mLooper.mQueue;
-@@ -838,7 +838,7 @@
-         return sendMessage(msg);
+-        dest.writeLong(when);
++        dest.writeInt((int) (when >>> 32));
++        dest.writeInt((int) when);
+         dest.writeBundle(data);
+-        Messenger.writeMessengerOrNullToParcel(replyTo, dest);
++        dest.writeBoolean(replyTo != null);
++        if (replyTo != null) dest.writeParcelable(replyTo, flags);
+         dest.writeInt(sendingUid);
+         dest.writeInt(workSourceUid);
      }
- 
--    @RavenwoodRedirect(comment = "Allow ravenwood to hook message enqueues.")
-+    @RavenwoodRedirect
-     private static void onBeforeEnqueue(@NonNull MessageQueue queue, @NonNull Message msg,
-             long uptimeMillis) {}
- 
+@@ -799,9 +743,9 @@
+         if (source.readInt() != 0) {
+             obj = source.readParcelable(getClass().getClassLoader(), java.lang.Object.class);
+         }
+-        when = source.readLong();
+-        data = source.readBundle();
+-        replyTo = Messenger.readMessengerOrNullFromParcel(source);
++        when = ((long) source.readInt() << 32) | (source.readInt() & 0xffffffffL);
++        data = source.readBundle(null);
++        replyTo = source.readBoolean() ? source.readParcelable(null, Messenger.class) : null;
+         sendingUid = source.readInt();
+         workSourceUid = source.readInt();
+     }
 --- a/frameworks/base/core/java/android/os/SystemClock.java
 +++ b/frameworks/base/core/java/android/os/SystemClock.java
-@@ -18,15 +18,9 @@
+@@ -16,17 +16,10 @@
  
- import android.annotation.FlaggedApi;
+ package android.os;
+ 
+-import android.annotation.FlaggedApi;
  import android.annotation.NonNull;
 -import android.app.IAlarmManager;
  import android.compat.annotation.UnsupportedAppUsage;
@@ -724,9 +1490,11 @@
  
  import dalvik.annotation.optimization.CriticalNative;
  
-@@ -107,10 +101,6 @@
+@@ -105,12 +98,7 @@
+  *     {@link android.content.Intent} broadcast when they occur.
+  * </ul>
   */
- @android.ravenwood.annotation.RavenwoodKeepPartialClass
+-@android.ravenwood.annotation.RavenwoodKeepPartialClass
  public final class SystemClock {
 -    private static final String TAG = "SystemClock";
 -
@@ -735,7 +1503,15 @@
      /**
       * Since {@code nanoTime()} is arbitrary, anchor our Ravenwood clocks against it.
       */
-@@ -164,31 +154,9 @@
+@@ -133,7 +121,6 @@
+      *
+      * @param ms to sleep before returning, in milliseconds of uptime.
+      */
+-    @android.ravenwood.annotation.RavenwoodKeep
+     public static void sleep(long ms)
+     {
+         long start = uptimeMillis();
+@@ -164,39 +151,18 @@
       * @return if the clock was successfully set to the specified time.
       */
      public static boolean setCurrentTimeMillis(long millis) {
@@ -767,10 +1543,10 @@
      /**
       * Returns milliseconds since boot, not counting time spent in deep sleep.
       *
-@@ -196,7 +164,9 @@
+      * @return milliseconds of non-sleep uptime since boot.
       */
      @CriticalNative
-     @android.ravenwood.annotation.RavenwoodReplace
+-    @android.ravenwood.annotation.RavenwoodReplace
 -    native public static long uptimeMillis();
 +    public static long uptimeMillis() {
 +        return elapsedRealtimeNanos() / 1_000_000;
@@ -778,10 +1554,26 @@
  
      /** @hide */
      public static long uptimeMillis$ravenwood() {
-@@ -240,7 +210,9 @@
+@@ -208,10 +174,10 @@
+      *
+      * @return nanoseconds of non-sleep uptime since boot.
+      */
+-    @FlaggedApi(Flags.FLAG_ADPF_GPU_REPORT_ACTUAL_WORK_DURATION)
+-    @CriticalNative
+-    @android.ravenwood.annotation.RavenwoodReplace
+-    public static native long uptimeNanos();
++    @CriticalNative
++    public static long uptimeNanos() {
++        return elapsedRealtimeNanos();
++    }
+ 
+     /** @hide */
+     public static long uptimeNanos$ravenwood() {
+@@ -239,8 +205,9 @@
+      * @return elapsed milliseconds since boot.
       */
      @CriticalNative
-     @android.ravenwood.annotation.RavenwoodReplace
+-    @android.ravenwood.annotation.RavenwoodReplace
 -    native public static long elapsedRealtime();
 +    public static long elapsedRealtime() {
 +        return elapsedRealtimeNanos() / 1_000_000;
@@ -789,7 +1581,49 @@
  
      /** @hide */
      public static long elapsedRealtime$ravenwood() {
-@@ -335,10 +307,7 @@
+@@ -268,7 +235,6 @@
+      * @return elapsed nanoseconds since boot.
+      */
+     @CriticalNative
+-    @android.ravenwood.annotation.RavenwoodReplace
+     public static native long elapsedRealtimeNanos();
+ 
+     /** @hide */
+@@ -283,7 +249,9 @@
+      * @return elapsed milliseconds in the thread
+      */
+     @CriticalNative
+-    public static native long currentThreadTimeMillis();
++    public static long currentThreadTimeMillis() {
++        return uptimeMillis();
++    }
+ 
+     /**
+      * Returns microseconds running in the current thread.
+@@ -294,7 +262,9 @@
+      */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     @CriticalNative
+-    public static native long currentThreadTimeMicro();
++    public static long currentThreadTimeMicro() {
++        return elapsedRealtimeNanos() / 1_000;
++    }
+ 
+     /**
+      * Returns current wall time in  microseconds.
+@@ -305,8 +275,9 @@
+      */
+     @UnsupportedAppUsage
+     @CriticalNative
+-    @android.ravenwood.annotation.RavenwoodReplace
+-    public static native long currentTimeMicro();
++    public static long currentTimeMicro() {
++        return System.currentTimeMillis() * 1_000;
++    }
+ 
+     /** @hide */
+     public static long currentTimeMicro$ravenwood() {
+@@ -335,10 +306,7 @@
       * @hide
       */
      public static long currentNetworkTimeMillis() {
@@ -801,7 +1635,7 @@
      }
  
      /**
-@@ -377,22 +346,9 @@
+@@ -377,22 +345,9 @@
       */
      public static @NonNull Clock currentGnssTimeClock() {
          return new SimpleClock(ZoneOffset.UTC) {
@@ -827,50 +1661,15 @@
      }
 --- a/frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
 +++ b/frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
-@@ -40,8 +40,8 @@
+@@ -40,6 +40,11 @@
  @android.ravenwood.annotation.RavenwoodKeepWholeClass
  public final class ThreadLocalWorkSource {
      public static final int UID_NONE = Message.UID_NONE;
--    private static final ThreadLocal<int []> sWorkSourceUid =
--            ThreadLocal.withInitial(() -> new int[] {UID_NONE});
-+    // Work attribution follows the interpreter's single guest thread.
-+    private static int sWorkSourceUid = UID_NONE;
++    static {
++        // Link the guest Thread class before its thread-local map is used.
++        Thread.currentThread();
++    }
++
+     private static final ThreadLocal<int []> sWorkSourceUid =
+             ThreadLocal.withInitial(() -> new int[] {UID_NONE});
  
-     /**
-      * Returns the UID to blame for the code currently executed on this thread.
-@@ -51,7 +51,7 @@
-      * <p>It can also be set manually using {@link #setUid(int)}.
-      */
-     public static int getUid() {
--        return sWorkSourceUid.get()[0];
-+        return sWorkSourceUid;
-     }
- 
-     /**
-@@ -66,7 +66,7 @@
-      */
-     public static long setUid(int uid) {
-         final long token = getToken();
--        sWorkSourceUid.get()[0] = uid;
-+        sWorkSourceUid = uid;
-         return token;
-     }
- 
-@@ -74,7 +74,7 @@
-      * Restores the state using the provided token.
-      */
-     public static void restore(long token) {
--        sWorkSourceUid.get()[0] = parseUidFromToken(token);
-+        sWorkSourceUid = parseUidFromToken(token);
-     }
- 
-     /**
-@@ -99,7 +99,7 @@
-     }
- 
-     private static long getToken() {
--        return sWorkSourceUid.get()[0];
-+        return sWorkSourceUid;
-     }
- 
-     private ThreadLocalWorkSource() {

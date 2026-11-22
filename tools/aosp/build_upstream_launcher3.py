@@ -446,7 +446,10 @@ def package_apk(args, stage, resources, classes, jars, aar_modules):
         for info in compiled.infolist():
             archive.writestr(info, compiled.read(info))
         for path in dex_files:
-            archive.writestr(zipfile.ZipInfo(path.name), path.read_bytes())
+            # The browser uploads the APK before ART opens its DEX entries. Keep
+            # that temporary upload small enough to reuse on later boots.
+            archive.writestr(zipfile.ZipInfo(path.name), path.read_bytes(),
+                             compress_type=zipfile.ZIP_DEFLATED)
         for module in aar_modules:
             for directory in ("assets", "jni"):
                 for path in sorted((module / directory).rglob("*")):

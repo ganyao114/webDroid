@@ -483,10 +483,11 @@ void CheckTap(Vm& vm, wa_sf_t* sf, wa::ui_jni::UiBridge& bridge,
     std::printf("%s emitted KeyEvent down/up for %d\n", getter, keycode);
 }
 
-void CheckRuntime(const char* apk, const char* framework, const char* platform,
+void CheckRuntime(const char* apk, const char* upstream, const char* framework, const char* platform,
                   const char* fixture_apk, const char* fixture_dex) {
     Vm vm;
-    vm.LoadDexFile(framework);
+    vm.LoadDexFile(upstream);
+    vm.LoadFallbackDexFile(framework);
     VisitDex(apk, [&](const art::DexFile& dex) {
         vm.LoadDexFile(dex.GetLocation(), {dex.Begin(), dex.Begin() + dex.Size()});
     });
@@ -515,7 +516,8 @@ void CheckRuntime(const char* apk, const char* framework, const char* platform,
                       args);
         bridge.LaunchActivity(vm, {.apk_path = fixture_apk,
                                    .class_name = "org.wasmandroid.tests.systemui.RenderActivity",
-                                   .density_dpi = 160, .width = kWidth, .height = kHeight});
+                                   .density_dpi = 160, .width = kWidth, .height = kHeight,
+                                   .framework_resource_apk = platform});
         auto* host = roots.Hold(vm.CallStatic(kFixture, "host", "()Landroid/widget/FrameLayout;").ref());
         const std::array mount_args{
             Value::Ref(host),
@@ -609,12 +611,12 @@ int main(int argc, char** argv) {
             CheckResources(argv[2]);
         } else if (argc == 3 && std::string_view(argv[1]) == "dex") {
             CheckDex(argv[2]);
-        } else if (argc == 7 && std::string_view(argv[1]) == "runtime") {
-            CheckRuntime(argv[2], argv[3], argv[4], argv[5], argv[6]);
+        } else if (argc == 8 && std::string_view(argv[1]) == "runtime") {
+            CheckRuntime(argv[2], argv[3], argv[4], argv[5], argv[6], argv[7]);
         } else {
             throw std::runtime_error(
                 "Usage: test_m10_upstream_systemui resources|dex APK, or "
-                "runtime APK FRAMEWORK.dex SDK36_ANDROID.jar FIXTURE.apk FIXTURE.dex");
+                "runtime APK UPSTREAM.dex CORE.dex FRAMEWORK_RES.apk FIXTURE.apk FIXTURE.dex");
         }
         return 0;
     } catch (const std::exception& error) {

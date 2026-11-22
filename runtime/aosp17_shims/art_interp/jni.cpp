@@ -688,7 +688,7 @@ jobject JniBridge::Local(Object* object) {
   if (!object) return nullptr;
   auto ref = std::make_unique<JniReference>(JniReference{object, JNILocalRefType});
   auto address = reinterpret_cast<jobject>(ref.get());
-  frames_.back().push_back(std::move(ref));
+  frames_[frame_depth_ - 1].push_back(std::move(ref));
   return address;
 }
 
@@ -702,7 +702,8 @@ jobject JniBridge::Global(Object* object) {
 
 void JniBridge::DeleteLocal(jobject ref) {
   if (!ref) return;
-  for (auto& frame : frames_) {
+  for (size_t depth = frame_depth_; depth > 0; --depth) {
+    auto& frame = frames_[depth - 1];
     auto it = std::ranges::find_if(frame, [&](const auto& entry) { return entry.get() == reinterpret_cast<JniReference*>(ref); });
     if (it != frame.end()) {
       frame.erase(it);
@@ -722,15 +723,19 @@ void JniBridge::SweepNativePeers() {
 }
 
 void JniBridge::PushFrame(size_t capacity) {
-  std::vector<std::unique_ptr<JniReference>> frame;
-  frame.reserve(capacity);
-  frames_.push_back(std::move(frame));
+  if (frame_depth_ == frames_.size()) frames_.emplace_back();
+  frames_[frame_depth_].reserve(capacity);
+  ++frame_depth_;
+}
+
+void JniBridge::RestoreFrameDepth(size_t depth) {
+  while (frame_depth_ > depth) frames_[--frame_depth_].clear();
 }
 
 jobject JniBridge::PopFrame(jobject keep) {
-  if (frames_.size() == frame_floor_) return keep;
+  if (frame_depth_ == frame_floor_) return keep;
   Object* object = Read(keep);
-  frames_.pop_back();
+  RestoreFrameDepth(frame_depth_ - 1);
   return Local(object);
 }
 
@@ -785,25 +790,26 @@ Value JniBridge::Invoke(Method& method, Object* receiver, std::span<const Value>
   ActiveBridge active(*this);
   LocalFrame locals(*this);
   jobject native_receiver = Local(method.IsStatic() ? runtime_.ClassObject(*method.owner) : receiver);
-  std::vector<jvalue> values;
-  values.reserve(args.size());
-  for (size_t i = 0; i < args.size(); ++i) values.push_back(ToNative(*this, method.shorty[i + 1], args[i]));
-  ++calls_[method.owner->descriptor];
-  const jvalue result = method.native(Env(), native_receiver, values.data());
+  std::array<jvalue, 16> local;
+  std::vector<jvalue> overflow(args.size() > local.size() ? args.size() : 0);
+  auto* values = overflow.empty() ? local.data() : overflow.data();
+  for (size_t i = 0; i < args.size(); ++i) values[i] = ToNative(*this, method.shorty[i + 1], args[i]);
+  ++method.owner->native_calls;
+  const jvalue result = method.native(Env(), native_receiver, values);
   if (runtime_.exception) throw ManagedException{};
   return FromNative(method.shorty.front(), result);
 }
 
 void JniBridge::VisitRoots(const std::function<void(Object*)>& mark) const {
-  for (const auto& frame : frames_) {
-    for (const auto& local : frame) mark(local->object);
+  for (size_t depth = 0; depth < frame_depth_; ++depth) {
+    for (const auto& local : frames_[depth]) mark(local->object);
   }
   for (const auto& [handle, global] : globals_) mark(global->object);
 }
 
 uint64_t JniBridge::Calls(std::string_view owner) const {
-  auto it = calls_.find(owner);
-  return it != calls_.end() ? it->second : 0;
+  const auto* cls = runtime_.linker.FindLinkedClass(owner);
+  return cls ? cls->native_calls : 0;
 }
 
 }  // namespace wa::interp

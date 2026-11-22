@@ -1,0 +1,23 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/DropTargetBar.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/DropTargetBar.java
+@@ -143,6 +143,12 @@
+     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+         int width = MeasureSpec.getSize(widthMeasureSpec);
+         int height = MeasureSpec.getSize(heightMeasureSpec);
++        // The hidden bar still reserves its insets. Fit its buttons when it
++        // becomes visible so their trial text sizes don't relayout the workspace.
++        if (getVisibility() != View.VISIBLE) {
++            setMeasuredDimension(width, height);
++            return;
++        }
+         int heightSpec = MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY);
+ 
+         int visibleCount = getVisibleButtons(mTempTargets);
+@@ -237,6 +243,7 @@
+ 
+     @Override
+     protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
++        if (getVisibility() != View.VISIBLE) return;
+         int visibleCount = getVisibleButtons(mTempTargets);
+         if (visibleCount == 0) {
+             return;

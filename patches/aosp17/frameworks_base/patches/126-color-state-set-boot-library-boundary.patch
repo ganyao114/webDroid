@@ -1,0 +1,14 @@
+--- a/frameworks/base/core/java/android/util/StateSet.java
++++ b/frameworks/base/core/java/android/util/StateSet.java
+@@ -98,7 +98,10 @@
+         final int NUM_BITS = VIEW_STATE_IDS.length / 2;
+         VIEW_STATE_SETS = new int[1 << NUM_BITS][];
+         for (int i = 0; i < VIEW_STATE_SETS.length; i++) {
+-            final int numBits = Integer.bitCount(i);
++            int numBits = 0;
++            for (int remaining = i; remaining != 0; remaining &= remaining - 1) {
++                numBits++;
++            }
+             final int[] set = new int[numBits];
+             int pos = 0;
+             for (int j = 0; j < orderedIds.length; j += 2) {

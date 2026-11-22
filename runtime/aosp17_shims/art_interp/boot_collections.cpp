@@ -923,6 +923,33 @@ Builtin CopyArray(bool range) {
   };
 }
 
+void AppendArray(Runtime& vm, Object* array, std::u16string& text, std::vector<Object*>& parents) {
+  if (std::ranges::contains(parents, array)) {
+    text += u"[...]";
+    return;
+  }
+  parents.push_back(array);
+  text += u'[';
+  const auto& component = *array->type->component;
+  for (size_t i = 0; i < array->elements.size(); ++i) {
+    if (i) text += u", ";
+    const auto item = array->elements[i];
+    if (component.IsPrimitive()) {
+      char type = component.descriptor.front();
+      std::string signature = "(I)Ljava/lang/String;";
+      if (type != 'B' && type != 'S') signature[1] = type;
+      auto& value_of = vm.linker.FindMethod(*vm.string_class, "valueOf", signature, true);
+      text += vm.Invoke(value_of, nullptr, std::array{item}).ref()->text;
+    } else if (auto* object = item.ref(); object && object->type->IsArray()) {
+      AppendArray(vm, object, text, parents);
+    } else {
+      text += JavaText(vm, item.ref());
+    }
+  }
+  text += u']';
+  parents.pop_back();
+}
+
 void InstallArrays(ClassLinker& cl) {
   auto& arrays = cl.Define("Ljava/util/Arrays;", kObject, art::kAccFinal);
   const auto add = [&](auto name, auto sig, Builtin fn) {
@@ -949,6 +976,14 @@ void InstallArrays(ClassLinker& cl) {
       text += items[i].ref() == a[0].ref() ? u"(this array)" : JavaText(vm, items[i].ref());
     }
     text += u']';
+    return StringValue(vm, std::move(text));
+  });
+  add("deepToString", "([Ljava/lang/Object;)Ljava/lang/String;", [](Runtime& vm, Object*, Values a) {
+    auto* array = a[0].ref();
+    if (!array) return StringValue(vm, u"null");
+    std::u16string text;
+    std::vector<Object*> parents;
+    AppendArray(vm, array, text, parents);
     return StringValue(vm, std::move(text));
   });
   for (char kind : std::string_view("ZBCSIJFDL")) {
@@ -1416,6 +1451,25 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
         InsertEntry(vm, *map, JavaHash(vm, a[0].ref()), a[0], a[1]);
         return WrapReadOnly(vm, kReadOnlyMap, Value::Ref(map));
       });
+  const Builtin map_of = [](Runtime& vm, Object*, Values a) {
+    RootScope roots(vm);
+    auto* map = roots.Hold(vm.heap.Allocate(vm, vm.linker.Resolve(kHashMap)));
+    for (size_t i = 0; i < a.size(); i += 2) {
+      vm.NonNull(a[i].ref());
+      vm.NonNull(a[i + 1].ref());
+      const auto hash = JavaHash(vm, a[i].ref());
+      if (Lookup(vm, *map, a[i].ref()).entry) {
+        vm.Fail("Ljava/lang/IllegalArgumentException;", "Duplicate key");
+      }
+      InsertEntry(vm, *map, hash, a[i], a[i + 1]);
+    }
+    return WrapReadOnly(vm, kReadOnlyMap, Value::Ref(map));
+  };
+  std::string parameters;
+  for (int pairs = 0; pairs <= 10; ++pairs) {
+    cl.AddMethod(cl.Resolve(kMap), "of", "(" + parameters + ")Ljava/util/Map;", art::kAccStatic, map_of);
+    parameters += "Ljava/lang/Object;Ljava/lang/Object;";
+  }
   cl.AddMethod(collections, "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) {
         vm.NonNull(a[0].ref());

@@ -1,0 +1,12 @@
+--- a/frameworks/base/core/java/android/util/LruCache.java
++++ b/frameworks/base/core/java/android/util/LruCache.java
+@@ -226,7 +226,8 @@
+     }
+ 
+     private Map.Entry<K, V> eldest() {
+-        return map.eldest();
++        var iterator = map.entrySet().iterator();
++        return iterator.hasNext() ? iterator.next() : null;
+     }
+ 
+     /**

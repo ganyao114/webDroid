@@ -1,6 +1,7 @@
-#include "native_methods.h"
+#include "native_graphics.h"
 
 #include "jni_bridge.h"
+#include "software_raster.h"
 
 #include <algorithm>
 #include <cmath>
@@ -8,14 +9,15 @@
 #include <unordered_map>
 #include <vector>
 
+#include <numbers>
+#include <tuple>
+
 namespace wa::ui_jni::detail {
 
 struct MatrixStore {
-    using Values = std::array<jfloat, 9>;
-    static constexpr Values identity{1, 0, 0, 0, 1, 0, 0, 0, 1};
 
     struct Entry {
-        Values values;
+        Matrix9 values;
         bool registered = false;
     };
     std::unordered_map<jlong, Entry> entries;
@@ -37,7 +39,7 @@ jlong CreateMatrix(JNIEnv* env, jclass, jlong source) {
     return CallSafely(env, [&]() -> jlong {
         State* state = GetState(env);
         if (!state) return 0;
-        auto values = MatrixStore::identity;
+        auto values = kIdentity;
         if (source != 0) {
             auto* entry = FindMatrix(env, *state, source);
             if (!entry) return 0;
@@ -74,20 +76,24 @@ void RetainMatrix(JNIEnv* env, jclass, jobject peer, jlong handle) {
     });
 }
 
-MatrixStore::Values* MatrixValues(JNIEnv* env, jlong handle) {
+} // namespace
+
+Matrix9* MatrixValues(JNIEnv* env, jlong handle) {
     State* state = GetState(env);
     if (!state) return nullptr;
     auto* entry = FindMatrix(env, *state, handle);
     return entry ? &entry->values : nullptr;
 }
 
+namespace {
+
 jboolean IsIdentityMatrix(JNIEnv* env, jclass, jlong handle) {
     const auto* values = MatrixValues(env, handle);
-    return values && *values == MatrixStore::identity;
+    return values && *values == kIdentity;
 }
 
 void ResetMatrix(JNIEnv* env, jclass, jlong handle) {
-    if (auto* values = MatrixValues(env, handle)) *values = MatrixStore::identity;
+    if (auto* values = MatrixValues(env, handle)) *values = kIdentity;
 }
 
 void CopyMatrix(JNIEnv* env, jclass, jlong handle, jlong source) {
@@ -110,12 +116,6 @@ void SetMatrixValues(JNIEnv* env, jclass, jlong handle, jfloatArray array) {
     if (auto* values = MatrixValues(env, handle)) {
         env->GetFloatArrayRegion(array, 0, values->size(), values->data());
     }
-}
-
-std::array<jfloat, 2> MapPoint(const MatrixStore::Values& m, jfloat x, jfloat y) {
-    const jfloat w = m[6] * x + m[7] * y + m[8];
-    const jfloat inverse = w == 0 ? 0 : 1 / w;
-    return {(m[0] * x + m[1] * y + m[2]) * inverse, (m[3] * x + m[4] * y + m[5]) * inverse};
 }
 
 void MapMatrixPoints(JNIEnv* env, jclass, jlong handle, jfloatArray dst, jint dst_index,
@@ -152,28 +152,47 @@ void MapMatrixPoints(JNIEnv* env, jclass, jlong handle, jfloatArray dst, jint ds
     });
 }
 
-jboolean InvertMatrix(JNIEnv* env, jclass, jlong handle, jlong inverse) {
-    const auto* m = MatrixValues(env, handle);
-    if (!m) return false;
-    const auto& [a, b, c, d, e, f, g, h, i] = *m;
+} // namespace
+std::optional<Matrix9> Inverse(const Matrix9& m) {
+    const auto& [a, b, c, d, e, f, g, h, i] = m;
     const auto det2 = [](double x, double y, double z, double w) { return x * w - y * z; };
     const std::array<double, 9> adj{
         det2(e, f, h, i), det2(c, b, i, h), det2(b, c, e, f),
         det2(f, d, i, g), det2(a, c, g, i), det2(c, a, f, d),
         det2(d, e, g, h), det2(b, a, h, g), det2(a, b, d, e)};
     const double det = a * adj[0] + b * adj[3] + c * adj[6];
-    if (det == 0 || !std::isfinite(det)) return false;
-    MatrixStore::Values result;
+    if (det == 0 || !std::isfinite(det)) return std::nullopt;
+    Matrix9 result;
     for (size_t pos = 0; pos < result.size(); ++pos) {
         result[pos] = static_cast<jfloat>(adj[pos] / det);
-        if (!std::isfinite(result[pos])) return false;
+        if (!std::isfinite(result[pos])) return std::nullopt;
     }
-    if (inverse == 0) return true;
-    auto* dest = MatrixValues(env, inverse);
-    if (!dest) return false;
-    *dest = result;
+    return result;
+}
+
+wa_rect_t MapRect(const Matrix9& m, wa_rect_t rect) {
+    const auto [l, t, r, b] = rect;
+    const auto a = MapPoint(m, l, t), c = MapPoint(m, r, t);
+    const auto d = MapPoint(m, l, b), e = MapPoint(m, r, b);
+    return {std::min({a[0], c[0], d[0], e[0]}), std::min({a[1], c[1], d[1], e[1]}),
+            std::max({a[0], c[0], d[0], e[0]}), std::max({a[1], c[1], d[1], e[1]})};
+}
+namespace {
+
+jboolean InvertMatrix(JNIEnv* env, jclass, jlong handle, jlong inverse) {
+    const auto* matrix = MatrixValues(env, handle);
+    if (!matrix) return false;
+    const auto result = Inverse(*matrix);
+    if (!result) return false;
+    if (inverse) {
+        auto* output = MatrixValues(env, inverse);
+        if (!output) return false;
+        *output = *result;
+    }
     return true;
 }
+
+#include "matrix.inc"
 
 void Shape(JNIEnv* env, jclass, jint op, jfloat a, jfloat b, jfloat c, jfloat d, jfloat e, jfloat f,
            jint color, jint style, jfloat stroke) {
@@ -314,26 +333,16 @@ jfloat MeasureText(JNIEnv* env, jclass, jstring text, jfloat size, jint weight, 
     });
 }
 
-uint32_t PublishBitmap(JNIEnv* env, State& state, jintArray pixels, jint width, jint height,
-                       jlong identity, jint generation, jboolean has_alpha) {
+uint32_t PublishBitmapPixels(State& state, std::span<const jint> argb, jint width, jint height,
+                             jlong identity, jint generation, jboolean has_alpha, uint32_t tint = 0) {
     for (const auto& image : state.images) {
-        if (image.identity == identity && image.generation == generation)
+        if (identity && image.identity == identity && image.generation == generation && image.tint == tint)
             return image.id;
     }
-    if (width <= 0 || height <= 0 || width > 4096 || height > 4096 ||
-        env->GetArrayLength(pixels) != width * height) {
-        state.result = WA_SF_INVALID;
-        return 0;
-    }
-
-    const size_t count = static_cast<size_t>(width) * height;
-    std::vector<jint> argb(count);
-    env->GetIntArrayRegion(pixels, 0, argb.size(), argb.data());
-    if (env->ExceptionCheck())
-        return 0;
+    const size_t count = argb.size();
     std::vector<uint8_t> rgba(count * 4);
     for (size_t i = 0; i < count; ++i) {
-        uint32_t color = static_cast<uint32_t>(argb[i]);
+        uint32_t color = static_cast<uint32_t>(argb[i]) | tint;
         rgba[i * 4] = color >> 16;
         rgba[i * 4 + 1] = color >> 8;
         rgba[i * 4 + 2] = color;
@@ -351,13 +360,34 @@ uint32_t PublishBitmap(JNIEnv* env, State& state, jintArray pixels, jint width, 
         wa_bitmap_release(store, existing);
         id = next_id();
     }
-    state.images.push_back({identity, generation, id});
+    state.images.push_back({identity, generation, id, tint});
     state.result = wa_bitmap_put(store, id, width, height, width * 4, rgba.data());
     if (state.result != WA_SF_OK) {
         state.images.pop_back();
         return 0;
     }
     return id;
+}
+
+
+uint32_t PublishBitmap(JNIEnv* env, State& state, jintArray pixels, jint width, jint height,
+                       jlong identity, jint generation, jboolean has_alpha) {
+    for (const auto& image : state.images) {
+        if (image.identity == -identity && image.generation == generation)
+            return image.id;
+    }
+    if (width <= 0 || height <= 0 || width > 4096 || height > 4096 ||
+        env->GetArrayLength(pixels) != width * height) {
+        state.result = WA_SF_INVALID;
+        return 0;
+    }
+
+    const size_t count = static_cast<size_t>(width) * height;
+    std::vector<jint> argb(count);
+    env->GetIntArrayRegion(pixels, 0, argb.size(), argb.data());
+    if (env->ExceptionCheck())
+        return 0;
+    return PublishBitmapPixels(state, argb, width, height, -identity, generation, has_alpha);
 }
 
 void DrawBitmap(JNIEnv* env, jclass, jintArray pixels, jint width, jint height, jlong identity,
@@ -400,19 +430,26 @@ void DrawGradient(JNIEnv* env, jclass, jfloat l, jfloat t, jfloat r, jfloat b, j
 
 } // namespace
 
+#include "paint.inc"
+#include "paint_effects.inc"
+#include "recording_canvas.inc"
+#include "vector_drawable.inc"
+
 void RegisterCanvas(interp::Vm& vm) {
-    Register(vm, "android/graphics/Canvas", Method<Shape>(vm, "nativeShape", "(IFFFFFFIIF)V"),
+    if (!RegisterModernCanvas(vm)) Register(vm, "android/graphics/Canvas", Method<Shape>(vm, "nativeShape", "(IFFFFFFIIF)V"),
              Method<DrawPath>(vm, "nativeDrawPath", "([FIIIIF)V"),
              Method<DrawText>(vm, "nativeDrawText", "(Ljava/lang/String;FFFIIII)V"),
              Method<DrawBitmap>(vm, "nativeDrawBitmap", "([IIIJIZFFFFFFFFFIF)V"),
              Method<DrawGradient>(vm, "nativeDrawGradient", "(FFFFFIIF)V"));
-    Register(vm, "android/graphics/Paint",
-             Method<MeasureText>(vm, "nativeMeasure", "(Ljava/lang/String;FII[F)F"));
+    RegisterPaint(vm);
+    RegisterTypeface(vm);
+    RegisterPaintEffects(vm);
 }
 
 void RegisterMatrix(interp::Vm& vm) {
     if (!vm.HasClass("Landroid/graphics/Matrix$ExtraNatives;")) return;
-    Register(vm, "android/graphics/Matrix$ExtraNatives", Method<CreateMatrix>(vm, "nCreate", "(J)J"));
+    Register(vm, "android/graphics/Matrix$ExtraNatives", Method<CreateMatrix>(vm, "nCreate", "(J)J"),
+             Method<ManagedFinalizer>(vm, "nGetNativeFinalizer", "()J"));
     Register(vm, "android/graphics/Matrix",
              Method<RetainMatrix>(vm, "nRegisterNativeAllocation", "(Landroid/graphics/Matrix;J)V"),
              Method<IsIdentityMatrix>(vm, "nIsIdentity", "(J)Z"),
@@ -422,7 +459,39 @@ void RegisterMatrix(interp::Vm& vm) {
              Method<GetMatrixValues>(vm, "nGetValues", "(J[F)V"),
              Method<SetMatrixValues>(vm, "nSetValues", "(J[F)V"),
              Method<MapMatrixPoints>(vm, "nMapPoints", "(J[FI[FIIZ)V"),
-             Method<InvertMatrix>(vm, "nInvert", "(JJ)Z"));
+             Method<InvertMatrix>(vm, "nInvert", "(JJ)Z"),
+             Method<MatrixIsAffine>(vm, "nIsAffine", "(J)Z"),
+             Method<MatrixRectStaysRect>(vm, "nRectStaysRect", "(J)Z"),
+             Method<MatrixRotate<MatrixOp::Set>>(vm, "nSetRotate", "(JF)V"),
+             Method<MatrixPivotRotate<MatrixOp::Set>>(vm, "nSetRotate", "(JFFF)V"),
+             Method<MatrixSinCos>(vm, "nSetSinCos", "(JFF)V"),
+             Method<MatrixPivotSinCos>(vm, "nSetSinCos", "(JFFFF)V"),
+             Method<MatrixPair<MatrixOp::Set, Scaling>>(vm, "nSetScale", "(JFF)V"),
+             Method<MatrixPivot<MatrixOp::Set, Scaling>>(vm, "nSetScale", "(JFFFF)V"),
+             Method<MatrixPair<MatrixOp::Set, Skew>>(vm, "nSetSkew", "(JFF)V"),
+             Method<MatrixPivot<MatrixOp::Set, Skew>>(vm, "nSetSkew", "(JFFFF)V"),
+             Method<MatrixSetConcat>(vm, "nSetConcat", "(JJJ)V"),
+             Method<MatrixPair<MatrixOp::Pre, Translation>>(vm, "nPreTranslate", "(JFF)V"),
+             Method<MatrixPair<MatrixOp::Post, Translation>>(vm, "nPostTranslate", "(JFF)V"),
+             Method<MatrixPair<MatrixOp::Pre, Scaling>>(vm, "nPreScale", "(JFF)V"),
+             Method<MatrixPivot<MatrixOp::Pre, Scaling>>(vm, "nPreScale", "(JFFFF)V"),
+             Method<MatrixPair<MatrixOp::Post, Scaling>>(vm, "nPostScale", "(JFF)V"),
+             Method<MatrixPivot<MatrixOp::Post, Scaling>>(vm, "nPostScale", "(JFFFF)V"),
+             Method<MatrixRotate<MatrixOp::Pre>>(vm, "nPreRotate", "(JF)V"),
+             Method<MatrixPivotRotate<MatrixOp::Pre>>(vm, "nPreRotate", "(JFFF)V"),
+             Method<MatrixRotate<MatrixOp::Post>>(vm, "nPostRotate", "(JF)V"),
+             Method<MatrixPivotRotate<MatrixOp::Post>>(vm, "nPostRotate", "(JFFF)V"),
+             Method<MatrixPair<MatrixOp::Pre, Skew>>(vm, "nPreSkew", "(JFF)V"),
+             Method<MatrixPivot<MatrixOp::Pre, Skew>>(vm, "nPreSkew", "(JFFFF)V"),
+             Method<MatrixPair<MatrixOp::Post, Skew>>(vm, "nPostSkew", "(JFF)V"),
+             Method<MatrixPivot<MatrixOp::Post, Skew>>(vm, "nPostSkew", "(JFFFF)V"),
+             Method<MatrixConcat<MatrixOp::Pre>>(vm, "nPreConcat", "(JJ)V"),
+             Method<MatrixConcat<MatrixOp::Post>>(vm, "nPostConcat", "(JJ)V"),
+             Method<MatrixMapRect>(vm, "nMapRect", "(JLandroid/graphics/RectF;Landroid/graphics/RectF;)Z"),
+             Method<MatrixRectToRect>(vm, "nSetRectToRect", "(JLandroid/graphics/RectF;Landroid/graphics/RectF;I)Z"),
+             Method<MatrixPolyToPoly>(vm, "nSetPolyToPoly", "(J[FI[FII)Z"),
+             Method<MatrixMapRadius>(vm, "nMapRadius", "(JF)F"),
+             Method<MatrixEquals>(vm, "nEquals", "(JJ)Z"));
 }
 
 } // namespace wa::ui_jni::detail

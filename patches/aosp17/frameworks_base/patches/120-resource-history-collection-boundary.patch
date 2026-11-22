@@ -1,0 +1,66 @@
+--- a/frameworks/base/core/java/android/content/res/Resources.java
++++ b/frameworks/base/core/java/android/content/res/Resources.java
+@@ -191,9 +191,8 @@
+     private int mThemeRefsNextFlushSize = MIN_THEME_REFS_FLUSH_SIZE;
+ 
+     /** @hide */
+-    private static final Set<Resources> sResourcesHistory = Collections.synchronizedSet(
+-            Collections.newSetFromMap(
+-                    new WeakHashMap<>()));
++    private static final Set<Resources> sResourcesHistory =
++            Collections.newSetFromMap(new WeakHashMap<>());
+ 
+     /**
+      * Returns the most appropriate default theme for the specified target SDK version.
+@@ -461,7 +460,9 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public Resources(@Nullable ClassLoader classLoader) {
+         mClassLoader = classLoader == null ? ClassLoader.getSystemClassLoader() : classLoader;
+-        sResourcesHistory.add(this);
++        synchronized (sResourcesHistory) {
++            sResourcesHistory.add(this);
++        }
+     }
+ 
+     /**
+@@ -471,7 +472,9 @@
+     @UnsupportedAppUsage
+     private Resources() {
+         mClassLoader = ClassLoader.getSystemClassLoader();
+-        sResourcesHistory.add(this);
++        synchronized (sResourcesHistory) {
++            sResourcesHistory.add(this);
++        }
+ 
+         final DisplayMetrics metrics = new DisplayMetrics();
+         metrics.setToDefaults();
+@@ -2975,17 +2978,19 @@
+         // Putting into a map keyed on the apk assets to deduplicate resources that are different
+         // objects but ultimately represent the same assets
+         ArrayMap<List<ApkAssets>, Resources> history = new ArrayMap<>();
+-        sResourcesHistory.forEach(
+-                r -> {
+-                    if (r != null) {
+-                        final var impl = r.mResourcesImpl;
+-                        if (impl != null) {
+-                            history.put(Arrays.asList(impl.mAssets.getApkAssets()), r);
+-                        } else {
+-                            history.put(null, r);
++        synchronized (sResourcesHistory) {
++            sResourcesHistory.forEach(
++                    r -> {
++                        if (r != null) {
++                            final var impl = r.mResourcesImpl;
++                            if (impl != null) {
++                                history.put(Arrays.asList(impl.mAssets.getApkAssets()), r);
++                            } else {
++                                history.put(null, r);
++                            }
+                         }
+-                    }
+-                });
++                    });
++        }
+         int i = 0;
+         for (Resources r : history.values()) {
+             pw.println(prefix + i++);

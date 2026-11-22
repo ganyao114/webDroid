@@ -56,8 +56,12 @@ await new Promise(resolve => setImmediate(resolve));
 class Canvas2D {
   getContext() { return this; }
   measureText(text) {
-    return { width: text.length * 8, actualBoundingBoxRight: text.length * 8, actualBoundingBoxAscent: 11,
-      actualBoundingBoxDescent: 3, fontBoundingBoxAscent: 49, fontBoundingBoxDescent: 15 };
+    const size = Number(/([\d.]+)px/.exec(this.font)?.[1] ?? 16);
+    const width = [...text].reduce((sum, char) => sum + size *
+      (char.codePointAt(0) >= 0x2e80 ? 1 : 'MWm'.includes(char) ? 0.9 : 'il '.includes(char) ? 0.3 : 0.55), 0);
+    return { width, actualBoundingBoxRight: width + size * 0.03,
+      actualBoundingBoxAscent: size * 0.7, actualBoundingBoxDescent: size * 0.2,
+      fontBoundingBoxAscent: size * 0.77, fontBoundingBoxDescent: size * 0.23 };
   }
   clearRect() {}
   save() {}
@@ -88,6 +92,14 @@ const renderer = new DisplayListRenderer(m, scene, {
   uploadBytes: (texture, data) => assert.equal(data.length, texture.width * texture.height * 4),
   destroyTexture() {},
 }, { codec });
+
+renderer.atlas.calibrateFonts(m, scene);
+const titleFont = new Canvas2D();
+titleFont.font = '500 24px system-ui';
+for (const [index, title] of ['Apps', 'Modes', 'Communal', 'WasmAndroid 3D Cube', '系统设置'].entries()) {
+  const actual = titleFont.measureText(title).actualBoundingBoxRight;
+  assert(module._m7_demo_measure_title(scene, index, 24, 500, 0) >= actual, title);
+}
 
 const records = new Set();
 const framePointers = new Set();

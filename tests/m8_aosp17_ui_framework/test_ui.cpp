@@ -1,5 +1,6 @@
 #include "art_interp.h"
 #include "ui_bridge.h"
+#include "../../runtime/hal_surfaceflinger/font_advances.h"
 
 #include <ziparchive/zip_archive.h>
 
@@ -73,6 +74,7 @@ struct DisplayList {
     uint32_t layers = 0;
     float min_translation_x = 0;
     bool rounded_card = false;
+    bool window_background = false;
     bool adaptive_mask = false;
     bool stroke_path = false;
     bool even_odd = false;
@@ -147,6 +149,14 @@ DisplayList Inspect(wa_sf_t* sf, const Packet& packet) {
             stats.min_translation_x = std::min(stats.min_translation_x, translate.x);
             break;
         }
+        case WA_CANVAS_DRAW_RECT: {
+            Require(body_size == sizeof(wa_canvas_rect_draw_t), "Rectangle payload");
+            auto draw = Read<wa_canvas_rect_draw_t>(body);
+            stats.window_background |= draw.paint.argb == 0xff10223c &&
+                    draw.paint.style == WA_PAINT_FILL && draw.rect.l == 0 && draw.rect.t == 0 &&
+                    draw.rect.r == kWidth && draw.rect.b == kHeight;
+            break;
+        }
         case WA_CANVAS_DRAW_ROUND_RECT: {
             Require(body_size == sizeof(wa_canvas_round_draw_t), "Rounded shape payload");
             auto shape = Read<wa_canvas_round_draw_t>(body);
@@ -156,10 +166,7 @@ DisplayList Inspect(wa_sf_t* sf, const Packet& packet) {
             break;
         }
         case WA_CANVAS_CLIP_ROUND_RECT: {
-            Require(body_size == sizeof(wa_round_rect_t), "Adaptive icon clip payload");
-            auto shape = Read<wa_round_rect_t>(body);
-            stats.adaptive_mask |= shape.rx > 0 && shape.rx * 2 == shape.rect.r - shape.rect.l &&
-                                   shape.ry * 2 == shape.rect.b - shape.rect.t;
+            Require(body_size == sizeof(wa_round_rect_t), "Rounded clip payload");
             break;
         }
         case WA_CANVAS_DRAW_PATH: {
@@ -191,17 +198,24 @@ DisplayList Inspect(wa_sf_t* sf, const Packet& packet) {
             auto draw = Read<wa_canvas_bitmap_t>(body);
             auto* store = wa_sf_bitmaps(sf);
             auto* view = wa_bitmap_acquire(store, draw.bitmap_id);
-            Require(view != nullptr && view->width == 2,
-                    "Published bitmap is available to frame consumers");
+            Require(view != nullptr, "Published bitmap is available to frame consumers");
             const uint8_t* pixels = wa_bitmap_pixels(view);
-            if (view->height == 2) {
+            if (view->width == 2 && view->height == 2) {
                 constexpr std::array<uint8_t, 8> expected{0x26, 0x71, 0xc4, 0xff,
                                                           0xe9, 0x49, 0x50, 0xff};
                 stats.authored_bitmap = std::ranges::equal(expected, std::span(pixels, 8));
-            } else if (view->height == 1) {
-                constexpr std::array<uint8_t, 8> expected{0x66, 0xcc, 0x33, 0xff,
-                                                          0x33, 0x66, 0x99, 0x80};
-                stats.resource_bitmap = std::ranges::equal(expected, std::span(pixels, 8));
+            } else if (view->width == 3 && view->height == 2) {
+                constexpr std::array<uint8_t, 4> left{0x66, 0xcc, 0x33, 0xff};
+                constexpr std::array<uint8_t, 4> right{0x33, 0x66, 0x99, 0x80};
+                stats.resource_bitmap = true;
+                for (uint32_t y = 0; y < view->height; ++y) {
+                    const auto* row = pixels + y * view->stride;
+                    stats.resource_bitmap &= std::ranges::equal(left, std::span(row, 4)) &&
+                            std::ranges::equal(right, std::span(row + 8, 4));
+                }
+            } else if (view->width == view->height && view->width > 2) {
+                const auto center = view->height / 2 * view->stride + view->width / 2 * 4;
+                stats.adaptive_mask |= pixels[3] < 255 && pixels[center + 3] == 255;
             }
             wa_bitmap_release(store, view);
             break;
@@ -282,8 +296,9 @@ void PrintList(std::string_view label, const DisplayList& frame) {
               << " round_clip=" << frame.counts[WA_CANVAS_CLIP_ROUND_RECT] << '\n';
 }
 
-void Run(Vm& vm, const char* framework, const char* apk, const char* system_resources) {
-    vm.LoadDexFile(framework);
+void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, const char* system_resources) {
+    vm.LoadDexFile(upstream);
+    vm.LoadFallbackDexFile(framework);
     vm.LoadDexFile(std::string(apk) + "!classes.dex", ExtractDex(apk));
     std::unique_ptr<wa_sf_t, decltype(&wa_sf_destroy)> sf(wa_sf_create(), wa_sf_destroy);
     Require(sf != nullptr, "SurfaceFlinger allocation");
@@ -338,7 +353,8 @@ void Run(Vm& vm, const char* framework, const char* apk, const char* system_reso
                                .locale = "en-US",
                                .density_dpi = kDpi,
                                .width = kWidth,
-                               .height = kHeight});
+                               .height = kHeight,
+                               .framework_resource_apk = system_resources});
     Require(ReadInt(vm, "lifecycle") == 123, "Launch ran onCreate/onStart/onResume");
     Require(ReadBool(vm, "resourcesVerified"),
             "Compiled resources, styles, included layout, and merge inflated");
@@ -353,11 +369,41 @@ void Run(Vm& vm, const char* framework, const char* apk, const char* system_reso
     __atomic_store_n(&font.ascent_q16, 49152u, __ATOMIC_RELAXED);
     __atomic_store_n(&font.descent_q16, 16384u, __ATOMIC_RELAXED);
     __atomic_store_n(&font.sequence, 2u, __ATOMIC_RELEASE);
-    Require(vm.CallStatic(kActivity, "headingAdvance", "()F").f() == 40.5f &&
+    const float heading_width = vm.CallStatic(kActivity, "headingAdvance", "()F").f();
+    Require(heading_width >= 40.5f && heading_width <= 41.f &&
                 vm.CallStatic(kActivity, "headingAscent", "()F").f() == -20.25f,
             "Paint measures text with SurfaceFlinger-published font metrics");
 
-    Require(frame(1000) == WA_SF_OK, "Initial screen commits");
+    auto& widths = wa_sf_font_advances(sf.get())[WA_FONT_ROBOTO * WA_FONT_WEIGHT_COUNT + 6];
+    std::ranges::fill(widths.ascii_q16, 32768u);
+    widths.ascii_q16['M' - WA_FONT_ASCII_FIRST] = 58983;
+    widths.ascii_q16['W' - WA_FONT_ASCII_FIRST] = 62260;
+    widths.ascii_q16['m' - WA_FONT_ASCII_FIRST] = 62260;
+    widths.ascii_q16['l' - WA_FONT_ASCII_FIRST] = 19661;
+    widths.ascii_q16[' ' - WA_FONT_ASCII_FIRST] = 16384;
+    widths.wide_q16 = 65536;
+    __atomic_store_n(&widths.sequence, 2u, __ATOMIC_RELEASE);
+    struct Title { const char* text; float width_at_16px; };
+    for (const auto& title : {Title{"Apps", 32}, Title{"Modes", 46.4f}, Title{"Communal", 75.2f},
+                             Title{"WasmAndroid 3D Cube", 158.4f}, Title{"系统设置", 64}}) {
+        const Value text[] = {Value::Ref(vm.NewString(title.text))};
+        const float measured = vm.CallStatic(kActivity, "titleAdvance", "(Ljava/lang/String;)F", text).f();
+        const float actual = title.width_at_16px * 27 / 16;
+        Require(measured >= actual && measured <= actual + 2, std::string("Calibrated Paint width for ") + title.text);
+    }
+    __atomic_store_n(&widths.sequence, 0u, __ATOMIC_RELEASE);
+
+    Require(frame(990) == WA_SF_OK, "Startup screen commits before browser calibration");
+    const auto text_measures = [&] {
+        return vm.GetInstanceMethodStats("Landroid/widget/TextView;", "onMeasure", "(II)V").invocations;
+    };
+    const auto startup_measures = text_measures();
+    auto* advances = wa_sf_font_advances(sf.get());
+    __atomic_store_n(&widths.sequence, 2u, __ATOMIC_RELEASE);
+    __atomic_store_n(&advances[WA_FONT_FACE_COUNT * WA_FONT_WEIGHT_COUNT - 1].sequence,
+                     2u, __ATOMIC_RELEASE);
+    Require(frame(1000) == WA_SF_OK && text_measures() > startup_measures,
+            "The first browser frame remeasures the startup screen after font calibration");
     Packet first(sf.get());
     auto initial = Inspect(sf.get(), first);
     PrintList("initial", initial);
@@ -367,13 +413,17 @@ void Run(Vm& vm, const char* framework, const char* apk, const char* system_reso
     Require(ReadInt(vm, "handlerValue") == 7, "Handler dispatched delayed Message");
     Require(static_cast<uint32_t>(ReadInt(vm, "swatchPixel")) == 0xffe94950u,
             "Reading a presented bitmap through the SurfaceFlinger store preserves ARGB");
-    Require(initial.rounded_card && initial.adaptive_mask && initial.stroke_path &&
-                initial.even_odd && initial.authored_bitmap && initial.resource_bitmap &&
-                initial.HasText("Ready to launch") && initial.HasText("Launcher tile") &&
-                initial.counts[WA_CANVAS_DRAW_COLOR] == 1 && initial.verbs[WA_PATH_CUBIC] > 0 &&
-                initial.verbs[WA_PATH_QUAD] > 0 && initial.verbs[WA_PATH_CLOSE] > 0,
-            "First frame contains real path, rounded rectangle, text, adaptive mask and bitmap "
-            "commands");
+    Require(initial.rounded_card, "The rounded card uses its authored paint and radius");
+    Require(initial.adaptive_mask, "The adaptive icon has transparent corners and an opaque center");
+    Require(initial.stroke_path && initial.even_odd &&
+                initial.verbs[WA_PATH_CUBIC] > 0 && initial.verbs[WA_PATH_QUAD] > 0 &&
+                initial.verbs[WA_PATH_CLOSE] > 0,
+            "Vector paths preserve stroke, fill rule and curve verbs");
+    Require(initial.authored_bitmap, "The programmatic bitmap preserves its authored pixels");
+    Require(initial.resource_bitmap, "The density-scaled PNG preserves its edge colors and alpha");
+    Require(initial.HasText("Ready to launch") && initial.HasText("Launcher tile"),
+            "The display list contains both fixture labels");
+    Require(initial.window_background, "The window records its full-size themed background");
 
     const float x = ReadInt(vm, "tileX"), y = ReadInt(vm, "tileY") + 25;
     Motion(sf.get(), WA_ACTION_DOWN, 1005, x + 45, y);
@@ -500,14 +550,14 @@ void Run(Vm& vm, const char* framework, const char* apk, const char* system_reso
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
+    if (argc != 5) {
         std::cerr
-            << "Usage: test_aosp17_ui_framework FRAMEWORK.dex APP.apk PLATFORM_RESOURCES.apk\n";
+            << "Usage: test_aosp17_ui_framework UPSTREAM.dex CORE.dex APP.apk PLATFORM_RESOURCES.apk\n";
         return 2;
     }
     Vm vm({.gc_interval = 137});
     try {
-        Run(vm, argv[1], argv[2], argv[3]);
+        Run(vm, argv[1], argv[2], argv[3], argv[4]);
         return 0;
     } catch (const wa::interp::ManagedException&) {
         std::cerr << vm.ExceptionSummary() << '\n';

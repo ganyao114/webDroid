@@ -1,0 +1,111 @@
+--- a/frameworks/base/core/java/android/content/res/Resources.java
++++ b/frameworks/base/core/java/android/content/res/Resources.java
+@@ -43,7 +43,6 @@
+ import android.annotation.XmlRes;
+ import android.app.Application;
+ import android.app.LocaleConfig;
+-import android.app.ResourcesManager;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.content.pm.ActivityInfo;
+@@ -459,7 +458,6 @@
+     public Resources(@Nullable ClassLoader classLoader) {
+         mClassLoader = classLoader == null ? ClassLoader.getSystemClassLoader() : classLoader;
+         sResourcesHistory.add(this);
+-        ResourcesManager.getInstance().registerAllResourcesReference(this);
+     }
+ 
+     /**
+@@ -3006,6 +3004,6 @@
+     @RavenwoodThrow(reason = "registerResourcePaths is unsupported")
+     public static void registerResourcePaths(@NonNull String uniqueId,
+             @NonNull ApplicationInfo appInfo) {
+-        ResourcesManager.getInstance().registerResourcePaths(uniqueId, appInfo);
++        throw new UnsupportedOperationException("Guest resources use the mounted APK paths");
+     }
+ }
+--- a/frameworks/base/core/java/android/content/res/ResourcesImpl.java
++++ b/frameworks/base/core/java/android/content/res/ResourcesImpl.java
+@@ -28,7 +28,6 @@
+ import android.annotation.StyleRes;
+ import android.annotation.StyleableRes;
+ import android.app.LocaleConfig;
+-import android.app.ResourcesManager;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.pm.ActivityInfo;
+ import android.content.res.AssetManager.AssetInputStream;
+@@ -59,7 +58,6 @@
+ import com.android.internal.annotations.VisibleForTesting;
+ import com.android.internal.util.GrowingArrayUtils;
+ 
+-import libcore.util.NativeAllocationRegistry;
+ 
+ import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+@@ -219,16 +217,13 @@
+     public ResourcesImpl(@NonNull AssetManager assets, @Nullable DisplayMetrics metrics,
+             @Nullable Configuration config, @NonNull DisplayAdjustments displayAdjustments,
+             boolean reuseAssets) {
+-        final var assetsAndHash =
+-                ResourcesManager.getInstance().updateResourceImplAssetsWithRegisteredLibs(assets,
+-                        reuseAssets);
+-        mAssets = assetsAndHash.first;
+-        mAppliedSharedLibsHash = assetsAndHash.second;
++        mAssets = assets;
++        mAppliedSharedLibsHash = 0;
+         mMetrics.setToDefaults();
+         mDisplayAdjustments = displayAdjustments;
+         mConfiguration.setToDefaults();
+         updateConfigurationImpl(config, metrics, displayAdjustments.getCompatibilityInfo(), true,
+-                Build.VERSION.RESOURCES_SDK_INT_FULL);
++                Build.VERSION.SDK_INT_FULL);
+     }
+ 
+     /**
+@@ -461,7 +456,7 @@
+     public void updateConfiguration(Configuration config, DisplayMetrics metrics,
+             CompatibilityInfo compat) {
+         updateConfigurationImpl(config, metrics, compat, false,
+-                Build.VERSION.RESOURCES_SDK_INT_FULL);
++                Build.VERSION.SDK_INT_FULL);
+     }
+ 
+     private void updateConfigurationImpl(Configuration config, DisplayMetrics metrics,
+@@ -1067,7 +1062,7 @@
+                         throw new NotFoundException("invalid frro parameters");
+                     }
+                     File f = new File('/' + uri.getHost() + uri.getPath());
+-                    if (!f.getCanonicalPath().startsWith(ResourcesManager.RESOURCE_CACHE_DIR)
++                    if (!f.getCanonicalPath().startsWith("/data/resource-cache/")
+                             || !f.getCanonicalPath().endsWith(".frro") || !f.canRead()) {
+                         throw new NotFoundException("invalid frro path");
+                     }
+@@ -1490,10 +1485,6 @@
+         return new ThemeImpl();
+     }
+ 
+-    private static final NativeAllocationRegistry sThemeRegistry =
+-            NativeAllocationRegistry.createMalloced(ResourcesImpl.class.getClassLoader(),
+-                    AssetManager.getThemeFreeFunction());
+-
+     void dump(PrintWriter pw, String prefix) {
+         pw.println(prefix + "class=" + getClass());
+         pw.println(prefix + "assets");
+@@ -1510,6 +1501,8 @@
+         private AssetManager mAssets;
+         private final long mTheme;
+ 
++        private static native void retainNativeTheme(ThemeImpl peer, long theme);
++
+         /**
+          * Resource identifier for the theme.
+          */
+@@ -1518,7 +1511,7 @@
+         /*package*/ ThemeImpl() {
+             mAssets = ResourcesImpl.this.mAssets;
+             mTheme = mAssets.createTheme();
+-            sThemeRegistry.registerNativeAllocation(this, mTheme);
++            retainNativeTheme(this, mTheme);
+         }
+ 
+         @Override

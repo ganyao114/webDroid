@@ -26,11 +26,14 @@ def read_table(source):
 
 def wrapper(source, methods):
     symbol = f"Resolve_{source.stem}"
-    lines = [f"#include {json.dumps(str(source.resolve()))}", '#include "native_thunk.h"',
-             f"wa::interp::NativeThunk wa::interp::{symbol}(void* function) {{"]
+    lines = [f"#include {json.dumps(str(source.resolve()))}", '#include "native_thunk.h"']
+    if source.stem == "android_util_AssetManager":
+        lines.append('#include "styleable_order.h"')
+    lines.append(f"wa::interp::NativeThunk wa::interp::{symbol}(void* function) {{")
     for name in dict.fromkeys(function for _, _, function in methods):
+        target = "ApplyStyleInAccessorOrder" if name == "NativeApplyStyleWithArray" else name
         lines.extend((f"  if (function == reinterpret_cast<void*>(&android::{name})) {{",
-                      f"    return &NativeCall<&android::{name}>::Invoke;", "  }"))
+                      f"    return &NativeCall<&android::{target}>::Invoke;", "  }"))
     return "\n".join(lines + ["  return nullptr;", "}", ""])
 
 

@@ -92,7 +92,9 @@ public class TextView extends View implements TextViewPaintAccess {
     public CharSequence getHint() { return hint; }
     public void setTextSize(float size) { setTextSize(TypedValue.COMPLEX_UNIT_SP, size); }
     public void setTextSize(int unit, float size) {
-        paint.setTextSize(TypedValue.applyDimension(unit, size, getResources().getDisplayMetrics()));
+        float pixels = TypedValue.applyDimension(unit, size, getResources().getDisplayMetrics());
+        if (pixels == paint.getTextSize()) return;
+        paint.setTextSize(pixels);
         requestLayout();
         invalidate();
     }

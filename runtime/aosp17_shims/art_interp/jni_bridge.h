@@ -36,9 +36,9 @@ class JniBridge {
   void DeleteGlobal(jobject reference);
   void PushFrame(size_t capacity);
   jobject PopFrame(jobject keep);
-  size_t FrameDepth() const { return frames_.size(); }
+  size_t FrameDepth() const { return frame_depth_; }
   size_t SetFrameFloor(size_t depth) { return std::exchange(frame_floor_, depth); }
-  void RestoreFrameDepth(size_t depth) { frames_.resize(depth); }
+  void RestoreFrameDepth(size_t depth);
   Class& AsClass(jclass cls);
   void RegisterAdapter(void* function, NativeThunk thunk);
   NativeThunk FindAdapter(void* function) const;
@@ -52,10 +52,10 @@ class JniBridge {
   Environment env_;
   VirtualMachine vm_;
   std::vector<std::vector<std::unique_ptr<JniReference>>> frames_;
+  size_t frame_depth_ = 0;
   std::unordered_map<JniReference*, std::unique_ptr<JniReference>> globals_;
   std::unordered_multimap<Object*, std::shared_ptr<void>> native_peers_;
   std::unordered_map<void*, NativeThunk> adapters_;
-  std::map<std::string, uint64_t, std::less<>> calls_;
   size_t frame_floor_ = 1;
   bool resources_registered_ = false;
 };

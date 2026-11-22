@@ -1,0 +1,209 @@
+--- a/frameworks/base/graphics/java/android/graphics/drawable/Icon.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/Icon.java
+@@ -26,7 +26,6 @@
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.app.IUriGrantsManager;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.ContentProvider;
+ import android.content.ContentResolver;
+@@ -57,9 +56,7 @@
+ import android.ravenwood.annotation.RavenwoodThrow;
+ import android.text.TextUtils;
+ import android.util.Log;
+-import android.window.DesktopExperienceFlags;
+-
+-import androidx.annotation.RequiresPermission;
++
+ 
+ import java.io.DataInputStream;
+ import java.io.DataOutputStream;
+@@ -411,13 +408,13 @@
+ 
+     /**
+      * Resizes image if size too large for Canvas to draw
+-     * @param bitmap Bitmap to be resized if size > {@link RecordingCanvas.MAX_BITMAP_SIZE}
++     * @param bitmap Bitmap to be resized if size > {@link (150 * 1024 * 1024)}
+      * @return resized bitmap
+      */
+     private Bitmap fixMaxBitmapSize(Bitmap bitmap) {
+-        if (bitmap != null && bitmap.getByteCount() > RecordingCanvas.MAX_BITMAP_SIZE) {
++        if (bitmap != null && bitmap.getByteCount() > (150 * 1024 * 1024)) {
+             int bytesPerPixel = bitmap.getRowBytes() / bitmap.getWidth();
+-            int maxNumPixels = RecordingCanvas.MAX_BITMAP_SIZE / bytesPerPixel;
++            int maxNumPixels = (150 * 1024 * 1024) / bytesPerPixel;
+             float aspRatio = (float) bitmap.getWidth() / (float) bitmap.getHeight();
+             int newHeight = (int) Math.sqrt(maxNumPixels / aspRatio);
+             int newWidth = (int) (newHeight * aspRatio);
+@@ -435,7 +432,7 @@
+ 
+     /**
+      * Resizes BitmapDrawable if size too large for Canvas to draw
+-     * @param drawable Drawable to be resized if size > {@link RecordingCanvas.MAX_BITMAP_SIZE}
++     * @param drawable Drawable to be resized if size > {@link (150 * 1024 * 1024)}
+      * @return resized Drawable
+      */
+     private Drawable fixMaxBitmapSize(Resources res, Drawable drawable) {
+@@ -494,8 +491,7 @@
+                         resPackage = context.getPackageName();
+                     }
+                     if ("android".equals(resPackage)) {
+-                        if (DesktopExperienceFlags
+-                                .USE_RESOURCES_FROM_CONTEXT_TO_CREATE_DRAWABLE_ICONS.isTrue()) {
++                        if (false) {
+                             // Gets display aware resources from the context, that is already
+                             // supposed to be associated with the display the icon will be shown in.
+                             mObj1 = context.getResources();
+@@ -591,6 +587,9 @@
+      */
+     @RavenwoodThrow(reason = "Ravenwood does not support multiuser")
+     public Drawable loadDrawableAsUser(Context context, int userId) {
++        if (userId != 0) {
++            throw new UnsupportedOperationException("The guest has one Android user");
++        }
+         if (mType == TYPE_RESOURCE) {
+             String resPackage = getResPackage();
+             if (TextUtils.isEmpty(resPackage)) {
+@@ -599,18 +598,7 @@
+             invalidateResourcesCacheIfNeeded(context);
+             if (getResources() == null && !(getResPackage().equals("android"))) {
+                 // TODO(b/173307037): Move CONTEXT_INCLUDE_CODE to ContextImpl.createContextAsUser
+-                final Context userContext;
+-                if (context.getUserId() == userId) {
+-                    userContext = context;
+-                } else {
+-                    final boolean sameAppWithProcess =
+-                            UserHandle.isSameApp(context.getApplicationInfo().uid, Process.myUid());
+-                    final int flags = (sameAppWithProcess ? CONTEXT_INCLUDE_CODE : 0)
+-                            | CONTEXT_RESTRICTED;
+-                    userContext = context.createContextAsUser(UserHandle.of(userId), flags);
+-                }
+-
+-                final PackageManager pm = userContext.getPackageManager();
++                final PackageManager pm = context.getPackageManager();
+                 try {
+                     // assign getResources() as the correct user
+                     mObj1 = pm.getResourcesForApplication(resPackage);
+@@ -626,7 +614,7 @@
+     }
+ 
+     private void invalidateResourcesCacheIfNeeded(Context context) {
+-        if (!DesktopExperienceFlags.USE_RESOURCES_FROM_CONTEXT_TO_CREATE_DRAWABLE_ICONS.isTrue()) {
++        if (!false) {
+             return;
+         }
+         if (mType == TYPE_RESOURCE && mObj1 != null) {
+@@ -640,46 +628,6 @@
+                 mObj1 = null;
+             }
+         }
+-    }
+-
+-    /**
+-     * Load a drawable, but in the case of URI types, it will check if the passed uid has a grant
+-     * to load the resource. The check will be performed using the permissions of the passed uid,
+-     * and not those of the caller.
+-     * <p>
+-     * This should be called for {@link Icon} objects that come from a not trusted source and may
+-     * contain a URI.
+-     *
+-     * After the check, if passed, {@link #loadDrawable} will be called. If failed, this will
+-     * return {@code null}.
+-     *
+-     * @see #loadDrawable
+-     *
+-     * @hide
+-     */
+-    @Nullable
+-    @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS_FULL)
+-    public Drawable loadDrawableCheckingUriGrant(
+-            Context context,
+-            IUriGrantsManager iugm,
+-            int callingUid,
+-            String packageName
+-    ) {
+-        if (getType() == TYPE_URI || getType() == TYPE_URI_ADAPTIVE_BITMAP) {
+-            try {
+-                iugm.checkGrantUriPermission_ignoreNonSystem(
+-                        callingUid,
+-                        packageName,
+-                        ContentProvider.getUriWithoutUserId(getUri()),
+-                        Intent.FLAG_GRANT_READ_URI_PERMISSION,
+-                        ContentProvider.getUserIdFromUri(getUri())
+-                );
+-            } catch (SecurityException | RemoteException e) {
+-                Log.e(TAG, "Failed to get URI permission for: " + getUri(), e);
+-                return null;
+-            }
+-        }
+-        return loadDrawable(context);
+     }
+ 
+     /** @hide */
+--- a/frameworks/base/graphics/java/android/graphics/drawable/AnimatedImageDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/AnimatedImageDrawable.java
+@@ -37,7 +37,6 @@
+ import android.util.TypedValue;
+ import android.view.View;
+ 
+-import com.android.graphics.hwui.flags.Flags;
+ import com.android.internal.R;
+ 
+ import dalvik.annotation.optimization.FastNative;
+@@ -463,7 +462,7 @@
+             throw new IllegalStateException("called start on empty AnimatedImageDrawable");
+         }
+ 
+-        if (Flags.animatedImageFrameRateHint() && Looper.myLooper() != null) {
++        if (false && Looper.myLooper() != null) {
+             nSetOnFrameRateHintListener(mState.mNativePtr, new WeakReference<>(this));
+         }
+ 
+@@ -487,7 +486,7 @@
+         if (nStop(mState.mNativePtr)) {
+             postOnAnimationEnd();
+         }
+-        if (Flags.animatedImageFrameRateHint() && Looper.myLooper() != null) {
++        if (false && Looper.myLooper() != null) {
+             nSetOnFrameRateHintListener(mState.mNativePtr, null);
+         }
+     }
+@@ -535,7 +534,7 @@
+ 
+     @Override
+     public void setFilterBitmap(boolean filterBitmap) {
+-        if (!Flags.animatedImageDrawableFilterBitmap()) {
++        if (!false) {
+             super.setFilterBitmap(filterBitmap);
+             return;
+         }
+@@ -551,7 +550,7 @@
+ 
+     @Override
+     public boolean isFilterBitmap() {
+-        if (!Flags.animatedImageDrawableFilterBitmap()) {
++        if (!false) {
+             return super.isFilterBitmap();
+         }
+         if (mState.mNativePtr == 0) {
+@@ -620,7 +619,7 @@
+     private static void callOnFrameRateHint(WeakReference<AnimatedImageDrawable> weakDrawable,
+             float fps) {
+ 
+-        if (!Flags.animatedImageFrameRateHint()) {
++        if (!false) {
+             return;
+         }
+         AnimatedImageDrawable drawable = weakDrawable.get();
+--- a/frameworks/base/graphics/java/android/graphics/drawable/AnimatedVectorDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/AnimatedVectorDrawable.java
+@@ -362,7 +362,7 @@
+      * @return whether invalid animations for vector drawable should be ignored.
+      */
+     private static boolean shouldIgnoreInvalidAnimation() {
+-        return android.graphics.Compatibility.getTargetSdkVersion() < Build.VERSION_CODES.N;
++        return Build.VERSION.SDK_INT < Build.VERSION_CODES.N;
+     }
+ 
+     @Override

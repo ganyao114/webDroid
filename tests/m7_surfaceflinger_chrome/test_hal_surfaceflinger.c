@@ -1,4 +1,5 @@
 #include "wasmandroid/surfaceflinger.h"
+#include "../../runtime/hal_surfaceflinger/font_advances.h"
 
 #include <math.h>
 #include <pthread.h>
@@ -224,6 +225,28 @@ static void bitmap_and_feedback_test(wa_sf_t *sf) {
     *m = (wa_font_metric_t){2, 32768, 65536, 49152, 16384};
     wa_text_metrics_t b = wa_canvas_measure_text(sf, "A桌", 4, 16, 500, WA_FONT_ROBOTO);
     CHECK(a.advance > 24 && b.advance == 24 && b.ascent == 12 && b.descent == 4);
+    wa_font_advances_t *row = wa_sf_font_advances(sf) + 9 + 4;
+    row->wide_q16 = 65536;
+    for (unsigned i = 0; i < WA_FONT_ASCII_COUNT; ++i)
+        row->ascii_q16[i] = 32768;
+    row->ascii_q16['M' - WA_FONT_ASCII_FIRST] = 58983;
+    row->ascii_q16['W' - WA_FONT_ASCII_FIRST] = 62260;
+    row->ascii_q16['m' - WA_FONT_ASCII_FIRST] = 62260;
+    row->ascii_q16['l' - WA_FONT_ASCII_FIRST] = 19661;
+    row->ascii_q16[' ' - WA_FONT_ASCII_FIRST] = 16384;
+    row->sequence = 2;
+    const struct { const char *title; float raw_width; } cases[] = {
+        {"Apps", 32}, {"Modes", 46.4f}, {"Communal", 75.2f},
+        {"WasmAndroid 3D Cube", 158.4f}, {"系统设置", 64},
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        const char *title = cases[i].title;
+        const float width = wa_canvas_measure_text(sf, title, strlen(title), 16, 500, WA_FONT_ROBOTO).advance;
+        CHECK(width >= cases[i].raw_width);
+        CHECK(width <= cases[i].raw_width + 2);
+    }
+    row->sequence = 3;
+    CHECK(wa_canvas_measure_text(sf, "A桌", 4, 16, 500, WA_FONT_ROBOTO).advance == 24);
 }
 
 static void platform_test(wa_sf_t *sf) {

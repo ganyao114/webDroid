@@ -21,7 +21,10 @@ public final class Parcel {
         position++;
     }
     public void writeInt(int value) { write(value); }
+    public void writeLong(long value) { write(value); }
     public void writeFloat(float value) { write(value); }
+    public void writeIntArray(int[] value) { write(value == null ? null : value.clone()); }
+    public void writeFloatArray(float[] value) { write(value == null ? null : value.clone()); }
     public void writeString(String value) { write(value); }
     public void writeBundle(Bundle value) { write(value == null ? null : new Bundle(value)); }
     public void writeBoolean(boolean value) { writeInt(value ? 1 : 0); }
@@ -35,6 +38,15 @@ public final class Parcel {
                 (android.util.ArrayMap<Object, Object>) values.get(position++));
     }
     public int readInt() { return (Integer) values.get(position++); }
+    public long readLong() { return (Long) values.get(position++); }
+    public int[] createIntArray() {
+        int[] array = (int[]) values.get(position++);
+        return array == null ? null : array.clone();
+    }
+    public float[] createFloatArray() {
+        float[] array = (float[]) values.get(position++);
+        return array == null ? null : array.clone();
+    }
     public boolean readBoolean() { return readInt() != 0; }
     public Bundle readBundle(ClassLoader loader) {
         Bundle stored = (Bundle) values.get(position++);

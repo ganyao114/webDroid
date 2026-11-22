@@ -19,7 +19,7 @@ diff --git a/packages/apps/Settings/AndroidManifest.xml b/packages/apps/Settings
              android:label="@string/settings_label"
 -            android:icon="@drawable/ic_launcher_settings"
 -            android:theme="@style/Theme.Settings"
-+            android:icon="@mipmap/ic_launcher_settings"
++            android:icon="@drawable/themed_icon_settings"
 +            android:theme="@style/Theme.Settings.Home"
              android:hardwareAccelerated="true"
              android:requiredForAllUsers="true"

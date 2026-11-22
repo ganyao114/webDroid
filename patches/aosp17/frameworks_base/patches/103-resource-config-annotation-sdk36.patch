@@ -1,0 +1,842 @@
+--- a/frameworks/base/core/java/android/content/res/ColorStateList.java
++++ b/frameworks/base/core/java/android/content/res/ColorStateList.java
+@@ -20,7 +20,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.Resources.Theme;
+ import android.graphics.Color;
+ import android.os.Build;
+@@ -159,7 +158,7 @@
+     private ColorStateListFactory mFactory;
+ 
+     private int[][] mThemeAttrs;
+-    private @Config int mChangingConfigurations;
++    private int mChangingConfigurations;
+ 
+     @UnsupportedAppUsage
+     private int[][] mStateSpecs;
+@@ -350,7 +349,7 @@
+         int depth;
+         int type;
+ 
+-        @Config int changingConfigurations = 0;
++        int changingConfigurations = 0;
+         int defaultColor = DEFAULT_COLOR;
+ 
+         boolean hasUnresolvedAttrs = false;
+@@ -549,7 +548,7 @@
+      *
+      * @see android.content.pm.ActivityInfo
+      */
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mChangingConfigurations;
+     }
+ 
+@@ -749,7 +748,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mSrc.mChangingConfigurations;
+         }
+ 
+--- a/frameworks/base/core/java/android/content/res/Configuration.java
++++ b/frameworks/base/core/java/android/content/res/Configuration.java
+@@ -51,7 +51,6 @@
+ import android.app.WindowConfiguration;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.pm.ActivityInfo;
+-import android.content.pm.ActivityInfo.Config;
+ import android.graphics.Typeface;
+ import android.internal.perfetto.protos.Locale.LocaleProto;
+ import android.os.Build;
+@@ -1635,7 +1634,7 @@
+      *
+      * @return a bit mask of the changed fields, as per {@link #diff}
+      */
+-    public @Config int updateFrom(@NonNull Configuration delta) {
++    public int updateFrom(@NonNull Configuration delta) {
+         int changed = 0;
+         if (delta.fontScale > 0 && fontScale != delta.fontScale) {
+             changed |= ActivityInfo.CONFIG_FONT_SCALE;
+@@ -1827,7 +1826,7 @@
+      * copy anything allowed by the mask (including undefined values).
+      * @hide
+      */
+-    public void setTo(@NonNull Configuration delta, @Config int mask,
++    public void setTo(@NonNull Configuration delta, int mask,
+             @WindowConfiguration.WindowConfig int windowMask) {
+         if ((mask & ActivityInfo.CONFIG_FONT_SCALE) != 0) {
+             fontScale = delta.fontScale;
+@@ -1912,7 +1911,7 @@
+      * @return Returns a bit mask indicating which configuration
+      * values have changed.
+      */
+-    public @Config int diff(Configuration delta) {
++    public int diff(Configuration delta) {
+         return diff(delta, false /* compareUndefined */, false /* publicOnly */);
+     }
+ 
+@@ -2058,8 +2057,8 @@
+      * @return {@code true} if the resource needs to be loaded, {@code false}
+      *         otherwise
+      */
+-    public static boolean needNewResources(@Config int configChanges,
+-            @Config int interestingChanges) {
++    public static boolean needNewResources(int configChanges,
++            int interestingChanges) {
+         // CONFIG_ASSETS_PATHS and CONFIG_FONT_SCALE are higher level configuration changes that
+         // all resources are subject to change with.
+         interestingChanges = interestingChanges | ActivityInfo.CONFIG_ASSETS_PATHS
+--- a/frameworks/base/core/java/android/content/res/ConfigurationBoundResourceCache.java
++++ b/frameworks/base/core/java/android/content/res/ConfigurationBoundResourceCache.java
+@@ -17,7 +17,6 @@
+ package android.content.res;
+ 
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ 
+ /**
+@@ -52,7 +51,7 @@
+     }
+ 
+     @Override
+-    public boolean shouldInvalidateEntry(ConstantState<T> entry, @Config int configChanges) {
++    public boolean shouldInvalidateEntry(ConstantState<T> entry, int configChanges) {
+         return Configuration.needNewResources(configChanges, entry.getChangingConfigurations());
+     }
+ }
+--- a/frameworks/base/core/java/android/content/res/ConstantState.java
++++ b/frameworks/base/core/java/android/content/res/ConstantState.java
+@@ -15,7 +15,6 @@
+ */
+ package android.content.res;
+ 
+-import android.content.pm.ActivityInfo.Config;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ 
+ /**
+@@ -37,7 +36,7 @@
+      * Return a bit mask of configuration changes that will impact
+      * this resource (and thus require completely reloading it).
+      */
+-    abstract public @Config int getChangingConfigurations();
++    abstract public int getChangingConfigurations();
+ 
+     /**
+      * Create a new instance without supplying resources the caller
+--- a/frameworks/base/core/java/android/content/res/GradientColor.java
++++ b/frameworks/base/core/java/android/content/res/GradientColor.java
+@@ -20,7 +20,6 @@
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.Resources.Theme;
+ import android.graphics.LinearGradient;
+ import android.graphics.RadialGradient;
+@@ -91,7 +90,7 @@
+     /** Lazily-created factory for this GradientColor. */
+     private GradientColorFactory mFactory;
+ 
+-    private @Config int mChangingConfigurations;
++    private int mChangingConfigurations;
+     private int mDefaultColor;
+ 
+     // After parsing all the attributes from XML, this shader is the ultimate result containing
+@@ -514,7 +513,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mSrc.mChangingConfigurations;
+         }
+ 
+--- a/frameworks/base/core/java/android/content/res/Resources.java
++++ b/frameworks/base/core/java/android/content/res/Resources.java
+@@ -47,7 +47,6 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.content.pm.ActivityInfo;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.pm.ApplicationInfo;
+ import android.content.res.loader.ResourcesLoader;
+ import android.graphics.Movie;
+@@ -1930,7 +1929,7 @@
+          *         {@link ActivityInfo}
+          * @see ActivityInfo
+          */
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             synchronized (mLock) {
+                 return mThemeImpl.getChangingConfigurations();
+             }
+--- a/frameworks/base/core/java/android/content/res/ResourcesImpl.java
++++ b/frameworks/base/core/java/android/content/res/ResourcesImpl.java
+@@ -31,7 +31,6 @@
+ import android.app.ResourcesManager;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.pm.ActivityInfo;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.AssetManager.AssetInputStream;
+ import android.content.res.Configuration.NativeConfig;
+ import android.content.res.Resources.NotFoundException;
+@@ -495,7 +494,7 @@
+                 // the framework.
+                 mDisplayAdjustments.getCompatibilityInfo().applyToDisplayMetrics(mMetrics);
+ 
+-                final @Config int configChanges = applyConfigChanges(config);
++                final int configChanges = applyConfigChanges(config);
+ 
+                 // If even after the update there are no Locales set, grab the default locales.
+                 LocaleList configLocales = mConfiguration.getLocales();
+@@ -674,7 +673,7 @@
+      * @param config the new configuration
+      * @return bitmask of config changes
+      */
+-    public @Config int applyConfigChanges(@Nullable Configuration config) {
++    public int applyConfigChanges(@Nullable Configuration config) {
+         if (config == null) {
+             // If there is no configuration, assume all flags have changed.
+             return 0xFFFFFFFF;
+@@ -941,8 +940,8 @@
+         }
+     }
+ 
+-    private boolean verifyPreloadConfig(@Config int changingConfigurations,
+-            @Config int allowVarying, @AnyRes int resourceId, @Nullable String name) {
++    private boolean verifyPreloadConfig(int changingConfigurations,
++            int allowVarying, @AnyRes int resourceId, @Nullable String name) {
+         // We allow preloading of resources even if they vary by font scale (which
+         // doesn't impact resource selection) or density (which we handle specially by
+         // simply turning off all preloading), as well as any other configs specified
+@@ -1607,7 +1606,7 @@
+             return mAssets.getStyleAttributes(getAppliedStyleResId());
+         }
+ 
+-        @Config int getChangingConfigurations() {
++        int getChangingConfigurations() {
+             final @NativeConfig int nativeChangingConfig =
+                     AssetManager.nativeThemeGetChangingConfigurations(mTheme);
+             return ActivityInfo.activityInfoConfigNativeToJava(nativeChangingConfig);
+--- a/frameworks/base/core/java/android/content/res/ThemedResourceCache.java
++++ b/frameworks/base/core/java/android/content/res/ThemedResourceCache.java
+@@ -19,7 +19,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.Resources.Theme;
+ import android.content.res.Resources.ThemeKey;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+@@ -138,7 +137,7 @@
+      * @param configChanges a bitmask of configuration changes
+      */
+     @UnsupportedAppUsage
+-    public void onConfigurationChange(@Config int configChanges) {
++    public void onConfigurationChange(int configChanges) {
+         synchronized (this) {
+             pruneLocked(configChanges);
+             mGeneration++;
+@@ -218,7 +217,7 @@
+      *                      simply prune missing weak references
+      * @return {@code true} if the cache is completely empty after pruning
+      */
+-    private boolean pruneLocked(@Config int configChanges) {
++    private boolean pruneLocked(int configChanges) {
+         if (mThemedEntries != null) {
+             for (int i = mThemedEntries.size() - 1; i >= 0; i--) {
+                 if (pruneEntriesLocked(mThemedEntries.valueAt(i), configChanges)) {
+@@ -235,7 +234,7 @@
+     }
+ 
+     private boolean pruneEntriesLocked(@Nullable LongSparseArray<WeakReference<T>> entries,
+-            @Config int configChanges) {
++            int configChanges) {
+         if (entries == null) {
+             return true;
+         }
+@@ -250,7 +249,7 @@
+         return entries.size() == 0;
+     }
+ 
+-    private boolean pruneEntryLocked(@Nullable T entry, @Config int configChanges) {
++    private boolean pruneEntryLocked(@Nullable T entry, int configChanges) {
+         return entry == null || (configChanges != 0
+                 && shouldInvalidateEntry(entry, configChanges));
+     }
+--- a/frameworks/base/core/java/android/content/res/TypedArray.java
++++ b/frameworks/base/core/java/android/content/res/TypedArray.java
+@@ -22,7 +22,6 @@
+ import android.annotation.StyleableRes;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.pm.ActivityInfo;
+-import android.content.pm.ActivityInfo.Config;
+ import android.graphics.Typeface;
+ import android.graphics.drawable.Drawable;
+ import android.os.Build;
+@@ -321,15 +320,15 @@
+      */
+     @UnsupportedAppUsage
+     public String getNonConfigurationString(@StyleableRes int index,
+-            @Config int allowedChangingConfigs) {
+-        if (mRecycled) {
+-            throw new RuntimeException("Cannot make calls to a recycled instance!");
+-        }
+-
+-        index *= STYLE_NUM_ENTRIES;
+-        final int[] data = mData;
+-        final int type = data[index + STYLE_TYPE];
+-        final @Config int changingConfigs = ActivityInfo.activityInfoConfigNativeToJava(
++            int allowedChangingConfigs) {
++        if (mRecycled) {
++            throw new RuntimeException("Cannot make calls to a recycled instance!");
++        }
++
++        index *= STYLE_NUM_ENTRIES;
++        final int[] data = mData;
++        final int type = data[index + STYLE_TYPE];
++        final int changingConfigs = ActivityInfo.activityInfoConfigNativeToJava(
+                 data[index + STYLE_CHANGING_CONFIGURATIONS]);
+         if ((changingConfigs & ~allowedChangingConfigs) != 0) {
+             return null;
+@@ -1347,12 +1346,12 @@
+      * @throws RuntimeException if the TypedArray has already been recycled.
+      * @see android.content.pm.ActivityInfo
+      */
+-    public @Config int getChangingConfigurations() {
+-        if (mRecycled) {
+-            throw new RuntimeException("Cannot make calls to a recycled instance!");
+-        }
+-
+-        @Config int changingConfig = 0;
++    public int getChangingConfigurations() {
++        if (mRecycled) {
++            throw new RuntimeException("Cannot make calls to a recycled instance!");
++        }
++
++        int changingConfig = 0;
+ 
+         final int[] data = mData;
+         final int N = length();
+--- a/frameworks/base/graphics/java/android/graphics/drawable/AdaptiveIconDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/AdaptiveIconDrawable.java
+@@ -21,7 +21,6 @@
+ import android.annotation.Nullable;
+ import android.annotation.TestApi;
+ import android.app.ActivityThread;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -661,7 +660,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mLayerState.getChangingConfigurations();
+     }
+ 
+@@ -1001,8 +1000,8 @@
+ 
+         int mOpacityOverride = PixelFormat.UNKNOWN;
+ 
+-        @Config int mChangingConfigurations;
+-        @Config int mChildrenChangingConfigurations;
++        int mChangingConfigurations;
++        int mChildrenChangingConfigurations;
+ 
+         @DrawableRes int mSourceDrawableId = Resources.ID_NULL;
+ 
+@@ -1077,7 +1076,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | mChildrenChangingConfigurations;
+         }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/AnimatedVectorDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/AnimatedVectorDrawable.java
+@@ -26,7 +26,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -377,7 +376,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mAnimatedVectorState.getChangingConfigurations();
+     }
+ 
+@@ -705,7 +704,7 @@
+     }
+ 
+     private static class AnimatedVectorDrawableState extends ConstantState {
+-        @Config int mChangingConfigurations;
++        int mChangingConfigurations;
+         VectorDrawable mVectorDrawable;
+ 
+         private final boolean mShouldIgnoreInvalidAnim;
+@@ -772,7 +771,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations;
+         }
+ 
+--- a/frameworks/base/graphics/java/android/graphics/drawable/BitmapDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/BitmapDrawable.java
+@@ -19,7 +19,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -484,7 +483,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mBitmapState.getChangingConfigurations();
+     }
+ 
+@@ -1006,7 +1005,7 @@
+ 
+         boolean mAutoMirrored = false;
+ 
+-        @Config int mChangingConfigurations;
++        int mChangingConfigurations;
+         boolean mRebuildShader;
+ 
+         BitmapState(Bitmap bitmap) {
+@@ -1047,7 +1046,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | (mTint != null ? mTint.getChangingConfigurations() : 0);
+         }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/ColorDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/ColorDrawable.java
+@@ -21,7 +21,6 @@
+ import android.annotation.Nullable;
+ import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -83,7 +82,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mColorState.getChangingConfigurations();
+     }
+ 
+@@ -351,7 +350,7 @@
+         @ViewDebug.ExportedProperty
+         @UnsupportedAppUsage
+         int mUseColor;  // basecolor modulated by setAlpha()
+-        @Config int mChangingConfigurations;
++        int mChangingConfigurations;
+         ColorStateList mTint = null;
+         BlendMode mBlendMode = DEFAULT_BLEND_MODE;
+ 
+@@ -385,7 +384,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | (mTint != null ? mTint.getChangingConfigurations() : 0);
+         }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/Drawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/Drawable.java
+@@ -22,7 +22,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -189,7 +188,7 @@
+ 
+     private int[] mStateSet = StateSet.WILD_CARD;
+     private int mLevel = 0;
+-    private @Config int mChangingConfigurations = 0;
++    private int mChangingConfigurations = 0;
+     private Rect mBounds = ZERO_BOUNDS_RECT;  // lazily becomes a new Rect()
+     @UnsupportedAppUsage
+     private WeakReference<Callback> mCallback = null;
+@@ -339,7 +338,7 @@
+      *
+      * @see android.content.pm.ActivityInfo
+      */
+-    public void setChangingConfigurations(@Config int configs) {
++    public void setChangingConfigurations(int configs) {
+         mChangingConfigurations = configs;
+     }
+ 
+@@ -356,7 +355,7 @@
+      *
+      * @see android.content.pm.ActivityInfo
+      */
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return mChangingConfigurations;
+     }
+ 
+@@ -1548,7 +1547,7 @@
+          * Return a bit mask of configuration changes that will impact
+          * this drawable (and thus require completely reloading it).
+          */
+-        public abstract @Config int getChangingConfigurations();
++        public abstract int getChangingConfigurations();
+ 
+         /**
+          * Return whether this constant state can have a theme applied.
+--- a/frameworks/base/graphics/java/android/graphics/drawable/DrawableContainer.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/DrawableContainer.java
+@@ -18,7 +18,6 @@
+ 
+ import android.annotation.NonNull;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -93,7 +92,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations()
+                 | mDrawableContainerState.getChangingConfigurations();
+     }
+@@ -686,8 +685,8 @@
+ 
+         Resources mSourceRes;
+         int mDensity = DisplayMetrics.DENSITY_DEFAULT;
+-        @Config int mChangingConfigurations;
+-        @Config int mChildrenChangingConfigurations;
++        int mChangingConfigurations;
++        int mChildrenChangingConfigurations;
+ 
+         SparseArray<ConstantState> mDrawableFutures;
+         @UnsupportedAppUsage
+@@ -825,7 +824,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations | mChildrenChangingConfigurations;
+         }
+ 
+--- a/frameworks/base/graphics/java/android/graphics/drawable/DrawableWrapper.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/DrawableWrapper.java
+@@ -19,7 +19,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -244,7 +243,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations()
+                 | (mState != null ? mState.getChangingConfigurations() : 0)
+                 | mDrawable.getChangingConfigurations();
+@@ -480,7 +479,7 @@
+     abstract static class DrawableWrapperState extends Drawable.ConstantState {
+         private int[] mThemeAttrs;
+ 
+-        @Config int mChangingConfigurations;
++        int mChangingConfigurations;
+         int mDensity = DisplayMetrics.DENSITY_DEFAULT;
+ 
+         /**
+@@ -560,7 +559,7 @@
+         public abstract Drawable newDrawable(@Nullable Resources res);
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | (mDrawableState != null ? mDrawableState.getChangingConfigurations() : 0);
+         }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/GradientDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/GradientDrawable.java
+@@ -27,7 +27,6 @@
+ import android.annotation.Nullable;
+ import android.annotation.Px;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -1298,7 +1297,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mGradientState.getChangingConfigurations();
+     }
+ 
+@@ -2118,7 +2117,7 @@
+     }
+ 
+     final static class GradientState extends ConstantState {
+-        public @Config int mChangingConfigurations;
++        public int mChangingConfigurations;
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 124050917)
+         public @Shape int mShape = RECTANGLE;
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 124050917)
+@@ -2379,7 +2378,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | (mStrokeColors != null ? mStrokeColors.getChangingConfigurations() : 0)
+                     | (mSolidColors != null ? mSolidColors.getChangingConfigurations() : 0)
+--- a/frameworks/base/graphics/java/android/graphics/drawable/LayerDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/LayerDrawable.java
+@@ -19,7 +19,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -1023,7 +1022,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mLayerState.getChangingConfigurations();
+     }
+ 
+@@ -1946,8 +1945,8 @@
+         int mPaddingEnd = -1;
+         int mOpacityOverride = PixelFormat.UNKNOWN;
+ 
+-        @Config int mChangingConfigurations;
+-        @Config int mChildrenChangingConfigurations;
++        int mChangingConfigurations;
++        int mChildrenChangingConfigurations;
+ 
+         private boolean mCheckedOpacity;
+         private int mOpacity;
+@@ -2071,7 +2070,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | mChildrenChangingConfigurations;
+         }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/NinePatchDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/NinePatchDrawable.java
+@@ -19,7 +19,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -263,7 +262,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mNinePatchState.getChangingConfigurations();
+     }
+ 
+@@ -589,7 +588,7 @@
+     }
+ 
+     final static class NinePatchState extends ConstantState {
+-        @Config int mChangingConfigurations;
++        int mChangingConfigurations;
+ 
+         // Values loaded during inflation.
+         @UnsupportedAppUsage
+@@ -657,7 +656,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | (mTint != null ? mTint.getChangingConfigurations() : 0);
+         }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/RippleDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/RippleDrawable.java
+@@ -29,7 +29,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -1384,7 +1383,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return super.getChangingConfigurations()
+                     | (mColor != null ? mColor.getChangingConfigurations() : 0);
+         }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/ShapeDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/ShapeDrawable.java
+@@ -19,7 +19,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.TestApi;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.Resources;
+ import android.content.res.Resources.Theme;
+@@ -266,7 +265,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mShapeState.getChangingConfigurations();
+     }
+ 
+@@ -538,7 +537,7 @@
+     static final class ShapeState extends ConstantState {
+         final @NonNull Paint mPaint;
+ 
+-        @Config int mChangingConfigurations;
++        int mChangingConfigurations;
+         int[] mThemeAttrs;
+         Shape mShape;
+         ColorStateList mTint;
+@@ -605,7 +604,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | (mTint != null ? mTint.getChangingConfigurations() : 0);
+         }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/TransitionDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/TransitionDrawable.java
+@@ -17,7 +17,6 @@
+ package android.graphics.drawable;
+ 
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.Resources;
+ import android.graphics.Canvas;
+ import android.os.SystemClock;
+@@ -277,7 +276,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations;
+         }
+     }
+--- a/frameworks/base/graphics/java/android/graphics/drawable/VectorDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/VectorDrawable.java
+@@ -17,7 +17,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo.Config;
+ import android.content.res.ColorStateList;
+ import android.content.res.ComplexColor;
+ import android.content.res.GradientColor;
+@@ -886,7 +885,7 @@
+     }
+ 
+     @Override
+-    public @Config int getChangingConfigurations() {
++    public int getChangingConfigurations() {
+         return super.getChangingConfigurations() | mVectorState.getChangingConfigurations();
+     }
+ 
+@@ -929,7 +928,7 @@
+     static class VectorDrawableState extends ConstantState {
+         // Variables below need to be copied (deep copy if applicable) for mutation.
+         int[] mThemeAttrs;
+-        @Config int mChangingConfigurations;
++        int mChangingConfigurations;
+         ColorStateList mTint = null;
+         BlendMode mBlendMode = DEFAULT_BLEND_MODE;
+         boolean mAutoMirrored;
+@@ -1087,7 +1086,7 @@
+         }
+ 
+         @Override
+-        public @Config int getChangingConfigurations() {
++        public int getChangingConfigurations() {
+             return mChangingConfigurations
+                     | (mTint != null ? mTint.getChangingConfigurations() : 0);
+         }
+@@ -1300,7 +1299,7 @@
+ 
+         // mLocalMatrix is updated based on the update of transformation information,
+         // either parsed from the XML or by animation.
+-        private @Config int mChangingConfigurations;
++        private int mChangingConfigurations;
+         private int[] mThemeAttrs;
+         private String mGroupName = null;
+ 
+@@ -1606,7 +1605,7 @@
+         protected PathParser.PathData mPathData = null;
+ 
+         String mPathName;
+-        @Config int mChangingConfigurations;
++        int mChangingConfigurations;
+ 
+         private static final Property<VPath, PathParser.PathData> PATH_DATA =
+                 new Property<VPath, PathParser.PathData>(PathParser.PathData.class, "pathData") {

@@ -1,0 +1,93 @@
+--- a/frameworks/base/core/java/android/view/InputEvent.java
++++ b/frameworks/base/core/java/android/view/InputEvent.java
+@@ -45,6 +45,9 @@
+ 
+     private static final boolean TRACK_RECYCLED_LOCATION = false;
+     private RuntimeException mRecycledLocation;
++    private int mHostSource;
++    private int mHostDisplayId = -1;
++    private boolean mHostTainted;
+ 
+     /*package*/ InputEvent() {
+         mSeq = mNextSeq.getAndIncrement();
+@@ -59,7 +62,7 @@
+      * @return The device id.
+      * @see InputDevice#getDevice
+      */
+-    public abstract int getDeviceId();
++    public int getDeviceId() { return 0; }
+ 
+     /**
+      * Gets the device that this event came from.
+@@ -76,7 +79,7 @@
+      * @return The event source or {@link InputDevice#SOURCE_UNKNOWN} if unknown.
+      * @see InputDevice#getSources
+      */
+-    public abstract int getSource();
++    public int getSource() { return mHostSource; }
+ 
+     /**
+      * Modifies the source of the event.
+@@ -84,7 +87,7 @@
+      * @param source The new source.
+      * @hide
+      */
+-    public abstract void setSource(int source);
++    public void setSource(int source) { mHostSource = source; }
+ 
+     /**
+      * Determines whether the event is from the given source.
+@@ -104,7 +107,7 @@
+      * @hide
+      */
+     @TestApi
+-    public abstract int getDisplayId();
++    public int getDisplayId() { return mHostDisplayId; }
+ 
+     /**
+      * Modifies the display id associated with the event
+@@ -112,7 +115,7 @@
+      * @hide
+      */
+     @TestApi
+-    public abstract void setDisplayId(int displayId);
++    public void setDisplayId(int displayId) { mHostDisplayId = displayId; }
+     /**
+      * Copies the event.
+      *
+@@ -176,7 +179,7 @@
+      * @return True if this event is tainted.
+      * @hide
+      */
+-    public abstract boolean isTainted();
++    public boolean isTainted() { return mHostTainted; }
+ 
+     /**
+      * Sets a private flag that indicates when the system has detected that this input event
+@@ -187,7 +190,7 @@
+      * @param tainted True if this event is tainted.
+      * @hide
+      */
+-    public abstract void setTainted(boolean tainted);
++    public void setTainted(boolean tainted) { mHostTainted = tainted; }
+ 
+     /**
+      * Retrieve the time this event occurred,
+@@ -212,7 +215,7 @@
+      *
+      * @hide
+      */
+-    public abstract long getEventTimeNanos();
++    public long getEventTimeNanos() { return getEventTime() * 1_000_000L; }
+ 
+     /**
+      * Marks the input event as being canceled.
+@@ -251,7 +254,7 @@
+      * @return The ID of this event.
+      * @hide
+      */
+-    public abstract int getId();
++    public int getId() { return getSequenceNumber(); }
+ 
+     public int describeContents() {
+         return 0;

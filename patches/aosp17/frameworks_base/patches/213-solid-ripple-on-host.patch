@@ -1,0 +1,12 @@
+--- a/frameworks/base/graphics/java/android/graphics/drawable/RippleDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/RippleDrawable.java
+@@ -155,7 +155,8 @@
+     private static final LinearInterpolator LINEAR_INTERPOLATOR = new LinearInterpolator();
+     private static final int DEFAULT_EFFECT_COLOR = 0x8dffffff;
+     /** Temporary flag for teamfood. **/
+-    private static final boolean FORCE_PATTERNED_STYLE = true;
++    // The embedded Canvas renders ripple geometry on the UI thread.
++    private static final boolean FORCE_PATTERNED_STYLE = false;
+ 
+     private final Rect mTempRect = new Rect();
+ 

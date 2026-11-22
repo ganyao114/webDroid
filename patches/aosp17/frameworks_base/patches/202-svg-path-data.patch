@@ -1,0 +1,21 @@
+--- a/frameworks/base/graphics/java/android/graphics/Path.java
++++ b/frameworks/base/graphics/java/android/graphics/Path.java
+@@ -39,7 +39,17 @@
+ public class Path {
+     // The host owns the native handle for the lifetime of this peer.
+     private static native void nRegisterNativeAllocation(Path path, long handle);
+-    private static native float[] nativeParsePathData(String pathData);
++    private static native long nCreateFromPathData(String pathData);
++
++    /** @hide Converts an SVG path through the host path-data parser. */
++    public static Path fromPathData(String pathData) {
++        return new Path(nCreateFromPathData(pathData));
++    }
++
++    private Path(long handle) {
++        mNativePath = handle;
++        nRegisterNativeAllocation(this, mNativePath);
++    }
+     /**
+      * @hide
+      */

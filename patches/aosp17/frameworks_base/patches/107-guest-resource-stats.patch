@@ -1,0 +1,87 @@
+--- a/frameworks/base/core/java/android/content/res/ResourceTimer.java
++++ b/frameworks/base/core/java/android/content/res/ResourceTimer.java
+@@ -17,7 +17,6 @@
+ package android.content.res;
+ 
+ import android.annotation.NonNull;
+-import android.app.AppProtoEnums;
+ import android.os.Handler;
+ import android.os.Looper;
+ import android.os.Message;
+@@ -28,7 +27,6 @@
+ 
+ import com.android.internal.annotations.GuardedBy;
+ import com.android.internal.util.FastPrintWriter;
+-import com.android.internal.util.FrameworkStatsLog;
+ 
+ import java.io.FileDescriptor;
+ import java.io.FileOutputStream;
+@@ -44,7 +42,7 @@
+ 
+     // Enable metrics in this process.  The flag may be set false in some processes.  The flag is
+     // never set true at runtime, so setting it false here disables the feature entirely.
+-    private static boolean sEnabled = true;
++    private static boolean sEnabled = false;
+ 
+     // Set true for incremental metrics (the counters are reset after every fetch).  Set false for
+     // cumulative metrics (the counters are never reset and accumulate values for the lifetime of
+@@ -100,7 +98,7 @@
+         int[] percentile;
+         @Override
+         public String toString() {
+-            return TextUtils.formatSimple("%d:%d:%d:%d", count, total, mintime, maxtime);
++            return String.format("%d:%d:%d:%d", count, total, mintime, maxtime);
+         }
+     }
+ 
+@@ -110,13 +108,6 @@
+     @GuardedBy("sLock")
+     private static Config sConfig;
+ 
+-    /**
+-     * This array contains the statsd enum associated with each timer entry.  A value of NONE (0)
+-     * means that the entry should not be logged to statsd.  (This would be the case for timers
+-     * that are created for temporary debugging.)
+-     */
+-    @GuardedBy("sLock")
+-    private static int[] sApiMap;
+ 
+     /**
+      * A singleton Summary object that is refilled from the native side.  The length of the array
+@@ -176,17 +167,6 @@
+             // Map the values returned from the runtime to statsd enumerals  The runtime may
+             // return timers that are not meant to be logged via statsd.  Such timers are mapped
+             // to RESOURCE_API_NONE.
+-            sApiMap = new int[sConfig.maxTimer];
+-            for (int i = 0; i < sApiMap.length; i++) {
+-                if (sConfig.timers[i].equals("GetResourceValue")) {
+-                    sApiMap[i] = AppProtoEnums.RESOURCE_API_GET_VALUE;
+-                } else if (sConfig.timers[i].equals("RetrieveAttributes")) {
+-                    sApiMap[i] = AppProtoEnums.RESOURCE_API_RETRIEVE_ATTRIBUTES;
+-                } else {
+-                    sApiMap[i] = AppProtoEnums.RESOURCE_API_NONE;
+-                }
+-            }
+-
+             sCurrentPoint = 0;
+             startTimer();
+         }
+@@ -248,17 +228,8 @@
+         for (int i = 0; i < sTimers.length; i++) {
+             var timer = sTimers[i];
+             if (timer.count > 0) {
+-                Log.i(TAG, TextUtils.formatSimple("%s count=%d pvalues=%s",
++                Log.i(TAG, String.format("%s count=%d pvalues=%s",
+                                 sConfig.timers[i], timer.count, packedString(timer.percentile)));
+-                if (sApiMap[i] != AppProtoEnums.RESOURCE_API_NONE) {
+-                    FrameworkStatsLog.write(FrameworkStatsLog.RESOURCE_API_INFO,
+-                            sApiMap[i],
+-                            timer.count, timer.total,
+-                            timer.percentile[0], timer.percentile[1],
+-                            timer.percentile[2], timer.percentile[3],
+-                            timer.largest[0], timer.largest[1], timer.largest[2],
+-                            timer.largest[3], timer.largest[4]);
+-                }
+             }
+         }
+         sCurrentPoint++;

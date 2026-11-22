@@ -1,0 +1,119 @@
+--- a/frameworks/base/core/java/android/content/res/AssetManager.java
++++ b/frameworks/base/core/java/android/content/res/AssetManager.java
+@@ -1257,18 +1257,14 @@
+     }
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    @RavenwoodReplace
+     void applyStyle(long themePtr, @AttrRes int defStyleAttr, @StyleRes int defStyleRes,
+-            @Nullable XmlBlock.Parser parser, @NonNull int[] inAttrs, long outValuesAddress,
+-            long outIndicesAddress) {
++            @Nullable XmlBlock.Parser parser, @NonNull int[] inAttrs, int[] outValues,
++            int[] outIndices) {
+         Objects.requireNonNull(inAttrs, "inAttrs");
+         synchronized (this) {
+-            // Need to synchronize on AssetManager because we will be accessing
+-            // the native implementation of AssetManager.
+-            ensureValidLocked();
+-            nativeApplyStyle(mObject, themePtr, defStyleAttr, defStyleRes,
+-                    parser != null ? parser.mParseState : 0, inAttrs, outValuesAddress,
+-                    outIndicesAddress);
++            ensureValidLocked();
++            nativeApplyStyleWithArray(mObject, themePtr, defStyleAttr, defStyleRes,
++                    parser != null ? parser.mParseState : 0, inAttrs, outValues, outIndices);
+         }
+     }
+ 
+@@ -1835,35 +1831,7 @@
+     @UnsupportedAppUsage
+     public static native int getGlobalAssetManagerCount();
+ 
+-    // Ravenwood Workarounds
+-
+-    /**
+-     * ART has explicit support for allocating pinned (non-movable) array objects.
+-     * On Ravenwood we allocate regular arrays and use critical array access in
+-     * JNI as a best effort to reduce memory copying.
+-     * TODO(b/359983716): Remove when Ravenwood switch to ART
+-     */
+-    void applyStyle$ravenwood(long themePtr, @AttrRes int defStyleAttr, @StyleRes int defStyleRes,
+-            @Nullable XmlBlock.Parser parser, @NonNull int[] inAttrs, long outValuesAddress,
+-            long outIndicesAddress) {
+-        Objects.requireNonNull(inAttrs, "inAttrs");
+-        var runtime = RavenwoodHelperBridge.getInstance();
+-        final int[] outValues = runtime.fromAddress(outValuesAddress);
+-        final int[] outIndices = runtime.fromAddress(outIndicesAddress);
+-        synchronized (this) {
+-            // Need to synchronize on AssetManager because we will be accessing
+-            // the native implementation of AssetManager.
+-            ensureValidLocked();
+-            nativeApplyStyleWithArray(mObject, themePtr, defStyleAttr, defStyleRes,
+-                    parser != null ? parser.mParseState : 0, inAttrs, outValues,
+-                    outIndices);
+-        }
+-    }
+-
+-    /**
+-     * A variant of nativeApplyStyle(), accepting java arrays instead of raw pointers.
+-     * TODO(b/359983716): Remove when Ravenwood switch to ART
+-     */
++    // The guest uses managed arrays and the array form of the upstream style JNI.
+     private static native void nativeApplyStyleWithArray(long ptr, long themePtr,
+             @AttrRes int defStyleAttr, @StyleRes int defStyleRes,
+             long xmlParserPtr, @NonNull int[] inAttrs, int[] outData, int[] outIndices);
+--- a/frameworks/base/core/java/android/content/res/TypedArray.java
++++ b/frameworks/base/core/java/android/content/res/TypedArray.java
+@@ -35,8 +35,6 @@
+ 
+ import com.android.internal.util.XmlUtils;
+ 
+-import dalvik.system.VMRuntime;
+-
+ import java.util.Arrays;
+ 
+ /**
+@@ -122,17 +120,8 @@
+      */
+     @UnsupportedAppUsage
+     /*package*/ int[] mData;
+-    /**
+-     * Pointer to the start of the memory address of mData. It is passed via JNI and used to write
+-     * to mData array directly from native code (AttributeResolution.cpp).
+-     */
+-    /*package*/ long mDataAddress;
+     @UnsupportedAppUsage
+     /*package*/ int[] mIndices;
+-    /**
+-     * Similar to mDataAddress, but instead it is a pointer to mIndices address.
+-     */
+-    /*package*/ long mIndicesAddress;
+     @UnsupportedAppUsage
+     /*package*/ int mLength;
+     @UnsupportedAppUsage
+@@ -142,12 +131,9 @@
+         mLength = len;
+         final int dataLen = len * STYLE_NUM_ENTRIES;
+         final int indicesLen = len + 1;
+-        final VMRuntime runtime = VMRuntime.getRuntime();
+-        if (mDataAddress == 0 || mData.length < dataLen) {
+-            mData = (int[]) runtime.newNonMovableArray(int.class, dataLen);
+-            mDataAddress = runtime.addressOf(mData);
+-            mIndices = (int[]) runtime.newNonMovableArray(int.class, indicesLen);
+-            mIndicesAddress = runtime.addressOf(mIndices);
++        if (mData == null || mData.length < dataLen) {
++            mData = new int[dataLen];
++            mIndices = new int[indicesLen];
+         }
+     }
+ 
+--- a/frameworks/base/core/java/android/content/res/ResourcesImpl.java
++++ b/frameworks/base/core/java/android/content/res/ResourcesImpl.java
+@@ -1576,7 +1576,7 @@
+             // contained in the resources and such).
+             final XmlBlock.Parser parser = (XmlBlock.Parser) set;
+             mAssets.applyStyle(mTheme, defStyleAttr, defStyleRes, parser, attrs,
+-                    array.mDataAddress, array.mIndicesAddress);
++                    array.mData, array.mIndices);
+             array.mTheme = wrapper;
+             array.mXml = parser;
+             return array;

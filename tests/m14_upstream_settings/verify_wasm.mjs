@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 
 const [executable, ...inputs] = process.argv.slice(2);
 assert.match(process.version, /^v26\./, 'Node 26 is required');
-assert.equal(inputs.length, 4, 'Expected APK, core and upstream framework DEX, and framework resources');
+assert.equal(inputs.length, 4, 'Expected APK, upstream and compatibility framework DEX, and framework resources');
 const { default: createModule } = await import(pathToFileURL(resolve(executable)).href);
 const { FS, NODEFS, callMain } = await createModule();
 const files = inputs.map((input, index) => {

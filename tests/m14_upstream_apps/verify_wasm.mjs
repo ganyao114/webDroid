@@ -7,7 +7,7 @@ import { Action, FramePacket, Ime, Input, Memory, Op, Ring, Surface, WebViewActi
 import { AndroidInputWriter } from '../../web/surfaceflinger/input_ime.mjs';
 
 const apps = {
-  Settings: ['com.android.settings', 'homepage.SettingsHomepageActivity', 'mipmap/ic_launcher_settings',
+  Settings: ['com.android.settings', 'homepage.SettingsHomepageActivity', 'drawable/themed_icon_settings',
     'Search Settings'],
   DeskClock: ['com.android.deskclock', 'DeskClock', 'mipmap/ic_launcher_alarmclock', 'Clock',
     'com.android.deskclock.DeskClockApplication'],
@@ -70,7 +70,7 @@ function latest(module, memory, scene) {
   }
 }
 
-async function verify(name, path, catalog, createSystem, wasmBinary, core, fallback, resources) {
+async function verify(name, path, catalog, createSystem, wasmBinary, framework, fallback, resources) {
   const [pkg, activity, icon, initialText, application = 'android.app.Application'] = apps[name];
   const file = basename(path);
   const apk = catalog.get(file) ?? await readFile(path);
@@ -99,7 +99,7 @@ async function verify(name, path, catalog, createSystem, wasmBinary, core, fallb
 
   try {
     withString('en-US', locale => call('create', width, height, dpi, locale));
-    withBytes(core, (p, n) => call('load_framework_dex', p, n));
+    withBytes(framework, (p, n) => call('load_framework_dex', p, n));
     withBytes(fallback, (p, n) => call('load_framework_fallback_dex', p, n));
     withBytes(resources, (p, n) => call('set_framework_res_apk', p, n));
     for (const [other, bytes] of catalog) {
@@ -244,16 +244,16 @@ async function verify(name, path, catalog, createSystem, wasmBinary, core, fallb
   }
 }
 
-const [system, corePath, fallbackPath, resourcesPath, apkDir, ...args] = process.argv.slice(2);
+const [system, frameworkPath, fallbackPath, resourcesPath, apkDir, ...args] = process.argv.slice(2);
 assert.equal(process.versions.node.split('.')[0], '26', 'Run this suite with Node 26');
-assert(apkDir, 'usage: node verify_wasm.mjs ANDROID_SYSTEM CORE FALLBACK RES APK_DIR [APP ...]');
+assert(apkDir, 'usage: node verify_wasm.mjs ANDROID_SYSTEM FRAMEWORK FALLBACK RES APK_DIR [APP ...]');
 const { values, positionals: selection } = parseArgs({ args, allowPositionals: true,
   options: { settings: { type: 'string' }, cube: { type: 'string' } } });
 assert.equal(Boolean(values.settings), Boolean(values.cube), 'Pass both Settings and Cube to verify the full catalog');
 const modulePath = resolve(system);
 const { default: createSystem } = await import(pathToFileURL(modulePath));
-const [wasmBinary, core, fallback, resources] = await Promise.all([
-  modulePath.replace(/\.mjs$/, '.wasm'), corePath, fallbackPath, resourcesPath,
+const [wasmBinary, framework, fallback, resources] = await Promise.all([
+  modulePath.replace(/\.mjs$/, '.wasm'), frameworkPath, fallbackPath, resourcesPath,
 ].map(file => readFile(file)));
 
 const paths = Object.fromEntries(Object.keys(apps).filter(name => name !== 'Settings')
@@ -265,7 +265,7 @@ const catalog = new Map(values.settings
 for (const name of selection.length ? selection : Object.keys(paths)) {
   assert(Object.hasOwn(paths, name), `Unknown upstream app ${name}`);
   try {
-    const measured = await verify(name, paths[name], catalog, createSystem, wasmBinary, core, fallback, resources);
+    const measured = await verify(name, paths[name], catalog, createSystem, wasmBinary, framework, fallback, resources);
     console.log(name, JSON.stringify(measured));
   } catch (error) {
     process.exitCode = 1;

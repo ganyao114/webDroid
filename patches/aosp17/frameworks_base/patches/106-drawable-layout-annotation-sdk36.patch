@@ -1,0 +1,73 @@
+--- a/frameworks/base/graphics/java/android/graphics/drawable/AnimatedVectorDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/AnimatedVectorDrawable.java
+@@ -421,7 +421,7 @@
+     }
+ 
+     @Override
+-    public boolean onLayoutDirectionChanged(@View.ResolvedLayoutDir int layoutDirection) {
++    public boolean onLayoutDirectionChanged(int layoutDirection) {
+         return mAnimatedVectorState.mVectorDrawable.setLayoutDirection(layoutDirection);
+     }
+ 
+--- a/frameworks/base/graphics/java/android/graphics/drawable/Drawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/Drawable.java
+@@ -525,7 +525,7 @@
+      *         {@link android.view.View#LAYOUT_DIRECTION_RTL}
+      * @see #setLayoutDirection(int)
+      */
+-    public @View.ResolvedLayoutDir int getLayoutDirection() {
++    public int getLayoutDirection() {
+         return mLayoutDirection;
+     }
+ 
+@@ -542,7 +542,7 @@
+      *         re-drawn, {@code false} otherwise
+      * @see #getLayoutDirection()
+      */
+-    public final boolean setLayoutDirection(@View.ResolvedLayoutDir int layoutDirection) {
++    public final boolean setLayoutDirection(int layoutDirection) {
+         if (mLayoutDirection != layoutDirection) {
+             mLayoutDirection = layoutDirection;
+             return onLayoutDirectionChanged(layoutDirection);
+@@ -559,7 +559,7 @@
+      *         re-drawn, {@code false} otherwise
+      * @see #setLayoutDirection(int)
+      */
+-    public boolean onLayoutDirectionChanged(@View.ResolvedLayoutDir int layoutDirection) {
++    public boolean onLayoutDirectionChanged(int layoutDirection) {
+         return false;
+     }
+ 
+--- a/frameworks/base/graphics/java/android/graphics/drawable/DrawableContainer.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/DrawableContainer.java
+@@ -349,7 +349,7 @@
+     }
+ 
+     @Override
+-    public boolean onLayoutDirectionChanged(@View.ResolvedLayoutDir int layoutDirection) {
++    public boolean onLayoutDirectionChanged(int layoutDirection) {
+         // Let the container handle setting its own layout direction. Otherwise,
+         // we're accessing potentially unused states.
+         return mDrawableContainerState.setLayoutDirection(layoutDirection, getCurrentIndex());
+--- a/frameworks/base/graphics/java/android/graphics/drawable/DrawableWrapper.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/DrawableWrapper.java
+@@ -332,7 +332,7 @@
+     }
+ 
+     @Override
+-    public boolean onLayoutDirectionChanged(@View.ResolvedLayoutDir int layoutDirection) {
++    public boolean onLayoutDirectionChanged(int layoutDirection) {
+         return mDrawable != null && mDrawable.setLayoutDirection(layoutDirection);
+     }
+ 
+--- a/frameworks/base/graphics/java/android/graphics/drawable/LayerDrawable.java
++++ b/frameworks/base/graphics/java/android/graphics/drawable/LayerDrawable.java
+@@ -1811,7 +1811,7 @@
+     }
+ 
+     @Override
+-    public boolean onLayoutDirectionChanged(@View.ResolvedLayoutDir int layoutDirection) {
++    public boolean onLayoutDirectionChanged(int layoutDirection) {
+         boolean changed = false;
+ 
+         final ChildDrawable[] array = mLayerState.mChildren;

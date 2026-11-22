@@ -57,7 +57,7 @@ set(build_command "${Python3_EXECUTABLE}" "${builder}"
     --android-jar "${WA_ANDROID_JAR}" --d8 "${WA_D8_EXECUTABLE}"
     --aidl "${WA_AIDL_EXECUTABLE}" --aapt2 "${WA_AAPT2_EXECUTABLE}"
     --services-classes-jar)
-file(GLOB patches CONFIGURE_DEPENDS "${profile}/*.patch")
+file(GLOB patches CONFIGURE_DEPENDS "${profile}/*.patch" "${profile}/patches/*.patch")
 add_custom_command(OUTPUT ${artifacts}
     COMMAND ${build_command} --depfile "${output}/framework.d"
     DEPENDS "${builder}" "${profile}/sources.txt" ${patches}

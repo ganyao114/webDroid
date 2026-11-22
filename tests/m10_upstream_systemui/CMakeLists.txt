@@ -20,6 +20,8 @@ foreach(tool IN ITEMS aapt2 zipalign apksigner)
 endforeach()
 
 get_target_property(framework_dex aosp17_framework_core WA_FRAMEWORK_DEX)
+get_target_property(upstream_dex aosp17_upstream_framework WA_FRAMEWORK_DEX)
+get_target_property(upstream_res aosp17_upstream_framework WA_FRAMEWORK_RES)
 get_target_property(framework_jar aosp17_framework_core WA_FRAMEWORK_CLASSES)
 if(NOT TARGET wa_upstream_systemui_apk)
     set(wa_launcher_output "${CMAKE_CURRENT_BINARY_DIR}/apk")
@@ -78,6 +80,6 @@ add_test(NAME m10_systemui_zipaligned COMMAND "${WA_ZIPALIGN_EXECUTABLE}" -c -P 
 add_test(NAME m10_systemui_signed COMMAND "${WA_APKSIGNER_EXECUTABLE}" verify "${apk}")
 add_test(NAME m10_systemui_resources COMMAND ${run_systemui_test} resources "${apk}")
 add_test(NAME m10_systemui_dex COMMAND ${run_systemui_test} dex "${apk}")
-add_test(NAME ${runtime_test} COMMAND ${run_systemui_test} runtime "${apk}" "${framework_dex}"
-    "${WA_ANDROID_JAR}" "${fixture_apk}" "${fixture_dex}")
+add_test(NAME ${runtime_test} COMMAND ${run_systemui_test} runtime "${apk}" "${upstream_dex}" "${framework_dex}"
+    "${upstream_res}" "${fixture_apk}" "${fixture_dex}")
 set_tests_properties(${runtime_test} PROPERTIES RUN_SERIAL TRUE)

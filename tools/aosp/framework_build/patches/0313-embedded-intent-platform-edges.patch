@@ -1,0 +1,3498 @@
+--- a/frameworks/base/core/java/android/content/Intent.java
++++ b/frameworks/base/core/java/android/content/Intent.java
+@@ -16,42 +16,19 @@
+ 
+ package android.content;
+ 
+-import static android.content.ContentProvider.maybeAddUserId;
+-import static android.content.flags.Flags.FLAG_STOP_VOICE_COMMAND;
+-import static android.os.Flags.FLAG_ALLOW_PRIVATE_PROFILE;
+-import static android.security.Flags.FLAG_PREVENT_INTENT_REDIRECT;
+-import static android.security.Flags.preventIntentRedirect;
+-import static android.timezone.flags.Flags.FLAG_ENABLE_HOME_TIME_ZONE_API;
+-import static android.timezone.flags.Flags.FLAG_ENABLE_TIME_ZONE_OFFSET_CHANGE_BROADCAST;
+-
+-import static com.android.internal.util.FrameworkStatsLog.IMPLICIT_URI_GRANT_EVENT_REPORTED;
+-import static com.android.internal.util.FrameworkStatsLog.IMPLICIT_URI_GRANT_EVENT_REPORTED__ACCESS_TYPE__READ;
+-import static com.android.internal.util.FrameworkStatsLog.IMPLICIT_URI_GRANT_EVENT_REPORTED__ACCESS_TYPE__WRITE;
+-import static com.android.internal.util.FrameworkStatsLog.IMPLICIT_URI_GRANT_EVENT_REPORTED__ACTION_TYPE__IMAGE_CAPTURE;
+-import static com.android.internal.util.FrameworkStatsLog.IMPLICIT_URI_GRANT_EVENT_REPORTED__ACTION_TYPE__SEND;
+-import static com.android.internal.util.FrameworkStatsLog.IMPLICIT_URI_GRANT_EVENT_REPORTED__ACTION_TYPE__SEND_MULTIPLE;
+-import static com.android.internal.util.FrameworkStatsLog.IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__GRANTED;
+-import static com.android.internal.util.FrameworkStatsLog.IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__RESTRICTED;
++
+ 
+ import android.Manifest;
+ import android.accessibilityservice.AccessibilityService;
+ import android.annotation.AnyRes;
+-import android.annotation.BroadcastBehavior;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.RequiresPermission;
+-import android.annotation.SdkConstant;
+-import android.annotation.SdkConstant.SdkConstantType;
+-import android.annotation.SpecialUsers.CanBeCURRENT;
+ import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+-import android.annotation.UserIdInt;
+ import android.app.Activity;
+-import android.app.ActivityThread;
+-import android.app.AppGlobals;
++import android.app.UiRuntime;
+ import android.app.StatusBarManager;
+ import android.bluetooth.BluetoothDevice;
+ import android.compat.annotation.UnsupportedAppUsage;
+@@ -61,7 +38,6 @@
+ import android.content.pm.PackageManager;
+ import android.content.pm.ResolveInfo;
+ import android.content.pm.ShortcutInfo;
+-import android.content.pm.SuspendDialogInfo;
+ import android.content.pm.verify.domain.DomainVerificationManager;
+ import android.content.res.Resources;
+ import android.content.res.TypedArray;
+@@ -70,20 +46,14 @@
+ import android.os.BadParcelableException;
+ import android.os.Build;
+ import android.os.Bundle;
+-import android.os.BundleMerger;
+ import android.os.CancellationSignal;
+ import android.os.IBinder;
+-import android.os.IncidentManager;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.os.PersistableBundle;
+ import android.os.Process;
+ import android.os.ResultReceiver;
+-import android.os.ShellCommand;
+-import android.os.StrictMode;
+ import android.os.SystemClock;
+ import android.os.UserHandle;
+-import android.os.storage.StorageManager;
+ import android.provider.ContactsContract.QuickContact;
+ import android.provider.DocumentsContract;
+ import android.provider.DocumentsProvider;
+@@ -100,8 +70,6 @@
+ import android.util.Log;
+ import android.util.proto.ProtoOutputStream;
+ 
+-import com.android.internal.util.FrameworkStatsLog;
+-import com.android.internal.util.XmlUtils;
+ 
+ import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+@@ -684,6 +652,21 @@
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class Intent implements Parcelable, Cloneable {
++    // Intents do not cross an Android Binder process boundary in this framework.
++    private static final boolean PREVENT_INTENT_REDIRECT = false;
++
++    // The boot ArraySet exposes capacity and default constructors.
++    static <T> ArraySet<T> copyArraySet(java.util.Collection<T> values) {
++        ArraySet<T> copy = new ArraySet<>(values.size());
++        for (T value : values) copy.add(value);
++        return copy;
++    }
++
++    private static String currentPackageName() {
++        Activity activity = UiRuntime.getActivity();
++        return activity == null ? null : activity.getPackageName();
++    }
++
+     private static final String TAG = "Intent";
+     private static final String ATTR_ACTION = "action";
+     private static final String TAG_CATEGORIES = "categories";
+@@ -706,7 +689,6 @@
+      *  <p>Input: nothing
+      *  <p>Output: nothing
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_MAIN = "android.intent.action.MAIN";
+ 
+     /**
+@@ -720,7 +702,6 @@
+      * <p>Input: {@link #getData} is URI from which to retrieve data.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_VIEW = "android.intent.action.VIEW";
+ 
+     /**
+@@ -756,7 +737,6 @@
+      * @see #EXTRA_INDEX
+      * @see #EXTRA_QUICK_VIEW_FEATURES
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_QUICK_VIEW = "android.intent.action.QUICK_VIEW";
+ 
+     /**
+@@ -767,7 +747,6 @@
+      * <p>Input: {@link #getData} is URI of data to be attached.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_ATTACH_DATA = "android.intent.action.ATTACH_DATA";
+ 
+     /**
+@@ -775,7 +754,6 @@
+      * <p>Input: {@link #getData} is URI of data to be edited.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_EDIT = "android.intent.action.EDIT";
+ 
+     /**
+@@ -786,7 +764,6 @@
+      * <p>Output: The URI of the item that was picked.  This must be a content:
+      * URI so that any receiver can access it.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_INSERT_OR_EDIT = "android.intent.action.INSERT_OR_EDIT";
+ 
+     /**
+@@ -795,7 +772,6 @@
+      * (vnd.android.cursor.dir/*) from which to pick an item.
+      * <p>Output: The URI of the item that was picked.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_PICK = "android.intent.action.PICK";
+ 
+     /**
+@@ -819,7 +795,6 @@
+      * @see #EXTRA_TEXT
+      * @see #EXTRA_TIME
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CREATE_REMINDER = "android.intent.action.CREATE_REMINDER";
+ 
+     /**
+@@ -838,7 +813,6 @@
+      * @see #EXTRA_SHORTCUT_ICON_RESOURCE
+      * @see android.content.Intent.ShortcutIconResource
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CREATE_SHORTCUT = "android.intent.action.CREATE_SHORTCUT";
+ 
+     /**
+@@ -880,7 +854,6 @@
+      * An activity that provides a user interface for adjusting application preferences.
+      * Optional but recommended settings for all applications which have settings.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_APPLICATION_PREFERENCES
+             = "android.intent.action.APPLICATION_PREFERENCES";
+ 
+@@ -893,7 +866,6 @@
+      * to be displayed.
+      * <p>Output: Nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SHOW_APP_INFO
+             = "android.intent.action.SHOW_APP_INFO";
+ 
+@@ -908,7 +880,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.SERVICE_ACTION)
+     public static final String ACTION_ACTIVITY_RECOGNIZER =
+             "android.intent.action.ACTIVITY_RECOGNIZER";
+ 
+@@ -937,7 +908,7 @@
+         boolean isForeign = (intent.mLocalFlags & LOCAL_FLAG_FROM_PARCEL) != 0;
+         boolean isWithoutTrustedCreatorToken =
+                 (intent.mLocalFlags & Intent.LOCAL_FLAG_TRUSTED_CREATOR_TOKEN_PRESENT) == 0;
+-        if (isForeign && isWithoutTrustedCreatorToken && preventIntentRedirect()) {
++        if (isForeign && isWithoutTrustedCreatorToken && PREVENT_INTENT_REDIRECT) {
+             intent.addExtendedFlags(EXTENDED_FLAG_MISSING_CREATOR_OR_INVALID_TOKEN);
+         }
+     }
+@@ -1059,7 +1030,6 @@
+      * <p>
+      * Output: Depends on the protocol of {@link #EXTRA_INTENT}.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CHOOSER = "android.intent.action.CHOOSER";
+ 
+     /**
+@@ -1199,7 +1169,6 @@
+      * Output: The URI of the item that was picked.  This must be a content:
+      * URI so that any receiver can access it.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_GET_CONTENT = "android.intent.action.GET_CONTENT";
+     /**
+      * Activity Action: Dial a number as specified by the data.  This shows a
+@@ -1210,7 +1179,6 @@
+      * number.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_DIAL = "android.intent.action.DIAL";
+     /**
+      * Activity Action: Perform a call to someone specified by the data.
+@@ -1239,7 +1207,6 @@
+      * permission which is not granted, then attempting to use this action will
+      * result in a {@link java.lang.SecurityException}.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CALL = "android.intent.action.CALL";
+     /**
+      * Activity Action: Perform a call to an emergency number specified by the
+@@ -1256,7 +1223,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CALL_EMERGENCY = "android.intent.action.CALL_EMERGENCY";
+     /**
+      * Activity Action: Dial a emergency number specified by the data.  This shows a
+@@ -1268,7 +1234,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_DIAL_EMERGENCY = "android.intent.action.DIAL_EMERGENCY";
+     /**
+      * Activity action: Perform a call to any number (emergency or not)
+@@ -1279,7 +1244,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CALL_PRIVILEGED = "android.intent.action.CALL_PRIVILEGED";
+ 
+     /**
+@@ -1289,14 +1253,12 @@
+      * {@link android.telephony.TelephonyManager#hasCarrierPrivileges() carrier privileges} to
+      * fulfill their duties.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CARRIER_SETUP = "android.intent.action.CARRIER_SETUP";
+     /**
+      * Activity Action: Send a message to someone specified by the data.
+      * <p>Input: {@link #getData} is URI describing the target.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SENDTO = "android.intent.action.SENDTO";
+     /**
+      * Activity Action: Deliver some data to someone else.  Who the data is
+@@ -1339,7 +1301,6 @@
+      * <p>
+      * Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SEND = "android.intent.action.SEND";
+     /**
+      * Activity Action: Deliver multiple data to someone else.
+@@ -1383,14 +1344,12 @@
+      * <p>
+      * Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SEND_MULTIPLE = "android.intent.action.SEND_MULTIPLE";
+     /**
+      * Activity Action: Handle an incoming phone call.
+      * <p>Input: nothing.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_ANSWER = "android.intent.action.ANSWER";
+     /**
+      * Activity Action: Insert an empty item into the given container.
+@@ -1398,7 +1357,6 @@
+      * in which to place the data.
+      * <p>Output: URI of the new data that was created.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_INSERT = "android.intent.action.INSERT";
+     /**
+      * Activity Action: Create a new item in the given container, initializing it
+@@ -1407,28 +1365,24 @@
+      * in which to place the data.
+      * <p>Output: URI of the new data that was created.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_PASTE = "android.intent.action.PASTE";
+     /**
+      * Activity Action: Delete the given data from its container.
+      * <p>Input: {@link #getData} is URI of data to be deleted.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_DELETE = "android.intent.action.DELETE";
+     /**
+      * Activity Action: Run the data, whatever that means.
+      * <p>Input: ?  (Note: this is currently specific to the test harness.)
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_RUN = "android.intent.action.RUN";
+     /**
+      * Activity Action: Perform a data synchronization.
+      * <p>Input: ?
+      * <p>Output: ?
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SYNC = "android.intent.action.SYNC";
+     /**
+      * Activity Action: Pick an activity given an intent, returning the class
+@@ -1438,7 +1392,6 @@
+      * set of activities from which to pick.
+      * <p>Output: Class name of the activity that was selected.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_PICK_ACTIVITY = "android.intent.action.PICK_ACTIVITY";
+     /**
+      * Activity Action: Perform a search.
+@@ -1447,7 +1400,6 @@
+      * enter your search results Activity with the search UI activated.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SEARCH = "android.intent.action.SEARCH";
+     /**
+      * Activity Action: Start the platform-defined tutorial
+@@ -1456,7 +1408,6 @@
+      * enter your search results Activity with the search UI activated.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SYSTEM_TUTORIAL = "android.intent.action.SYSTEM_TUTORIAL";
+     /**
+      * Activity Action: Perform a web search.
+@@ -1468,7 +1419,6 @@
+      * <p>
+      * Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_WEB_SEARCH = "android.intent.action.WEB_SEARCH";
+ 
+     /**
+@@ -1480,7 +1430,6 @@
+      * information.
+      * Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_ASSIST = "android.intent.action.ASSIST";
+ 
+     /**
+@@ -1493,7 +1442,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_VOICE_ASSIST = "android.intent.action.VOICE_ASSIST";
+ 
+     /**
+@@ -1537,7 +1485,6 @@
+      * that should be used to invoke the assist. If not set, invoke the assist on the default
+      * display is suggested.
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_ASSIST_DISPLAY_ID_PUBLIC)
+     public static final String EXTRA_ASSIST_DISPLAY_ID =
+             "android.intent.extra.ASSIST_DISPLAY_ID";
+ 
+@@ -1546,7 +1493,6 @@
+      * <p>Input: Nothing.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_ALL_APPS = "android.intent.action.ALL_APPS";
+ 
+     /**
+@@ -1556,7 +1502,6 @@
+      * <p>Input: Nothing.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SHOW_WORK_APPS =
+             "android.intent.action.SHOW_WORK_APPS";
+ 
+@@ -1565,7 +1510,6 @@
+      * <p>Input: Nothing.
+      * <p>Output: Nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SET_WALLPAPER = "android.intent.action.SET_WALLPAPER";
+ 
+     /**
+@@ -1573,7 +1517,6 @@
+      * <p>Input: Nothing.
+      * <p>Output: Nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_BUG_REPORT = "android.intent.action.BUG_REPORT";
+ 
+     /**
+@@ -1583,7 +1526,6 @@
+      *  <p>Input: nothing
+      *  <p>Output: nothing
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_FACTORY_TEST = "android.intent.action.FACTORY_TEST";
+ 
+     /**
+@@ -1592,7 +1534,6 @@
+      * <p>Input: Nothing.
+      * <p>Output: Nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CALL_BUTTON = "android.intent.action.CALL_BUTTON";
+ 
+     /**
+@@ -1649,7 +1590,6 @@
+      * In some cases, a matching Activity may not exist, so ensure you
+      * safeguard against this.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_VOICE_COMMAND = "android.intent.action.VOICE_COMMAND";
+ 
+     /**
+@@ -1677,9 +1617,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @FlaggedApi(FLAG_STOP_VOICE_COMMAND)
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(includeBackground = true)
+     public static final String ACTION_STOP_VOICE_COMMAND
+             = "android.intent.action.STOP_VOICE_COMMAND";
+ 
+@@ -1689,7 +1626,6 @@
+      * <p>Input: Nothing.
+      * <p>Output: Nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SEARCH_LONG_PRESS = "android.intent.action.SEARCH_LONG_PRESS";
+ 
+     /**
+@@ -1702,7 +1638,6 @@
+      *
+      * @see #EXTRA_BUG_REPORT
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_APP_ERROR = "android.intent.action.APP_ERROR";
+ 
+     /**
+@@ -1740,7 +1675,6 @@
+      * <p>Input: Nothing.
+      * <p>Output: Nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_POWER_USAGE_SUMMARY = "android.intent.action.POWER_USAGE_SUMMARY";
+ 
+     /**
+@@ -1770,7 +1704,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_UPGRADE_SETUP = "android.intent.action.UPGRADE_SETUP";
+ 
+     /**
+@@ -1779,7 +1712,6 @@
+      * <p>Output: Nothing.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_SHOW_KEYBOARD_SHORTCUTS =
+             "com.android.intent.action.SHOW_KEYBOARD_SHORTCUTS";
+ 
+@@ -1789,7 +1721,6 @@
+      * <p>Output: Nothing.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_DISMISS_KEYBOARD_SHORTCUTS =
+             "com.android.intent.action.DISMISS_KEYBOARD_SHORTCUTS";
+ 
+@@ -1798,7 +1729,6 @@
+      * specific application. Applications should define an activity that offers
+      * options to control data usage.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_MANAGE_NETWORK_USAGE =
+             "android.intent.action.MANAGE_NETWORK_USAGE";
+ 
+@@ -1827,7 +1757,6 @@
+      * @deprecated use {@link android.content.pm.PackageInstaller} instead
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_INSTALL_PACKAGE = "android.intent.action.INSTALL_PACKAGE";
+ 
+     /**
+@@ -1843,7 +1772,6 @@
+      * Input: {@link #EXTRA_INTENT} the original intent that started split installation.
+      * {@link #EXTRA_SPLIT_NAME} the name of the split that failed to be installed.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_INSTALL_FAILURE = "android.intent.action.INSTALL_FAILURE";
+ 
+     /**
+@@ -1855,7 +1783,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_INSTALL_INSTANT_APP_PACKAGE
+             = "android.intent.action.INSTALL_INSTANT_APP_PACKAGE";
+ 
+@@ -1869,7 +1796,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.SERVICE_ACTION)
+     public static final String ACTION_RESOLVE_INSTANT_APP_PACKAGE
+             = "android.intent.action.RESOLVE_INSTANT_APP_PACKAGE";
+ 
+@@ -1883,7 +1809,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_INSTANT_APP_RESOLVER_SETTINGS
+             = "android.intent.action.INSTANT_APP_RESOLVER_SETTINGS";
+ 
+@@ -2000,7 +1925,6 @@
+      *             instead
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_UNINSTALL_PACKAGE = "android.intent.action.UNINSTALL_PACKAGE";
+ 
+     /**
+@@ -2040,7 +1964,6 @@
+      */
+     @Deprecated
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_MANAGE_APP_PERMISSIONS =
+             "android.intent.action.MANAGE_APP_PERMISSIONS";
+ 
+@@ -2074,8 +1997,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(android.Manifest.permission.GRANT_RUNTIME_PERMISSIONS)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_MANAGE_APP_PERMISSION =
+             "android.intent.action.MANAGE_APP_PERMISSION";
+ 
+@@ -2091,7 +2012,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_MANAGE_PERMISSIONS =
+             "android.intent.action.MANAGE_PERMISSIONS";
+ 
+@@ -2109,7 +2029,6 @@
+      * Output: Nothing.
+      * </p>
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_AUTO_REVOKE_PERMISSIONS =
+             "android.intent.action.AUTO_REVOKE_PERMISSIONS";
+ 
+@@ -2123,7 +2042,6 @@
+      * Output: Nothing.
+      * </p>
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_MANAGE_UNUSED_APPS =
+             "android.intent.action.MANAGE_UNUSED_APPS";
+ 
+@@ -2161,7 +2079,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_REVIEW_PERMISSIONS =
+             "android.intent.action.REVIEW_PERMISSIONS";
+ 
+@@ -2185,8 +2102,6 @@
+      * Output: Nothing.
+      * </p>
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+-    @RequiresPermission(android.Manifest.permission.START_VIEW_PERMISSION_USAGE)
+     public static final String ACTION_VIEW_PERMISSION_USAGE =
+             "android.intent.action.VIEW_PERMISSION_USAGE";
+ 
+@@ -2219,8 +2134,6 @@
+      * Output: Nothing.
+      * </p>
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+-    @RequiresPermission(android.Manifest.permission.START_VIEW_PERMISSION_USAGE)
+     public static final String ACTION_VIEW_PERMISSION_USAGE_FOR_PERIOD =
+             "android.intent.action.VIEW_PERMISSION_USAGE_FOR_PERIOD";
+ 
+@@ -2237,8 +2150,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+-    @RequiresPermission(Manifest.permission.MANAGE_SENSOR_PRIVACY)
+     public static final String ACTION_VIEW_SAFETY_CENTER_QS =
+             "android.intent.action.VIEW_SAFETY_CENTER_QS";
+ 
+@@ -2254,8 +2165,6 @@
+      *
+      * @hide
+      */
+-    @RequiresPermission(android.Manifest.permission.MANAGE_ROLE_HOLDERS)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     @SystemApi
+     public static final String ACTION_MANAGE_DEFAULT_APP =
+             "android.intent.action.MANAGE_DEFAULT_APP";
+@@ -2284,8 +2193,6 @@
+      *
+      * @hide
+      */
+-    @RequiresPermission(android.Manifest.permission.MANAGE_ROLE_HOLDERS)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     @SystemApi
+     public static final String ACTION_MANAGE_SPECIAL_APP_ACCESSES =
+             "android.intent.action.MANAGE_SPECIAL_APP_ACCESSES";
+@@ -2388,7 +2295,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_MANAGE_PERMISSION_APPS =
+             "android.intent.action.MANAGE_PERMISSION_APPS";
+ 
+@@ -2451,8 +2357,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(android.Manifest.permission.GRANT_RUNTIME_PERMISSIONS)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_REVIEW_PERMISSION_USAGE =
+             "android.intent.action.REVIEW_PERMISSION_USAGE";
+ 
+@@ -2474,8 +2378,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(android.Manifest.permission.GRANT_RUNTIME_PERMISSIONS)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_REVIEW_PERMISSION_HISTORY =
+             "android.intent.action.REVIEW_PERMISSION_HISTORY";
+ 
+@@ -2497,8 +2399,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(android.Manifest.permission.GRANT_RUNTIME_PERMISSIONS)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_REVIEW_ONGOING_PERMISSION_USAGE =
+             "android.intent.action.REVIEW_ONGOING_PERMISSION_USAGE";
+ 
+@@ -2514,8 +2414,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(android.Manifest.permission.REVIEW_ACCESSIBILITY_SERVICES)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_REVIEW_ACCESSIBILITY_SERVICES =
+             "android.intent.action.REVIEW_ACCESSIBILITY_SERVICES";
+ 
+@@ -2555,8 +2453,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(android.Manifest.permission.START_VIEW_PERMISSION_USAGE)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_MANAGE_PERMISSION_USAGE =
+             "android.intent.action.MANAGE_PERMISSION_USAGE";
+ 
+@@ -2579,8 +2475,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(android.Manifest.permission.START_VIEW_APP_FEATURES)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_VIEW_APP_FEATURES =
+             "android.intent.action.VIEW_APP_FEATURES";
+ 
+@@ -2588,7 +2482,6 @@
+      * Activity action: Launch UI to open the Safety Center, which highlights the user's security
+      * and privacy status.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SAFETY_CENTER =
+             "android.intent.action.SAFETY_CENTER";
+ 
+@@ -2611,8 +2504,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(Manifest.permission.GRANT_RUNTIME_PERMISSIONS)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_REVIEW_APP_DATA_SHARING_UPDATES =
+             "android.intent.action.REVIEW_APP_DATA_SHARING_UPDATES";
+ 
+@@ -2641,7 +2532,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_SCREEN_OFF = "android.intent.action.SCREEN_OFF";
+ 
+     /**
+@@ -2665,7 +2555,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_SCREEN_ON = "android.intent.action.SCREEN_ON";
+ 
+     /**
+@@ -2674,7 +2563,6 @@
+      * <p class="note">This is a protected intent that can only be sent by the system.
+      * It is only sent to registered receivers.</p>
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_DREAMING_STOPPED = "android.intent.action.DREAMING_STOPPED";
+ 
+     /**
+@@ -2683,7 +2571,6 @@
+      * <p class="note">This is a protected intent that can only be sent by the system.
+      * It is only sent to registered receivers.</p>
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_DREAMING_STARTED = "android.intent.action.DREAMING_STARTED";
+ 
+     /**
+@@ -2693,7 +2580,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_USER_PRESENT = "android.intent.action.USER_PRESENT";
+ 
+     /**
+@@ -2706,17 +2592,14 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_TIME_TICK = "android.intent.action.TIME_TICK";
+     /**
+      * Broadcast Action: The time was set.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_TIME_CHANGED = "android.intent.action.TIME_SET";
+     /**
+      * Broadcast Action: The date has changed.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_DATE_CHANGED = "android.intent.action.DATE_CHANGED";
+     /**
+      * Broadcast Action: The timezone has changed. The intent will have the following extra values:</p>
+@@ -2728,7 +2611,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_TIMEZONE_CHANGED = "android.intent.action.TIMEZONE_CHANGED";
+ 
+     /**
+@@ -2743,9 +2625,6 @@
+      *
+      * <p class="note">This is a protected intent that can only be sent by the system.
+      */
+-    @FlaggedApi(FLAG_ENABLE_TIME_ZONE_OFFSET_CHANGE_BROADCAST)
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(includeBackground = true, protectedBroadcast = true)
+     public static final String ACTION_TIMEZONE_OFFSET_CHANGED =
+             "android.intent.action.TIMEZONE_OFFSET_CHANGED";
+ 
+@@ -2759,9 +2638,6 @@
+      *
+      * <p class="note">This is a protected intent that can only be sent by the system.
+      */
+-    @FlaggedApi(FLAG_ENABLE_HOME_TIME_ZONE_API)
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(includeBackground = true, protectedBroadcast = true)
+     public static final String ACTION_HOME_TIME_ZONE_CHANGED =
+             "android.intent.action.HOME_TIME_ZONE_CHANGED";
+ 
+@@ -2771,7 +2647,6 @@
+      * AlarmClock application and the StatusBar service.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public static final String ACTION_ALARM_CHANGED = "android.intent.action.ALARM_CHANGED";
+ 
+@@ -2805,7 +2680,6 @@
+      *
+      * @see Context#createDeviceProtectedStorageContext()
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_LOCKED_BOOT_COMPLETED = "android.intent.action.LOCKED_BOOT_COMPLETED";
+ 
+     /**
+@@ -2833,8 +2707,6 @@
+      *
+      * This is a protected intent that can only be sent by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(includeBackground = true)
+     public static final String ACTION_BOOT_COMPLETED = "android.intent.action.BOOT_COMPLETED";
+ 
+     /**
+@@ -2853,8 +2725,6 @@
+      *
+      * @see AccessibilityService#GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @RequiresPermission(android.Manifest.permission.BROADCAST_CLOSE_SYSTEM_DIALOGS)
+     @Deprecated
+     public static final String ACTION_CLOSE_SYSTEM_DIALOGS = "android.intent.action.CLOSE_SYSTEM_DIALOGS";
+     /**
+@@ -2868,7 +2738,6 @@
+      * @deprecated This constant has never been used.
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_INSTALL = "android.intent.action.PACKAGE_INSTALL";
+     /**
+      * Broadcast Action: A new application package has been installed on the
+@@ -2884,7 +2753,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_ADDED = "android.intent.action.PACKAGE_ADDED";
+     /**
+      * Broadcast Action: A new version of an application package has been
+@@ -2898,7 +2766,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_REPLACED = "android.intent.action.PACKAGE_REPLACED";
+     /**
+      * Broadcast Action: A new version of your application has been installed
+@@ -2909,7 +2776,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MY_PACKAGE_REPLACED = "android.intent.action.MY_PACKAGE_REPLACED";
+     /**
+      * Broadcast Action: An existing application package has been removed from
+@@ -2929,7 +2795,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_REMOVED = "android.intent.action.PACKAGE_REMOVED";
+     /**
+      * Broadcast Action: An existing application package has been removed from
+@@ -2954,7 +2819,6 @@
+      *
+      * @hide This broadcast is used internally by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_REMOVED_INTERNAL =
+             "android.intent.action.PACKAGE_REMOVED_INTERNAL";
+     /**
+@@ -2972,7 +2836,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_FULLY_REMOVED
+             = "android.intent.action.PACKAGE_FULLY_REMOVED";
+     /**
+@@ -2990,7 +2853,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_CHANGED = "android.intent.action.PACKAGE_CHANGED";
+ 
+     /**
+@@ -3013,7 +2875,6 @@
+      * @see ApplicationInfo#FLAG_STOPPED
+      * @see #ACTION_PACKAGE_RESTARTED
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_UNSTOPPED = "android.intent.action.PACKAGE_UNSTOPPED";
+ 
+     /**
+@@ -3025,7 +2886,6 @@
+      *
+      * @hide This broadcast is used internally by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_ENABLE_ROLLBACK =
+             "android.intent.action.PACKAGE_ENABLE_ROLLBACK";
+     /**
+@@ -3037,7 +2897,6 @@
+      *
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_CANCEL_ENABLE_ROLLBACK =
+             "android.intent.action.CANCEL_ENABLE_ROLLBACK";
+     /**
+@@ -3049,7 +2908,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_ROLLBACK_COMMITTED =
+             "android.intent.action.ROLLBACK_COMMITTED";
+     /**
+@@ -3066,7 +2924,6 @@
+      * by the system.
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_QUERY_PACKAGE_RESTART = "android.intent.action.QUERY_PACKAGE_RESTART";
+     /**
+      * Broadcast Action: The user has restarted a package, and all of its
+@@ -3087,7 +2944,6 @@
+      * was restarted, in {@link SystemClock#elapsedRealtime() elapsed realtime}.
+      * </p>
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_RESTARTED = "android.intent.action.PACKAGE_RESTARTED";
+ 
+     /**
+@@ -3108,7 +2964,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_DATA_CLEARED = "android.intent.action.PACKAGE_DATA_CLEARED";
+     /**
+      * Broadcast Action: Packages have been suspended.
+@@ -3121,7 +2976,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system. It is only sent to registered receivers.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGES_SUSPENDED = "android.intent.action.PACKAGES_SUSPENDED";
+     /**
+      * Broadcast Action: Packages have been unsuspended.
+@@ -3134,7 +2988,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system. It is only sent to registered receivers.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGES_UNSUSPENDED = "android.intent.action.PACKAGES_UNSUSPENDED";
+     /**
+      * Broadcast Action: One of the suspend conditions have been modified for the packages.
+@@ -3149,7 +3002,6 @@
+      *
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGES_SUSPENSION_CHANGED =
+             "android.intent.action.PACKAGES_SUSPENSION_CHANGED";
+ 
+@@ -3168,7 +3020,6 @@
+      * @see PackageManager#setDistractingPackageRestrictions(String[], int)
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_DISTRACTING_PACKAGES_CHANGED =
+             "android.intent.action.DISTRACTING_PACKAGES_CHANGED";
+ 
+@@ -3190,7 +3041,6 @@
+      * @see PackageManager#isPackageSuspended()
+      * @see PackageManager#getSuspendedPackageAppExtras()
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MY_PACKAGE_SUSPENDED = "android.intent.action.MY_PACKAGE_SUSPENDED";
+ 
+     /**
+@@ -3216,7 +3066,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SHOW_SUSPENDED_APP_DETAILS =
+             "android.intent.action.SHOW_SUSPENDED_APP_DETAILS";
+ 
+@@ -3244,7 +3093,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_UNSUSPENDED_MANUALLY =
+             "android.intent.action.PACKAGE_UNSUSPENDED_MANUALLY";
+ 
+@@ -3260,7 +3108,6 @@
+      * @see PackageManager#isPackageSuspended()
+      * @see PackageManager#getSuspendedPackageAppExtras()
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MY_PACKAGE_UNSUSPENDED = "android.intent.action.MY_PACKAGE_UNSUSPENDED";
+ 
+     /**
+@@ -3273,7 +3120,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_UID_REMOVED = "android.intent.action.UID_REMOVED";
+ 
+     /**
+@@ -3287,7 +3133,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_FIRST_LAUNCH = "android.intent.action.PACKAGE_FIRST_LAUNCH";
+ 
+     /**
+@@ -3297,7 +3142,6 @@
+      * This is a protected intent that can only be sent by the system.
+      * </p>
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_NEEDS_VERIFICATION = "android.intent.action.PACKAGE_NEEDS_VERIFICATION";
+ 
+     /**
+@@ -3306,7 +3150,6 @@
+      * <p class="note">
+      * This is a protected intent that can only be sent by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_VERIFIED = "android.intent.action.PACKAGE_VERIFIED";
+ 
+     /**
+@@ -3322,7 +3165,6 @@
+      */
+     @Deprecated
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_INTENT_FILTER_NEEDS_VERIFICATION =
+             "android.intent.action.INTENT_FILTER_NEEDS_VERIFICATION";
+ 
+@@ -3337,7 +3179,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_DOMAINS_NEED_VERIFICATION =
+             "android.intent.action.DOMAINS_NEED_VERIFICATION";
+ 
+@@ -3364,7 +3205,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_EXTERNAL_APPLICATIONS_AVAILABLE =
+         "android.intent.action.EXTERNAL_APPLICATIONS_AVAILABLE";
+ 
+@@ -3388,7 +3228,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_EXTERNAL_APPLICATIONS_UNAVAILABLE =
+         "android.intent.action.EXTERNAL_APPLICATIONS_UNAVAILABLE";
+ 
+@@ -3403,7 +3242,6 @@
+      *
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PREFERRED_ACTIVITY_CHANGED =
+             "android.intent.action.ACTION_PREFERRED_ACTIVITY_CHANGED";
+ 
+@@ -3424,7 +3262,7 @@
+      * shown behind their UI, rather than watching for this broadcast and
+      * rendering the wallpaper on their own.
+      */
+-    @Deprecated @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
++    @Deprecated
+     public static final String ACTION_WALLPAPER_CHANGED = "android.intent.action.WALLPAPER_CHANGED";
+     /**
+      * Broadcast Action: The current device {@link android.content.res.Configuration}
+@@ -3447,7 +3285,6 @@
+      *
+      * @see android.content.res.Configuration
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_CONFIGURATION_CHANGED = "android.intent.action.CONFIGURATION_CHANGED";
+ 
+     /**
+@@ -3466,7 +3303,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_SPLIT_CONFIGURATION_CHANGED =
+             "android.intent.action.SPLIT_CONFIGURATION_CHANGED";
+     /**
+@@ -3487,7 +3323,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_LOCALE_CHANGED = "android.intent.action.LOCALE_CHANGED";
+     /**
+      * Broadcast Action: Locale of a particular app has changed.
+@@ -3507,7 +3342,6 @@
+      * <li>{@link #EXTRA_LOCALE_LIST} contains locales that are currently set for specified app
+      * </ul>
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_APPLICATION_LOCALE_CHANGED =
+             "android.intent.action.APPLICATION_LOCALE_CHANGED";
+     /**
+@@ -3529,7 +3363,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_BATTERY_CHANGED = "android.intent.action.BATTERY_CHANGED";
+ 
+ 
+@@ -3555,7 +3388,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_BATTERY_LOW = "android.intent.action.BATTERY_LOW";
+     /**
+      * Broadcast Action:  Indicates the battery is now okay after being low.
+@@ -3565,7 +3397,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_BATTERY_OKAY = "android.intent.action.BATTERY_OKAY";
+     /**
+      * Broadcast Action:  External power has been connected to the device.
+@@ -3577,7 +3408,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_POWER_CONNECTED = "android.intent.action.ACTION_POWER_CONNECTED";
+     /**
+      * Broadcast Action:  External power has been removed from the device.
+@@ -3589,7 +3419,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_POWER_DISCONNECTED =
+             "android.intent.action.ACTION_POWER_DISCONNECTED";
+     /**
+@@ -3609,7 +3438,6 @@
+      * shutdown is only for userspace processes.  If not set, assumed to be false.
+      * </ul>
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_SHUTDOWN = "android.intent.action.ACTION_SHUTDOWN";
+     /**
+      * Activity Action:  Start this activity to request system shutdown.
+@@ -3638,7 +3466,6 @@
+      *             {@link Context#getCacheDir()} behavior so the system can
+      *             automatically free up storage when needed.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     @Deprecated
+     public static final String ACTION_DEVICE_STORAGE_LOW = "android.intent.action.DEVICE_STORAGE_LOW";
+     /**
+@@ -3654,7 +3481,6 @@
+      *             {@link Context#getCacheDir()} behavior so the system can
+      *             automatically free up storage when needed.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     @Deprecated
+     public static final String ACTION_DEVICE_STORAGE_OK = "android.intent.action.DEVICE_STORAGE_OK";
+     /**
+@@ -3673,7 +3499,6 @@
+      *             automatically free up storage when needed.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     @Deprecated
+     public static final String ACTION_DEVICE_STORAGE_FULL = "android.intent.action.DEVICE_STORAGE_FULL";
+     /**
+@@ -3690,7 +3515,6 @@
+      *             automatically free up storage when needed.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     @Deprecated
+     public static final String ACTION_DEVICE_STORAGE_NOT_FULL = "android.intent.action.DEVICE_STORAGE_NOT_FULL";
+     /**
+@@ -3699,7 +3523,6 @@
+      * This is triggered by the user from the ACTION_DEVICE_STORAGE_LOW
+      * notification.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MANAGE_PACKAGE_STORAGE = "android.intent.action.MANAGE_PACKAGE_STORAGE";
+     /**
+      * Broadcast Action:  The device has entered USB Mass Storage mode.
+@@ -3709,7 +3532,6 @@
+      * @deprecated replaced by android.os.storage.StorageEventListener
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_UMS_CONNECTED = "android.intent.action.UMS_CONNECTED";
+ 
+     /**
+@@ -3720,35 +3542,30 @@
+      * @deprecated replaced by android.os.storage.StorageEventListener
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_UMS_DISCONNECTED = "android.intent.action.UMS_DISCONNECTED";
+ 
+     /**
+      * Broadcast Action:  External media has been removed.
+      * The path to the mount point for the removed media is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_REMOVED = "android.intent.action.MEDIA_REMOVED";
+ 
+     /**
+      * Broadcast Action:  External media is present, but not mounted at its mount point.
+      * The path to the mount point for the unmounted media is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_UNMOUNTED = "android.intent.action.MEDIA_UNMOUNTED";
+ 
+     /**
+      * Broadcast Action:  External media is present, and being disk-checked
+      * The path to the mount point for the checking media is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_CHECKING = "android.intent.action.MEDIA_CHECKING";
+ 
+     /**
+      * Broadcast Action:  External media is present, but is using an incompatible fs (or is blank)
+      * The path to the mount point for the checking media is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_NOFS = "android.intent.action.MEDIA_NOFS";
+ 
+     /**
+@@ -3757,14 +3574,12 @@
+      * The Intent contains an extra with name "read-only" and Boolean value to indicate if the
+      * media was mounted read only.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_MOUNTED = "android.intent.action.MEDIA_MOUNTED";
+ 
+     /**
+      * Broadcast Action:  External media is unmounted because it is being shared via USB mass storage.
+      * The path to the mount point for the shared media is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_SHARED = "android.intent.action.MEDIA_SHARED";
+ 
+     /**
+@@ -3779,14 +3594,12 @@
+      * Broadcast Action:  External media was removed from SD card slot, but mount point was not unmounted.
+      * The path to the mount point for the removed media is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_BAD_REMOVAL = "android.intent.action.MEDIA_BAD_REMOVAL";
+ 
+     /**
+      * Broadcast Action:  External media is present but cannot be mounted.
+      * The path to the mount point for the unmountable media is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_UNMOUNTABLE = "android.intent.action.MEDIA_UNMOUNTABLE";
+ 
+     /**
+@@ -3794,21 +3607,18 @@
+      * Applications should close all files they have open within the mount point when they receive this intent.
+      * The path to the mount point for the media to be ejected is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_EJECT = "android.intent.action.MEDIA_EJECT";
+ 
+     /**
+      * Broadcast Action:  The media scanner has started scanning a directory.
+      * The path to the directory being scanned is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_SCANNER_STARTED = "android.intent.action.MEDIA_SCANNER_STARTED";
+ 
+     /**
+      * Broadcast Action:  The media scanner has finished scanning a directory.
+      * The path to the scanned directory is contained in the Intent.mData field.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_SCANNER_FINISHED = "android.intent.action.MEDIA_SCANNER_FINISHED";
+ 
+     /**
+@@ -3821,7 +3631,6 @@
+      *             {@link MediaStore}, where they will be automatically scanned
+      *             after each mutation.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     @Deprecated
+     public static final String ACTION_MEDIA_SCANNER_SCAN_FILE = "android.intent.action.MEDIA_SCANNER_SCAN_FILE";
+ 
+@@ -3830,7 +3639,6 @@
+      * extra field, {@link #EXTRA_KEY_EVENT}, containing the key event that
+      * caused the broadcast.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_MEDIA_BUTTON = "android.intent.action.MEDIA_BUTTON";
+ 
+     /**
+@@ -3838,7 +3646,6 @@
+      * extra field, {@link #EXTRA_KEY_EVENT}, containing the key event that
+      * caused the broadcast.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_CAMERA_BUTTON = "android.intent.action.CAMERA_BUTTON";
+ 
+     // *** NOTE: @todo(*) The following really should go into a more domain-specific
+@@ -3847,21 +3654,18 @@
+     /**
+      * Broadcast Action: A GTalk connection has been established.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_GTALK_SERVICE_CONNECTED =
+             "android.intent.action.GTALK_CONNECTED";
+ 
+     /**
+      * Broadcast Action: A GTalk connection has been disconnected.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_GTALK_SERVICE_DISCONNECTED =
+             "android.intent.action.GTALK_DISCONNECTED";
+ 
+     /**
+      * Broadcast Action: An input method has been changed.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_INPUT_METHOD_CHANGED =
+             "android.intent.action.INPUT_METHOD_CHANGED";
+ 
+@@ -3876,7 +3680,6 @@
+      *
+      * <p class="note">This is a protected intent that can only be sent by the system.</p>
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_AIRPLANE_MODE_CHANGED = "android.intent.action.AIRPLANE_MODE";
+ 
+     /**
+@@ -3905,7 +3708,6 @@
+      * sync operation in which a message is archived). The phone should still
+      * ring/vibrate/etc as normal in this case.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PROVIDER_CHANGED =
+             "android.intent.action.PROVIDER_CHANGED";
+ 
+@@ -3918,7 +3720,6 @@
+      * {@link android.os.Build.VERSION_CODES#LOLLIPOP}, it is recommended to refer
+      * to the <code>AudioManager</code> constant in your receiver registration code instead.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_HEADSET_PLUG = android.media.AudioManager.ACTION_HEADSET_PLUG;
+ 
+     /**
+@@ -3942,7 +3743,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.</p>
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_APPLICATION_RESTRICTIONS_CHANGED =
+             "android.intent.action.APPLICATION_RESTRICTIONS_CHANGED";
+ 
+@@ -4010,7 +3810,6 @@
+      * outgoing call is placed.
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_NEW_OUTGOING_CALL =
+             "android.intent.action.NEW_OUTGOING_CALL";
+ 
+@@ -4021,7 +3820,6 @@
+      * <p class="note">This is a protected intent that can only be sent
+      * by the system.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_REBOOT =
+             "android.intent.action.REBOOT";
+ 
+@@ -4038,7 +3836,6 @@
+      * See {@link android.app.UiModeManager} for the normal API dealing with
+      * dock mode changes.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_DOCK_EVENT =
+             "android.intent.action.DOCK_EVENT";
+ 
+@@ -4068,7 +3865,6 @@
+      *
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_IDLE_MAINTENANCE_START =
+             "android.intent.action.ACTION_IDLE_MAINTENANCE_START";
+ 
+@@ -4097,7 +3893,6 @@
+      *
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_IDLE_MAINTENANCE_END =
+             "android.intent.action.ACTION_IDLE_MAINTENANCE_END";
+ 
+@@ -4114,8 +3909,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(protectedBroadcast = true)
+     public static final String
+             ACTION_MAIN_USER_LOCKSCREEN_KNOWLEDGE_FACTOR_CHANGED =
+             "android.intent.action.MAIN_USER_LOCKSCREEN_KNOWLEDGE_FACTOR_CHANGED";
+@@ -4357,7 +4150,6 @@
+      * regardless of which broadcast you receive. Because of that, receivers should always check
+      * the current state of the user.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_USER_UNLOCKED = "android.intent.action.USER_UNLOCKED";
+ 
+     /**
+@@ -4376,7 +4168,6 @@
+      * This is only sent to permission protected manifest receivers. It is sent to all users.
+      * @hide
+      */
+-    @BroadcastBehavior(includeBackground = true)
+     public static final String ACTION_USER_INFO_CHANGED_BACKGROUND =
+             "android.intent.action.USER_INFO_CHANGED_BACKGROUND";
+ 
+@@ -4445,7 +4236,6 @@
+      * case of a managed profile, both {@link #ACTION_MANAGED_PROFILE_AVAILABLE} and
+      * {@link #ACTION_PROFILE_AVAILABLE} broadcasts are sent.
+      */
+-    @FlaggedApi(FLAG_ALLOW_PRIVATE_PROFILE)
+     public static final String ACTION_PROFILE_AVAILABLE =
+             "android.intent.action.PROFILE_AVAILABLE";
+ 
+@@ -4461,7 +4251,6 @@
+      * case of a managed profile, both {@link #ACTION_MANAGED_PROFILE_UNAVAILABLE} and
+      * {@link #ACTION_PROFILE_UNAVAILABLE} broadcasts are sent.
+      */
+-    @FlaggedApi(FLAG_ALLOW_PRIVATE_PROFILE)
+     public static final String ACTION_PROFILE_UNAVAILABLE =
+             "android.intent.action.PROFILE_UNAVAILABLE";
+ 
+@@ -4496,7 +4285,6 @@
+      * This is only sent to registered receivers created with {@link Context#registerReceiver}.
+      * It is not sent to manifest receivers.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PROFILE_REMOVED =
+             "android.intent.action.PROFILE_REMOVED";
+ 
+@@ -4516,7 +4304,6 @@
+      * This is only sent to registered receivers created with {@link Context#registerReceiver}.
+      * It is not sent to manifest receivers.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PROFILE_ADDED =
+             "android.intent.action.PROFILE_ADDED";
+ 
+@@ -4640,7 +4427,6 @@
+      * @see #ACTION_CREATE_DOCUMENT
+      * @see #FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_OPEN_DOCUMENT = "android.intent.action.OPEN_DOCUMENT";
+ 
+     /**
+@@ -4680,7 +4466,6 @@
+      * @see #ACTION_OPEN_DOCUMENT_TREE
+      * @see #FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CREATE_DOCUMENT = "android.intent.action.CREATE_DOCUMENT";
+ 
+     /**
+@@ -4704,7 +4489,6 @@
+      *
+      * @see DocumentsContract
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String
+             ACTION_OPEN_DOCUMENT_TREE = "android.intent.action.OPEN_DOCUMENT_TREE";
+ 
+@@ -4716,7 +4500,6 @@
+      * <p>
+      * Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_TRANSLATE = "android.intent.action.TRANSLATE";
+ 
+     /**
+@@ -4726,7 +4509,6 @@
+      * <p>
+      * Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_DEFINE = "android.intent.action.DEFINE";
+ 
+     /**
+@@ -4737,7 +4519,6 @@
+      *
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String
+             ACTION_DYNAMIC_SENSOR_CHANGED = "android.intent.action.DYNAMIC_SENSOR_CHANGED";
+ 
+@@ -4749,8 +4530,6 @@
+      * Output: {@link #EXTRA_COLOR getIntExtra(EXTRA_COLOR)} is the color of the selected pixel in
+      * ARGB format (0xFFRRGGBB).
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+-    @FlaggedApi(com.android.eyedropper.Flags.FLAG_ENABLE_EYE_DROPPER_API)
+     public static final String ACTION_OPEN_EYE_DROPPER = "android.intent.action.OPEN_EYE_DROPPER";
+ 
+     /**
+@@ -4768,8 +4547,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @RequiresPermission(Manifest.permission.MASTER_CLEAR)
+     public static final String ACTION_MASTER_CLEAR_NOTIFICATION
+             = "android.intent.action.MASTER_CLEAR_NOTIFICATION";
+ 
+@@ -4798,7 +4575,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_FACTORY_RESET = "android.intent.action.FACTORY_RESET";
+ 
+     /**
+@@ -4880,7 +4656,6 @@
+      * {@link #EXTRA_PROCESS_TEXT_READONLY} states if the resulting text will be read-only.</p>
+      * <p>Output: {@link #EXTRA_PROCESS_TEXT} contains the processed text.</p>
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_PROCESS_TEXT = "android.intent.action.PROCESS_TEXT";
+ 
+     /**
+@@ -4900,7 +4675,6 @@
+      */
+     @Deprecated
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_SIM_STATE_CHANGED = "android.intent.action.SIM_STATE_CHANGED";
+ 
+     /**
+@@ -5090,7 +4864,6 @@
+      */
+     @Deprecated
+     @SystemApi
+-    @SdkConstant(SdkConstant.SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_SERVICE_STATE = "android.intent.action.SERVICE_STATE";
+ 
+     /**
+@@ -5108,7 +4881,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstant.SdkConstantType.SERVICE_ACTION)
+     public static final String ACTION_LOAD_DATA = "android.intent.action.LOAD_DATA";
+ 
+     /**
+@@ -5398,7 +5170,6 @@
+      * is reaching its maximum temperatue, the thermal level reported
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_THERMAL_EVENT = "android.intent.action.THERMAL_EVENT";
+ 
+     /** @hide */
+@@ -5467,7 +5238,6 @@
+      * app domain. Should be stable across reboots and backup / restore.
+      * <p>Output: nothing.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_VIEW_LOCUS = "android.intent.action.VIEW_LOCUS";
+ 
+     /**
+@@ -5476,7 +5246,6 @@
+      * handle privacy sensitive data and features when launched on the lock screen. See
+      * {@link android.app.KeyguardManager} for lock screen checks.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CREATE_NOTE = "android.intent.action.CREATE_NOTE";
+ 
+     /**
+@@ -5515,8 +5284,6 @@
+      * <p>Callers should query for {@link #EXTRA_CAPTURE_CONTENT_FOR_NOTE_STATUS_CODE} in the
+      * response {@link Intent} to check if the request was a success.
+      */
+-    @RequiresPermission(Manifest.permission.LAUNCH_CAPTURE_CONTENT_ACTIVITY_FOR_NOTE)
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_LAUNCH_CAPTURE_CONTENT_ACTIVITY_FOR_NOTE =
+             "android.intent.action.LAUNCH_CAPTURE_CONTENT_ACTIVITY_FOR_NOTE";
+ 
+@@ -5593,7 +5360,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_PACKAGE_NEEDS_INTEGRITY_VERIFICATION =
+             "android.intent.action.PACKAGE_NEEDS_INTEGRITY_VERIFICATION";
+ 
+@@ -5615,9 +5381,6 @@
+      *
+      * @see android.content.pm.PackageInstaller#requestUnarchive
+      */
+-    @FlaggedApi(android.content.pm.Flags.FLAG_ARCHIVING)
+-    @BroadcastBehavior(explicitOnly = true)
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_UNARCHIVE_PACKAGE = "android.intent.action.UNARCHIVE_PACKAGE";
+ 
+     /**
+@@ -5639,9 +5402,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(android.service.personalcontext.Flags.FLAG_ENABLE_PERSONAL_CONTEXT_SERVICE)
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(protectedBroadcast = true)
+     public static final String ACTION_PERSONAL_CONTEXT_MODE_CHANGED =
+             "android.intent.action.PERSONAL_CONTEXT_MODE_CHANGED";
+ 
+@@ -5657,7 +5417,6 @@
+      * Intent when initiating an action -- it is for use in intent filters
+      * specified in packages.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_DEFAULT = "android.intent.category.DEFAULT";
+     /**
+      * Activities that can be safely invoked from a browser must support this
+@@ -5669,7 +5428,6 @@
+      * damaging (without user intervention) that can happen by invoking any
+      * matching Intent.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_BROWSABLE = "android.intent.category.BROWSABLE";
+     /**
+      * Categories for activities that can participate in voice interaction.
+@@ -5677,7 +5435,6 @@
+      * no UI shown at all (though in some case it may have a UI shown), and
+      * rely on {@link android.app.VoiceInteractor} to interact with the user.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_VOICE = "android.intent.category.VOICE";
+     /**
+      * Set if the activity should be considered as an alternative action to
+@@ -5700,7 +5457,6 @@
+      * displayed while also allowing other applications to provide their own
+      * overrides of that particular action.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_ALTERNATIVE = "android.intent.category.ALTERNATIVE";
+     /**
+      * Set if the activity should be considered as an alternative selection
+@@ -5709,23 +5465,19 @@
+      * of items from which the user can select, giving them alternatives to the
+      * default action that will be performed on it.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_SELECTED_ALTERNATIVE = "android.intent.category.SELECTED_ALTERNATIVE";
+     /**
+      * Intended to be used as a tab inside of a containing TabActivity.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_TAB = "android.intent.category.TAB";
+     /**
+      * Should be displayed in the top-level launcher.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_LAUNCHER = "android.intent.category.LAUNCHER";
+     /**
+      * Indicates an activity optimized for Leanback mode, and that should
+      * be displayed in the Leanback launcher.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_LEANBACK_LAUNCHER = "android.intent.category.LEANBACK_LAUNCHER";
+     /**
+      * Indicates the preferred entry-point activity when an application is launched from a Car
+@@ -5733,13 +5485,11 @@
+      * fallback, or exclude the application entirely.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_CAR_LAUNCHER = "android.intent.category.CAR_LAUNCHER";
+     /**
+      * Used to indicate that the activity can be used in communal mode.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_COMMUNAL_MODE = "android.intent.category.COMMUNAL_MODE";
+     /**
+      * Indicates a Leanback settings activity to be displayed in the Leanback launcher.
+@@ -5752,32 +5502,27 @@
+      * a package does not contain a {@link #CATEGORY_LAUNCHER} to provide
+      * a front-door to the user without having to be shown in the all apps list.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_INFO = "android.intent.category.INFO";
+     /**
+      * This is the home activity, that is the first activity that is displayed
+      * when the device boots.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_HOME = "android.intent.category.HOME";
+     /**
+      * This is the home activity that is displayed when the device is finished setting up and ready
+      * for use.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_HOME_MAIN = "android.intent.category.HOME_MAIN";
+     /**
+      * The home activity shown on secondary displays that support showing home activities.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_SECONDARY_HOME = "android.intent.category.SECONDARY_HOME";
+     /**
+      * This is the setup wizard activity, that is the first activity that is displayed
+      * when the user sets up the device for the first time.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_SETUP_WIZARD = "android.intent.category.SETUP_WIZARD";
+     /**
+      * This is the home activity, that is the activity that serves as the launcher app
+@@ -5787,32 +5532,26 @@
+      * setup helpers.
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_LAUNCHER_APP = "android.intent.category.LAUNCHER_APP";
+     /**
+      * This activity is a preference panel.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_PREFERENCE = "android.intent.category.PREFERENCE";
+     /**
+      * This activity is a development preference panel.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_DEVELOPMENT_PREFERENCE = "android.intent.category.DEVELOPMENT_PREFERENCE";
+     /**
+      * Capable of running inside a parent activity container.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_EMBED = "android.intent.category.EMBED";
+     /**
+      * This activity allows the user to browse and download new applications.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_MARKET = "android.intent.category.APP_MARKET";
+     /**
+      * This activity may be exercised by the monkey or other automated test tools.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_MONKEY = "android.intent.category.MONKEY";
+     /**
+      * To be used as a test (not part of the normal user experience).
+@@ -5838,7 +5577,6 @@
+      * @see #ACTION_OPEN_DOCUMENT
+      * @see #ACTION_CREATE_DOCUMENT
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_OPENABLE = "android.intent.category.OPENABLE";
+ 
+     /**
+@@ -5852,7 +5590,6 @@
+      * @see #ACTION_SEND
+      * @see #ACTION_SEND_MULTIPLE
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_TYPED_OPENABLE  =
+             "android.intent.category.TYPED_OPENABLE";
+ 
+@@ -5866,21 +5603,18 @@
+      * Used with {@link #ACTION_MAIN} to launch an activity.  For more
+      * information, see {@link android.app.UiModeManager}.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_CAR_DOCK = "android.intent.category.CAR_DOCK";
+     /**
+      * An activity to run when device is inserted into a desk dock.
+      * Used with {@link #ACTION_MAIN} to launch an activity.  For more
+      * information, see {@link android.app.UiModeManager}.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_DESK_DOCK = "android.intent.category.DESK_DOCK";
+     /**
+      * An activity to run when device is inserted into a analog (low end) dock.
+      * Used with {@link #ACTION_MAIN} to launch an activity.  For more
+      * information, see {@link android.app.UiModeManager}.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_LE_DESK_DOCK = "android.intent.category.LE_DESK_DOCK";
+ 
+     /**
+@@ -5888,13 +5622,11 @@
+      * Used with {@link #ACTION_MAIN} to launch an activity.  For more
+      * information, see {@link android.app.UiModeManager}.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_HE_DESK_DOCK = "android.intent.category.HE_DESK_DOCK";
+ 
+     /**
+      * Used to indicate that the activity can be used in a car environment.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_CAR_MODE = "android.intent.category.CAR_MODE";
+ 
+     /**
+@@ -5902,7 +5634,6 @@
+      * Used with {@link #ACTION_MAIN} to launch an activity.  For more
+      * information, see {@link android.app.UiModeManager}.
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_VR_HOME = "android.intent.category.VR_HOME";
+ 
+     /**
+@@ -5960,7 +5691,6 @@
+      * target.
+      * </p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_ACCESSIBILITY_SHORTCUT_TARGET =
+             "android.intent.category.ACCESSIBILITY_SHORTCUT_TARGET";
+     // ---------------------------------------------------------------------
+@@ -5976,7 +5706,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_BROWSER = "android.intent.category.APP_BROWSER";
+ 
+     /**
+@@ -5988,7 +5717,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_CALCULATOR = "android.intent.category.APP_CALCULATOR";
+ 
+     /**
+@@ -6000,7 +5728,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_CALENDAR = "android.intent.category.APP_CALENDAR";
+ 
+     /**
+@@ -6012,7 +5739,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_CONTACTS = "android.intent.category.APP_CONTACTS";
+ 
+     /**
+@@ -6024,7 +5750,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_EMAIL = "android.intent.category.APP_EMAIL";
+ 
+     /**
+@@ -6037,7 +5762,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_GALLERY = "android.intent.category.APP_GALLERY";
+ 
+     /**
+@@ -6049,7 +5773,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_MAPS = "android.intent.category.APP_MAPS";
+ 
+     /**
+@@ -6061,7 +5784,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_MESSAGING = "android.intent.category.APP_MESSAGING";
+ 
+     /**
+@@ -6074,7 +5796,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_MUSIC = "android.intent.category.APP_MUSIC";
+ 
+     /**
+@@ -6086,7 +5807,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_FILES = "android.intent.category.APP_FILES";
+ 
+     /**
+@@ -6098,7 +5818,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_WEATHER = "android.intent.category.APP_WEATHER";
+ 
+     /**
+@@ -6110,7 +5829,6 @@
+      * {@link #makeMainSelectorActivity(String, String)} to generate a main
+      * Intent with this category in the selector.</p>
+      */
+-    @SdkConstant(SdkConstantType.INTENT_CATEGORY)
+     public static final String CATEGORY_APP_FITNESS = "android.intent.category.APP_FITNESS";
+ 
+     // ---------------------------------------------------------------------
+@@ -6760,7 +6478,6 @@
+      * the package is being archived. Either by removing the existing APK, or by installing
+      * a package without an APK.
+      */
+-    @FlaggedApi(android.content.pm.Flags.FLAG_ARCHIVING)
+     public static final String EXTRA_ARCHIVAL = "android.intent.extra.ARCHIVAL";
+ 
+     /**
+@@ -7038,7 +6755,6 @@
+      *
+      * <p>Type: int, the offset in seconds.
+      */
+-    @FlaggedApi(FLAG_ENABLE_TIME_ZONE_OFFSET_CHANGE_BROADCAST)
+     public static final String EXTRA_NEW_TIMEZONE_OFFSET =
+             "android.intent.extra.NEW_TIMEZONE_OFFSET";
+ 
+@@ -7048,7 +6764,6 @@
+      *
+      * <p>Type: int, the offset in seconds.
+      */
+-    @FlaggedApi(FLAG_ENABLE_TIME_ZONE_OFFSET_CHANGE_BROADCAST)
+     public static final String EXTRA_OLD_TIMEZONE_OFFSET =
+             "android.intent.extra.OLD_TIMEZONE_OFFSET";
+ 
+@@ -7059,7 +6774,6 @@
+      * <p>Type: String, the same as returned by {@link java.util.TimeZone#getID()} to identify time
+      * zones. This extra will be {@code null} if the user disables the home time zone feature.
+      */
+-    @FlaggedApi(FLAG_ENABLE_HOME_TIME_ZONE_API)
+     public static final String EXTRA_HOME_TIME_ZONE_ID = "android.intent.extra.HOME_TIME_ZONE_ID";
+ 
+     /**
+@@ -7253,7 +6967,6 @@
+      *
+      * @see #ACTION_OPEN_EYE_DROPPER
+      */
+-    @FlaggedApi(com.android.eyedropper.Flags.FLAG_ENABLE_EYE_DROPPER_API)
+     public static final String EXTRA_COLOR = "android.intent.extra.COLOR";
+ 
+ 
+@@ -7274,7 +6987,6 @@
+      * @see #setData(Uri)
+      * @see android.provider.ContactsPickerSessionContract#ACTION_PICK_CONTACTS
+      */
+-    @FlaggedApi(android.content.flags.Flags.FLAG_ENABLE_SYSTEM_CONTACTS_PICKER)
+     public static final String EXTRA_USE_SYSTEM_CONTACTS_PICKER =
+             "android.intent.extra.USE_SYSTEM_CONTACTS_PICKER";
+ 
+@@ -8186,7 +7898,7 @@
+         this.mCreatorTokenInfo = o.mCreatorTokenInfo;
+ 
+         if (o.mCategories != null) {
+-            this.mCategories = new ArraySet<>(o.mCategories);
++            this.mCategories = copyArraySet(o.mCategories);
+         }
+ 
+         // Inherit flags from the original, plus mark that we were
+@@ -8249,7 +7961,18 @@
+                 .setComponent(this.mComponent)
+                 .setFlags(this.mFlags & IMMUTABLE_FLAGS);
+         if (this.mClipData != null) {
+-            clone.setClipData(this.mClipData.cloneOnlyUriItems());
++            ClipData uriItems = null;
++            for (int i = 0; i < mClipData.getItemCount(); i++) {
++                Uri uri = mClipData.getItemAt(i).getUri();
++                if (uri != null) {
++                    if (uriItems == null) {
++                        uriItems = ClipData.newRawUri(mClipData.getDescription().getLabel(), uri);
++                    } else {
++                        uriItems.addItem(new ClipData.Item(uri));
++                    }
++                }
++            }
++            clone.setClipData(uriItems);
+         }
+         clone.mCreatorTokenInfo = this.mCreatorTokenInfo;
+         return clone;
+@@ -8595,13 +8318,13 @@
+                     // add EXTRA
+                     if      (uri.startsWith("S.", i)) b.putString(key, value);
+                     else if (uri.startsWith("B.", i)) b.putBoolean(key, Boolean.parseBoolean(value));
+-                    else if (uri.startsWith("b.", i)) b.putByte(key, Byte.parseByte(value));
++                    else if (uri.startsWith("b.", i)) b.putByte(key, (byte) parseExtraInteger(value, Byte.MIN_VALUE, Byte.MAX_VALUE));
+                     else if (uri.startsWith("c.", i)) b.putChar(key, value.charAt(0));
+                     else if (uri.startsWith("d.", i)) b.putDouble(key, Double.parseDouble(value));
+                     else if (uri.startsWith("f.", i)) b.putFloat(key, Float.parseFloat(value));
+                     else if (uri.startsWith("i.", i)) b.putInt(key, Integer.parseInt(value));
+                     else if (uri.startsWith("l.", i)) b.putLong(key, Long.parseLong(value));
+-                    else if (uri.startsWith("s.", i)) b.putShort(key, Short.parseShort(value));
++                    else if (uri.startsWith("s.", i)) b.putShort(key, (short) parseExtraInteger(value, Short.MIN_VALUE, Short.MAX_VALUE));
+                     else throw new URISyntaxException(uri, "unknown EXTRA type", i);
+                 }
+ 
+@@ -8801,7 +8524,7 @@
+                                 intent.mExtras.putBoolean(key, Boolean.parseBoolean(value));
+                                 break;
+                             case 'b':
+-                                intent.mExtras.putByte(key, Byte.parseByte(value));
++                                intent.mExtras.putByte(key, (byte) parseExtraInteger(value, Byte.MIN_VALUE, Byte.MAX_VALUE));
+                                 break;
+                             case 'c':
+                                 intent.mExtras.putChar(key, Uri.decode(value).charAt(0));
+@@ -8819,7 +8542,7 @@
+                                 intent.mExtras.putLong(key, Long.parseLong(value));
+                                 break;
+                             case 's':
+-                                intent.mExtras.putShort(key, Short.parseShort(value));
++                                intent.mExtras.putShort(key, (short) parseExtraInteger(value, Short.MIN_VALUE, Short.MAX_VALUE));
+                                 break;
+                             default:
+                                 throw new URISyntaxException(uri, "EXTRA has unknown type", i);
+@@ -8853,449 +8576,35 @@
+         return intent;
+     }
+ 
++    private static int parseExtraInteger(String value, int min, int max) {
++        int result = Integer.parseInt(value);
++        if (result < min || result > max) throw new NumberFormatException(value);
++        return result;
++    }
++
+     private static Integer decodeInteger(String value) {
+-        try {
+-            return Integer.decode(value);
+-        } catch (NumberFormatException e) {
+-            try {
+-                if (value != null && value.startsWith("0x")) {
+-                    // In toUriInner, we do "0x".append(Integer.toHexString).
+-                    // Sometimes "decode" fails to parse, e.g. 0x90000000.
+-                    return Integer.parseUnsignedInt(value.substring(2), 16);
+-                }
+-            } catch (NumberFormatException ignored) {
+-                // ignored, throw the original exception
+-            }
+-            throw e;
+-        }
+-    }
+-
+-    /** @hide */
+-    public interface CommandOptionHandler {
+-        boolean handleOption(String opt, ShellCommand cmd);
+-    }
+-
+-    /** @hide */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    @SuppressWarnings("AndroidFrameworkEfficientCollections")
+-    public static Intent parseCommandArgs(ShellCommand cmd, CommandOptionHandler optionHandler)
+-            throws URISyntaxException {
+-        Intent intent = new Intent();
+-        Intent baseIntent = intent;
+-        boolean hasIntentInfo = false;
+-
+-        Uri data = null;
+-        String type = null;
+-
+-        String opt;
+-        while ((opt=cmd.getNextOption()) != null) {
+-            switch (opt) {
+-                case "-a":
+-                    intent.setAction(cmd.getNextArgRequired());
+-                    if (intent == baseIntent) {
+-                        hasIntentInfo = true;
+-                    }
+-                    break;
+-                case "-d":
+-                    data = Uri.parse(cmd.getNextArgRequired());
+-                    if (intent == baseIntent) {
+-                        hasIntentInfo = true;
+-                    }
+-                    break;
+-                case "-t":
+-                    type = cmd.getNextArgRequired();
+-                    if (intent == baseIntent) {
+-                        hasIntentInfo = true;
+-                    }
+-                    break;
+-                case "-i":
+-                    intent.setIdentifier(cmd.getNextArgRequired());
+-                    if (intent == baseIntent) {
+-                        hasIntentInfo = true;
+-                    }
+-                    break;
+-                case "-c":
+-                    intent.addCategory(cmd.getNextArgRequired());
+-                    if (intent == baseIntent) {
+-                        hasIntentInfo = true;
+-                    }
+-                    break;
+-                case "-e":
+-                case "--es": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    intent.putExtra(key, value);
+-                }
+-                break;
+-                case "--esn": {
+-                    String key = cmd.getNextArgRequired();
+-                    intent.putExtra(key, (String) null);
+-                }
+-                break;
+-                case "--ei": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    intent.putExtra(key, decodeInteger(value));
+-                }
+-                break;
+-                case "--eu": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    intent.putExtra(key, Uri.parse(value));
+-                }
+-                break;
+-                case "--ecn": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    ComponentName cn = ComponentName.unflattenFromString(value);
+-                    if (cn == null)
+-                        throw new IllegalArgumentException("Bad component name: " + value);
+-                    intent.putExtra(key, cn);
+-                }
+-                break;
+-                case "--eia": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    String[] strings = value.split(",");
+-                    int[] list = new int[strings.length];
+-                    for (int i = 0; i < strings.length; i++) {
+-                        list[i] = decodeInteger(strings[i]);
+-                    }
+-                    intent.putExtra(key, list);
+-                }
+-                break;
+-                case "--eial": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    String[] strings = value.split(",");
+-                    ArrayList<Integer> list = new ArrayList<>(strings.length);
+-                    for (int i = 0; i < strings.length; i++) {
+-                        list.add(decodeInteger(strings[i]));
+-                    }
+-                    intent.putExtra(key, list);
+-                }
+-                break;
+-                case "--el": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    intent.putExtra(key, Long.valueOf(value));
+-                }
+-                break;
+-                case "--ela": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    String[] strings = value.split(",");
+-                    long[] list = new long[strings.length];
+-                    for (int i = 0; i < strings.length; i++) {
+-                        list[i] = Long.valueOf(strings[i]);
+-                    }
+-                    intent.putExtra(key, list);
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--elal": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    String[] strings = value.split(",");
+-                    ArrayList<Long> list = new ArrayList<>(strings.length);
+-                    for (int i = 0; i < strings.length; i++) {
+-                        list.add(Long.valueOf(strings[i]));
+-                    }
+-                    intent.putExtra(key, list);
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--ef": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    intent.putExtra(key, Float.valueOf(value));
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--efa": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    String[] strings = value.split(",");
+-                    float[] list = new float[strings.length];
+-                    for (int i = 0; i < strings.length; i++) {
+-                        list[i] = Float.valueOf(strings[i]);
+-                    }
+-                    intent.putExtra(key, list);
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--efal": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    String[] strings = value.split(",");
+-                    ArrayList<Float> list = new ArrayList<>(strings.length);
+-                    for (int i = 0; i < strings.length; i++) {
+-                        list.add(Float.valueOf(strings[i]));
+-                    }
+-                    intent.putExtra(key, list);
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--ed": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    intent.putExtra(key, Double.valueOf(value));
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--eda": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    String[] strings = value.split(",");
+-                    double[] list = new double[strings.length];
+-                    for (int i = 0; i < strings.length; i++) {
+-                        list[i] = Double.valueOf(strings[i]);
+-                    }
+-                    intent.putExtra(key, list);
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--edal": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    String[] strings = value.split(",");
+-                    ArrayList<Double> list = new ArrayList<>(strings.length);
+-                    for (int i = 0; i < strings.length; i++) {
+-                        list.add(Double.valueOf(strings[i]));
+-                    }
+-                    intent.putExtra(key, list);
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--esa": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    // Split on commas unless they are preceeded by an escape.
+-                    // The escape character must be escaped for the string and
+-                    // again for the regex, thus four escape characters become one.
+-                    String[] strings = value.split("(?<!\\\\),");
+-                    intent.putExtra(key, strings);
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--esal": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired();
+-                    // Split on commas unless they are preceeded by an escape.
+-                    // The escape character must be escaped for the string and
+-                    // again for the regex, thus four escape characters become one.
+-                    String[] strings = value.split("(?<!\\\\),");
+-                    ArrayList<String> list = new ArrayList<>(strings.length);
+-                    for (int i = 0; i < strings.length; i++) {
+-                        list.add(strings[i]);
+-                    }
+-                    intent.putExtra(key, list);
+-                    hasIntentInfo = true;
+-                }
+-                break;
+-                case "--ez": {
+-                    String key = cmd.getNextArgRequired();
+-                    String value = cmd.getNextArgRequired().toLowerCase();
+-                    // Boolean.valueOf() results in false for anything that is not "true", which is
+-                    // error-prone in shell commands
+-                    boolean arg;
+-                    if ("true".equals(value) || "t".equals(value)) {
+-                        arg = true;
+-                    } else if ("false".equals(value) || "f".equals(value)) {
+-                        arg = false;
+-                    } else {
+-                        try {
+-                            arg = decodeInteger(value) != 0;
+-                        } catch (NumberFormatException ex) {
+-                            throw new IllegalArgumentException("Invalid boolean value: " + value);
+-                        }
+-                    }
+-
+-                    intent.putExtra(key, arg);
+-                }
+-                break;
+-                case "-n": {
+-                    String str = cmd.getNextArgRequired();
+-                    ComponentName cn = ComponentName.unflattenFromString(str);
+-                    if (cn == null)
+-                        throw new IllegalArgumentException("Bad component name: " + str);
+-                    intent.setComponent(cn);
+-                    if (intent == baseIntent) {
+-                        hasIntentInfo = true;
+-                    }
+-                }
+-                break;
+-                case "-p": {
+-                    String str = cmd.getNextArgRequired();
+-                    intent.setPackage(str);
+-                    if (intent == baseIntent) {
+-                        hasIntentInfo = true;
+-                    }
+-                }
+-                break;
+-                case "-f":
+-                    String str = cmd.getNextArgRequired();
+-                    intent.setFlags(decodeInteger(str).intValue());
+-                    break;
+-                case "--grant-read-uri-permission":
+-                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+-                    break;
+-                case "--grant-write-uri-permission":
+-                    intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+-                    break;
+-                case "--grant-persistable-uri-permission":
+-                    intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+-                    break;
+-                case "--grant-prefix-uri-permission":
+-                    intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+-                    break;
+-                case "--exclude-stopped-packages":
+-                    intent.addFlags(Intent.FLAG_EXCLUDE_STOPPED_PACKAGES);
+-                    break;
+-                case "--include-stopped-packages":
+-                    intent.addFlags(Intent.FLAG_INCLUDE_STOPPED_PACKAGES);
+-                    break;
+-                case "--debug-log-resolution":
+-                    intent.addFlags(Intent.FLAG_DEBUG_LOG_RESOLUTION);
+-                    break;
+-                case "--activity-brought-to-front":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT);
+-                    break;
+-                case "--activity-clear-top":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP);
+-                    break;
+-                case "--activity-clear-when-task-reset":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_WHEN_TASK_RESET);
+-                    break;
+-                case "--activity-exclude-from-recents":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+-                    break;
+-                case "--activity-launched-from-history":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY);
+-                    break;
+-                case "--activity-multiple-task":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK);
+-                    break;
+-                case "--activity-no-animation":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+-                    break;
+-                case "--activity-no-history":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
+-                    break;
+-                case "--activity-no-user-action":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+-                    break;
+-                case "--activity-previous-is-top":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_PREVIOUS_IS_TOP);
+-                    break;
+-                case "--activity-reorder-to-front":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+-                    break;
+-                case "--activity-reset-task-if-needed":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+-                    break;
+-                case "--activity-single-top":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+-                    break;
+-                case "--activity-clear-task":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK);
+-                    break;
+-                case "--activity-task-on-home":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_TASK_ON_HOME);
+-                    break;
+-                case "--activity-match-external":
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_MATCH_EXTERNAL);
+-                    break;
+-                case "--receiver-registered-only":
+-                    intent.addFlags(Intent.FLAG_RECEIVER_REGISTERED_ONLY);
+-                    break;
+-                case "--receiver-replace-pending":
+-                    intent.addFlags(Intent.FLAG_RECEIVER_REPLACE_PENDING);
+-                    break;
+-                case "--receiver-foreground":
+-                    intent.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
+-                    break;
+-                case "--receiver-no-abort":
+-                    intent.addFlags(Intent.FLAG_RECEIVER_NO_ABORT);
+-                    break;
+-                case "--receiver-include-background":
+-                    intent.addFlags(Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND);
+-                    break;
+-                case "--selector":
+-                    intent.setDataAndType(data, type);
+-                    intent = new Intent();
+-                    break;
+-                default:
+-                    if (optionHandler != null && optionHandler.handleOption(opt, cmd)) {
+-                        // Okay, caller handled this option.
+-                    } else {
+-                        throw new IllegalArgumentException("Unknown option: " + opt);
+-                    }
+-                    break;
+-            }
+-        }
+-        intent.setDataAndType(data, type);
+-
+-        final boolean hasSelector = intent != baseIntent;
+-        if (hasSelector) {
+-            // A selector was specified; fix up.
+-            baseIntent.setSelector(intent);
+-            intent = baseIntent;
+-        }
+-
+-        String arg = cmd.getNextArg();
+-        baseIntent = null;
+-        if (arg == null) {
+-            if (hasSelector) {
+-                // If a selector has been specified, and no arguments
+-                // have been supplied for the main Intent, then we can
+-                // assume it is ACTION_MAIN CATEGORY_LAUNCHER; we don't
+-                // need to have a component name specified yet, the
+-                // selector will take care of that.
+-                baseIntent = new Intent(Intent.ACTION_MAIN);
+-                baseIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+-            }
+-        } else if (arg.indexOf(':') >= 0) {
+-            // The argument is a URI.  Fully parse it, and use that result
+-            // to fill in any data not specified so far.
+-            baseIntent = Intent.parseUri(arg, Intent.URI_INTENT_SCHEME
+-                    | Intent.URI_ANDROID_APP_SCHEME | Intent.URI_ALLOW_UNSAFE);
+-        } else if (arg.indexOf('/') >= 0) {
+-            // The argument is a component name.  Build an Intent to launch
+-            // it.
+-            baseIntent = new Intent(Intent.ACTION_MAIN);
+-            baseIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+-            baseIntent.setComponent(ComponentName.unflattenFromString(arg));
+-        } else {
+-            // Assume the argument is a package name.
+-            baseIntent = new Intent(Intent.ACTION_MAIN);
+-            baseIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+-            baseIntent.setPackage(arg);
+-        }
+-        if (baseIntent != null) {
+-            Bundle extras = intent.getExtras();
+-            intent.replaceExtras((Bundle)null);
+-            Bundle uriExtras = baseIntent.getExtras();
+-            baseIntent.replaceExtras((Bundle)null);
+-            if (intent.getAction() != null && baseIntent.getCategories() != null) {
+-                HashSet<String> cats = new HashSet<String>(baseIntent.getCategories());
+-                for (String c : cats) {
+-                    baseIntent.removeCategory(c);
+-                }
+-            }
+-            intent.fillIn(baseIntent, Intent.FILL_IN_COMPONENT | Intent.FILL_IN_SELECTOR);
+-            if (extras == null) {
+-                extras = uriExtras;
+-            } else if (uriExtras != null) {
+-                uriExtras.putAll(extras);
+-                extras = uriExtras;
+-            }
+-            intent.replaceExtras(extras);
+-            hasIntentInfo = true;
+-        }
+-
+-        if (!hasIntentInfo) throw new IllegalArgumentException("No intent supplied");
+-        return intent;
++        int index = 0;
++        boolean negative = value.startsWith("-");
++        if (negative || value.startsWith("+")) index++;
++
++        int radix = 10;
++        if (value.startsWith("0x", index) || value.startsWith("0X", index)) {
++            index += 2;
++            radix = 16;
++        } else if (value.startsWith("#", index)) {
++            index++;
++            radix = 16;
++        } else if (value.startsWith("0", index) && value.length() > index + 1) {
++            index++;
++            radix = 8;
++        }
++        if (index == value.length() || value.charAt(index) == '+' || value.charAt(index) == '-') {
++            throw new NumberFormatException(value);
++        }
++        long result = Long.parseLong((negative ? "-" : "") + value.substring(index), radix);
++        long maximum = value.startsWith("0x") ? 0xffffffffL : Integer.MAX_VALUE;
++        if (result < Integer.MIN_VALUE || result > maximum) throw new NumberFormatException(value);
++        return (int) result;
+     }
+ 
+     /** @hide */
+@@ -9480,7 +8789,7 @@
+         }
+         if (mData != null) {
+             if ("content".equals(mData.getScheme())) {
+-                return resolver.getType(mData);
++                return null; // This process has no remote content provider.
+             }
+         }
+         return null;
+@@ -9500,9 +8809,9 @@
+      */
+     public @Nullable String resolveTypeIfNeeded(@NonNull ContentResolver resolver) {
+         // Match logic in PackageManagerService#applyEnforceIntentFilterMatching(...)
+-        if (mComponent != null && (Process.myUid() == Process.ROOT_UID
+-                || Process.myUid() == Process.SYSTEM_UID
+-                || mComponent.getPackageName().equals(ActivityThread.currentPackageName()))) {
++        if (mComponent != null && (Process.myUid() == UserHandle.AID_ROOT
++                || Process.myUid() == 1000
++                || mComponent.getPackageName().equals(currentPackageName()))) {
+             return mType;
+         }
+         return resolveType(resolver);
+@@ -9543,6 +8852,14 @@
+      * @see #hasCategory
+      * @see #addCategory
+      */
++    /** Returns categories for the embedded package catalog. @hide */
++    public String[] categoryArray() {
++        if (mCategories == null) return new String[0];
++        String[] categories = new String[mCategories.size()];
++        for (int i = 0; i < categories.length; i++) categories[i] = mCategories.valueAt(i);
++        return categories;
++    }
++
+     public Set<String> getCategories() {
+         return mCategories;
+     }
+@@ -9568,7 +8885,7 @@
+     }
+ 
+     /** @hide */
+-    public @CanBeCURRENT @UserIdInt int getContentUserHint() {
++    public int getContentUserHint() {
+         return mContentUserHint;
+     }
+ 
+@@ -10394,7 +9711,7 @@
+      * @see #resolveActivity
+      */
+     public ActivityInfo resolveActivityInfo(@NonNull PackageManager pm,
+-            @PackageManager.ComponentInfoFlagsBits int flags) {
++            int flags) {
+         ActivityInfo ai = null;
+         if (mComponent != null) {
+             try {
+@@ -10422,30 +9739,9 @@
+      */
+     @UnsupportedAppUsage
+     public @Nullable ComponentName resolveSystemService(@NonNull PackageManager pm,
+-            @PackageManager.ComponentInfoFlagsBits int flags) {
+-        if (mComponent != null) {
+-            return mComponent;
+-        }
+-
+-        List<ResolveInfo> results = pm.queryIntentServices(this, flags);
+-        if (results == null) {
+-            return null;
+-        }
+-        ComponentName comp = null;
+-        for (int i=0; i<results.size(); i++) {
+-            ResolveInfo ri = results.get(i);
+-            if ((ri.serviceInfo.applicationInfo.flags&ApplicationInfo.FLAG_SYSTEM) == 0) {
+-                continue;
+-            }
+-            ComponentName foundComp = new ComponentName(ri.serviceInfo.applicationInfo.packageName,
+-                    ri.serviceInfo.name);
+-            if (comp != null) {
+-                throw new IllegalStateException("Multiple system services handle " + this
+-                        + ": " + comp + ", " + foundComp);
+-            }
+-            comp = foundComp;
+-        }
+-        return comp;
++            int flags) {
++        // The embedded package catalog does not expose remote services.
++        return mComponent;
+     }
+ 
+     /**
+@@ -11909,7 +11205,7 @@
+         if (other.mCategories != null
+                 && (mCategories == null || (flags&FILL_IN_CATEGORIES) != 0)) {
+             if (other.mCategories != null) {
+-                mCategories = new ArraySet<String>(other.mCategories);
++                mCategories = copyArraySet(other.mCategories);
+             }
+             changes |= FILL_IN_CATEGORIES;
+         }
+@@ -11987,7 +11283,7 @@
+             ArraySet<NestedIntentKey> otherNestedIntentKeys =
+                     otherCreatorTokenInfo.mNestedIntentKeys;
+             if (mCreatorTokenInfo.mNestedIntentKeys == null) {
+-                mCreatorTokenInfo.mNestedIntentKeys = new ArraySet<>(otherNestedIntentKeys);
++                mCreatorTokenInfo.mNestedIntentKeys = copyArraySet(otherNestedIntentKeys);
+             } else {
+                 ArraySet<NestedIntentKey> otherKeys;
+                 if ((changes & FILL_IN_CLIP_DATA) == 0) {
+@@ -12018,20 +11314,6 @@
+     }
+ 
+     /**
+-     * Merge the extras data in this intent with that of other supplied intent using the
+-     * strategy specified using {@code extrasMerger}.
+-     *
+-     * <p> Note the extras data in this intent is treated as the {@code first} param
+-     * and the extras data in {@code other} intent is treated as the {@code last} param
+-     * when using the passed in {@link BundleMerger} object.
+-     *
+-     * @hide
+-     */
+-    public void mergeExtras(@NonNull Intent other, @NonNull BundleMerger extrasMerger) {
+-        mExtras = extrasMerger.merge(mExtras, other.mExtras);
+-    }
+-
+-    /**
+      * Wrapper class holding an Intent and implementing comparisons on it for
+      * the purpose of filtering.  The class implements its
+      * {@link #equals equals()} and {@link #hashCode hashCode()} methods as
+@@ -12253,7 +11535,7 @@
+                 b.append(' ');
+             }
+             b.append("clip={");
+-            mClipData.toShortString(b, !clip || secure);
++            b.append(mClipData.getItemCount()).append(" items");
+             first = false;
+             b.append('}');
+         }
+@@ -12305,52 +11587,7 @@
+ 
+     private void dumpDebugWithoutFieldId(ProtoOutputStream proto, boolean secure, boolean comp,
+             boolean extras, boolean clip) {
+-        if (mAction != null) {
+-            proto.write(IntentProto.ACTION, mAction);
+-        }
+-        if (mCategories != null)  {
+-            for (String category : mCategories) {
+-                proto.write(IntentProto.CATEGORIES, category);
+-            }
+-        }
+-        if (mData != null) {
+-            proto.write(IntentProto.DATA, secure ? mData.toSafeString() : mData.toString());
+-        }
+-        if (mType != null) {
+-            proto.write(IntentProto.TYPE, mType);
+-        }
+-        if (mIdentifier != null) {
+-            proto.write(IntentProto.IDENTIFIER, mIdentifier);
+-        }
+-        if (mFlags != 0) {
+-            proto.write(IntentProto.FLAG, "0x" + Integer.toHexString(mFlags));
+-        }
+-        if (mExtendedFlags != 0) {
+-            proto.write(IntentProto.EXTENDED_FLAG, "0x" + Integer.toHexString(mExtendedFlags));
+-        }
+-        if (mPackage != null) {
+-            proto.write(IntentProto.PACKAGE, mPackage);
+-        }
+-        if (comp && mComponent != null) {
+-            mComponent.dumpDebug(proto, IntentProto.COMPONENT);
+-        }
+-        if (mSourceBounds != null) {
+-            proto.write(IntentProto.SOURCE_BOUNDS, mSourceBounds.toShortString());
+-        }
+-        if (mClipData != null) {
+-            StringBuilder b = new StringBuilder();
+-            mClipData.toShortString(b, !clip || secure);
+-            proto.write(IntentProto.CLIP_DATA, b.toString());
+-        }
+-        if (extras && mExtras != null) {
+-            proto.write(IntentProto.EXTRAS, mExtras.toShortString());
+-        }
+-        if (mContentUserHint != 0) {
+-            proto.write(IntentProto.CONTENT_USER_HINT, mContentUserHint);
+-        }
+-        if (mSelector != null) {
+-            proto.write(IntentProto.SELECTOR, mSelector.toShortString(secure, comp, extras, clip));
+-        }
++        throw new UnsupportedOperationException("Platform intent proto diagnostics are unavailable");
+     }
+ 
+     /**
+@@ -12672,7 +11909,7 @@
+      * @hide
+      */
+     public void collectExtraIntentKeys(boolean forceUnparcel) {
+-        if (preventIntentRedirect()) {
++        if (PREVENT_INTENT_REDIRECT) {
+             collectNestedIntentKeysRecur(new ArraySet<>(), forceUnparcel);
+         }
+     }
+@@ -12723,7 +11960,7 @@
+ 
+         if (mClipData != null) {
+             for (int i = 0; i < mClipData.getItemCount(); i++) {
+-                Intent intent = mClipData.getItemAt(i).mIntent;
++                Intent intent = mClipData.getItemAt(i).getIntent();
+                 if (intent != null && !visited.contains(intent)) {
+                     handleNestedIntent(intent, visited, new NestedIntentKey(
+                                     NestedIntentKey.NESTED_INTENT_KEY_TYPE_CLIP_DATA, null, i),
+@@ -12778,9 +12015,6 @@
+         if (intent.mExtras != null) {
+             intent.mExtras.enableTokenVerification();
+         }
+-        if (intent.mClipData != null) {
+-            intent.mClipData.setTokenVerificationEnabled();
+-        }
+     };
+ 
+     /** @hide */
+@@ -12791,9 +12025,6 @@
+             // otherwise, the logic to mark missing token would run before
+             // mark trusted creator token present.
+             mExtras.enableTokenVerification();
+-        }
+-        if (mClipData != null) {
+-            mClipData.setTokenVerificationEnabled();
+         }
+     }
+ 
+@@ -12849,7 +12080,7 @@
+                 if (key.mIndex < mClipData.getItemCount()) {
+                     ClipData.Item item = mClipData.getItemAt(key.mIndex);
+                     if (item != null) {
+-                        return item.mIntent;
++                        return item.getIntent();
+                     }
+                 }
+                 break;
+@@ -12896,7 +12127,6 @@
+      * permission to launch or block it from granting URI access to the tagert it cannot access.
+      * This method provides a way to opt out this feature.
+      */
+-    @FlaggedApi(FLAG_PREVENT_INTENT_REDIRECT)
+     public void removeLaunchSecurityProtection() {
+         mExtendedFlags &= ~EXTENDED_FLAG_MISSING_CREATOR_OR_INVALID_TOKEN;
+         removeCreatorTokenInfo();
+@@ -12936,12 +12166,8 @@
+             out.writeInt(0);
+         }
+ 
+-        if (mClipData != null) {
+-            out.writeInt(1);
+-            mClipData.writeToParcel(out, flags);
+-        } else {
+-            out.writeInt(0);
+-        }
++        out.writeBoolean(mClipData != null);
++        if (mClipData != null) out.writeParcelable(mClipData, flags);
+         out.writeInt(mContentUserHint);
+         out.writeBundle(mExtras);
+ 
+@@ -12952,27 +12178,6 @@
+             out.writeInt(0);
+         }
+ 
+-        if (preventIntentRedirect()) {
+-            if (mCreatorTokenInfo == null) {
+-                out.writeInt(0);
+-            } else {
+-                out.writeInt(1);
+-                out.writeStrongBinder(mCreatorTokenInfo.mCreatorToken);
+-
+-                if (mCreatorTokenInfo.mNestedIntentKeys != null) {
+-                    final int N = mCreatorTokenInfo.mNestedIntentKeys.size();
+-                    out.writeInt(N);
+-                    for (int i = 0; i < N; i++) {
+-                        NestedIntentKey key = mCreatorTokenInfo.mNestedIntentKeys.valueAt(i);
+-                        out.writeInt(key.mType);
+-                        out.writeString8(key.mKey);
+-                        out.writeInt(key.mIndex);
+-                    }
+-                } else {
+-                    out.writeInt(0);
+-                }
+-            }
+-        }
+     }
+ 
+     public static final @android.annotation.NonNull Parcelable.Creator<Intent> CREATOR
+@@ -13022,33 +12227,13 @@
+             mSelector = new Intent(in);
+         }
+ 
+-        if (in.readInt() != 0) {
+-            mClipData = new ClipData(in);
+-        }
++        mClipData = in.readBoolean() ? in.readParcelable(null, ClipData.class) : null;
+         mContentUserHint = in.readInt();
+-        mExtras = in.readBundle();
++        mExtras = in.readBundle(null);
+         if (in.readInt() != 0) {
+             mOriginalIntent = new Intent(in);
+         }
+ 
+-        if (preventIntentRedirect()) {
+-            if (in.readInt() != 0) {
+-                mCreatorTokenInfo = new CreatorTokenInfo();
+-                mCreatorTokenInfo.mCreatorToken = in.readStrongBinder();
+-
+-                N = in.readInt();
+-                if (N > 0) {
+-                    mCreatorTokenInfo.mNestedIntentKeys = new ArraySet<>(N);
+-                    for (int i = 0; i < N; i++) {
+-                        int type = in.readInt();
+-                        String key = in.readString8();
+-                        int index = in.readInt();
+-                        mCreatorTokenInfo.mNestedIntentKeys.append(
+-                                new NestedIntentKey(type, key, index));
+-                    }
+-                }
+-            }
+-        }
+     }
+ 
+     /**
+@@ -13075,18 +12260,19 @@
+         Intent intent = new Intent();
+ 
+         TypedArray sa = resources.obtainAttributes(attrs,
+-                com.android.internal.R.styleable.Intent);
+-
+-        intent.setAction(sa.getString(com.android.internal.R.styleable.Intent_action));
+-
+-        String data = sa.getString(com.android.internal.R.styleable.Intent_data);
+-        String mimeType = sa.getString(com.android.internal.R.styleable.Intent_mimeType);
++                new int[] {android.R.attr.action, android.R.attr.data, android.R.attr.mimeType,
++                        android.R.attr.identifier, android.R.attr.targetPackage, android.R.attr.targetClass});
++
++        intent.setAction(sa.getString(0));
++
++        String data = sa.getString(1);
++        String mimeType = sa.getString(2);
+         intent.setDataAndType(data != null ? Uri.parse(data) : null, mimeType);
+ 
+-        intent.setIdentifier(sa.getString(com.android.internal.R.styleable.Intent_identifier));
+-
+-        String packageName = sa.getString(com.android.internal.R.styleable.Intent_targetPackage);
+-        String className = sa.getString(com.android.internal.R.styleable.Intent_targetClass);
++        intent.setIdentifier(sa.getString(3));
++
++        String packageName = sa.getString(4);
++        String className = sa.getString(5);
+         if (packageName != null && className != null) {
+             intent.setComponent(new ComponentName(packageName, className));
+         }
+@@ -13104,24 +12290,46 @@
+             String nodeName = parser.getName();
+             if (nodeName.equals(TAG_CATEGORIES)) {
+                 sa = resources.obtainAttributes(attrs,
+-                        com.android.internal.R.styleable.IntentCategory);
+-                String cat = sa.getString(com.android.internal.R.styleable.IntentCategory_name);
++                        new int[] {android.R.attr.name});
++                String cat = sa.getString(0);
+                 sa.recycle();
+ 
+                 if (cat != null) {
+                     intent.addCategory(cat);
+                 }
+-                XmlUtils.skipCurrentTag(parser);
++                IntentFilter.skipXmlTag(parser);
+ 
+             } else if (nodeName.equals(TAG_EXTRA)) {
+                 if (intent.mExtras == null) {
+                     intent.mExtras = new Bundle();
+                 }
+-                resources.parseBundleExtra(TAG_EXTRA, attrs, intent.mExtras);
+-                XmlUtils.skipCurrentTag(parser);
++                TypedArray extra = resources.obtainAttributes(attrs,
++                        new int[] {android.R.attr.name, android.R.attr.value});
++                try {
++                    String name = extra.getString(0);
++                    if (name == null) throw new XmlPullParserException("Intent extra is missing its name");
++                    android.util.TypedValue value = extra.peekValue(1);
++                    if (value != null) {
++                        if (value.type == android.util.TypedValue.TYPE_STRING) {
++                            intent.putExtra(name, extra.getString(1));
++                        } else if (value.type == android.util.TypedValue.TYPE_INT_BOOLEAN) {
++                            intent.putExtra(name, value.data != 0);
++                        } else if (value.type >= android.util.TypedValue.TYPE_FIRST_INT
++                                && value.type <= android.util.TypedValue.TYPE_LAST_INT) {
++                            intent.putExtra(name, value.data);
++                        } else if (value.type == android.util.TypedValue.TYPE_FLOAT) {
++                            intent.putExtra(name, value.getFloat());
++                        } else {
++                            throw new XmlPullParserException("Unsupported intent extra " + name);
++                        }
++                    }
++                } finally {
++                    extra.recycle();
++                }
++                IntentFilter.skipXmlTag(parser);
+ 
+             } else {
+-                XmlUtils.skipCurrentTag(parser);
++                IntentFilter.skipXmlTag(parser);
+             }
+         }
+ 
+@@ -13201,7 +12409,7 @@
+                     }
+                 } else {
+                     Log.w(TAG, "restoreFromXml: unknown name=" + name);
+-                    XmlUtils.skipCurrentTag(in);
++                    IntentFilter.skipXmlTag(in);
+                 }
+             }
+         }
+@@ -13248,7 +12456,6 @@
+      *
+      * @hide
+      */
+-    @android.ravenwood.annotation.RavenwoodThrow
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public void prepareToLeaveProcess(Context context) {
+         final boolean leavingPackage;
+@@ -13270,7 +12477,6 @@
+      *
+      * @hide
+      */
+-    @android.ravenwood.annotation.RavenwoodThrow
+     public void prepareToLeaveProcess(boolean leavingPackage) {
+         prepareToLeaveProcess(leavingPackage, true);
+     }
+@@ -13280,104 +12486,13 @@
+      */
+     void prepareToLeaveProcess(boolean leavingPackage, boolean isTopLevel) {
+         setAllowFds(false);
+-
+-        if (mSelector != null) {
+-            mSelector.prepareToLeaveProcess(leavingPackage, false);
+-        }
+-        if (mClipData != null) {
+-            mClipData.prepareToLeaveProcess(leavingPackage, getFlags());
+-        }
+-        if (mOriginalIntent != null) {
+-            mOriginalIntent.prepareToLeaveProcess(leavingPackage, false);
+-        }
+-
+-        if (mExtras != null && !mExtras.isParcelled()) {
+-            final Object intent = mExtras.get(Intent.EXTRA_INTENT);
+-            if (intent instanceof Intent) {
+-                ((Intent) intent).prepareToLeaveProcess(leavingPackage, false);
+-            }
+-        }
+-
+-        if (mAction != null && mData != null && StrictMode.vmFileUriExposureEnabled()
+-                && leavingPackage) {
+-            switch (mAction) {
+-                case ACTION_MEDIA_REMOVED:
+-                case ACTION_MEDIA_UNMOUNTED:
+-                case ACTION_MEDIA_CHECKING:
+-                case ACTION_MEDIA_NOFS:
+-                case ACTION_MEDIA_MOUNTED:
+-                case ACTION_MEDIA_SHARED:
+-                case ACTION_MEDIA_UNSHARED:
+-                case ACTION_MEDIA_BAD_REMOVAL:
+-                case ACTION_MEDIA_UNMOUNTABLE:
+-                case ACTION_MEDIA_EJECT:
+-                case ACTION_MEDIA_SCANNER_STARTED:
+-                case ACTION_MEDIA_SCANNER_FINISHED:
+-                case ACTION_MEDIA_SCANNER_SCAN_FILE:
+-                case ACTION_PACKAGE_NEEDS_VERIFICATION:
+-                case ACTION_PACKAGE_NEEDS_INTEGRITY_VERIFICATION:
+-                case ACTION_PACKAGE_VERIFIED:
+-                case ACTION_PACKAGE_ENABLE_ROLLBACK:
+-                    // Ignore legacy actions
+-                    break;
+-                default:
+-                    mData.checkFileUriExposed("Intent.getData()");
+-            }
+-        }
+-
+-        if (mAction != null && mData != null && StrictMode.vmContentUriWithoutPermissionEnabled()
+-                && leavingPackage) {
+-            switch (mAction) {
+-                case ACTION_PROVIDER_CHANGED:
+-                case QuickContact.ACTION_QUICK_CONTACT:
+-                    // Ignore actions that don't need to grant
+-                    break;
+-                default:
+-                    mData.checkContentUriWithoutPermission("Intent.getData()", getFlags());
+-            }
+-        }
+-
+-        // Translate raw filesystem paths out of storage sandbox
+-        if (ACTION_MEDIA_SCANNER_SCAN_FILE.equals(mAction) && mData != null
+-                && ContentResolver.SCHEME_FILE.equals(mData.getScheme()) && leavingPackage) {
+-            final StorageManager sm = AppGlobals.getInitialApplication()
+-                    .getSystemService(StorageManager.class);
+-            final File before = new File(mData.getPath());
+-            final File after = sm.translateAppToSystem(before,
+-                    android.os.Process.myPid(), android.os.Process.myUid());
+-            if (!Objects.equals(before, after)) {
+-                Log.v(TAG, "Translated " + before + " to " + after);
+-                mData = Uri.fromFile(after);
+-            }
+-        }
+-
+-        // Detect cases where we're about to launch a potentially unsafe intent
+-        if (StrictMode.vmUnsafeIntentLaunchEnabled()) {
+-            if ((mLocalFlags & LOCAL_FLAG_FROM_PARCEL) != 0
+-                    && (mLocalFlags
+-                    & (LOCAL_FLAG_FROM_PROTECTED_COMPONENT | LOCAL_FLAG_FROM_SYSTEM)) == 0) {
+-                StrictMode.onUnsafeIntentLaunch(this);
+-            } else if ((mLocalFlags & LOCAL_FLAG_UNFILTERED_EXTRAS) != 0) {
+-                StrictMode.onUnsafeIntentLaunch(this);
+-            } else if ((mLocalFlags & LOCAL_FLAG_FROM_URI) != 0
+-                    && !(mCategories != null && mCategories.contains(CATEGORY_BROWSABLE)
+-                    && mComponent == null)) {
+-                // Since the docs for #URI_ALLOW_UNSAFE recommend setting the category to browsable
+-                // for an implicit Intent parsed from a URI a violation should be reported if these
+-                // conditions are not met.
+-                StrictMode.onUnsafeIntentLaunch(this);
+-            }
+-        }
+-
+-        if (isTopLevel) {
+-            collectExtraIntentKeys();
+-        }
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @android.ravenwood.annotation.RavenwoodThrow
++        if (mSelector != null) mSelector.prepareToLeaveProcess(leavingPackage, false);
++        if (mOriginalIntent != null) mOriginalIntent.prepareToLeaveProcess(leavingPackage, false);
++    }
++
++    /**
++     * @hide
++     */
+     public void prepareToEnterProcess(boolean fromProtectedComponent, AttributionSource source) {
+         if (fromProtectedComponent) {
+             prepareToEnterProcess(LOCAL_FLAG_FROM_PROTECTED_COMPONENT, source);
+@@ -13389,48 +12504,13 @@
+     /**
+      * @hide
+      */
+-    @android.ravenwood.annotation.RavenwoodThrow
+     public void prepareToEnterProcess(int localFlags, AttributionSource source) {
+-        // We just entered destination process, so we should be able to read all
+-        // parcelables inside.
+-        setDefusable(true);
+-
+-        if (mSelector != null) {
+-            // We can't recursively claim that this data is from a protected
+-            // component, since it may have been filled in by a malicious app
+-            mSelector.prepareToEnterProcess(0, source);
+-        }
+-        if (mClipData != null) {
+-            mClipData.prepareToEnterProcess(source);
+-        }
+-        if (mOriginalIntent != null) {
+-            // We can't recursively claim that this data is from a protected
+-            // component, since it may have been filled in by a malicious app
+-            mOriginalIntent.prepareToEnterProcess(0, source);
+-        }
+-
++        mLocalFlags |= localFlags;
++        if (mSelector != null) mSelector.prepareToEnterProcess(0, source);
++        if (mOriginalIntent != null) mOriginalIntent.prepareToEnterProcess(0, source);
+         if (mContentUserHint != UserHandle.USER_CURRENT) {
+-            if (UserHandle.getAppId(Process.myUid()) != Process.SYSTEM_UID) {
+-                fixUris(mContentUserHint);
+-                mContentUserHint = UserHandle.USER_CURRENT;
+-            }
+-        }
+-
+-        mLocalFlags |= localFlags;
+-        checkCreatorToken();
+-
+-        // Special attribution fix-up logic for any BluetoothDevice extras
+-        // passed via Bluetooth intents
+-        if (mAction != null && mAction.startsWith("android.bluetooth.")
+-                && hasExtra(BluetoothDevice.EXTRA_DEVICE)) {
+-            final BluetoothDevice device = getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice.class);
+-            if (device != null) {
+-                AttributionSource sanitizedSource =
+-                    source.getDeviceId() != Context.DEVICE_ID_DEFAULT
+-                        ? source.withDeviceId(Context.DEVICE_ID_DEFAULT)
+-                        : source;
+-                device.prepareToEnterProcess(sanitizedSource);
+-            }
++            fixUris(mContentUserHint);
++            mContentUserHint = UserHandle.USER_CURRENT;
+         }
+     }
+ 
+@@ -13486,7 +12566,6 @@
+      * @return Returns true if the intent does not match any intent filters declared in the
+      * receiving component.
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_ENFORCE_INTENT_FILTER_MATCH)
+     public boolean isMismatchingFilter() {
+         return (mExtendedFlags & EXTENDED_FLAG_FILTER_MISMATCH) != 0;
+     }
+@@ -13494,14 +12573,10 @@
+     /**
+      * @hide
+      */
+-    @android.ravenwood.annotation.RavenwoodThrow
+      public void fixUris(int contentUserHint) {
+         Uri data = getData();
+         if (data != null) {
+             mData = maybeAddUserId(data, contentUserHint);
+-        }
+-        if (mClipData != null) {
+-            mClipData.fixUris(contentUserHint);
+         }
+         String action = getAction();
+         if (ACTION_SEND.equals(action)) {
+@@ -13534,9 +12609,8 @@
+      * @return Whether any contents were migrated.
+      * @hide
+      */
+-    @android.ravenwood.annotation.RavenwoodThrow
+     public boolean migrateExtraStreamToClipData() {
+-        return migrateExtraStreamToClipData(AppGlobals.getInitialApplication());
++        return migrateExtraStreamToClipData(UiRuntime.getActivity());
+     }
+ 
+     /**
+@@ -13548,242 +12622,60 @@
+      * @return Whether any contents were migrated.
+      * @hide
+      */
+-    @android.ravenwood.annotation.RavenwoodThrow
+     public boolean migrateExtraStreamToClipData(Context context) {
+-        // Refuse to touch if extras already parcelled
+-        if (mExtras != null && mExtras.isParcelled()) return false;
+-
+-        // Bail when someone already gave us ClipData
+-        if (getClipData() != null) return false;
+-
+-        final String action = getAction();
+-        if (ACTION_CHOOSER.equals(action)) {
+-            // Inspect contained intents to see if we need to migrate extras. We
+-            // don't promote ClipData to the parent, since ChooserActivity will
+-            // already start the picked item as the caller, and we can't combine
+-            // the flags in a safe way.
+-
++        if (mClipData != null || mExtras == null || mExtras.isParcelled()) return false;
++        if (ACTION_CHOOSER.equals(mAction)) {
+             boolean migrated = false;
+-            try {
+-                final Intent intent = getParcelableExtra(EXTRA_INTENT, Intent.class);
+-                if (intent != null) {
+-                    migrated |= intent.migrateExtraStreamToClipData(context);
+-                }
+-            } catch (ClassCastException e) {
+-            }
+-            try {
+-                final Parcelable[] intents = getParcelableArrayExtra(EXTRA_INITIAL_INTENTS);
+-                if (intents != null) {
+-                    for (int i = 0; i < intents.length; i++) {
+-                        final Intent intent = (Intent) intents[i];
+-                        if (intent != null) {
+-                            migrated |= intent.migrateExtraStreamToClipData(context);
+-                        }
++            Intent target = getParcelableExtra(EXTRA_INTENT, Intent.class);
++            if (target != null) migrated = target.migrateExtraStreamToClipData(context);
++            Parcelable[] initial = getParcelableArrayExtra(EXTRA_INITIAL_INTENTS);
++            if (initial != null) {
++                for (Parcelable item : initial) {
++                    if (item instanceof Intent intent) {
++                        migrated |= intent.migrateExtraStreamToClipData(context);
+                     }
+                 }
+-            } catch (ClassCastException e) {
+             }
+             return migrated;
+-
+-        } else if (ACTION_SEND.equals(action)) {
+-            try {
+-                final Uri stream = getParcelableExtra(EXTRA_STREAM, Uri.class);
+-                final CharSequence text = getCharSequenceExtra(EXTRA_TEXT);
+-                final String htmlText = getStringExtra(EXTRA_HTML_TEXT);
+-                if (stream != null || text != null || htmlText != null) {
+-                    final ClipData clipData = new ClipData(
+-                            null, new String[] { getType() },
+-                            new ClipData.Item(text, htmlText, null, stream));
+-                    setClipData(clipData);
+-                    if (stream != null && isMissingGrantFlag(FLAG_GRANT_READ_URI_PERMISSION)) {
+-                        String errorMessage =
+-                                "Implicit URI grant for " + ACTION_SEND + " action will be "
+-                                        + "discontinued from Android 18 onwards. Please set the "
+-                                        + "grant explicitly in the app.";
+-                        if (android.security.Flags.strictModeViolationForImplicitUriGrantsEnabled()
+-                                && StrictMode.vmImplicitUriPermissionGrantEnabled()) {
+-                            StrictMode.onImplicitUriPermissionGrant(errorMessage);
+-                        }
+-                        int grantType;
+-                        if (android.security.Flags.implicitUriGrantsRestrictedForSendAction()) {
+-                            Log.e(TAG, "Skipping implicit URI grants for " + ACTION_SEND
+-                                    + " action because it is restricted", new Throwable());
+-                            grantType = IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__RESTRICTED;
+-                        } else {
+-                            Log.e(TAG, errorMessage, new Throwable());
+-                            addFlags(FLAG_GRANT_READ_URI_PERMISSION);
+-                            grantType = IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__GRANTED;
+-                        }
+-                        FrameworkStatsLog.write(
+-                                IMPLICIT_URI_GRANT_EVENT_REPORTED,
+-                                context.getApplicationInfo().uid,
+-                                grantType,
+-                                IMPLICIT_URI_GRANT_EVENT_REPORTED__ACCESS_TYPE__READ,
+-                                IMPLICIT_URI_GRANT_EVENT_REPORTED__ACTION_TYPE__SEND);
+-                    }
+-                    return true;
+-                }
+-            } catch (ClassCastException e) {
+-            }
+-
+-        } else if (ACTION_SEND_MULTIPLE.equals(action)) {
+-            try {
+-                final ArrayList<Uri> streams = getParcelableArrayListExtra(EXTRA_STREAM, Uri.class);
+-                final ArrayList<CharSequence> texts = getCharSequenceArrayListExtra(EXTRA_TEXT);
+-                final ArrayList<String> htmlTexts = getStringArrayListExtra(EXTRA_HTML_TEXT);
+-                int num = -1;
+-                if (streams != null) {
+-                    num = streams.size();
+-                }
+-                if (texts != null) {
+-                    if (num >= 0 && num != texts.size()) {
+-                        // Wha...!  F- you.
+-                        return false;
+-                    }
+-                    num = texts.size();
+-                }
+-                if (htmlTexts != null) {
+-                    if (num >= 0 && num != htmlTexts.size()) {
+-                        // Wha...!  F- you.
+-                        return false;
+-                    }
+-                    num = htmlTexts.size();
+-                }
+-                if (num > 0) {
+-                    final ClipData clipData = new ClipData(
+-                            null, new String[] { getType() },
+-                            makeClipItem(streams, texts, htmlTexts, 0));
+-
+-                    for (int i = 1; i < num; i++) {
+-                        clipData.addItem(makeClipItem(streams, texts, htmlTexts, i));
+-                    }
+-
+-                    setClipData(clipData);
+-                    if (streams != null && isMissingGrantFlag(FLAG_GRANT_READ_URI_PERMISSION)) {
+-                        String errorMessage = "Implicit URI grant for " + ACTION_SEND_MULTIPLE
+-                                + " action will be discontinued from Android 18 onwards. Please"
+-                                + " set the grant explicitly in the app.";
+-                        if (android.security.Flags.strictModeViolationForImplicitUriGrantsEnabled()
+-                                && StrictMode.vmImplicitUriPermissionGrantEnabled()) {
+-                            StrictMode.onImplicitUriPermissionGrant(errorMessage);
+-                        }
+-                        int grantType;
+-                        if (android.security.Flags
+-                                .implicitUriGrantsRestrictedForSendmultipleImagecaptureActions()) {
+-                            Log.e(TAG, "Skipping implicit URI grants for "
+-                                    + ACTION_SEND_MULTIPLE + " action because it is restricted",
+-                                    new Throwable());
+-                            grantType = IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__RESTRICTED;
+-                        } else {
+-                            Log.e(TAG, errorMessage, new Throwable());
+-                            addFlags(FLAG_GRANT_READ_URI_PERMISSION);
+-                            grantType = IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__GRANTED;
+-                        }
+-                        FrameworkStatsLog.write(
+-                                IMPLICIT_URI_GRANT_EVENT_REPORTED,
+-                                context.getApplicationInfo().uid,
+-                                grantType,
+-                                IMPLICIT_URI_GRANT_EVENT_REPORTED__ACCESS_TYPE__READ,
+-                                IMPLICIT_URI_GRANT_EVENT_REPORTED__ACTION_TYPE__SEND_MULTIPLE);
+-                    }
+-                    return true;
+-                }
+-            } catch (ClassCastException e) {
+-            }
+-        } else if (isImageCaptureIntent()) {
+-            Uri output;
+-            try {
+-                output = getParcelableExtra(MediaStore.EXTRA_OUTPUT, Uri.class);
+-            } catch (ClassCastException e) {
+-                return false;
+-            }
+-
+-            if (output != null) {
+-                output = maybeConvertFileToContentUri(context, output);
+-                putExtra(MediaStore.EXTRA_OUTPUT, output);
+-
+-                setClipData(ClipData.newRawUri("", output));
+-
+-                if (isMissingGrantFlag(FLAG_GRANT_READ_URI_PERMISSION)) {
+-                    String errorMessage = "Implicit URI read grant for ImageCapture action will be "
+-                                    + "discontinued from Android 18 onwards. Please set the grant"
+-                                    + " explicitly in the app.";
+-                    if (android.security.Flags.strictModeViolationForImplicitUriGrantsEnabled()
+-                            && StrictMode.vmImplicitUriPermissionGrantEnabled()) {
+-                        StrictMode.onImplicitUriPermissionGrant(errorMessage);
+-                    }
+-                    int grantType;
+-                    if (android.security.Flags
+-                            .implicitUriGrantsRestrictedForSendmultipleImagecaptureActions()) {
+-                        Log.e(TAG,
+-                                "Skipping implicit URI read grants for ImageCapture action "
+-                                        + "because it is restricted", new Throwable());
+-                        grantType = IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__RESTRICTED;
+-                    } else {
+-                        Log.e(TAG, errorMessage, new Throwable());
+-                        addFlags(FLAG_GRANT_READ_URI_PERMISSION);
+-                        grantType = IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__GRANTED;
+-                    }
+-                    FrameworkStatsLog.write(IMPLICIT_URI_GRANT_EVENT_REPORTED,
+-                            context.getApplicationInfo().uid,
+-                            grantType,
+-                            IMPLICIT_URI_GRANT_EVENT_REPORTED__ACCESS_TYPE__READ,
+-                            IMPLICIT_URI_GRANT_EVENT_REPORTED__ACTION_TYPE__IMAGE_CAPTURE);
+-                }
+-                if (isMissingGrantFlag(FLAG_GRANT_WRITE_URI_PERMISSION)) {
+-                    String errorMessage =
+-                            "Implicit URI write grant for ImageCapture action will be "
+-                                    + "discontinued from Android 18 onwards. Please set the grant"
+-                                    + " explicitly in the app.";
+-                    if (android.security.Flags.strictModeViolationForImplicitUriGrantsEnabled()
+-                            && StrictMode.vmImplicitUriPermissionGrantEnabled()) {
+-                        StrictMode.onImplicitUriPermissionGrant(errorMessage);
+-                    }
+-                    int grantType;
+-                    if (android.security.Flags
+-                            .implicitUriGrantsRestrictedForSendmultipleImagecaptureActions()) {
+-                        Log.e(TAG,
+-                                "Skipping implicit URI write grants for ImageCapture action "
+-                                        + "because it is restricted", new Throwable());
+-                        grantType = IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__RESTRICTED;
+-                    } else {
+-                        Log.e(TAG, errorMessage, new Throwable());
+-                        addFlags(FLAG_GRANT_WRITE_URI_PERMISSION);
+-                        grantType = IMPLICIT_URI_GRANT_EVENT_REPORTED__GRANT_TYPE__GRANTED;
+-                    }
+-                    FrameworkStatsLog.write(IMPLICIT_URI_GRANT_EVENT_REPORTED,
+-                            context.getApplicationInfo().uid,
+-                            grantType,
+-                            IMPLICIT_URI_GRANT_EVENT_REPORTED__ACCESS_TYPE__WRITE,
+-                            IMPLICIT_URI_GRANT_EVENT_REPORTED__ACTION_TYPE__IMAGE_CAPTURE);
+-                }
+-                return true;
+-            }
+-        }
+-
+-        return false;
+-    }
+-
+-    private boolean isMissingGrantFlag(int grantFlagToCheck) {
+-        return ((getFlags() & grantFlagToCheck) != grantFlagToCheck);
+-    }
+-
+-    @android.ravenwood.annotation.RavenwoodThrow
+-    private Uri maybeConvertFileToContentUri(Context context, Uri uri) {
+-        if (ContentResolver.SCHEME_FILE.equals(uri.getScheme())
+-                && context.getApplicationInfo().targetSdkVersion < Build.VERSION_CODES.R) {
+-            File file = new File(uri.getPath());
+-            try {
+-                if (!file.exists()) file.createNewFile();
+-                uri = MediaStore.scanFile(context.getContentResolver(), new File(uri.getPath()));
+-                if (uri != null) {
+-                    return uri;
+-                }
+-            } catch (IOException e) {
+-                Log.e(TAG, "Ignoring failure to create file " + file, e);
+-            }
+-        }
+-        return uri;
++        }
++        if (ACTION_SEND.equals(mAction)) {
++            Uri stream = getParcelableExtra(EXTRA_STREAM, Uri.class);
++            CharSequence text = getCharSequenceExtra(EXTRA_TEXT);
++            String html = getStringExtra(EXTRA_HTML_TEXT);
++            if (stream == null && text == null && html == null) return false;
++            setClipData(new ClipData(null, new String[]{getType()},
++                    new ClipData.Item(text, html, null, stream)));
++            addFlags(FLAG_GRANT_READ_URI_PERMISSION);
++            return true;
++        }
++        if (ACTION_SEND_MULTIPLE.equals(mAction)) {
++            ArrayList<Uri> streams = getParcelableArrayListExtra(EXTRA_STREAM, Uri.class);
++            ArrayList<CharSequence> texts = getCharSequenceArrayListExtra(EXTRA_TEXT);
++            ArrayList<String> htmls = getStringArrayListExtra(EXTRA_HTML_TEXT);
++            int count = streams != null ? streams.size()
++                    : texts != null ? texts.size() : htmls != null ? htmls.size() : 0;
++            if (count == 0 || texts != null && texts.size() != count
++                    || htmls != null && htmls.size() != count) return false;
++            ClipData clip = new ClipData(null, new String[]{getType()},
++                    makeClipItem(streams, texts, htmls, 0));
++            for (int i = 1; i < count; i++) clip.addItem(makeClipItem(streams, texts, htmls, i));
++            setClipData(clip);
++            addFlags(FLAG_GRANT_READ_URI_PERMISSION);
++            return true;
++        }
++        Uri output = isImageCaptureIntent() ? getParcelableExtra(MediaStore.EXTRA_OUTPUT, Uri.class) : null;
++        if (output == null) return false;
++        setClipData(ClipData.newRawUri("", output));
++        addFlags(FLAG_GRANT_READ_URI_PERMISSION | FLAG_GRANT_WRITE_URI_PERMISSION);
++        return true;
++    }
++
++    private static Uri maybeAddUserId(Uri uri, int userId) {
++        if (userId == UserHandle.USER_CURRENT || !"content".equals(uri.getScheme())
++                || uri.getEncodedAuthority() == null || uri.getEncodedAuthority().indexOf('@') != -1) {
++            return uri;
++        }
++        return uri.buildUpon().encodedAuthority(userId + "@" + uri.getEncodedAuthority()).build();
+     }
+ 
+     /**

@@ -3,6 +3,10 @@
 #include <math.h>
 #include <string.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 _Static_assert(sizeof(wa_canvas_record_t) == 4, "record header ABI");
 _Static_assert(sizeof(wa_canvas_rect_draw_t) == 28, "rect ABI");
 _Static_assert(sizeof(wa_canvas_round_draw_t) == 36, "round rect ABI");
@@ -297,6 +301,96 @@ wa_font_metric_t *wa_sf_font_metrics(wa_sf_t *sf) {
     return sf ? &sf->fonts[0][0] : NULL;
 }
 
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+wa_font_advances_t *wa_sf_font_advances(wa_sf_t *sf) {
+    return sf ? &sf->advances[0][0] : NULL;
+}
+
+uint32_t wa_sf_font_calibration_generation(const wa_sf_t *sf) {
+    if (!sf)
+        return 0;
+    /* The compositor publishes rows in face and weight order. The final row
+     * changes only after the new widths for the other faces are available. */
+    const wa_font_advances_t *last = &sf->advances[WA_FONT_FACE_COUNT - 1][WA_FONT_WEIGHT_COUNT - 1];
+    const uint32_t generation = wa_atomic_load(&last->sequence);
+    return generation & 1u ? 0 : generation;
+}
+
+_Static_assert(sizeof(wa_font_advances_t) == 404, "font advances ABI");
+
+/* Conservative widths in hundredths of an em for the browser's sans-serif
+ * fallback stack. Keep the space and narrow glyphs distinct from wide letters. */
+static const uint8_t sans_widths[WA_FONT_ASCII_COUNT] = {
+    /*  ! " # $ % & ' ( ) * + , - . / */
+    32, 34, 47, 72, 67, 99, 80, 29, 42, 42, 52, 70, 34, 42, 34, 43,
+    /* 0 1 2 3 4 5 6 7 8 9 : ; < = > ? */
+    67, 62, 67, 67, 67, 67, 67, 67, 67, 67, 35, 35, 70, 70, 70, 57,
+    /* @ A B C D E F G H I J K L M N O */
+    104, 75, 73, 76, 79, 66, 60, 80, 79, 34, 43, 73, 61, 93, 79, 81,
+    /* P Q R S T U V W X Y Z [ \ ] ^ _ */
+    68, 81, 73, 69, 66, 78, 75, 102, 76, 74, 68, 42, 43, 42, 62, 59,
+    /* ` a b c d e f g h i j k l m n o */
+    58, 64, 67, 60, 67, 64, 40, 66, 66, 31, 32, 63, 31, 102, 66, 66,
+    /* p q r s t u v w x y z { | } ~ */
+    67, 67, 46, 58, 45, 66, 65, 92, 65, 65, 57, 44, 32, 44, 70,
+};
+
+static int wide_character(uint32_t cp) {
+    return cp >= 0x2e80 || (cp >= 0x1100 && cp <= 0x11ff);
+}
+
+static double fallback_width(uint32_t cp, uint32_t face, uint32_t bucket) {
+    if (wide_character(cp))
+        return 1.06;
+    if (face == WA_FONT_MONOSPACE)
+        return 0.64;
+    if (cp < WA_FONT_ASCII_FIRST + WA_FONT_ASCII_COUNT)
+        return sans_widths[cp - WA_FONT_ASCII_FIRST] / 100.0 + (bucket >= 4 ? 0.02 : 0);
+    return 0.86;
+}
+
+static double text_advance(const char *text, uint32_t len, uint32_t face, uint32_t bucket,
+                           const wa_font_advances_t *row, float latin, float wide) {
+    uint32_t at = 0, cp;
+    double advance = 0;
+    while (at < len) {
+        if (wa_utf8_next(text, len, &at, &cp) < 0)
+            cp = 0xfffd;
+        if (cp < WA_FONT_ASCII_FIRST || cp == 0x7f || cp == 0x200d ||
+            (cp >= 0x300 && cp <= 0x36f) || (cp >= 0xfe00 && cp <= 0xfe0f) ||
+            (cp >= 0x1f3fb && cp <= 0x1f3ff))
+            continue;
+        if (row) {
+            uint32_t q16;
+            if (cp < WA_FONT_ASCII_FIRST + WA_FONT_ASCII_COUNT)
+                q16 = wa_atomic_load(&row->ascii_q16[cp - WA_FONT_ASCII_FIRST]);
+            else if (wide_character(cp))
+                q16 = wa_atomic_load(&row->wide_q16);
+            else if ((cp >= 0xc0 && cp <= 0xde && cp != 0xd7) ||
+                     (cp >= 0x391 && cp <= 0x3ab) || (cp >= 0x410 && cp <= 0x42f))
+                q16 = wa_atomic_load(&row->upper_q16);
+            else if ((cp >= 0xdf && cp <= 0xff && cp != 0xf7) ||
+                     (cp >= 0x3b1 && cp <= 0x3cb) || (cp >= 0x430 && cp <= 0x44f))
+                q16 = wa_atomic_load(&row->lower_q16);
+            else if ((cp >= 0x660 && cp <= 0x669) || (cp >= 0x6f0 && cp <= 0x6f9))
+                q16 = wa_atomic_load(&row->digit_q16);
+            else
+                q16 = wa_atomic_load(&row->punct_q16);
+            advance += q16 ? q16 / 65536.0 : fallback_width(cp, face, bucket);
+        } else if (latin > 0) {
+            if (wide_character(cp))
+                advance += wide;
+            else
+                advance += cp == ' ' && face != WA_FONT_MONOSPACE ? latin * 0.55 : latin;
+        } else {
+            advance += fallback_width(cp, face, bucket);
+        }
+    }
+    return advance;
+}
+
 wa_text_metrics_t wa_canvas_measure_text(const wa_sf_t *sf, const char *text, uint32_t len,
                                          float px, uint32_t weight, uint32_t face) {
     if (!text || !isfinite(px) || px <= 0 || face >= WA_FONT_FACE_COUNT)
@@ -304,7 +398,7 @@ wa_text_metrics_t wa_canvas_measure_text(const wa_sf_t *sf, const char *text, ui
     uint32_t bucket = !weight ? 4u : weight >= 900 ? 9u : (weight + 50u) / 100u;
     if (bucket)
         --bucket;
-    float latin = face == WA_FONT_MONOSPACE ? 0.60f : 0.54f;
+    float latin = 0;
     float wide = 1.0f, ascent = 0.80f, descent = 0.20f;
     if (sf) {
         const wa_font_metric_t *m = &sf->fonts[face][bucket];
@@ -319,19 +413,18 @@ wa_text_metrics_t wa_canvas_measure_text(const wa_sf_t *sf, const char *text, ui
                 descent = d / 65536.f;
             }
         }
+        const wa_font_advances_t *row = &sf->advances[face][bucket];
+        before = wa_atomic_load(&row->sequence);
+        if (before && !(before & 1)) {
+            const double advance = text_advance(text, len, face, bucket, row, 0, 0);
+            if (before == wa_atomic_load(&row->sequence)) {
+                /* Keep a fraction of a pixel for ink and pixel snapping at
+                 * small sizes before rounding outward to the layout grid. */
+                return (wa_text_metrics_t){advance > 0 ? ceil(advance * px + 0.5) : 0,
+                                           ascent * px, descent * px};
+            }
+        }
     }
-    uint32_t at = 0, cp;
-    float advance = 0;
-    while (at < len) {
-        if (wa_utf8_next(text, len, &at, &cp) < 0)
-            cp = 0xfffd;
-        if (cp < 32 || cp == 0x200d || (cp >= 0x300 && cp <= 0x36f) ||
-            (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0x1f3fb && cp <= 0x1f3ff))
-            continue;
-        if (cp >= 0x2e80 || (cp >= 0x1100 && cp <= 0x11ff))
-            advance += wide;
-        else
-            advance += (cp == ' ' && face != WA_FONT_MONOSPACE) ? latin * 0.55f : latin;
-    }
-    return (wa_text_metrics_t){advance * px, ascent * px, descent * px};
+    const double advance = text_advance(text, len, face, bucket, NULL, latin, wide) * px;
+    return (wa_text_metrics_t){latin > 0 ? advance : ceil(advance), ascent * px, descent * px};
 }

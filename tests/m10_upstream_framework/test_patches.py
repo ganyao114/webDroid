@@ -6,7 +6,7 @@ import unittest
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/aosp"))
-from build_upstream_framework_dex import apply_patch
+from build_upstream_framework_dex import apply_patch, profile_sources
 
 
 class StrictPatchTest(unittest.TestCase):
@@ -45,6 +45,33 @@ class StrictPatchTest(unittest.TestCase):
         self.patch.write_bytes(b"--- a/other.java\n+++ b/other.java\n@@ -1 +1 @@\n-old\n+new\n")
         with self.assertRaisesRegex(ValueError, "invalid or repeated Java target"):
             apply_patch(self.patch, self.sources)
+
+
+class SourceProfileTest(unittest.TestCase):
+    def test_directory_includes_subpackages_and_tracks_additions(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            directory = "frameworks/base/core/java/android/content/res"
+            first = directory + "/Resources.java"
+            nested = directory + "/loader/ResourcesLoader.java"
+            excluded = directory + "/DeviceOnly.java"
+            for name in (first, nested, excluded):
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.touch()
+            manifest = root / "sources.txt"
+            manifest.write_text(
+                f"[framework]\n@dir {directory}\n@exclude {excluded}\n"
+                "[services]\nframeworks/base/services/Resolver.java\n")
+            inputs = set()
+            groups = profile_sources(root, inputs, manifest)
+            self.assertEqual(groups["framework"], [first, nested])
+            self.assertEqual(inputs, {root / directory, (root / nested).parent})
+
+            with manifest.open("a") as sources:
+                sources.write(f"[framework]\n{nested}\n")
+            with self.assertRaisesRegex(ValueError, "duplicate source"):
+                profile_sources(root, set(), manifest)
 
 
 if __name__ == "__main__":

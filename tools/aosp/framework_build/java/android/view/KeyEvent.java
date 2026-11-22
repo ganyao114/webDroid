@@ -1,5 +1,8 @@
 package android.view;
 
+import android.os.Parcel;
+import android.os.Parcelable;
+
 public class KeyEvent extends InputEvent {
     public static final int ACTION_DOWN = 0, ACTION_UP = 1, ACTION_MULTIPLE = 2;
     public static final int KEYCODE_UNKNOWN = 0, KEYCODE_HOME = 3, KEYCODE_BACK = 4,
@@ -9,7 +12,8 @@ public class KeyEvent extends InputEvent {
     public static final int KEYCODE_SEARCH = 84;
     public static final int META_SHIFT_ON = 1, META_ALT_ON = 2, META_CTRL_ON = 0x1000, META_META_ON = 0x10000;
     public static final int FLAG_CANCELED = 0x20, FLAG_LONG_PRESS = 0x80;
-    private final int action, code, repeat, meta, device, scan, flags;
+    private final int action, code, repeat, meta, device, scan;
+    private int flags;
     private final long downTime, eventTime;
     private boolean tracking;
 
@@ -53,6 +57,52 @@ public class KeyEvent extends InputEvent {
     public boolean isCtrlPressed() { return (meta & META_CTRL_ON) != 0; }
     public boolean isMetaPressed() { return (meta & META_META_ON) != 0; }
     public void startTracking() { tracking = true; }
+
+    @Override public void cancel() { flags |= FLAG_CANCELED; }
+
+    @Override public KeyEvent copy() {
+        KeyEvent copy = new KeyEvent(downTime, eventTime, action, code, repeat, meta, device, scan,
+                flags, getSource());
+        copy.setDisplayId(getDisplayId());
+        copy.setTainted(isTainted());
+        copy.tracking = tracking;
+        return copy;
+    }
+
+    @Override public void recycleIfNeededAfterDispatch() {}
+
+    @Override public void writeToParcel(Parcel out, int parcelFlags) {
+        out.writeInt(PARCEL_TOKEN_KEY_EVENT);
+        out.writeLong(downTime);
+        out.writeLong(eventTime);
+        out.writeInt(action);
+        out.writeInt(code);
+        out.writeInt(repeat);
+        out.writeInt(meta);
+        out.writeInt(device);
+        out.writeInt(scan);
+        out.writeInt(flags);
+        out.writeInt(getSource());
+        out.writeInt(getDisplayId());
+        out.writeBoolean(isTainted());
+        out.writeBoolean(tracking);
+    }
+
+    public static final Parcelable.Creator<KeyEvent> CREATOR = new Parcelable.Creator<KeyEvent>() {
+        @Override public KeyEvent createFromParcel(Parcel in) {
+            if (in.readInt() != PARCEL_TOKEN_KEY_EVENT) {
+                throw new android.os.BadParcelableException("Expected a key event");
+            }
+            KeyEvent event = new KeyEvent(in.readLong(), in.readLong(), in.readInt(), in.readInt(),
+                    in.readInt(), in.readInt(), in.readInt(), in.readInt(), in.readInt(), in.readInt());
+            event.setDisplayId(in.readInt());
+            event.setTainted(in.readBoolean());
+            event.tracking = in.readBoolean();
+            return event;
+        }
+
+        @Override public KeyEvent[] newArray(int size) { return new KeyEvent[size]; }
+    };
 
     public final boolean dispatch(Callback callback) {
         switch (action) {

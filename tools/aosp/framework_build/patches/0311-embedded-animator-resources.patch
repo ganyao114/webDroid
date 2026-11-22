@@ -1,0 +1,456 @@
+--- a/frameworks/base/core/java/android/animation/AnimatorInflater.java
++++ b/frameworks/base/core/java/android/animation/AnimatorInflater.java
+@@ -15,13 +15,9 @@
+  */
+ package android.animation;
+ 
+-import android.annotation.AnimatorRes;
+ import android.annotation.AnyRes;
+ import android.annotation.NonNull;
+ import android.content.Context;
+-import android.content.pm.ActivityInfo.Config;
+-import android.content.res.ConfigurationBoundResourceCache;
+-import android.content.res.ConstantState;
+ import android.content.res.Resources;
+ import android.content.res.Resources.NotFoundException;
+ import android.content.res.Resources.Theme;
+@@ -39,7 +35,6 @@
+ import android.view.animation.BaseInterpolator;
+ import android.view.animation.Interpolator;
+ 
+-import com.android.internal.R;
+ 
+ import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+@@ -61,6 +56,66 @@
+     /**
+      * These flags are used when parsing AnimatorSet objects
+      */
++    // Attribute IDs from the framework animator styleables in core/res/res/values/attrs.xml.
++    private static final class Styleable {
++        static final int[] Animator = {
++            android.R.attr.interpolator,
++            android.R.attr.duration,
++            android.R.attr.startOffset,
++            android.R.attr.repeatCount,
++            android.R.attr.repeatMode,
++            android.R.attr.valueFrom,
++            android.R.attr.valueTo,
++            android.R.attr.valueType,
++        };
++        static final int Animator_interpolator = 0;
++        static final int Animator_duration = 1;
++        static final int Animator_startOffset = 2;
++        static final int Animator_repeatCount = 3;
++        static final int Animator_repeatMode = 4;
++        static final int Animator_valueFrom = 5;
++        static final int Animator_valueTo = 6;
++        static final int Animator_valueType = 7;
++
++        static final int[] PropertyValuesHolder = {
++            android.R.attr.valueFrom,
++            android.R.attr.valueTo,
++            android.R.attr.valueType,
++            android.R.attr.propertyName,
++        };
++        static final int PropertyValuesHolder_valueType = 2;
++        static final int PropertyValuesHolder_propertyName = 3;
++        static final int PropertyValuesHolder_valueFrom = 0;
++        static final int PropertyValuesHolder_valueTo = 1;
++
++        static final int[] Keyframe = {
++            android.R.attr.value,
++            android.R.attr.interpolator,
++            android.R.attr.valueType,
++            android.R.attr.fraction,
++        };
++        static final int Keyframe_value = 0;
++        static final int Keyframe_fraction = 3;
++        static final int Keyframe_interpolator = 1;
++
++        static final int[] PropertyAnimator = {
++            android.R.attr.propertyName,
++            android.R.attr.pathData,
++            android.R.attr.propertyXName,
++            android.R.attr.propertyYName,
++        };
++        static final int PropertyAnimator_propertyName = 0;
++        static final int PropertyAnimator_propertyXName = 2;
++        static final int PropertyAnimator_propertyYName = 3;
++        static final int PropertyAnimator_pathData = 1;
++
++        static final int[] AnimatorSet = {
++            android.R.attr.ordering,
++        };
++        static final int AnimatorSet_ordering = 0;
++
++    }
++
+     private static final int TOGETHER = 0;
+     private static final int SEQUENTIALLY = 1;
+ 
+@@ -86,7 +141,7 @@
+      * @return The animator object reference by the specified id
+      * @throws android.content.res.Resources.NotFoundException when the animation cannot be loaded
+      */
+-    public static Animator loadAnimator(Context context, @AnimatorRes int id)
++    public static Animator loadAnimator(Context context, int id)
+             throws NotFoundException {
+         return loadAnimator(context.getResources(), context.getTheme(), id);
+     }
+@@ -109,33 +164,12 @@
+     /** @hide */
+     public static Animator loadAnimator(Resources resources, Theme theme, int id,
+             float pathErrorScale) throws NotFoundException {
+-        final ConfigurationBoundResourceCache<Animator> animatorCache = resources
+-                .getAnimatorCache();
+-        Animator animator = animatorCache.getInstance(id, resources, theme);
+-        if (animator != null) {
+-            if (DBG_ANIMATOR_INFLATER) {
+-                Log.d(TAG, "loaded animator from cache, " + resources.getResourceName(id));
+-            }
+-            return animator;
+-        } else if (DBG_ANIMATOR_INFLATER) {
+-            Log.d(TAG, "cache miss for animator " + resources.getResourceName(id));
+-        }
+-        int cacheGeneration = animatorCache.getGeneration();
+         XmlResourceParser parser = null;
+         try {
+             parser = resources.getAnimation(id);
+-            animator = createAnimatorFromXml(resources, theme, parser, pathErrorScale);
++            Animator animator = createAnimatorFromXml(resources, theme, parser, pathErrorScale);
+             if (animator != null) {
+                 animator.appendChangingConfigurations(getChangingConfigs(resources, id));
+-                final ConstantState<Animator> constantState = animator.createConstantState();
+-                if (constantState != null) {
+-                    if (DBG_ANIMATOR_INFLATER) {
+-                        Log.d(TAG, "caching animator for res " + resources.getResourceName(id));
+-                    }
+-                    animatorCache.put(id, theme, constantState, cacheGeneration);
+-                    // create a new animator so that cached version is never used by the user
+-                    animator = constantState.newInstance(resources, theme);
+-                }
+             }
+             return animator;
+         } catch (XmlPullParserException ex) {
+@@ -158,28 +192,14 @@
+     public static StateListAnimator loadStateListAnimator(Context context, int id)
+             throws NotFoundException {
+         final Resources resources = context.getResources();
+-        final ConfigurationBoundResourceCache<StateListAnimator> cache = resources
+-                .getStateListAnimatorCache();
+         final Theme theme = context.getTheme();
+-        StateListAnimator animator = cache.getInstance(id, resources, theme);
+-        if (animator != null) {
+-            return animator;
+-        }
+-        int cacheGeneration = cache.getGeneration();
+         XmlResourceParser parser = null;
+         try {
+             parser = resources.getAnimation(id);
+-            animator =
++            StateListAnimator animator =
+                     createStateListAnimatorFromXml(context, parser, Xml.asAttributeSet(parser));
+             if (animator != null) {
+                 animator.appendChangingConfigurations(getChangingConfigs(resources, id));
+-                final ConstantState<StateListAnimator> constantState = animator
+-                        .createConstantState();
+-                if (constantState != null) {
+-                    cache.put(id, theme, constantState, cacheGeneration);
+-                    // return a clone so that the animator in constant state is never used.
+-                    animator = constantState.newInstance(resources, theme);
+-                }
+             }
+             return animator;
+         } catch (XmlPullParserException ex) {
+@@ -227,7 +247,7 @@
+                         int stateIndex = 0;
+                         for (int i = 0; i < attributeCount; i++) {
+                             int attrName = attributeSet.getAttributeNameResource(i);
+-                            if (attrName == R.attr.animation) {
++                            if (attrName == android.R.attr.animation) {
+                                 final int animId = attributeSet.getAttributeResourceValue(i, 0);
+                                 animator = loadAnimator(context, animId);
+                             } else {
+@@ -412,18 +432,18 @@
+      */
+     private static void parseAnimatorFromTypeArray(ValueAnimator anim,
+             TypedArray arrayAnimator, TypedArray arrayObjectAnimator, float pixelSize) {
+-        long duration = arrayAnimator.getInt(R.styleable.Animator_duration, 300);
+-
+-        long startDelay = arrayAnimator.getInt(R.styleable.Animator_startOffset, 0);
+-
+-        int valueType = arrayAnimator.getInt(R.styleable.Animator_valueType, VALUE_TYPE_UNDEFINED);
++        long duration = arrayAnimator.getInt(Styleable.Animator_duration, 300);
++
++        long startDelay = arrayAnimator.getInt(Styleable.Animator_startOffset, 0);
++
++        int valueType = arrayAnimator.getInt(Styleable.Animator_valueType, VALUE_TYPE_UNDEFINED);
+ 
+         if (valueType == VALUE_TYPE_UNDEFINED) {
+-            valueType = inferValueTypeFromValues(arrayAnimator, R.styleable.Animator_valueFrom,
+-                    R.styleable.Animator_valueTo);
++            valueType = inferValueTypeFromValues(arrayAnimator, Styleable.Animator_valueFrom,
++                    Styleable.Animator_valueTo);
+         }
+         PropertyValuesHolder pvh = getPVH(arrayAnimator, valueType,
+-                R.styleable.Animator_valueFrom, R.styleable.Animator_valueTo, "");
++                Styleable.Animator_valueFrom, Styleable.Animator_valueTo, "");
+         if (pvh != null) {
+             anim.setValues(pvh);
+         }
+@@ -431,13 +451,13 @@
+         anim.setDuration(duration);
+         anim.setStartDelay(startDelay);
+ 
+-        if (arrayAnimator.hasValue(R.styleable.Animator_repeatCount)) {
++        if (arrayAnimator.hasValue(Styleable.Animator_repeatCount)) {
+             anim.setRepeatCount(
+-                    arrayAnimator.getInt(R.styleable.Animator_repeatCount, 0));
+-        }
+-        if (arrayAnimator.hasValue(R.styleable.Animator_repeatMode)) {
++                    arrayAnimator.getInt(Styleable.Animator_repeatCount, 0));
++        }
++        if (arrayAnimator.hasValue(Styleable.Animator_repeatMode)) {
+             anim.setRepeatMode(
+-                    arrayAnimator.getInt(R.styleable.Animator_repeatMode,
++                    arrayAnimator.getInt(Styleable.Animator_repeatMode,
+                             ValueAnimator.RESTART));
+         }
+ 
+@@ -456,8 +476,8 @@
+     private static TypeEvaluator setupAnimatorForPath(ValueAnimator anim,
+              TypedArray arrayAnimator) {
+         TypeEvaluator evaluator = null;
+-        String fromString = arrayAnimator.getString(R.styleable.Animator_valueFrom);
+-        String toString = arrayAnimator.getString(R.styleable.Animator_valueTo);
++        String fromString = arrayAnimator.getString(Styleable.Animator_valueFrom);
++        String toString = arrayAnimator.getString(Styleable.Animator_valueTo);
+         PathParser.PathData pathDataFrom = fromString == null
+                 ? null : new PathParser.PathData(fromString);
+         PathParser.PathData pathDataTo = toString == null
+@@ -498,7 +518,7 @@
+     private static void setupObjectAnimator(ValueAnimator anim, TypedArray arrayObjectAnimator,
+             int valueType, float pixelSize) {
+         ObjectAnimator oa = (ObjectAnimator) anim;
+-        String pathData = arrayObjectAnimator.getString(R.styleable.PropertyAnimator_pathData);
++        String pathData = arrayObjectAnimator.getString(Styleable.PropertyAnimator_pathData);
+ 
+         // Path can be involved in an ObjectAnimator in the following 3 ways:
+         // 1) Path morphing: the property to be animated is pathData, and valueFrom and valueTo
+@@ -510,9 +530,9 @@
+         // Here we are dealing with case 2:
+         if (pathData != null) {
+             String propertyXName =
+-                    arrayObjectAnimator.getString(R.styleable.PropertyAnimator_propertyXName);
++                    arrayObjectAnimator.getString(Styleable.PropertyAnimator_propertyXName);
+             String propertyYName =
+-                    arrayObjectAnimator.getString(R.styleable.PropertyAnimator_propertyYName);
++                    arrayObjectAnimator.getString(Styleable.PropertyAnimator_propertyYName);
+ 
+             if (valueType == VALUE_TYPE_PATH || valueType == VALUE_TYPE_UNDEFINED) {
+                 // When pathData is defined, we are in case #2 mentioned above. ValueType can only
+@@ -553,7 +573,7 @@
+             }
+         } else {
+             String propertyName =
+-                    arrayObjectAnimator.getString(R.styleable.PropertyAnimator_propertyName);
++                    arrayObjectAnimator.getString(Styleable.PropertyAnimator_propertyName);
+             oa.setPropertyName(propertyName);
+         }
+     }
+@@ -572,8 +592,8 @@
+      */
+     private static void setupValues(ValueAnimator anim, TypedArray arrayAnimator,
+             boolean getFloats, boolean hasFrom, int fromType, boolean hasTo, int toType) {
+-        int valueFromIndex = R.styleable.Animator_valueFrom;
+-        int valueToIndex = R.styleable.Animator_valueTo;
++        int valueFromIndex = Styleable.Animator_valueFrom;
++        int valueToIndex = Styleable.Animator_valueTo;
+         if (getFloats) {
+             float valueFrom;
+             float valueTo;
+@@ -674,12 +694,12 @@
+                 anim = new AnimatorSet();
+                 TypedArray a;
+                 if (theme != null) {
+-                    a = theme.obtainStyledAttributes(attrs, R.styleable.AnimatorSet, 0, 0);
+-                } else {
+-                    a = res.obtainAttributes(attrs, R.styleable.AnimatorSet);
+-                }
+-                anim.appendChangingConfigurations(a.getChangingConfigurations());
+-                int ordering = a.getInt(R.styleable.AnimatorSet_ordering, TOGETHER);
++                    a = theme.obtainStyledAttributes(attrs, Styleable.AnimatorSet, 0, 0);
++                } else {
++                    a = res.obtainAttributes(attrs, Styleable.AnimatorSet);
++                }
++                anim.appendChangingConfigurations(changingConfigurations(a));
++                int ordering = a.getInt(Styleable.AnimatorSet_ordering, TOGETHER);
+                 createAnimatorFromXml(res, theme, parser, attrs, (AnimatorSet) anim, ordering,
+                         pixelSize);
+                 a.recycle();
+@@ -734,19 +754,19 @@
+             if (name.equals("propertyValuesHolder")) {
+                 TypedArray a;
+                 if (theme != null) {
+-                    a = theme.obtainStyledAttributes(attrs, R.styleable.PropertyValuesHolder, 0, 0);
+-                } else {
+-                    a = res.obtainAttributes(attrs, R.styleable.PropertyValuesHolder);
+-                }
+-                String propertyName = a.getString(R.styleable.PropertyValuesHolder_propertyName);
+-                int valueType = a.getInt(R.styleable.PropertyValuesHolder_valueType,
++                    a = theme.obtainStyledAttributes(attrs, Styleable.PropertyValuesHolder, 0, 0);
++                } else {
++                    a = res.obtainAttributes(attrs, Styleable.PropertyValuesHolder);
++                }
++                String propertyName = a.getString(Styleable.PropertyValuesHolder_propertyName);
++                int valueType = a.getInt(Styleable.PropertyValuesHolder_valueType,
+                         VALUE_TYPE_UNDEFINED);
+ 
+                 PropertyValuesHolder pvh = loadPvh(res, theme, parser, propertyName, valueType);
+                 if (pvh == null) {
+                     pvh = getPVH(a, valueType,
+-                            R.styleable.PropertyValuesHolder_valueFrom,
+-                            R.styleable.PropertyValuesHolder_valueTo, propertyName);
++                            Styleable.PropertyValuesHolder_valueFrom,
++                            Styleable.PropertyValuesHolder_valueTo, propertyName);
+                 }
+                 if (pvh != null) {
+                     if (values == null) {
+@@ -778,12 +798,12 @@
+         int valueType;
+         TypedArray a;
+         if (theme != null) {
+-            a = theme.obtainStyledAttributes(attrs, R.styleable.Keyframe, 0, 0);
++            a = theme.obtainStyledAttributes(attrs, Styleable.Keyframe, 0, 0);
+         } else {
+-            a = res.obtainAttributes(attrs, R.styleable.Keyframe);
+-        }
+-
+-        TypedValue keyframeValue = a.peekValue(R.styleable.Keyframe_value);
++            a = res.obtainAttributes(attrs, Styleable.Keyframe);
++        }
++
++        TypedValue keyframeValue = a.peekValue(Styleable.Keyframe_value);
+         boolean hasValue = (keyframeValue != null);
+         // When no value type is provided, check whether it's a color type first.
+         // If not, fall back to default value type (i.e. float type).
+@@ -959,16 +979,16 @@
+ 
+         TypedArray a;
+         if (theme != null) {
+-            a = theme.obtainStyledAttributes(attrs, R.styleable.Keyframe, 0, 0);
++            a = theme.obtainStyledAttributes(attrs, Styleable.Keyframe, 0, 0);
+         } else {
+-            a = res.obtainAttributes(attrs, R.styleable.Keyframe);
++            a = res.obtainAttributes(attrs, Styleable.Keyframe);
+         }
+ 
+         Keyframe keyframe = null;
+ 
+-        float fraction = a.getFloat(R.styleable.Keyframe_fraction, -1);
+-
+-        TypedValue keyframeValue = a.peekValue(R.styleable.Keyframe_value);
++        float fraction = a.getFloat(Styleable.Keyframe_fraction, -1);
++
++        TypedValue keyframeValue = a.peekValue(Styleable.Keyframe_value);
+         boolean hasValue = (keyframeValue != null);
+         if (valueType == VALUE_TYPE_UNDEFINED) {
+             // When no value type is provided, check whether it's a color type first.
+@@ -983,12 +1003,12 @@
+         if (hasValue) {
+             switch (valueType) {
+                 case VALUE_TYPE_FLOAT:
+-                    float value = a.getFloat(R.styleable.Keyframe_value, 0);
++                    float value = a.getFloat(Styleable.Keyframe_value, 0);
+                     keyframe = Keyframe.ofFloat(fraction, value);
+                     break;
+                 case VALUE_TYPE_COLOR:
+                 case VALUE_TYPE_INT:
+-                    int intValue = a.getInt(R.styleable.Keyframe_value, 0);
++                    int intValue = a.getInt(Styleable.Keyframe_value, 0);
+                     keyframe = Keyframe.ofInt(fraction, intValue);
+                     break;
+             }
+@@ -997,9 +1017,9 @@
+                     Keyframe.ofInt(fraction);
+         }
+ 
+-        final int resID = a.getResourceId(R.styleable.Keyframe_interpolator, 0);
++        final int resID = a.getResourceId(Styleable.Keyframe_interpolator, 0);
+         if (resID > 0) {
+-            final Interpolator interpolator = AnimationUtils.loadInterpolator(res, theme, resID);
++            final Interpolator interpolator = loadInterpolator(res, theme, resID);
+             keyframe.setInterpolator(interpolator);
+         }
+         a.recycle();
+@@ -1032,32 +1052,32 @@
+         TypedArray arrayObjectAnimator = null;
+ 
+         if (theme != null) {
+-            arrayAnimator = theme.obtainStyledAttributes(attrs, R.styleable.Animator, 0, 0);
++            arrayAnimator = theme.obtainStyledAttributes(attrs, Styleable.Animator, 0, 0);
+         } else {
+-            arrayAnimator = res.obtainAttributes(attrs, R.styleable.Animator);
++            arrayAnimator = res.obtainAttributes(attrs, Styleable.Animator);
+         }
+ 
+         // If anim is not null, then it is an object animator.
+         if (anim != null) {
+             if (theme != null) {
+                 arrayObjectAnimator = theme.obtainStyledAttributes(attrs,
+-                        R.styleable.PropertyAnimator, 0, 0);
++                        Styleable.PropertyAnimator, 0, 0);
+             } else {
+-                arrayObjectAnimator = res.obtainAttributes(attrs, R.styleable.PropertyAnimator);
+-            }
+-            anim.appendChangingConfigurations(arrayObjectAnimator.getChangingConfigurations());
++                arrayObjectAnimator = res.obtainAttributes(attrs, Styleable.PropertyAnimator);
++            }
++            anim.appendChangingConfigurations(changingConfigurations(arrayObjectAnimator));
+         }
+ 
+         if (anim == null) {
+             anim = new ValueAnimator();
+         }
+-        anim.appendChangingConfigurations(arrayAnimator.getChangingConfigurations());
++        anim.appendChangingConfigurations(changingConfigurations(arrayAnimator));
+ 
+         parseAnimatorFromTypeArray(anim, arrayAnimator, arrayObjectAnimator, pathErrorScale);
+ 
+-        final int resID = arrayAnimator.getResourceId(R.styleable.Animator_interpolator, 0);
++        final int resID = arrayAnimator.getResourceId(Styleable.Animator_interpolator, 0);
+         if (resID > 0) {
+-            final Interpolator interpolator = AnimationUtils.loadInterpolator(res, theme, resID);
++            final Interpolator interpolator = loadInterpolator(res, theme, resID);
+             if (interpolator instanceof BaseInterpolator) {
+                 anim.appendChangingConfigurations(
+                         ((BaseInterpolator) interpolator).getChangingConfiguration());
+@@ -1072,7 +1092,26 @@
+         return anim;
+     }
+ 
+-    private static @Config int getChangingConfigs(@NonNull Resources resources, @AnyRes int id) {
++    private static int changingConfigurations(TypedArray attributes) {
++        int changes = 0;
++        for (int i = 0; i < attributes.length(); i++) {
++            TypedValue value = attributes.peekValue(i);
++            if (value != null) changes |= value.changingConfigurations;
++        }
++        return changes;
++    }
++
++    private static Interpolator loadInterpolator(Resources resources, Theme theme, int id) {
++        Context context = new android.content.ContextWrapper(null) {
++            @Override
++            public Resources getResources() { return resources; }
++            @Override
++            public Theme getTheme() { return theme; }
++        };
++        return AnimationUtils.loadInterpolator(context, id);
++    }
++
++    private static int getChangingConfigs(@NonNull Resources resources, @AnyRes int id) {
+         synchronized (sTmpTypedValue) {
+             resources.getValue(id, sTmpTypedValue, true);
+             return sTmpTypedValue.changingConfigurations;

@@ -1,0 +1,69 @@
+--- a/frameworks/base/core/java/android/content/res/TypedArray.java
++++ b/frameworks/base/core/java/android/content/res/TypedArray.java
+@@ -25,7 +25,6 @@
+ import android.graphics.Typeface;
+ import android.graphics.drawable.Drawable;
+ import android.os.Build;
+-import android.os.StrictMode;
+ import android.ravenwood.annotation.RavenwoodIgnore;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ import android.util.AttributeSet;
+@@ -384,7 +383,7 @@
+ 
+         final TypedValue v = mValue;
+         if (getValueAt(index, v)) {
+-            StrictMode.noteResourceMismatch(v);
++
+             return XmlUtils.convertValueToBoolean(v.coerceToString(), defValue);
+         }
+ 
+@@ -423,7 +422,7 @@
+ 
+         final TypedValue v = mValue;
+         if (getValueAt(index, v)) {
+-            StrictMode.noteResourceMismatch(v);
++
+             return XmlUtils.convertValueToInt(v.coerceToString(), defValue);
+         }
+ 
+@@ -464,7 +463,7 @@
+         if (getValueAt(index, v)) {
+             final CharSequence str = v.coerceToString();
+             if (str != null) {
+-                StrictMode.noteResourceMismatch(v);
++
+                 return Float.parseFloat(str.toString());
+             }
+         }
+--- a/frameworks/base/graphics/java/android/graphics/NinePatch.java
++++ b/frameworks/base/graphics/java/android/graphics/NinePatch.java
+@@ -117,19 +117,7 @@
+         mBitmap = bitmap;
+         mSrcName = srcName;
+         mNativeChunk = validateNinePatchChunk(chunk);
+-    }
+-
+-    @Override
+-    protected void finalize() throws Throwable {
+-        try {
+-            if (mNativeChunk != 0) {
+-                // only attempt to destroy correctly initialized chunks
+-                nativeFinalize(mNativeChunk);
+-                mNativeChunk = 0;
+-            }
+-        } finally {
+-            super.finalize();
+-        }
++        nRetainChunk(this, mNativeChunk);
+     }
+ 
+     /**
+@@ -268,7 +256,7 @@
+      * object used by the renderers.
+      */
+     private static native long validateNinePatchChunk(byte[] chunk);
+-    private static native void nativeFinalize(long chunk);
++    private static native void nRetainChunk(NinePatch owner, long chunk);
+     private static native long nativeGetTransparentRegion(long bitmapHandle, long chunk,
+         Rect location);
+ }

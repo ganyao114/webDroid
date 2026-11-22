@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build the Android 17 UI framework DEX and its matching javac classpath JAR."""
+"""Build the legacy Android UI compatibility DEX and the combined javac classpath."""
 
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import shutil
 import sys
@@ -11,8 +12,8 @@ import tempfile
 import zipfile
 
 sys.dont_write_bytecode = True
-from build_pm_dex import run, sdk_declarations, write_depfile, write_jar
-from build_upstream_framework_dex import apply_patch, stage_java
+from build_pm_dex import dex_profile, run, write_depfile, write_jar
+from build_upstream_framework_dex import apply_patch, dex_entries, dex_from_jar, stage_java
 from framework_build.generate_unicode import generate as generate_unicode
 
 HERE = Path(__file__).resolve().parent
@@ -24,10 +25,6 @@ JAR = "aosp17_framework_classes.jar"
 # Share the existing JNI support classes used with the original resource sources.
 WAVE6 = """
 android/annotation/AnyRes.java
-android/content/om/OverlayableInfo.java
-android/content/res/AssetFileDescriptor.java
-android/content/res/StringBlock.java
-android/content/res/Validator.java
 android/ravenwood/annotation/RavenwoodKeepWholeClass.java
 android/system/OsConstants.java
 com/android/internal/annotations/GuardedBy.java
@@ -36,6 +33,14 @@ dalvik/annotation/optimization/CriticalNative.java
 dalvik/annotation/optimization/FastNative.java
 libcore/io/IoUtils.java
 """.split()
+
+PACKAGE = re.compile(rb"^\s*package\s+([\w.]+)\s*;", re.MULTILINE)
+
+
+def class_entry(path):
+    match = PACKAGE.search(path.read_bytes())
+    package = match[1].decode().replace(".", "/") + "/" if match else ""
+    return package + path.stem + ".class"
 
 
 def build(args, stage):
@@ -58,13 +63,10 @@ def build(args, stage):
     compile_only_annotations = [
         HERE / f"pm_build/android/annotation/{name}.java" for name in ("SystemApi", "TestApi")
     ]
-    generator = REPO / "runtime/aosp17_shims/art_interp/generate_jni.py"
-    native_table = args.aosp_root / "frameworks/base/core/jni/android_util_AssetManager.cpp"
-    template = SOURCES / "AssetManager.java.in"
     inputs = {Path(__file__).resolve(), HERE / "build_pm_dex.py",
-              HERE / "build_upstream_framework_dex.py", manifest, generator, *compile_only_annotations, *patches,
+              HERE / "build_upstream_framework_dex.py", manifest, *compile_only_annotations, *patches,
               SOURCES / "generate_unicode.py",
-              native_table, template, args.javac, args.d8, args.android_jar, *sources, *java_base, *libcore}
+              args.upstream_classes, args.javac, args.d8, args.android_jar, *sources, *java_base, *libcore}
     d8_jar = args.d8.parent / "lib/d8.jar"
     if d8_jar.is_file():
         inputs.add(d8_jar)
@@ -84,20 +86,17 @@ def build(args, stage):
                 sources.remove(original)
                 sources.append(stage_java(stage / "upstream", name, upstream_java[name]))
 
-    asset_manager = stage / "android/content/res/AssetManager.java"
-    run(sys.executable, generator, "--source", native_table, "--asset-manager",
-        asset_manager, "--template", template)
+    with zipfile.ZipFile(args.upstream_classes) as upstream_jar:
+        primary = {name: upstream_jar.read(name) for name in upstream_jar.namelist() if name.endswith(".class")}
+    if "android/content/res/AssetManager.class" not in primary:
+        raise ValueError(f"{args.upstream_classes}: expected the upstream resource subsystem")
     classes = stage / "classes"
     classes.mkdir()
-    icon_entry = "android/graphics/drawable/Icon.class"
-    hidden_api = stage / "hidden-api.jar"
-    with zipfile.ZipFile(args.android_jar) as sdk:
-        write_jar(hidden_api, {icon_entry: sdk_declarations(
-            sdk.read(icon_entry), methods=[("sameAs", "(Landroid/graphics/drawable/Icon;)Z", False)])})
+    sources = [path for path in sources if class_entry(path) not in primary]
     run(args.javac, "--release", "17", "-encoding", "UTF-8", "-proc:none",
         "-g:source,lines", "-XDstringConcat=inline", "-sourcepath", "",
-        "-classpath", os.pathsep.join(map(str, (hidden_api, args.android_jar))), "-d", classes,
-        *sorted(sources), asset_manager, *compile_only_annotations)
+        "-classpath", os.pathsep.join(map(str, (args.upstream_classes, args.android_jar))),
+        "-d", classes, *sorted(sources), *compile_only_annotations)
     base = stage / "java-base"
     staged_sources = []
     for original, root in [(path, SOURCES / "java_base") for path in java_base] + [
@@ -134,13 +133,18 @@ def build(args, stage):
         for name in ("org/xmlpull/v1/XmlPullParser", "java/util/Map$Entry",
                      "android/provider/BaseColumns",
                      "android/window/OnBackInvokedCallback", "android/window/OnBackInvokedDispatcher"):
-            entries[name + ".class"] = sdk.read(name + ".class")
-    write_jar(stage / JAR, entries)
-    run(args.d8, "--release", "--min-api", "26", "--lib", args.android_jar,
-        "--output", stage, stage / JAR)
-    if sorted(path.name for path in stage.glob("classes*.dex")) != ["classes.dex"]:
-        raise ValueError("Expected exactly one classes.dex from SDK 36 d8")
-    (stage / "classes.dex").rename(stage / DEX)
+            entry = name + ".class"
+            if entry not in primary:
+                entries[entry] = sdk.read(entry)
+    # Primary classes are already on the parent class path. Only give D8
+    # the remaining compatibility classes as program input.
+    compatibility = stage / "compatibility-classes.jar"
+    write_jar(compatibility, {name: data for name, data in entries.items() if name not in primary})
+    dex_from_jar(args, stage, compatibility, Path(DEX).stem, [args.upstream_classes])
+    primary_types = {"L" + name.removesuffix(".class") + ";" for name in primary}
+    for dex in dex_entries(stage / DEX):
+        dex_profile(dex, set(), primary_types)
+    write_jar(stage / JAR, entries | primary)
     return inputs, len(upstream)
 
 
@@ -153,6 +157,8 @@ def main():
                         or os.environ.get("ANDROID_HOME") or default_sdk)
     parser.add_argument("--javac", type=Path, default=Path("/usr/bin/javac"))
     parser.add_argument("--android-jar", type=Path)
+    parser.add_argument("--upstream-classes", type=Path, required=True,
+                        help="Javac classpath built by build_upstream_framework_dex.py")
     parser.add_argument("--d8", type=Path)
     parser.add_argument("--depfile", type=Path)
     parser.add_argument("--check", action="store_true", help="rebuild and compare the DEX and JAR")

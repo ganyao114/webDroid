@@ -1,32 +1,14 @@
 # Sources compiled directly from the read-only AOSP 17 checkout.
-frameworks/base/core/java/android/animation/TimeInterpolator.java
 frameworks/base/core/java/android/animation/TypeEvaluator.java
 frameworks/base/core/java/android/animation/PointFEvaluator.java
 frameworks/base/core/java/android/animation/RectEvaluator.java
 frameworks/base/core/java/android/animation/ArgbEvaluator.java
 @patch 0021-srgb-argb-evaluator.patch
-frameworks/base/core/java/android/content/res/ApkAssets.java
-frameworks/base/core/java/android/content/res/XmlBlock.java
-frameworks/base/core/java/android/content/res/XmlResourceParser.java
-frameworks/base/core/java/android/content/res/loader/AssetsProvider.java
-frameworks/base/core/java/android/util/ArrayMap.java
-frameworks/base/core/java/android/util/AttributeSet.java
-frameworks/base/core/java/android/util/ContainerHelpers.java
-frameworks/base/core/java/android/util/EmptyArray.java
-frameworks/base/core/java/android/util/MapCollections.java
-frameworks/base/core/java/android/util/Pair.java
-frameworks/base/core/java/android/util/SparseArray.java
-frameworks/base/core/java/android/util/SparseBooleanArray.java
-frameworks/base/core/java/android/util/SparseIntArray.java
-frameworks/base/core/java/android/util/SparseLongArray.java
 frameworks/base/core/java/android/util/LongSparseArray.java
 frameworks/base/core/java/com/android/internal/util/function/LongObjPredicate.java
-frameworks/base/core/java/android/util/TypedValue.java
-frameworks/base/core/java/android/view/Gravity.java
 frameworks/base/core/java/android/view/animation/BaseInterpolator.java
 frameworks/base/core/java/android/view/animation/Interpolator.java
 frameworks/base/core/java/android/view/animation/LinearInterpolator.java
-frameworks/base/core/java/com/android/internal/util/GrowingArrayUtils.java
 frameworks/base/core/java/android/view/animation/AccelerateDecelerateInterpolator.java
 frameworks/base/core/java/android/view/animation/DecelerateInterpolator.java
 frameworks/base/core/java/android/view/animation/AccelerateInterpolator.java
@@ -36,22 +18,17 @@ frameworks/base/core/java/android/view/animation/PathInterpolator.java
 frameworks/base/core/java/android/widget/OverScroller.java
 frameworks/base/core/java/android/widget/Scroller.java
 frameworks/base/core/java/android/widget/Advanceable.java
-frameworks/base/core/java/android/util/UtilConfig.java
-libcore/ojluni/src/main/java/java/lang/Runnable.java
 libcore/ojluni/src/main/java/java/lang/Void.java
 libcore/ojluni/src/main/java/java/io/ByteArrayOutputStream.java
 libcore/ojluni/src/main/java/java/io/Flushable.java
 libcore/ojluni/src/main/java/java/io/OutputStream.java
 libcore/ojluni/src/main/java/java/util/concurrent/Callable.java
-libcore/ojluni/src/main/java/java/util/function/BiConsumer.java
-libcore/ojluni/src/main/java/java/util/function/BiFunction.java
 libcore/ojluni/src/main/java/java/util/function/IntConsumer.java
 libcore/ojluni/src/main/java/java/util/function/IntBinaryOperator.java
 libcore/ojluni/src/main/java/java/util/function/IntFunction.java
 libcore/ojluni/src/main/java/java/util/function/LongFunction.java
 libcore/ojluni/src/main/java/java/util/function/IntPredicate.java
 libcore/ojluni/src/main/java/java/util/function/IntUnaryOperator.java
-frameworks/base/core/java/android/os/LocaleList.java
 frameworks/base/core/java/android/app/Application.java
 frameworks/base/core/java/android/content/ComponentCallbacks.java
 frameworks/base/core/java/android/content/ComponentCallbacks2.java
@@ -62,13 +39,10 @@ frameworks/base/core/java/android/os/HandlerThread.java
 frameworks/base/core/java/android/os/Trace.java
 frameworks/base/core/java/android/content/BroadcastReceiver.java
 frameworks/base/core/java/android/app/Person.java
-frameworks/base/core/java/android/os/Parcelable.java
 libcore/ojluni/src/main/java/java/util/AbstractMap.java
 libcore/ojluni/src/main/java/java/util/AbstractCollection.java
 libcore/ojluni/src/main/java/java/util/AbstractSet.java
 libcore/ojluni/src/main/java/java/util/WeakHashMap.java
-frameworks/base/core/java/android/content/res/ResourceId.java
-frameworks/base/core/java/android/util/Pools.java
 frameworks/base/core/java/android/view/RemotableViewMethod.java
 frameworks/base/core/java/android/widget/RelativeLayout.java
 libcore/ojluni/src/main/java/java/util/ArrayDeque.java
@@ -81,7 +55,6 @@ frameworks/base/core/java/android/os/OperationCanceledException.java
 frameworks/base/core/java/android/view/ViewTreeObserver.java
 frameworks/base/core/java/android/view/GestureDetector.java
 frameworks/base/core/java/android/view/accessibility/AccessibilityNodeProvider.java
-frameworks/base/graphics/java/android/graphics/Matrix.java
 
 # Exact patches applied to staged copies of entries above.
 @patch 0001-cooperative-handler-thread.patch
@@ -94,7 +67,6 @@ frameworks/base/graphics/java/android/graphics/Matrix.java
 @patch 0008-reverse-deque-jdk17.patch
 @patch 0009-local-cancellation-signal.patch
 @patch 0010-view-tree-observer-sdk.patch
-@patch 0011-matrix-ui-jni.patch
 libcore/ojluni/src/main/java/java/util/OptionalInt.java
 libcore/ojluni/src/main/java/java/util/PrimitiveIterator.java
 libcore/ojluni/src/main/java/java/util/Spliterator.java
@@ -156,3 +128,60 @@ frameworks/base/core/java/android/content/pm/LauncherUserInfo.java
 @patch 0020-local-long-sparse-array.patch
 libcore/ojluni/src/main/java/java/util/concurrent/CompletionException.java
 libcore/ojluni/src/main/java/java/util/concurrent/CopyOnWriteArraySet.java
+
+# Phase 1 W3: upstream animation, os, content, net, util
+# Animation package.
+frameworks/base/core/java/android/animation/AnimationHandler.java
+frameworks/base/core/java/android/animation/Animator.java
+frameworks/base/core/java/android/animation/AnimatorInflater.java
+frameworks/base/core/java/android/animation/AnimatorListenerAdapter.java
+frameworks/base/core/java/android/animation/AnimatorSet.java
+frameworks/base/core/java/android/animation/BidirectionalTypeConverter.java
+frameworks/base/core/java/android/animation/FloatArrayEvaluator.java
+frameworks/base/core/java/android/animation/FloatEvaluator.java
+frameworks/base/core/java/android/animation/FloatKeyframeSet.java
+frameworks/base/core/java/android/animation/IntArrayEvaluator.java
+frameworks/base/core/java/android/animation/IntEvaluator.java
+frameworks/base/core/java/android/animation/IntKeyframeSet.java
+frameworks/base/core/java/android/animation/Keyframe.java
+frameworks/base/core/java/android/animation/KeyframeSet.java
+frameworks/base/core/java/android/animation/Keyframes.java
+frameworks/base/core/java/android/animation/LayoutTransition.java
+frameworks/base/core/java/android/animation/ObjectAnimator.java
+frameworks/base/core/java/android/animation/PathKeyframes.java
+frameworks/base/core/java/android/animation/PropertyValuesHolder.java
+frameworks/base/core/java/android/animation/RevealAnimator.java
+frameworks/base/core/java/android/animation/StateListAnimator.java
+frameworks/base/core/java/android/animation/TimeAnimator.java
+frameworks/base/core/java/android/animation/TypeConverter.java
+frameworks/base/core/java/android/animation/ValueAnimator.java
+
+# Additional OS helpers.
+frameworks/base/core/java/android/os/UserHandle.java
+
+# Component identity, intent matching, and URI handling.
+frameworks/base/core/java/android/content/ActivityNotFoundException.java
+frameworks/base/core/java/android/content/ContextWrapper.java
+frameworks/base/core/java/android/content/Intent.java
+frameworks/base/core/java/android/net/Uri.java
+frameworks/base/core/java/android/net/UriCodec.java
+
+# Properties, display metrics, and shared utility implementations.
+frameworks/base/core/java/android/util/Property.java
+frameworks/base/core/java/android/util/ReflectiveProperty.java
+frameworks/base/core/java/android/util/IntProperty.java
+frameworks/base/core/java/android/util/FloatProperty.java
+
+# Upstream dependencies of the subsystems above.
+frameworks/base/core/java/android/util/AndroidException.java
+frameworks/base/core/java/android/util/AndroidRuntimeException.java
+frameworks/base/core/java/android/util/NoSuchPropertyException.java
+
+# Patches for the embedded platform and SDK boundaries.
+@patch 0305-local-user-identity.patch
+@patch 0307-embedded-context-wrapper.patch
+@patch 0308-local-uri-platform-edges.patch
+@patch 0309-embedded-animation-scheduling.patch
+@patch 0310-reflective-animation-properties.patch
+@patch 0311-embedded-animator-resources.patch
+@patch 0313-embedded-intent-platform-edges.patch

@@ -1,0 +1,245 @@
+--- a/frameworks/base/core/java/android/net/Uri.java
++++ b/frameworks/base/core/java/android/net/Uri.java
+@@ -21,17 +21,13 @@
+ import android.annotation.SystemApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Intent;
+-import android.content.pm.Flags;
+-import android.os.Environment;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.os.StrictMode;
+ import android.util.Log;
+ 
+ import java.io.File;
+ import java.io.IOException;
+ import java.io.UnsupportedEncodingException;
+-import java.net.URLEncoder;
+ import java.nio.charset.StandardCharsets;
+ import java.util.AbstractList;
+ import java.util.ArrayList;
+@@ -1667,12 +1663,9 @@
+             return Collections.emptyList();
+         }
+ 
+-        String encodedKey;
+-        try {
+-            encodedKey = URLEncoder.encode(key, DEFAULT_ENCODING);
+-        } catch (UnsupportedEncodingException e) {
+-            throw new AssertionError(e);
+-        }
++        // Form encoding allows '*' and encodes spaces as '+'.
++        String encodedKey = encode(key).replace("!", "%21").replace("~", "%7E")
++                .replace("'", "%27").replace("(", "%28").replace(")", "%29").replace("%20", "+");
+ 
+         ArrayList<String> values = new ArrayList<String>();
+ 
+@@ -2364,28 +2357,10 @@
+      */
+     @UnsupportedAppUsage
+     public Uri getCanonicalUri() {
+-        if ("file".equals(getScheme())) {
+-            final String canonicalPath;
+-            try {
+-                canonicalPath = new File(getPath()).getCanonicalPath();
+-            } catch (IOException e) {
+-                return this;
+-            }
+-
+-            if (Environment.isExternalStorageEmulated()) {
+-                final String legacyPath = Environment.getLegacyExternalStorageDirectory()
+-                        .toString();
+-
+-                // Splice in user-specific path when legacy path is found
+-                if (canonicalPath.startsWith(legacyPath)) {
+-                    return Uri.fromFile(new File(
+-                            Environment.getExternalStorageDirectory().toString(),
+-                            canonicalPath.substring(legacyPath.length() + 1)));
+-                }
+-            }
+-
+-            return Uri.fromFile(new File(canonicalPath));
+-        } else {
++        if (!"file".equals(getScheme())) return this;
++        try {
++            return fromFile(new File(getPath()).getCanonicalFile());
++        } catch (IOException e) {
+             return this;
+         }
+     }
+@@ -2397,10 +2372,7 @@
+      * @hide
+      */
+     public void checkFileUriExposed(String location) {
+-        if ("file".equals(getScheme())
+-                && (getPath() != null) && !getPath().startsWith("/system/")) {
+-            StrictMode.onFileUriExposed(this, location);
+-        }
++        // The embedded process has no StrictMode URI policy.
+     }
+ 
+     /**
+@@ -2410,9 +2382,7 @@
+      * @hide
+      */
+     public void checkContentUriWithoutPermission(String location, int flags) {
+-        if ("content".equals(getScheme()) && !Intent.isAccessUriMode(flags)) {
+-            StrictMode.onContentUriWithoutPermission(this, location);
+-        }
++        // There are no remote content URI permissions in this process.
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/net/UriCodec.java
++++ b/frameworks/base/core/java/android/net/UriCodec.java
+@@ -17,11 +17,8 @@
+ package android.net;
+ 
+ import java.net.URISyntaxException;
+-import java.nio.ByteBuffer;
+-import java.nio.charset.CharacterCodingException;
+ import java.nio.charset.Charset;
+-import java.nio.charset.CharsetDecoder;
+-import java.nio.charset.CodingErrorAction;
++import java.nio.charset.StandardCharsets;
+ 
+ /**
+  * Decodes “application/x-www-form-urlencoded” content.
+@@ -91,21 +88,17 @@
+             boolean convertPlus,
+             Charset charset,
+             boolean throwOnFailure) {
+-        CharsetDecoder decoder = charset.newDecoder()
+-                .onMalformedInput(CodingErrorAction.REPLACE)
+-                .replaceWith("\ufffd")
+-                .onUnmappableCharacter(CodingErrorAction.REPORT);
+-        // Holds the bytes corresponding to the escaped chars being read (empty if the last char
+-        // wasn't a escaped char).
+-        ByteBuffer byteBuffer = ByteBuffer.allocate(s.length());
++        // A run of percent escapes can contain more than one byte of a code point.
++        byte[] bytes = null;
++        int byteCount = 0;
+         int i = 0;
+         while (i < s.length()) {
+             char c = s.charAt(i);
+             i++;
+             switch (c) {
+                 case '+':
+-                    flushDecodingByteAccumulator(
+-                            builder, decoder, byteBuffer, throwOnFailure);
++                    flushDecodingByteAccumulator(builder, charset, bytes, byteCount);
++                    byteCount = 0;
+                     builder.append(convertPlus ? ' ' : '+');
+                     break;
+                 case '%':
+@@ -119,8 +112,8 @@
+                             if (throwOnFailure) {
+                                 throw new IllegalArgumentException(e);
+                             } else {
+-                                flushDecodingByteAccumulator(
+-                                        builder, decoder, byteBuffer, throwOnFailure);
++                                flushDecodingByteAccumulator(builder, charset, bytes, byteCount);
++                                byteCount = 0;
+                                 builder.append(INVALID_INPUT_CHARACTER);
+                                 return;
+                             }
+@@ -132,45 +125,79 @@
+                                 throw new IllegalArgumentException(
+                                         unexpectedCharacterException(s, null /* name */, c, i - 1));
+                             } else {
+-                                flushDecodingByteAccumulator(
+-                                        builder, decoder, byteBuffer, throwOnFailure);
++                                flushDecodingByteAccumulator(builder, charset, bytes, byteCount);
++                                byteCount = 0;
+                                 builder.append(INVALID_INPUT_CHARACTER);
+                                 break;
+                             }
+                         }
+                         hexValue = (byte) (hexValue * 0x10 + newDigit);
+                     }
+-                    byteBuffer.put(hexValue);
++                    if (bytes == null) bytes = new byte[s.length() / 3 + 1];
++                    bytes[byteCount++] = hexValue;
+                     break;
+                 default:
+-                    flushDecodingByteAccumulator(builder, decoder, byteBuffer, throwOnFailure);
++                    flushDecodingByteAccumulator(builder, charset, bytes, byteCount);
++                    byteCount = 0;
+                     builder.append(c);
+             }
+         }
+-        flushDecodingByteAccumulator(builder, decoder, byteBuffer, throwOnFailure);
++        flushDecodingByteAccumulator(builder, charset, bytes, byteCount);
+     }
+ 
+     private static void flushDecodingByteAccumulator(
+             StringBuilder builder,
+-            CharsetDecoder decoder,
+-            ByteBuffer byteBuffer,
+-            boolean throwOnFailure) {
+-        if (byteBuffer.position() == 0) {
++            Charset charset,
++            byte[] bytes,
++            int byteCount) {
++        if (byteCount == 0) return;
++        if (charset != StandardCharsets.UTF_8) {
++            builder.append(new String(bytes, 0, byteCount, charset));
+             return;
+         }
+-        byteBuffer.flip();
+-        try {
+-            builder.append(decoder.decode(byteBuffer));
+-        } catch (CharacterCodingException e) {
+-            if (throwOnFailure) {
+-                throw new IllegalArgumentException(e);
++
++        // The guest String constructors accept UTF-16 characters. Decode the
++        // percent-escaped UTF-8 bytes before appending them.
++        for (int pos = 0; pos < byteCount;) {
++            int first = bytes[pos++] & 0xff;
++            if (first < 0x80) {
++                builder.append((char) first);
++                continue;
++            }
++
++            int trailing;
++            int codePoint;
++            if (first >= 0xc2 && first <= 0xdf) {
++                trailing = 1;
++                codePoint = first & 0x1f;
++            } else if (first >= 0xe0 && first <= 0xef) {
++                trailing = 2;
++                codePoint = first & 0x0f;
++            } else if (first >= 0xf0 && first <= 0xf4) {
++                trailing = 3;
++                codePoint = first & 0x07;
+             } else {
+                 builder.append(INVALID_INPUT_CHARACTER);
+-            }
+-        } finally {
+-            // Use the byte buffer to write again.
+-            byteBuffer.flip();
+-            byteBuffer.limit(byteBuffer.capacity());
++                continue;
++            }
++
++            int consumed = 0;
++            while (consumed < trailing && pos < byteCount) {
++                int next = bytes[pos] & 0xff;
++                if ((next & 0xc0) != 0x80 || consumed == 0
++                        && (first == 0xe0 && next < 0xa0 || first == 0xf0 && next < 0x90
++                        || first == 0xf4 && next >= 0x90)) {
++                    break;
++                }
++                codePoint = (codePoint << 6) | (next & 0x3f);
++                pos++;
++                consumed++;
++            }
++            if (consumed != trailing || codePoint >= 0xd800 && codePoint <= 0xdfff) {
++                builder.append(INVALID_INPUT_CHARACTER);
++            } else {
++                builder.appendCodePoint(codePoint);
++            }
+         }
+     }
+ }

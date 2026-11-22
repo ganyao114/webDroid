@@ -1,0 +1,43 @@
+--- a/frameworks/base/core/java/android/content/res/AssetManager.java
++++ b/frameworks/base/core/java/android/content/res/AssetManager.java
+@@ -69,6 +69,8 @@
+  */
+ @RavenwoodKeepWholeClass
+ public final class AssetManager implements AutoCloseable {
++    // Android encodes the minor SDK version in the last five digits.
++    static final int SDK_VERSION_MULTIPLIER = 100_000;
+     private static final String TAG = "AssetManager";
+     private static final boolean DEBUG_REFS = false;
+ 
+@@ -1594,9 +1596,9 @@
+             int grammaticalGender, int sdkVersionFull, boolean forceRefresh) {
+         synchronized (this) {
+             ensureValidLocked();
+-            final int majorVersion = Build.getMajorSdkVersion(sdkVersionFull);
++            final int majorVersion = sdkVersionFull / SDK_VERSION_MULTIPLIER;
+             final int minorVersion = resourcesMinorVersionSupport()
+-                    ? Build.getMinorSdkVersion(sdkVersionFull) : 0;
++                    ? sdkVersionFull % SDK_VERSION_MULTIPLIER : 0;
+             nativeSetConfiguration(mObject, mcc, mnc, defaultLocale, locales, orientation,
+                     touchscreen, density, keyboard, keyboardHidden, navigation, screenWidth,
+                     screenHeight, smallestScreenWidthDp, screenWidthDp, screenHeightDp,
+--- a/frameworks/base/core/java/android/content/res/ResourcesImpl.java
++++ b/frameworks/base/core/java/android/content/res/ResourcesImpl.java
+@@ -221,7 +221,7 @@
+         mDisplayAdjustments = displayAdjustments;
+         mConfiguration.setToDefaults();
+         updateConfigurationImpl(config, metrics, displayAdjustments.getCompatibilityInfo(), true,
+-                Build.VERSION.SDK_INT_FULL);
++                Build.VERSION.SDK_INT * AssetManager.SDK_VERSION_MULTIPLIER);
+     }
+ 
+     /**
+@@ -454,7 +454,7 @@
+     public void updateConfiguration(Configuration config, DisplayMetrics metrics,
+             CompatibilityInfo compat) {
+         updateConfigurationImpl(config, metrics, compat, false,
+-                Build.VERSION.SDK_INT_FULL);
++                Build.VERSION.SDK_INT * AssetManager.SDK_VERSION_MULTIPLIER);
+     }
+ 
+     private void updateConfigurationImpl(Configuration config, DisplayMetrics metrics,

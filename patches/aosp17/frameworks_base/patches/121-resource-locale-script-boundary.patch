@@ -1,0 +1,63 @@
+--- a/frameworks/base/core/java/android/content/res/Configuration.java
++++ b/frameworks/base/core/java/android/content/res/Configuration.java
+@@ -27,11 +27,11 @@
+ import android.content.pm.ActivityInfo;
+ import android.graphics.Typeface;
+ import android.os.Build;
++import android.icu.util.ULocale;
+ import android.os.LocaleList;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.text.TextUtils;
+ import android.util.DisplayMetrics;
+ import android.util.proto.ProtoInputStream;
+ import android.util.proto.ProtoOutputStream;
+@@ -522,7 +522,7 @@
+         if ((diff & ActivityInfo.CONFIG_GRAMMATICAL_GENDER) != 0) {
+             list.add("CONFIG_GRAMMATICAL_GENDER");
+         }
+-        return "{" + TextUtils.join(", ", list) + "}";
++        return "{" + joinConfigurationParts(", ", list) + "}";
+     }
+ 
+     /**
+@@ -2225,11 +2225,24 @@
+      * @see View#LAYOUT_DIRECTION_RTL
+      */
+     public void setLayoutDirection(Locale loc) {
+-        // There is a "1" difference between the configuration values for
+-        // layout direction and View constants for layout direction, just add "1".
+-        final int layoutDirection = 1 + TextUtils.getLayoutDirectionFromLocale(loc);
+-        screenLayout = (screenLayout&~SCREENLAYOUT_LAYOUTDIR_MASK)|
+-                (layoutDirection << SCREENLAYOUT_LAYOUTDIR_SHIFT);
++        // Use the guest's ICU locale adapter backed by the Android resource tables.
++        final String script = loc == null || Locale.ROOT.equals(loc) ? ""
++                : ULocale.addLikelySubtags(ULocale.forLocale(loc)).getScript();
++        final boolean rtl = "Arab".equals(script) || "Hebr".equals(script) || "Thaa".equals(script)
++                || "Nkoo".equals(script) || "Adlm".equals(script) || "Syrc".equals(script);
++        screenLayout = (screenLayout & ~SCREENLAYOUT_LAYOUTDIR_MASK)
++                | (rtl ? SCREENLAYOUT_LAYOUTDIR_RTL : SCREENLAYOUT_LAYOUTDIR_LTR);
++    }
++
++    private static String joinConfigurationParts(String separator, ArrayList<String> parts) {
++        final StringBuilder joined = new StringBuilder();
++        for (int i = 0; i < parts.size(); i++) {
++            if (i != 0) {
++                joined.append(separator);
++            }
++            joined.append(parts.get(i));
++        }
++        return joined.toString();
+     }
+ 
+     private static int getScreenLayoutNoDirection(int screenLayout) {
+@@ -2594,7 +2607,7 @@
+         }
+ 
+         parts.add("v" + Build.VERSION.SDK_INT);
+-        return TextUtils.join("-", parts);
++        return joinConfigurationParts("-", parts);
+     }
+ 
+     /**

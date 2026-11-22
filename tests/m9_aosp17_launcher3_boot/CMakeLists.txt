@@ -1,7 +1,7 @@
 get_target_property(framework_dex aosp17_framework_core WA_FRAMEWORK_DEX)
 get_target_property(cube_build wa_cube_app_apk BINARY_DIR)
 
-set(inputs "${framework_dex}" "${WA_LAUNCHER_FRAMEWORK_DEX}" "${WA_LAUNCHER_FRAMEWORK_RES}"
+set(inputs "${WA_LAUNCHER_FRAMEWORK_DEX}" "${framework_dex}" "${WA_LAUNCHER_FRAMEWORK_RES}"
     "${WA_LAUNCHER_APK}" "${WA_SYSTEMUI_APK}" "${cube_build}/wa_cube_app.apk" ${WA_SYSTEM_APP_APKS})
 if(EMSCRIPTEN)
     add_dependencies(android_system wa_cube_app_apk)

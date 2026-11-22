@@ -349,7 +349,7 @@ struct Session {
     unsigned long long on_create = 0, on_start = 0, on_resume = 0;
     double boot_ms = 0;
     std::array<double, 120> frame_ms{};
-    bool core_loaded = false, fallback_loaded = false, boot_attempted = false, booted = false;
+    bool framework_loaded = false, fallback_loaded = false, boot_attempted = false, booted = false;
     bool natives_registered = false;
     bool icon_loaded = false, finishing = false, ime_focused = false, frame_pending = false;
 };
@@ -499,20 +499,20 @@ void wa_system_app_destroy() {
 wa_sf_t* wa_system_app_sf_ctx() { return session ? session->scene.get() : nullptr; }
 
 int32_t wa_system_app_load_framework_dex(const uint8_t* bytes, size_t size) {
-    return Prepared("Load core framework DEX", [&](Session& s) -> int32_t {
+    return Prepared("Load upstream framework DEX", [&](Session& s) -> int32_t {
         if (!bytes || !size) return WA_ERR_INVALID;
-        if (s.core_loaded) return WA_ERR_BUSY;
-        s.vm.LoadDexFile("aosp17_framework_core.dex", {bytes, bytes + size});
-        s.core_loaded = true;
+        if (s.framework_loaded) return WA_ERR_BUSY;
+        s.vm.LoadDexFile("aosp17_upstream_framework.dex", {bytes, bytes + size});
+        s.framework_loaded = true;
         return WA_OK;
     });
 }
 
 int32_t wa_system_app_load_framework_fallback_dex(const uint8_t* bytes, size_t size) {
-    return Prepared("Load fallback framework DEX", [&](Session& s) -> int32_t {
-        if (!bytes || !size || !s.core_loaded) return WA_ERR_INVALID;
+    return Prepared("Load framework compatibility DEX", [&](Session& s) -> int32_t {
+        if (!bytes || !size || !s.framework_loaded) return WA_ERR_INVALID;
         if (s.fallback_loaded) return WA_ERR_BUSY;
-        s.vm.LoadFallbackDexFile("aosp17_upstream_framework.dex", {bytes, bytes + size});
+        s.vm.LoadFallbackDexFile("aosp17_framework_core.dex", {bytes, bytes + size});
         s.fallback_loaded = true;
         return WA_OK;
     });
@@ -542,7 +542,8 @@ int32_t wa_system_app_install_package_catalog_apk(const char* name, const uint8_
 
 int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t size, const char* activity) {
     return Prepared("Boot foreground APK", [&](Session& s) -> int32_t {
-        if (!name || !*name || !bytes || !size || !s.core_loaded || !s.framework_resources)
+        if (!name || !*name || !bytes || !size || !s.framework_loaded || !s.fallback_loaded ||
+            !s.framework_resources)
             return WA_ERR_INVALID;
 
         const auto start = Clock::now();

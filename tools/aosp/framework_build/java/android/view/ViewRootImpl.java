@@ -63,8 +63,10 @@ public final class ViewRootImpl implements ViewParent {
             window.applyInsets();
         }
         if (requested) {
-            requested = false;
             performMeasure();
+            // Measurement may request layout while fitting its children. This
+            // pass handles those requests and keeps any made during layout.
+            requested = false;
             performLayout();
             treeObserver.dispatchOnGlobalLayout();
             drawRequested = true;
