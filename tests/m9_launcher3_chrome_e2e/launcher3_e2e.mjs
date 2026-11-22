@@ -138,7 +138,14 @@ export async function runLauncher3E2E(options = {}) {
       from: { x, y: rect.top + rect.height * 0.75 }, to: { x, y: rect.top + rect.height * 0.45 },
     });
     await waitFor('Settings to consume the swipe', () => host.app?.inputEventsProcessed > before);
-    await nextFrame();
+    // Real upstream AbsListView + VelocityTracker flings briefly after a swipe; wait for it to settle before tapping.
+    let previous = '', stable = 0;
+    await waitFor('Settings scroll fling to settle', () => {
+      const snapshot = host.appLabels().map(({ text, y }) => `${text}@${Math.round(y)}`).join('|');
+      stable = snapshot === previous ? stable + 1 : 0;
+      previous = snapshot;
+      return stable >= 4;
+    });
   }
 
   async function collectSettingsLabels(expected, seen = new Set()) {
