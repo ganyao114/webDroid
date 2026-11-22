@@ -1,0 +1,1602 @@
+--- a/frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java
++++ b/frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java
+@@ -16,16 +16,10 @@
+ 
+ package android.view.accessibility;
+ 
+-import static android.accessibilityservice.AccessibilityServiceInfo.FLAG_ENABLE_ACCESSIBILITY_VOLUME;
+ import static android.annotation.SystemApi.Client.MODULE_LIBRARIES;
+ 
+-import static com.android.internal.accessibility.common.ShortcutConstants.UserShortcutType.HARDWARE;
+-
+-import android.Manifest;
+ import android.accessibilityservice.AccessibilityService;
+ import android.accessibilityservice.AccessibilityServiceInfo;
+-import android.accessibilityservice.AccessibilityServiceInfo.FeedbackType;
+-import android.accessibilityservice.AccessibilityShortcutInfo;
+ import android.annotation.CallbackExecutor;
+ import android.annotation.ColorInt;
+ import android.annotation.FlaggedApi;
+@@ -33,7 +27,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SdkConstant;
+ import android.annotation.SystemApi;
+ import android.annotation.SystemService;
+ import android.annotation.TestApi;
+@@ -42,13 +35,8 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.ComponentName;
+ import android.content.Context;
+-import android.content.Intent;
+-import android.content.pm.ActivityInfo;
+-import android.content.pm.PackageManager;
+-import android.content.pm.ResolveInfo;
+ import android.content.pm.ServiceInfo;
+ import android.content.res.Resources;
+-import android.os.Binder;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Handler;
+@@ -56,29 +44,18 @@
+ import android.os.IBinder;
+ import android.os.Looper;
+ import android.os.Message;
+-import android.os.Process;
+-import android.os.RemoteException;
+-import android.os.ServiceManager;
+ import android.os.SystemClock;
+-import android.os.UserHandle;
+ import android.util.ArrayMap;
+ import android.util.Log;
+ import android.util.SparseArray;
+ import android.view.Display;
+-import android.view.IWindow;
+ import android.view.SurfaceControl;
+ import android.view.View;
+ import android.view.accessibility.AccessibilityEvent.EventType;
+ 
+ import com.android.internal.R;
+-import com.android.internal.accessibility.common.ShortcutConstants;
+-import com.android.internal.accessibility.common.ShortcutConstants.UserShortcutType;
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.util.IntPair;
+-
+-import org.xmlpull.v1.XmlPullParserException;
+-
+-import java.io.IOException;
++
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+ import java.util.ArrayList;
+@@ -179,7 +156,6 @@
+      *
+      * @hide
+      */
+-    @SdkConstant(SdkConstant.SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CHOOSE_ACCESSIBILITY_BUTTON =
+             "com.android.internal.intent.action.CHOOSE_ACCESSIBILITY_BUTTON";
+ 
+@@ -251,12 +227,6 @@
+     private final Object mLock = new Object();
+ 
+     @UnsupportedAppUsage
+-    private IAccessibilityManager mService;
+-
+-    @UnsupportedAppUsage
+-    final int mUserId;
+-
+-    @UnsupportedAppUsage
+     final Handler mHandler;
+ 
+     final Handler.Callback mCallback;
+@@ -310,13 +280,6 @@
+      * Map from a view's accessibility id to the list of request preparers set for that view
+      */
+     private SparseArray<List<AccessibilityRequestPreparer>> mRequestPreparerLists;
+-
+-    /**
+-     * Binder for flash notification.
+-     *
+-     * @see #startFlashNotificationSequence(Context, int)
+-     */
+-    private final Binder mBinder = new Binder();
+ 
+     /**
+      * Listener for the system accessibility state. To listen for changes to the
+@@ -380,7 +343,7 @@
+      * register it with the system by calling
+      * {@link #addHighContrastTextStateChangeListener}.
+      */
+-    @FlaggedApi(com.android.graphics.hwui.flags.Flags.FLAG_HIGH_CONTRAST_TEXT_SMALL_TEXT_RECT)
++    @FlaggedApi("com.android.graphics.hwui.flags.high_contrast_text_small_text_rect")
+     public interface HighContrastTextStateChangeListener {
+ 
+         /**
+@@ -456,56 +419,9 @@
+          * @return The services to report.
+          */
+         @Nullable List<AccessibilityServiceInfo> getEnabledAccessibilityServiceList(
+-                @FeedbackType int feedbackTypeFlags,
++                int feedbackTypeFlags,
+                 @Nullable List<AccessibilityServiceInfo> enabledService);
+     }
+-
+-    private final IAccessibilityManagerClient.Stub mClient =
+-            new IAccessibilityManagerClient.Stub() {
+-        @Override
+-        public void setState(int state) {
+-            // We do not want to change this immediately as the application may
+-            // have already checked that accessibility is on and fired an event,
+-            // that is now propagating up the view tree, Hence, if accessibility
+-            // is now off an exception will be thrown. We want to have the exception
+-            // enforcement to guard against apps that fire unnecessary accessibility
+-            // events when accessibility is off.
+-            mHandler.obtainMessage(MyCallback.MSG_SET_STATE, state, 0).sendToTarget();
+-        }
+-
+-        @Override
+-        public void notifyServicesStateChanged(long updatedUiTimeout) {
+-            updateUiTimeout(updatedUiTimeout);
+-
+-            final ArrayMap<AccessibilityServicesStateChangeListener, Executor> listeners;
+-            synchronized (mLock) {
+-                if (mServicesStateChangeListeners.isEmpty()) {
+-                    return;
+-                }
+-                listeners = new ArrayMap<>(mServicesStateChangeListeners);
+-            }
+-
+-            int numListeners = listeners.size();
+-            for (int i = 0; i < numListeners; i++) {
+-                final AccessibilityServicesStateChangeListener listener =
+-                        mServicesStateChangeListeners.keyAt(i);
+-                mServicesStateChangeListeners.valueAt(i).execute(() -> listener
+-                        .onAccessibilityServicesStateChanged(AccessibilityManager.this));
+-            }
+-        }
+-
+-        @Override
+-        public void setRelevantEventTypes(int eventTypes) {
+-            mRelevantEventTypes = eventTypes;
+-        }
+-
+-        @Override
+-        public void setFocusAppearance(int strokeWidth, int color) {
+-            synchronized (mLock) {
+-                updateFocusAppearanceLocked(strokeWidth, color);
+-            }
+-        }
+-    };
+ 
+     /**
+      * Get an AccessibilityManager instance (create one if necessary).
+@@ -518,76 +434,21 @@
+     public static AccessibilityManager getInstance(Context context) {
+         synchronized (sInstanceSync) {
+             if (sInstance == null) {
+-                final int userId;
+-                if (Binder.getCallingUid() == Process.SYSTEM_UID
+-                        || context.checkCallingOrSelfPermission(
+-                                Manifest.permission.INTERACT_ACROSS_USERS)
+-                                        == PackageManager.PERMISSION_GRANTED
+-                        || context.checkCallingOrSelfPermission(
+-                                Manifest.permission.INTERACT_ACROSS_USERS_FULL)
+-                                        == PackageManager.PERMISSION_GRANTED) {
+-                    userId = UserHandle.USER_CURRENT;
+-                } else {
+-                    userId = context.getUserId();
+-                }
+-                sInstance = new AccessibilityManager(context, null, userId);
++                sInstance = new AccessibilityManager(context.getMainLooper(), context.getResources());
+             }
+-        }
+-        return sInstance;
+-    }
+-
+-    /**
+-     * Create an instance.
+-     *
+-     * @param context A {@link Context}.
+-     * @param service An interface to the backing service.
+-     * @param userId User id under which to run.
+-     *
+-     * @hide
+-     */
+-    public AccessibilityManager(Context context, IAccessibilityManager service, int userId) {
+-        // Constructor can't be chained because we can't create an instance of an inner class
+-        // before calling another constructor.
++            return sInstance;
++        }
++    }
++
++    /** Creates a manager without an accessibility service connection. @hide */
++    public AccessibilityManager() {
++        this(Looper.getMainLooper(), Resources.getSystem());
++    }
++
++    private AccessibilityManager(Looper looper, Resources resources) {
+         mCallback = new MyCallback();
+-        mHandler = new Handler(context.getMainLooper(), mCallback);
+-        mUserId = userId;
+-        synchronized (mLock) {
+-            initialFocusAppearanceLocked(context.getResources());
+-            tryConnectToServiceLocked(service);
+-        }
+-    }
+-
+-    /**
+-     * Create an instance.
+-     *
+-     * @param context A {@link Context}.
+-     * @param handler The handler to use
+-     * @param service An interface to the backing service.
+-     * @param userId User id under which to run.
+-     * @param serviceConnect {@code true} to connect the service or
+-     *                       {@code false} not to connect the service.
+-     *
+-     * @hide
+-     */
+-    @VisibleForTesting
+-    public AccessibilityManager(Context context, Handler handler, IAccessibilityManager service,
+-            int userId, boolean serviceConnect) {
+-        mCallback = new MyCallback();
+-        mHandler = handler;
+-        mUserId = userId;
+-        synchronized (mLock) {
+-            initialFocusAppearanceLocked(context.getResources());
+-            if (serviceConnect) {
+-                tryConnectToServiceLocked(service);
+-            }
+-        }
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public IAccessibilityManagerClient getClient() {
+-        return mClient;
++        mHandler = new Handler(looper, mCallback);
++        initialFocusAppearanceLocked(resources);
+     }
+ 
+     /**
+@@ -595,17 +456,6 @@
+      * @hide
+      */
+     public boolean removeClient() {
+-        synchronized (mLock) {
+-            IAccessibilityManager service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-            try {
+-                return service.removeClient(mClient, mUserId);
+-            } catch (RemoteException re) {
+-                Log.e(LOG_TAG, "AccessibilityManagerService is dead", re);
+-            }
+-        }
+         return false;
+     }
+ 
+@@ -658,20 +508,7 @@
+     public boolean enableTrustedAccessibilityService(
+             @NonNull ComponentName trustedAccessibilityService) {
+         Objects.requireNonNull(trustedAccessibilityService);
+-        final IAccessibilityManager service;
+-        final int userId;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-            userId = mUserId;
+-        }
+-        try {
+-            return service.enableTrustedAccessibilityService(trustedAccessibilityService, userId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -685,22 +522,10 @@
+      */
+     @TestApi
+     @FlaggedApi(Flags.FLAG_ENABLE_TRUSTED_ACCESSIBILITY_SERVICE_API)
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     @VisibleForTesting
+     public void setTrustedAccessibilityServiceForTesting(
+             @Nullable ComponentName trustedAccessibilityService) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.setTrustedAccessibilityServiceForTesting(trustedAccessibilityService);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+     }
+ 
+     /**
+@@ -709,7 +534,7 @@
+      */
+     @TestApi
+     public boolean hasAnyDirectConnection() {
+-        return AccessibilityInteractionClient.hasAnyDirectConnection();
++        return false;
+     }
+ 
+     /**
+@@ -726,10 +551,6 @@
+      */
+     public boolean isTouchExplorationEnabled() {
+         synchronized (mLock) {
+-            IAccessibilityManager service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+             return mIsTouchExplorationEnabled;
+         }
+     }
+@@ -744,13 +565,9 @@
+      * @return True if high contrast text is enabled, false otherwise.
+      *
+      */
+-    @FlaggedApi(com.android.graphics.hwui.flags.Flags.FLAG_HIGH_CONTRAST_TEXT_SMALL_TEXT_RECT)
++    @FlaggedApi("com.android.graphics.hwui.flags.high_contrast_text_small_text_rect")
+     public boolean isHighContrastTextEnabled() {
+         synchronized (mLock) {
+-            IAccessibilityManager service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+             return mIsHighContrastTextEnabled;
+         }
+     }
+@@ -769,12 +586,9 @@
+      * their descendants.
+      */
+     public void sendAccessibilityEvent(AccessibilityEvent event) {
+-        final IAccessibilityManager service;
+-        final int userId;
+         final AccessibilityEvent dispatchedEvent;
+         synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
++            if (mAccessibilityPolicy == null && !mIsEnabled) {
+                 return;
+             }
+             event.setEventTime(SystemClock.uptimeMillis());
+@@ -812,66 +626,17 @@
+                 }
+                 return;
+             }
+-            userId = mUserId;
+-        }
+-        try {
+-            // it is possible that this manager is in the same process as the service but
+-            // client using it is called through Binder from another process. Example: MMS
+-            // app adds a SMS notification and the NotificationManagerService calls this method
+-            final long identityToken = Binder.clearCallingIdentity();
+-            try {
+-                service.sendAccessibilityEvent(dispatchedEvent, userId);
+-            } finally {
+-                Binder.restoreCallingIdentity(identityToken);
+-            }
+-            if (DEBUG) {
+-                Log.i(LOG_TAG, dispatchedEvent + " sent");
+-            }
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error during sending " + dispatchedEvent + " ", re);
+-        } finally {
+-            if (event != dispatchedEvent) {
+-                event.recycle();
+-            }
+-            dispatchedEvent.recycle();
+-        }
++        }
++        if (event != dispatchedEvent) {
++            event.recycle();
++        }
++        dispatchedEvent.recycle();
+     }
+ 
+     /**
+      * Requests feedback interruption from all accessibility services.
+      */
+     public void interrupt() {
+-        final IAccessibilityManager service;
+-        final int userId;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-            if (!isEnabled()) {
+-                Looper myLooper = Looper.myLooper();
+-                if (myLooper == Looper.getMainLooper()) {
+-                    throw new IllegalStateException(
+-                            "Accessibility off. Did you forget to check that?");
+-                } else {
+-                    // If we're not running on the thread with the main looper, it's possible for
+-                    // the state of accessibility to change between checking isEnabled and
+-                    // calling this method. So just log the error rather than throwing the
+-                    // exception.
+-                    Log.e(LOG_TAG, "Interrupt called with accessibility disabled");
+-                    return;
+-                }
+-            }
+-            userId = mUserId;
+-        }
+-        try {
+-            service.interrupt(userId);
+-            if (DEBUG) {
+-                Log.i(LOG_TAG, "Requested interrupt from all services");
+-            }
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while requesting interrupt from all services. ", re);
+-        }
+     }
+ 
+     /**
+@@ -899,32 +664,13 @@
+      * @return An unmodifiable list with {@link AccessibilityServiceInfo}s.
+      */
+     public List<AccessibilityServiceInfo> getInstalledAccessibilityServiceList() {
+-        final IAccessibilityManager service;
+-        final int userId;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
++        synchronized (mLock) {
++            if (mAccessibilityPolicy == null) {
+                 return Collections.emptyList();
+             }
+-            userId = mUserId;
+-        }
+-
+-        List<AccessibilityServiceInfo> services = null;
+-        try {
+-            services = service.getInstalledAccessibilityServiceList(userId).getList();
+-            if (DEBUG) {
+-                Log.i(LOG_TAG, "Installed AccessibilityServices " + services);
+-            }
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while obtaining the installed AccessibilityServices. ", re);
+-        }
+-        if (mAccessibilityPolicy != null) {
+-            services = mAccessibilityPolicy.getInstalledAccessibilityServiceList(services);
+-        }
+-        if (services != null) {
++            final List<AccessibilityServiceInfo> services =
++                    mAccessibilityPolicy.getInstalledAccessibilityServiceList(Collections.emptyList());
+             return Collections.unmodifiableList(services);
+-        } else {
+-            return Collections.emptyList();
+         }
+     }
+ 
+@@ -934,29 +680,14 @@
+      */
+     public List<AccessibilityServiceInfo> getEnabledAccessibilityServiceList(
+             int feedbackTypeFlags, int userId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return Collections.emptyList();
++        synchronized (mLock) {
++            if (mAccessibilityPolicy != null) {
++                final List<AccessibilityServiceInfo> services = mAccessibilityPolicy
++                        .getEnabledAccessibilityServiceList(feedbackTypeFlags, Collections.emptyList());
++                if (services != null) {
++                    return Collections.unmodifiableList(services);
++                }
+             }
+-        }
+-        List<AccessibilityServiceInfo> services = null;
+-        try {
+-            services = service.getEnabledAccessibilityServiceList(feedbackTypeFlags, userId);
+-            if (DEBUG) {
+-                Log.i(LOG_TAG, "Enabled AccessibilityServices " + services);
+-            }
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while obtaining the enabled AccessibilityServices. ", re);
+-        }
+-        if (mAccessibilityPolicy != null) {
+-            services = mAccessibilityPolicy.getEnabledAccessibilityServiceList(
+-                    feedbackTypeFlags, services);
+-        }
+-        if (services != null) {
+-            return Collections.unmodifiableList(services);
+-        } else {
+             return Collections.emptyList();
+         }
+     }
+@@ -977,11 +708,7 @@
+      */
+     public List<AccessibilityServiceInfo> getEnabledAccessibilityServiceList(
+             int feedbackTypeFlags) {
+-        final int userId;
+-        synchronized (mLock) {
+-            userId = mUserId;
+-        }
+-        return getEnabledAccessibilityServiceList(feedbackTypeFlags, userId);
++        return getEnabledAccessibilityServiceList(feedbackTypeFlags, 0);
+     }
+ 
+     /**
+@@ -989,21 +716,9 @@
+      * before the AccessibilityService (or any shortcut for the service) can be enabled.
+      * @hide
+      */
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     public boolean isAccessibilityServiceWarningRequired(@NonNull AccessibilityServiceInfo info) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return true;
+-            }
+-        }
+-        try {
+-            return service.isAccessibilityServiceWarningRequired(info);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while checking isAccessibilityServiceWarningRequired: ", re);
+-            return true;
+-        }
++        return true;
+     }
+ 
+     /**
+@@ -1136,52 +851,6 @@
+             @NonNull AccessibilityServicesStateChangeListener listener) {
+         synchronized (mLock) {
+             return mServicesStateChangeListeners.remove(listener) != null;
+-        }
+-    }
+-
+-    /**
+-     * Registers callback for when user initialization has completed.
+-     * Does nothing if the same callback is already registered.
+-     *
+-     * @param callback The callback to be registered
+-     * @hide
+-     */
+-    public void registerUserInitializationCompleteCallback(
+-            @NonNull IUserInitializationCompleteCallback callback) {
+-        IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.registerUserInitializationCompleteCallback(callback);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while registering userInitializationCompleteCallback. ", re);
+-        }
+-    }
+-
+-    /**
+-     * Unregisters callback for when user initialization has completed.
+-     *
+-     * @param callback The callback to be unregistered
+-     * @hide
+-     */
+-    public void unregisterUserInitializationCompleteCallback(
+-            @NonNull IUserInitializationCompleteCallback callback) {
+-        IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.unregisterUserInitializationCompleteCallback(callback);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG,
+-                    "Error while unregistering userInitializationCompleteCallback. ", re);
+         }
+     }
+ 
+@@ -1398,7 +1067,7 @@
+      * @param executor a executor to call the listener from
+      * @param listener The listener to be called
+      */
+-    @FlaggedApi(com.android.graphics.hwui.flags.Flags.FLAG_HIGH_CONTRAST_TEXT_SMALL_TEXT_RECT)
++    @FlaggedApi("com.android.graphics.hwui.flags.high_contrast_text_small_text_rect")
+     public void addHighContrastTextStateChangeListener(
+             @NonNull @CallbackExecutor Executor executor,
+             @NonNull HighContrastTextStateChangeListener listener
+@@ -1413,7 +1082,7 @@
+      *
+      * @param listener The listener.
+      */
+-    @FlaggedApi(com.android.graphics.hwui.flags.Flags.FLAG_HIGH_CONTRAST_TEXT_SMALL_TEXT_RECT)
++    @FlaggedApi("com.android.graphics.hwui.flags.high_contrast_text_small_text_rect")
+     public void removeHighContrastTextStateChangeListener(
+             @NonNull HighContrastTextStateChangeListener listener) {
+         synchronized (mLock) {
+@@ -1474,7 +1143,7 @@
+         List<AccessibilityServiceInfo> serviceInfos =
+                 getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK);
+         for (int i = 0; i < serviceInfos.size(); i++) {
+-            if ((serviceInfos.get(i).flags & FLAG_ENABLE_ACCESSIBILITY_VOLUME) != 0) {
++            if ((serviceInfos.get(i).flags & (1 << 7) /* FLAG_ENABLE_ACCESSIBILITY_VOLUME */) != 0) {
+                 return true;
+             }
+         }
+@@ -1489,18 +1158,7 @@
+      * @hide
+      */
+     public boolean sendFingerprintGesture(int keyCode) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-        }
+-        try {
+-            return service.sendFingerprintGesture(keyCode);
+-        } catch (RemoteException e) {
+-            return false;
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -1515,22 +1173,7 @@
+      */
+     @SystemApi
+     public int getAccessibilityWindowId(@Nullable IBinder windowToken) {
+-        if (windowToken == null) {
+-            return AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
+-        }
+-
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
+-            }
+-        }
+-        try {
+-            return service.getAccessibilityWindowId(windowToken);
+-        } catch (RemoteException e) {
+-            return AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
+-        }
++        return -1;
+     }
+ 
+     /**
+@@ -1539,18 +1182,6 @@
+      * @hide
+      */
+     public void associateEmbeddedHierarchy(@NonNull IBinder host, @NonNull IBinder embedded) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.associateEmbeddedHierarchy(host, embedded);
+-        } catch (RemoteException e) {
+-            return;
+-        }
+     }
+ 
+     /**
+@@ -1560,21 +1191,6 @@
+      * @hide
+      */
+     public void disassociateEmbeddedHierarchy(@NonNull IBinder token) {
+-        if (token == null) {
+-            return;
+-        }
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.disassociateEmbeddedHierarchy(token);
+-        } catch (RemoteException e) {
+-            return;
+-        }
+     }
+ 
+     /**
+@@ -1640,7 +1256,7 @@
+             return null;
+         }
+         for (int i = 0; i < installedServiceInfos.size(); i++) {
+-            if (componentName.equals(installedServiceInfos.get(i).getComponentName())) {
++            if (componentName.equals(ComponentName.unflattenFromString(installedServiceInfos.get(i).getId()))) {
+                 return installedServiceInfos.get(i);
+             }
+         }
+@@ -1648,63 +1264,13 @@
+     }
+ 
+     /**
+-     * Adds an accessibility interaction connection interface for a given window.
+-     * @param windowToken The window token to which a connection is added.
+-     * @param leashToken The leash token to which a connection is added.
+-     * @param connection The connection.
+-     *
+-     * @hide
+-     */
+-    public int addAccessibilityInteractionConnection(IWindow windowToken, IBinder leashToken,
+-            String packageName, IAccessibilityInteractionConnection connection) {
+-        final IAccessibilityManager service;
+-        final int userId;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return View.NO_ID;
+-            }
+-            userId = mUserId;
+-        }
+-        try {
+-            return service.addAccessibilityInteractionConnection(windowToken, leashToken,
+-                    connection, packageName, userId);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while adding an accessibility interaction connection. ", re);
+-        }
+-        return View.NO_ID;
+-    }
+-
+-    /**
+-     * Removed an accessibility interaction connection interface for a given window.
+-     * @param windowToken The window token to which a connection is removed.
+-     *
+-     * @hide
+-     */
+-    public void removeAccessibilityInteractionConnection(IWindow windowToken) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.removeAccessibilityInteractionConnection(windowToken);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while removing an accessibility interaction connection. ", re);
+-        }
+-    }
+-
+-    /**
+      * Perform the accessibility shortcut if the caller has permission.
+      *
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     public void performAccessibilityShortcut() {
+-        performAccessibilityShortcut(Display.DEFAULT_DISPLAY, HARDWARE, null);
+     }
+ 
+     /**
+@@ -1715,21 +1281,9 @@
+      *        specified target.
+      * @hide
+      */
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     public void performAccessibilityShortcut(
+-            int displayId, @UserShortcutType int shortcutType, @Nullable String targetName) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.performAccessibilityShortcut(displayId, shortcutType, targetName);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error performing accessibility shortcut. ", re);
+-        }
++            int displayId, int shortcutType, @Nullable String targetName) {
+     }
+ 
+     /**
+@@ -1740,23 +1294,10 @@
+      *                           {@link Manifest.permission#MANAGE_ACCESSIBILITY} permission
+      * @hide
+      */
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     public void enableShortcutsForTargets(boolean enable,
+-            @UserShortcutType int shortcutTypes, @NonNull Set<String> targets,
++            int shortcutTypes, @NonNull Set<String> targets,
+             @UserIdInt int userId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.enableShortcutsForTargets(
+-                    enable, shortcutTypes, targets.stream().toList(), userId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+     }
+ 
+     /**
+@@ -1770,34 +1311,10 @@
+      * @hide
+      * @see ShortcutConstants.A11Y_FEATURE_TO_FRAMEWORK_TILE
+      */
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     @NonNull
+     public Map<ComponentName, ComponentName> getA11yFeatureToTileMap(@UserIdInt int userId) {
+-        final IAccessibilityManager service;
+-        Map<ComponentName, ComponentName> a11yFeatureToTileMap = new ArrayMap<>();
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return a11yFeatureToTileMap;
+-            }
+-        }
+-        try {
+-            Bundle a11yFeatureToTile = service.getA11yFeatureToTileMap(userId);
+-            for (String key : a11yFeatureToTile.keySet()) {
+-                ComponentName feature = ComponentName.unflattenFromString(key);
+-                if (feature == null) {
+-                    continue;
+-                }
+-                ComponentName tileService = a11yFeatureToTile.getParcelable(key,
+-                        ComponentName.class);
+-                if (tileService != null) {
+-                    a11yFeatureToTileMap.put(feature, tileService);
+-                }
+-            }
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+-        return a11yFeatureToTileMap;
++        return Collections.emptyMap();
+     }
+ 
+     /**
+@@ -1815,24 +1332,8 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     public void registerSystemAction(@NonNull RemoteAction action, int actionId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.registerSystemAction(action, actionId);
+-
+-            if (DEBUG) {
+-                Log.i(LOG_TAG, "System action " + action.getTitle() + " is registered.");
+-            }
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error registering system action " + action.getTitle() + " ", re);
+-        }
+     }
+ 
+    /**
+@@ -1842,24 +1343,8 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     public void unregisterSystemAction(int actionId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.unregisterSystemAction(actionId);
+-
+-            if (DEBUG) {
+-                Log.i(LOG_TAG, "System action with actionId " + actionId + " is unregistered.");
+-            }
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error unregistering system action with actionId " + actionId + " ", re);
+-        }
+     }
+ 
+     /**
+@@ -1869,7 +1354,7 @@
+      * @param displayId The logical display id.
+      * @hide
+      */
+-    @RequiresPermission(android.Manifest.permission.STATUS_BAR_SERVICE)
++    @RequiresPermission("android.permission.STATUS_BAR_SERVICE")
+     public void notifyAccessibilityButtonClicked(int displayId) {
+         notifyAccessibilityButtonClicked(displayId, null);
+     }
+@@ -1884,20 +1369,8 @@
+      *        specified target.
+      * @hide
+      */
+-    @RequiresPermission(android.Manifest.permission.STATUS_BAR_SERVICE)
++    @RequiresPermission("android.permission.STATUS_BAR_SERVICE")
+     public void notifyAccessibilityButtonClicked(int displayId, @Nullable String targetName) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.notifyAccessibilityButtonClicked(displayId, targetName);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while dispatching accessibility button click", re);
+-        }
+     }
+ 
+     /**
+@@ -1909,20 +1382,8 @@
+      * @param displayId The id of the display to show the dialog on.
+      * @hide
+      */
+-    @RequiresPermission(Manifest.permission.STATUS_BAR_SERVICE)
++    @RequiresPermission("android.permission.STATUS_BAR_SERVICE")
+     public void notifyAccessibilityButtonLongClicked(int displayId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.notifyAccessibilityButtonLongClicked(displayId);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while dispatching accessibility button long click. ", re);
+-        }
+     }
+ 
+     /**
+@@ -1934,43 +1395,6 @@
+      * @hide
+      */
+     public void notifyAccessibilityButtonVisibilityChanged(boolean shown) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.notifyAccessibilityButtonVisibilityChanged(shown);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while dispatching accessibility button visibility change", re);
+-        }
+-    }
+-
+-    /**
+-     * Set an IAccessibilityInteractionConnection to replace the actions of a picture-in-picture
+-     * window. Intended for use by the System UI only.
+-     *
+-     * @param connection The connection to handle the actions. Set to {@code null} to avoid
+-     * affecting the actions.
+-     *
+-     * @hide
+-     */
+-    public void setPictureInPictureActionReplacingConnection(
+-            @Nullable IAccessibilityInteractionConnection connection) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.setPictureInPictureActionReplacingConnection(connection);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error setting picture in picture action replacement", re);
+-        }
+     }
+ 
+     /**
+@@ -1980,21 +1404,10 @@
+      * @return The list of shortcut target names.
+      * @hide
+      */
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     @NonNull
+     public List<String> getAccessibilityShortcutTargets(
+-            @UserShortcutType int shortcutType, int userId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-        }
+-        if (service != null) {
+-            try {
+-                return service.getAccessibilityShortcutTargets(shortcutType, userId);
+-            } catch (RemoteException re) {
+-                re.rethrowFromSystemServer();
+-            }
+-        }
++            int shortcutType, int userId) {
+         return Collections.emptyList();
+     }
+ 
+@@ -2008,104 +1421,11 @@
+      * @hide
+      */
+     @TestApi
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     @NonNull
+     public List<String> getAccessibilityShortcutTargets(
+-            @UserShortcutType int shortcutType) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-        }
+-        if (service != null) {
+-            try {
+-                return service.getAccessibilityShortcutTargets(shortcutType,
+-                        UserHandle.USER_CURRENT);
+-            } catch (RemoteException re) {
+-                re.rethrowFromSystemServer();
+-            }
+-        }
++            int shortcutType) {
+         return Collections.emptyList();
+-    }
+-
+-    /**
+-     * Returns the {@link AccessibilityShortcutInfo}s of the installed accessibility shortcut
+-     * targets, for specific user.
+-     *
+-     * @param context The context of the application.
+-     * @param userId The user id.
+-     * @return A list with {@link AccessibilityShortcutInfo}s.
+-     * @hide
+-     */
+-    @NonNull
+-    public List<AccessibilityShortcutInfo> getInstalledAccessibilityShortcutListAsUser(
+-            @NonNull Context context, @UserIdInt int userId) {
+-        final List<AccessibilityShortcutInfo> shortcutInfos = new ArrayList<>();
+-        final int flags = PackageManager.GET_ACTIVITIES
+-                | PackageManager.GET_META_DATA
+-                | PackageManager.MATCH_DISABLED_UNTIL_USED_COMPONENTS
+-                | PackageManager.MATCH_DIRECT_BOOT_AWARE
+-                | PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+-        final Intent actionMain = new Intent(Intent.ACTION_MAIN);
+-        actionMain.addCategory(Intent.CATEGORY_ACCESSIBILITY_SHORTCUT_TARGET);
+-
+-        final PackageManager packageManager = context.getPackageManager();
+-        final List<ResolveInfo> installedShortcutList =
+-                packageManager.queryIntentActivitiesAsUser(actionMain, flags, userId);
+-        for (int i = 0; i < installedShortcutList.size(); i++) {
+-            final AccessibilityShortcutInfo shortcutInfo =
+-                    getShortcutInfo(context, installedShortcutList.get(i));
+-            if (shortcutInfo != null) {
+-                shortcutInfos.add(shortcutInfo);
+-            }
+-        }
+-        return shortcutInfos;
+-    }
+-
+-    /**
+-     * Returns an {@link AccessibilityShortcutInfo} according to the given {@link ResolveInfo} of
+-     * an activity.
+-     *
+-     * @param context The context of the application.
+-     * @param resolveInfo The resolve info of an activity.
+-     * @return The AccessibilityShortcutInfo.
+-     */
+-    @Nullable
+-    private AccessibilityShortcutInfo getShortcutInfo(@NonNull Context context,
+-            @NonNull ResolveInfo resolveInfo) {
+-        final ActivityInfo activityInfo = resolveInfo.activityInfo;
+-        if (activityInfo == null || activityInfo.metaData == null
+-                || activityInfo.metaData.getInt(AccessibilityShortcutInfo.META_DATA) == 0) {
+-            return null;
+-        }
+-        try {
+-            return new AccessibilityShortcutInfo(context, activityInfo);
+-        } catch (XmlPullParserException | IOException exp) {
+-            Log.e(LOG_TAG, "Error while initializing AccessibilityShortcutInfo", exp);
+-        }
+-        return null;
+-    }
+-
+-    /**
+-     *
+-     * Sets an {@link IMagnificationConnection} that manipulates magnification in SystemUI.
+-     *
+-     * @param connection The connection that manipulates magnification in SystemUI.
+-     * @hide
+-     */
+-    public void setMagnificationConnection(@Nullable
+-            IMagnificationConnection connection) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.setMagnificationConnection(connection);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error setting magnification connection", re);
+-        }
+     }
+ 
+     /**
+@@ -2128,10 +1448,6 @@
+      */
+     public boolean isAudioDescriptionRequested() {
+         synchronized (mLock) {
+-            IAccessibilityManager service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+             return mIsAudioDescriptionByDefaultRequested;
+         }
+     }
+@@ -2144,18 +1460,6 @@
+      * @hide
+      */
+     public void setSystemAudioCaptioningEnabled(boolean isEnabled, int userId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.setSystemAudioCaptioningEnabled(isEnabled, userId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+     }
+ 
+     /**
+@@ -2166,18 +1470,7 @@
+      * @hide
+      */
+     public boolean isSystemAudioCaptioningUiEnabled(int userId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-        }
+-        try {
+-            return service.isSystemAudioCaptioningUiEnabled(userId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -2188,105 +1481,6 @@
+      * @hide
+      */
+     public void setSystemAudioCaptioningUiEnabled(boolean isEnabled, int userId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.setSystemAudioCaptioningUiEnabled(isEnabled, userId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+-    }
+-
+-
+-    /**
+-     * Sets the {@link AccessibilityWindowAttributes} to the window associated with the given
+-     * window id.
+-     *
+-     * @param displayId The display id of the window.
+-     * @param windowId  The id of the window.
+-     * @param attributes The accessibility window attributes.
+-     * @hide
+-     */
+-    public void setAccessibilityWindowAttributes(int displayId, int windowId,
+-            AccessibilityWindowAttributes attributes) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.setAccessibilityWindowAttributes(displayId, windowId, mUserId, attributes);
+-        } catch (RemoteException re) {
+-            re.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Registers an {@link AccessibilityDisplayProxy}, so this proxy can access UI content specific
+-     * to its display.
+-     *
+-     * @param proxy the {@link AccessibilityDisplayProxy} to register.
+-     * @return {@code true} if the proxy is successfully registered.
+-     *
+-     * @throws IllegalArgumentException if the proxy's display is not currently tracked by a11y, is
+-     * {@link android.view.Display#DEFAULT_DISPLAY}, is or lower than
+-     * {@link android.view.Display#INVALID_DISPLAY}, or is already being proxy-ed.
+-     *
+-     * @throws SecurityException if the app does not hold the required permissions.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(allOf = {Manifest.permission.MANAGE_ACCESSIBILITY,
+-            Manifest.permission.CREATE_VIRTUAL_DEVICE})
+-    public boolean registerDisplayProxy(@NonNull AccessibilityDisplayProxy proxy) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-        }
+-
+-        try {
+-            return service.registerProxyForDisplay(proxy.mServiceClient, proxy.getDisplayId());
+-        }  catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Unregisters an {@link AccessibilityDisplayProxy}.
+-     *
+-     * @return {@code true} if the proxy is successfully unregistered.
+-     *
+-     * @throws SecurityException if the app does not hold the required permissions.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(allOf = {Manifest.permission.MANAGE_ACCESSIBILITY,
+-            Manifest.permission.CREATE_VIRTUAL_DEVICE})
+-    public boolean unregisterDisplayProxy(@NonNull AccessibilityDisplayProxy proxy)  {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-        }
+-        try {
+-            return service.unregisterProxyForDisplay(proxy.getDisplayId());
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+     }
+ 
+     /**
+@@ -2309,21 +1503,7 @@
+     @SystemApi(client = MODULE_LIBRARIES)
+     public boolean startFlashNotificationSequence(@NonNull Context context,
+             @FlashNotificationReason int reason) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-        }
+-
+-        try {
+-            return service.startFlashNotificationSequence(context.getOpPackageName(),
+-                    reason, mBinder);
+-        } catch (RemoteException | SecurityException e) {
+-            Log.e(LOG_TAG, "Error while start flash notification sequence", e);
+-            return false;
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -2340,20 +1520,7 @@
+     @TestApi
+     @SystemApi(client = MODULE_LIBRARIES)
+     public boolean stopFlashNotificationSequence(@NonNull Context context) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-        }
+-
+-        try {
+-            return service.stopFlashNotificationSequence(context.getOpPackageName());
+-        } catch (RemoteException | SecurityException e) {
+-            Log.e(LOG_TAG, "Error while stop flash notification sequence", e);
+-            return false;
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -2367,21 +1534,7 @@
+      */
+     public boolean startFlashNotificationEvent(@NonNull Context context,
+             @FlashNotificationReason int reason, @Nullable String reasonPkg) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-        }
+-
+-        try {
+-            return service.startFlashNotificationEvent(context.getOpPackageName(),
+-                    reason, reasonPkg);
+-        } catch (RemoteException | SecurityException e) {
+-            Log.e(LOG_TAG, "Error while start flash notification event", e);
+-            return false;
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -2393,20 +1546,7 @@
+      * @hide
+      */
+     public boolean isAccessibilityServiceTargetAllowed(AccessibilityServiceInfo info, int userId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-        }
+-
+-        try {
+-            return service.isAccessibilityServiceTargetAllowed(info, userId);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while check accessibility service target status", re);
+-            return false;
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -2418,48 +1558,7 @@
+      * @hide
+      */
+     public boolean sendRestrictedDialogIntent(AccessibilityServiceInfo info, int userId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return false;
+-            }
+-        }
+-
+-        try {
+-            return service.sendRestrictedDialogIntent(info, userId);
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "Error while show restricted dialog", re);
+-            return false;
+-        }
+-    }
+-
+-    private IAccessibilityManager getServiceLocked() {
+-        if (mService == null) {
+-            tryConnectToServiceLocked(null);
+-        }
+-        return mService;
+-    }
+-
+-    private void tryConnectToServiceLocked(IAccessibilityManager service) {
+-        if (service == null) {
+-            IBinder iBinder = ServiceManager.getService(Context.ACCESSIBILITY_SERVICE);
+-            if (iBinder == null) {
+-                return;
+-            }
+-            service = IAccessibilityManager.Stub.asInterface(iBinder);
+-        }
+-
+-        try {
+-            final long userStateAndRelevantEvents = service.addClient(mClient, mUserId);
+-            setStateLocked(IntPair.first(userStateAndRelevantEvents));
+-            mRelevantEventTypes = IntPair.second(userStateAndRelevantEvents);
+-            updateUiTimeout(service.getRecommendedTimeoutMillis());
+-            updateFocusAppearanceLocked(service.getFocusStrokeWidth(), service.getFocusColor());
+-            mService = service;
+-        } catch (RemoteException re) {
+-            Log.e(LOG_TAG, "AccessibilityManagerService is dead", re);
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -2563,31 +1662,6 @@
+         synchronized (mLock) {
+             mAccessibilityTracingState = stateFlag;
+         }
+-    }
+-
+-    /**
+-     * Update interactive and non-interactive UI timeout.
+-     *
+-     * @param uiTimeout A pair of {@code int}s. First integer for interactive one, and second
+-     *                  integer for non-interactive one.
+-     */
+-    private void updateUiTimeout(long uiTimeout) {
+-        mInteractiveUiTimeout = IntPair.first(uiTimeout);
+-        mNonInteractiveUiTimeout = IntPair.second(uiTimeout);
+-    }
+-
+-    /**
+-     * Updates the stroke width and color of the focus rectangle.
+-     *
+-     * @param strokeWidth The strokeWidth of the focus rectangle.
+-     * @param color The color of the focus rectangle.
+-     */
+-    private void updateFocusAppearanceLocked(int strokeWidth, int color) {
+-        if (mFocusStrokeWidth == strokeWidth && mFocusColor == color) {
+-            return;
+-        }
+-        mFocusStrokeWidth = strokeWidth;
+-        mFocusColor = color;
+     }
+ 
+     /**
+@@ -2628,7 +1702,6 @@
+         public boolean handleMessage(Message message) {
+             switch (message.what) {
+                 case MSG_SET_STATE: {
+-                    // See comment at mClient
+                     final int state = message.arg1;
+                     synchronized (mLock) {
+                         setStateLocked(state);
+@@ -2640,54 +1713,14 @@
+     }
+ 
+     /**
+-     * Retrieves the window's transformation matrix and magnification spec.
+-     *
+-     * <p>
+-     * Used by callers outside of the AccessibilityManagerService process which need
+-     * this information, like {@link android.view.accessibility.DirectAccessibilityConnection}.
+-     * </p>
+-     *
+-     * @return The transformation spec
+-     * @hide
+-     */
+-    public IAccessibilityManager.WindowTransformationSpec getWindowTransformationSpec(
+-            int windowId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return null;
+-            }
+-        }
+-        try {
+-            return service.getWindowTransformationSpec(windowId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+      * Attaches a {@link android.view.SurfaceControl} containing an accessibility overlay to the
+      * specified display.
+      *
+      * @hide
+      */
+-    @RequiresPermission(android.Manifest.permission.INTERNAL_SYSTEM_WINDOW)
++    @RequiresPermission("android.permission.INTERNAL_SYSTEM_WINDOW")
+     public void attachAccessibilityOverlayToDisplay(
+             int displayId, @NonNull SurfaceControl surfaceControl) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.attachAccessibilityOverlayToDisplay(
+-                    displayId, surfaceControl);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+     }
+ 
+     /**
+@@ -2698,21 +1731,9 @@
+      *                           and the a11y platform tiles' component names
+      * @hide
+      */
+-    @RequiresPermission(Manifest.permission.STATUS_BAR_SERVICE)
++    @RequiresPermission("android.permission.STATUS_BAR_SERVICE")
+     public void notifyQuickSettingsTilesChanged(
+             @UserIdInt int userId, List<ComponentName> tileComponentNames) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.notifyQuickSettingsTilesChanged(userId, tileComponentNames);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+     }
+ 
+     /**
+@@ -2721,19 +1742,7 @@
+      * @param displayId which display enabling Magnification
+      * @hide
+      */
+-    @RequiresPermission(Manifest.permission.MANAGE_ACCESSIBILITY)
++    @RequiresPermission("android.permission.MANAGE_ACCESSIBILITY")
+     public void enableMagnificationAndZoomIn(int displayId) {
+-        final IAccessibilityManager service;
+-        synchronized (mLock) {
+-            service = getServiceLocked();
+-            if (service == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            service.enableMagnificationAndZoomIn(displayId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+     }
+ }

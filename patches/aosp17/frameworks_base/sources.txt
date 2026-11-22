@@ -231,6 +231,19 @@ libcore/luni/src/main/java/libcore/api/IntraCoreApi.java
 libcore/luni/src/main/java/libcore/util/NonNull.java
 libcore/luni/src/main/java/libcore/util/Nullable.java
 
+# Phase 3 W1: upstream View, ViewGroup, TextView, Display, IME, Accessibility
+frameworks/base/core/java/android/view/Display.java
+frameworks/base/core/java/android/view/DisplayInfo.java
+frameworks/base/core/java/android/view/DisplayAddress.java
+frameworks/base/core/java/android/view/FrameRateCategoryRate.java
+frameworks/base/core/java/android/view/FrameRateVelocityPoint.java
+frameworks/base/core/java/android/hardware/display/BrightnessInfo.java
+frameworks/base/core/java/android/hardware/display/DeviceProductInfo.java
+frameworks/base/core/java/android/hardware/OverlayProperties.java
+frameworks/base/core/java/android/os/HandlerExecutor.java
+frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java
+frameworks/base/core/java/android/view/accessibility/AccessibilityRequestPreparer.java
+
 [sdk-support]
 # The SDK supplies the color appearance model used by ColorStateList lStar.
 com/android/internal/graphics/ColorUtils.java
@@ -520,3 +533,6 @@ patches/503-text-input-sdk36-edges.patch
 patches/504-text-format-sdk36-edges.patch
 patches/505-guest-bidi-boundary.patch
 patches/506-button-sdk36-platform-edges.patch
+
+patches/801-local-display.patch
+patches/802-local-accessibility-manager.patch
