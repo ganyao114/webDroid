@@ -16,8 +16,11 @@ struct Image {
     uint32_t id;
 };
 
+struct MatrixStore;
+
 struct State {
     JNIEnv* env = nullptr;
+    interp::Vm* vm = nullptr;
     wa_sf_t* sf = nullptr;
     wa_canvas_t* canvas = nullptr;
     uint32_t layer_id = 0;
@@ -40,6 +43,7 @@ struct State {
     std::array<std::vector<uint32_t>, 2> published_images;
     std::vector<jfloat> path_coordinates;
     std::vector<wa_path_verb_t> path_verbs;
+    std::shared_ptr<MatrixStore> matrices;
 
     std::string ime_text;
     uint32_t ime_action = 0;
@@ -87,6 +91,7 @@ template <class... Methods> void Register(interp::Vm& vm, const char* name, Meth
 }
 
 void RegisterCanvas(interp::Vm& vm);
+void RegisterMatrix(interp::Vm& vm);
 void RegisterPath(interp::Vm& vm);
 void RegisterBitmaps(interp::Vm& vm);
 

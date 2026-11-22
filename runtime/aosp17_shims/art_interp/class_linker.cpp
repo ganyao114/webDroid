@@ -1,14 +1,77 @@
 #include "runtime_internal.h"
 
 #include <algorithm>
+#include <charconv>
+#include <limits>
+#include <mutex>
 #include <stdexcept>
+#include <sys/mman.h>
 
+#include "base/mem_map.h"
 #include "dex/art_dex_file_loader.h"
 #include "dex/class_accessor-inl.h"
 #include "dex/dex_file-inl.h"
-#include "dex/dex_file_verifier.h"
+#include "ziparchive/zip_archive.h"
+#include "ziparchive/zip_error.h"
 
 namespace wa::interp {
+namespace {
+
+std::unique_ptr<const art::DexFile> OpenDex(art::ArtDexFileLoader& loader,
+                                           const std::string& location, bool verify,
+                                           uint32_t checksum = 0) {
+  std::string error;
+  auto dex = loader.OpenOne(0, checksum, nullptr, verify, verify, &error);
+  if (!dex) throw std::runtime_error("DEX " + location + ": " + error);
+  return dex;
+}
+
+size_t DexEntryNumber(std::string_view name) {
+  if (name == "classes.dex") return 1;
+  name.remove_prefix(std::string_view("classes").size());
+  name.remove_suffix(std::string_view(".dex").size());
+  if (name.empty() || name.front() == '0') return 0;
+  size_t index = 0;
+  const char* end = name.data() + name.size();
+  const auto result = std::from_chars(name.data(), end, index);
+  return result.ec == std::errc{} && result.ptr == end && index >= 2 ? index : 0;
+}
+
+std::unique_ptr<const art::DexFile> OpenApkEntry(ZipArchiveHandle archive, const ZipEntry64& entry,
+                                                const std::string& location, bool verify) {
+  if (entry.uncompressed_length == 0 || entry.uncompressed_length > UINT32_MAX ||
+      entry.uncompressed_length > std::vector<uint8_t>().max_size() || (entry.gpbf & 1)) {
+    throw std::runtime_error("Invalid or encrypted DEX entry " + location);
+  }
+  const size_t size = static_cast<size_t>(entry.uncompressed_length);
+#ifndef __EMSCRIPTEN__
+  if (entry.method == kCompressStored && entry.compressed_length == size &&
+      entry.offset % alignof(art::DexFile::Header) == 0) {
+    static std::mutex mem_map_init;
+    {
+      std::lock_guard lock(mem_map_init);
+      art::MemMap::Init();
+    }
+    std::string error;
+    auto mapping = art::MemMap::MapFile(size, PROT_READ, MAP_PRIVATE, GetFileDescriptor(archive),
+                                        entry.offset, false, location.c_str(), &error);
+    if (mapping.IsValid()) {
+      art::ArtDexFileLoader loader(std::move(mapping), location);
+      return OpenDex(loader, location, verify, entry.crc32);
+    }
+  }
+#endif
+  // A compressed entry needs a backing buffer. Wasm also uses this path because
+  // mmap of a virtual filesystem file copies it into linear memory.
+  std::vector<uint8_t> bytes(size);
+  if (const auto status = ExtractToMemory(archive, &entry, bytes.data(), size); status != 0) {
+    throw std::runtime_error("DEX " + location + ": " + ErrorCodeString(status));
+  }
+  art::ArtDexFileLoader loader(std::move(bytes), location);
+  return OpenDex(loader, location, verify, entry.crc32);
+}
+
+}  // namespace
 
 std::string MemberKey(std::string_view name, std::string_view signature) {
   std::string key(name);
@@ -39,46 +102,101 @@ bool Method::IsVirtual() const {
 
 std::string Method::QualifiedName() const { return owner->descriptor + "->" + name + signature; }
 
-void ClassLinker::LoadDexFile(std::string location, std::vector<uint8_t> bytes) {
-  DexUnit unit{std::move(bytes), nullptr};
-  art::ArtDexFileLoader loader(unit.bytes.data(), unit.bytes.size(), location);
-  std::string error;
-  unit.dex = loader.OpenOne(0, 0, nullptr, /*verify=*/false, /*verify_checksum=*/false, &error);
-  if (!unit.dex || !art::dex::Verify(unit.dex.get(), location.c_str(), true, &error)) {
-    throw std::runtime_error("DEX " + location + ": " + error);
+void ClassLinker::LoadDexFile(std::string location, std::vector<uint8_t> bytes, bool fallback) {
+  DexFiles files;
+  art::ArtDexFileLoader loader(std::move(bytes), location);
+  files.push_back(OpenDex(loader, location, runtime_.options.verify_dex));
+  IndexDexFiles(std::move(files), fallback ? DexSource::Fallback : DexSource::File);
+}
+
+void ClassLinker::LoadApkDexFiles(const std::string& path) {
+  ZipArchiveHandle handle = nullptr;
+  const int32_t opened = OpenArchive(path.c_str(), &handle);
+  const std::unique_ptr<ZipArchive, decltype(&CloseArchive)> archive(handle, CloseArchive);
+  if (opened != 0) throw std::runtime_error("APK " + path + ": " + ErrorCodeString(opened));
+
+  std::vector<std::pair<size_t, ZipEntry64>> entries;
+  {
+    void* cookie = nullptr;
+    if (const auto status = StartIteration(handle, &cookie, "classes", ".dex"); status != 0) {
+      throw std::runtime_error("APK " + path + ": " + ErrorCodeString(status));
+    }
+    const std::unique_ptr<void, decltype(&EndIteration)> iteration(cookie, EndIteration);
+    int32_t status;
+    ZipEntry64 entry{};
+    std::string_view name;
+    while ((status = Next(cookie, &entry, &name)) == 0) {
+      if (const size_t number = DexEntryNumber(name); number != 0) entries.emplace_back(number, entry);
+    }
+    if (status != kIterationEnd) throw std::runtime_error("APK " + path + ": " + ErrorCodeString(status));
   }
 
-  decltype(classes_) pending;
-  for (const art::ClassAccessor accessor : unit.dex->GetClasses()) {
-    std::string descriptor(accessor.GetDescriptorView());
-    const auto loaded = classes_.find(descriptor);
-    // Boot classes are the parent namespace. Framework DEX may include definitions
-    // for its own build profile, but references link to the installed boot class.
-    if (loaded != classes_.end() && !loaded->second.dex) continue;
-    if (loaded != classes_.end() || pending.contains(descriptor)) {
-      throw std::runtime_error("Duplicate DEX class " + descriptor + " from " + location);
+  std::ranges::sort(entries, {}, &std::pair<size_t, ZipEntry64>::first);
+  if (entries.empty() || entries.front().first != 1) {
+    throw std::runtime_error("APK " + path + ": missing classes.dex");
+  }
+  DexFiles files;
+  files.reserve(entries.size());
+  for (const auto& [number, entry] : entries) {
+    const std::string location = path + '!' + art::DexFileLoader::GetMultiDexZipEntryName(number - 1);
+    files.push_back(OpenApkEntry(handle, entry, location, runtime_.options.verify_dex));
+  }
+  IndexDexFiles(std::move(files), DexSource::Apk);
+}
+
+void ClassLinker::IndexDexFiles(DexFiles files, DexSource source) {
+  size_t definitions = 0;
+  for (const auto& dex : files) {
+    if (dex->NumClassDefs() > static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()) + 1) {
+      throw std::runtime_error("Too many class definitions in " + dex->GetLocation());
     }
-    Class& cls = pending[descriptor];
-    cls.descriptor = std::move(descriptor);
-    cls.dex = unit.dex.get();
-    cls.definition = accessor.GetClassDefIndex();
-    const auto& def = unit.dex->GetClassDef(cls.definition);
-    cls.flags = def.access_flags_;
-    if (def.superclass_idx_.IsValid()) {
-      cls.superclass_descriptor = unit.dex->GetTypeDescriptorView(def.superclass_idx_);
-    }
-    if (const auto* list = unit.dex->GetInterfacesList(def)) {
-      for (uint32_t i = 0; i < list->Size(); ++i) {
-        cls.interface_descriptors.emplace_back(unit.dex->GetTypeDescriptorView(list->GetTypeItem(i).type_idx_));
+    definitions += dex->NumClassDefs();
+  }
+  decltype(dex_index_) pending;
+  pending.reserve(definitions);
+  for (const auto& dex : files) {
+    for (uint32_t i = 0; i < dex->NumClassDefs(); ++i) {
+      const auto definition = static_cast<uint16_t>(i);
+      const auto descriptor = dex->GetTypeDescriptorView(dex->GetClassDef(definition).class_idx_);
+      // Installed boot classes are always the parent namespace.
+      const auto loaded = classes_.find(descriptor);
+      if (loaded != classes_.end() && !loaded->second.dex) continue;
+      const auto existing = dex_index_.find(descriptor);
+      const bool inherits = existing != dex_index_.end() &&
+          (source == DexSource::Fallback || (source == DexSource::Apk && !existing->second.from_apk));
+      if ((existing != dex_index_.end() && !inherits) ||
+          !pending.try_emplace(descriptor, DexClass{dex.get(), definition, source == DexSource::Apk}).second) {
+        throw std::runtime_error("Duplicate DEX class " + std::string(descriptor) + " from " +
+                                 dex->GetLocation());
       }
     }
   }
-  dex_files_.push_back(std::move(unit));
-  classes_.merge(pending);
+  if (source != DexSource::File) {
+    std::erase_if(pending, [&](const auto& entry) { return dex_index_.contains(entry.first); });
+  }
+  dex_files_.reserve(dex_files_.size() + files.size());
+  dex_index_.reserve(dex_index_.size() + pending.size());
+  dex_index_.merge(pending);
+  for (auto& dex : files) dex_files_.push_back(std::move(dex));
+}
+
+DexStats ClassLinker::GetDexStats() const {
+  DexStats stats{dex_index_.size(), linked_dex_classes_, {}};
+  stats.files.reserve(dex_files_.size());
+  for (const auto& dex : dex_files_) {
+    stats.files.push_back({dex->GetLocation(), dex->Size(), dex->NumClassDefs()});
+  }
+  return stats;
+}
+
+std::string ClassLinker::DexLocation(std::string_view descriptor) const {
+  const auto it = dex_index_.find(descriptor);
+  return it == dex_index_.end() ? std::string{} : it->second.dex->GetLocation();
 }
 
 Class& ClassLinker::Define(std::string_view name, std::string_view super, uint32_t flags,
                           std::initializer_list<std::string_view> interfaces) {
+  if (dex_index_.contains(name)) throw std::logic_error("Duplicate boot class " + std::string(name));
   auto [it, added] = classes_.try_emplace(std::string(name));
   if (!added) throw std::logic_error("Duplicate boot class " + std::string(name));
   Class& cls = it->second;
@@ -93,7 +211,8 @@ Class& ClassLinker::Define(std::string_view name, std::string_view super, uint32
 Field& ClassLinker::AddField(Class& cls, std::string_view name, std::string_view type,
                             bool is_static, Value initial) {
   auto [it, added] = cls.fields.emplace(MemberKey(name, type),
-      Field{&cls, std::string(name), std::string(type), type.front(), is_static, 0, initial});
+      Field{&cls, std::string(name), std::string(type), type.front(), is_static,
+            is_static ? art::kAccStatic : 0u, 0, initial});
   if (!added) throw std::logic_error("Duplicate field " + cls.descriptor + "->" + std::string(name));
   cls.field_order.push_back(&it->second);
   return it->second;
@@ -112,22 +231,33 @@ Method& ClassLinker::AddMethod(Class& cls, std::string_view name, std::string_vi
 Class& ClassLinker::Resolve(std::string_view descriptor) {
   auto it = classes_.find(descriptor);
   if (it == classes_.end()) {
-    if (!descriptor.starts_with('[') || descriptor.size() == 1 || descriptor.substr(1) == "V") {
-      runtime_.Fail("Ljava/lang/NoClassDefFoundError;", descriptor);
+    if (const auto dex = dex_index_.find(descriptor); dex != dex_index_.end()) {
+      it = classes_.try_emplace(std::string(descriptor)).first;
+      Class& cls = it->second;
+      cls.descriptor = descriptor;
+      cls.dex = dex->second.dex;
+      cls.definition = dex->second.definition;
+    } else {
+      if (!descriptor.starts_with('[') || descriptor.size() == 1 || descriptor.substr(1) == "V") {
+        runtime_.Fail("Ljava/lang/NoClassDefFoundError;", descriptor);
+      }
+      Class& array = Define(descriptor, "Ljava/lang/Object;", art::kAccFinal,
+                            {"Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
+      Link(array);
+      return array;
     }
-    Define(descriptor, "Ljava/lang/Object;", art::kAccFinal,
-           {"Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
-    it = classes_.find(descriptor);
   }
-  Link(it->second);
-  return it->second;
+  Class& cls = it->second;
+  Link(cls);
+  return cls;
 }
 
 bool ClassLinker::HasClass(std::string_view descriptor) const {
   const size_t component = descriptor.find_first_not_of('[');
   if (component == std::string_view::npos || component > 255) return false;
   descriptor.remove_prefix(component);
-  return (component == 0 || descriptor != "V") && classes_.contains(descriptor);
+  return (component == 0 || descriptor != "V") &&
+      (classes_.contains(descriptor) || dex_index_.contains(descriptor));
 }
 
 void ClassLinker::LoadMembers(Class& cls) {
@@ -135,8 +265,9 @@ void ClassLinker::LoadMembers(Class& cls) {
   const art::ClassAccessor access(dex, dex.GetClassDef(cls.definition));
   for (const auto& field : access.GetFields()) {
     const auto& id = dex.GetFieldId(field.GetIndex());
+    const auto flags = field.GetAccessFlags();
     AddField(cls, dex.GetFieldNameView(id), dex.GetFieldTypeDescriptorView(id),
-             (field.GetAccessFlags() & art::kAccStatic) != 0);
+             (flags & art::kAccStatic) != 0).flags = flags;
   }
   for (const auto& method : access.GetMethods()) {
     const auto& id = dex.GetMethodId(method.GetIndex());
@@ -150,16 +281,32 @@ void ClassLinker::LoadMembers(Class& cls) {
 void ClassLinker::Link(Class& cls) {
   if (cls.link_state == LinkState::Linked) return;
   if (cls.link_state == LinkState::Linking) runtime_.Fail("Ljava/lang/ClassCircularityError;", cls.descriptor);
-  if (cls.link_state == LinkState::Failed) runtime_.Fail("Ljava/lang/NoClassDefFoundError;", cls.descriptor);
+  if (cls.link_state == LinkState::Failed) {
+    runtime_.Fail("Ljava/lang/NoClassDefFoundError;", cls.descriptor, cls.failure);
+  }
   cls.link_state = LinkState::Linking;
   try {
-    if (!cls.superclass_descriptor.empty()) {
-      cls.super = &Resolve(cls.superclass_descriptor);
+    if (cls.dex) {
+      const auto& def = cls.dex->GetClassDef(cls.definition);
+      cls.flags = def.access_flags_;
+      if (def.superclass_idx_.IsValid()) {
+        cls.super = &Resolve(cls.dex->GetTypeDescriptorView(def.superclass_idx_));
+      }
+      if (const auto* list = cls.dex->GetInterfacesList(def)) {
+        cls.interfaces.reserve(list->Size());
+        for (uint32_t i = 0; i < list->Size(); ++i) {
+          cls.interfaces.push_back(&Resolve(cls.dex->GetTypeDescriptorView(list->GetTypeItem(i).type_idx_)));
+        }
+      }
+    } else {
+      if (!cls.superclass_descriptor.empty()) cls.super = &Resolve(cls.superclass_descriptor);
+      for (const auto& iface : cls.interface_descriptors) cls.interfaces.push_back(&Resolve(iface));
+    }
+    if (cls.super) {
       cls.instance_slots = cls.super->instance_slots;
       cls.vtable = cls.super->vtable;
     }
     if (cls.IsArray()) cls.component = &Resolve(std::string_view(cls.descriptor).substr(1));
-    for (const auto& iface : cls.interface_descriptors) cls.interfaces.push_back(&Resolve(iface));
     if (cls.dex) LoadMembers(cls);
     for (Field* field : cls.field_order) {
       if (!field->is_static) field->slot = cls.instance_slots++;
@@ -210,6 +357,11 @@ void ClassLinker::Link(Class& cls) {
       for (Method* declaration : declarations) cls.itable.emplace(declaration, target);
     }
     cls.link_state = LinkState::Linked;
+    if (cls.dex) ++linked_dex_classes_;
+  } catch (const ManagedException&) {
+    cls.failure = runtime_.exception;
+    cls.link_state = LinkState::Failed;
+    throw;
   } catch (...) {
     cls.link_state = LinkState::Failed;
     throw;
@@ -250,7 +402,7 @@ void ClassLinker::Initialize(Class& cls) {
   switch (cls.init_state) {
     case InitState::Initialized:
     case InitState::Initializing: return;
-    case InitState::Failed: runtime_.Fail("Ljava/lang/NoClassDefFoundError;", cls.descriptor);
+    case InitState::Failed: runtime_.Fail("Ljava/lang/NoClassDefFoundError;", cls.descriptor, cls.failure);
     case InitState::Uninitialized: break;
   }
   cls.init_state = InitState::Initializing;
@@ -278,6 +430,7 @@ void ClassLinker::Initialize(Class& cls) {
       runtime_.exception = runtime_.MakeException("Ljava/lang/ExceptionInInitializerError;", cls.descriptor);
       runtime_.exception->payload = Value::Ref(cause);
     }
+    cls.failure = runtime_.exception;
     throw;
   } catch (...) {
     cls.init_state = InitState::Failed;
@@ -365,6 +518,7 @@ bool ClassLinker::IsAssignable(const Class& target, const Class& source) const {
 void ClassLinker::VisitRoots(const std::function<void(Object*)>& mark) const {
   for (const auto& [name, cls] : classes_) {
     mark(cls.mirror);
+    mark(cls.failure);
     for (const Field* field : cls.field_order) {
       if (field->is_static) mark(field->value.ref());
     }

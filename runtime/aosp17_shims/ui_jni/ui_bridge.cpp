@@ -44,12 +44,14 @@ jclass FindGuestClass(JNIEnv* env, jstring name) {
         return nullptr;
     }
     std::ranges::replace(path, '.', '/');
-    jclass type = env->FindClass(path.c_str());
-    if (!type) {
-        env->ExceptionClear();
+    const auto* state = GetState(env);
+    if (!state)
+        return nullptr;
+    if (!state->vm->HasClass("L" + path + ";")) {
         Throw(env, "java/lang/ClassNotFoundException", path.c_str());
+        return nullptr;
     }
-    return type;
+    return env->FindClass(path.c_str());
 }
 
 jobject CreateView(JNIEnv* env, jclass, jstring name, jobject context, jobject attrs) {
@@ -541,10 +543,12 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
              Method<detail::Exp>(vm, "exp", "(D)D"), Method<detail::Log>(vm, "log", "(D)D"),
              Method<detail::ParseFloat>(vm, "parseFloat", "(Ljava/lang/String;)F"));
     detail::RegisterCanvas(vm);
+    detail::RegisterMatrix(vm);
     detail::RegisterPath(vm);
     detail::RegisterBitmaps(vm);
     detail::bindings.emplace(env, state_.get());
     state_->env = env;
+    state_->vm = &vm;
 }
 
 void UiBridge::BindSurfaceFlinger(wa_sf_t* sf, uint32_t layer_id) {

@@ -45,6 +45,7 @@ struct Field {
   std::string type;
   char value_type;
   bool is_static;
+  uint32_t flags;
   size_t slot;
   Value value;
 };
@@ -137,6 +138,7 @@ struct Class {
   std::unordered_map<std::string, Method*> vtable;
   std::unordered_map<Method*, Method*> itable;
   Object* mirror = nullptr;
+  Object* failure = nullptr;
 
   bool IsArray() const { return kind == '['; }
   bool IsInterface() const { return (flags & art::kAccInterface) != 0; }
@@ -154,7 +156,10 @@ struct HashEntries {
 struct Object {
   Class* type = nullptr;
   Class* represented_class = nullptr;  // Set for java.lang.Class instances.
-  Method* reflected_method = nullptr;
+  union {
+    Method* reflected_method = nullptr;
+    Field* reflected_field;
+  };
   Object* weak_referent = nullptr;
   Object* next_free = nullptr;
   bool marked = false;
@@ -167,12 +172,20 @@ struct Object {
   std::u16string text;
   Value payload;
   std::unique_ptr<HashEntries> table;
+  struct TraceFrame {
+    const Method* method;
+    uint32_t dex_pc;
+  };
+  std::unique_ptr<std::vector<TraceFrame>> exception_stack;
 };
 
 class ClassLinker {
  public:
   explicit ClassLinker(Runtime& runtime) : runtime_(runtime) {}
-  void LoadDexFile(std::string location, std::vector<uint8_t> bytes);
+  void LoadDexFile(std::string location, std::vector<uint8_t> bytes, bool fallback = false);
+  void LoadApkDexFiles(const std::string& path);
+  DexStats GetDexStats() const;
+  std::string DexLocation(std::string_view descriptor) const;
   Class& Define(std::string_view name, std::string_view super, uint32_t flags = 0,
                 std::initializer_list<std::string_view> interfaces = {});
   Field& AddField(Class& cls, std::string_view name, std::string_view type, bool is_static,
@@ -189,17 +202,29 @@ class ClassLinker {
   void VisitRoots(const std::function<void(Object*)>& mark) const;
 
  private:
-  struct DexUnit {
-    std::vector<uint8_t> bytes;
-    std::unique_ptr<const art::DexFile> dex;
+  struct DexClass {
+    const art::DexFile* dex;
+    uint16_t definition;
+    bool from_apk;
   };
+  enum class DexSource { File, Fallback, Apk };
+  struct DescriptorHash {
+    using is_transparent = void;
+    size_t operator()(std::string_view name) const noexcept {
+      return std::hash<std::string_view>{}(name);
+    }
+  };
+  using DexFiles = std::vector<std::unique_ptr<const art::DexFile>>;
 
+  void IndexDexFiles(DexFiles files, DexSource source);
   void Link(Class& cls);
   void LoadMembers(Class& cls);
   void InitializeConstants(Class& cls);
   Runtime& runtime_;
-  std::vector<DexUnit> dex_files_;
-  std::map<std::string, Class, std::less<>> classes_;
+  DexFiles dex_files_;
+  std::unordered_map<std::string_view, DexClass> dex_index_;
+  std::unordered_map<std::string, Class, DescriptorHash, std::equal_to<>> classes_;
+  size_t linked_dex_classes_ = 0;
 };
 
 struct RootScope {
@@ -278,9 +303,11 @@ struct Runtime {
   Value& ArrayElement(Object& array, int32_t index);
   void StoreArrayElement(Object& array, int32_t index, Value value);
   Object* MakeException(std::string_view type, std::string_view message);
-  [[noreturn]] void Fail(std::string_view type, std::string_view message = {});
+  void AppendExceptionFrame(const Method& method, uint32_t pc);
+  [[noreturn]] void Fail(std::string_view type, std::string_view message = {}, Object* cause = nullptr);
   [[noreturn]] void Throw(Object* exception);
   std::string ExceptionSummary() const;
+  std::vector<std::string> ExceptionStackTrace() const;
 
   const Options options;
   ClassLinker linker;

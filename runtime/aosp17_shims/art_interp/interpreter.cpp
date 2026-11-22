@@ -717,6 +717,7 @@ Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value
         pc = next;
       }
     } catch (const ManagedException&) {
+      if (options.capture_exception_stack) AppendExceptionFrame(method, pc);
       f.Result() = {};
       if (!FindHandler(*this, f, dex, code, pc)) throw;
     }

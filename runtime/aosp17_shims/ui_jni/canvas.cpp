@@ -1,12 +1,179 @@
 #include "native_methods.h"
 
+#include "jni_bridge.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
 namespace wa::ui_jni::detail {
+
+struct MatrixStore {
+    using Values = std::array<jfloat, 9>;
+    static constexpr Values identity{1, 0, 0, 0, 1, 0, 0, 0, 1};
+
+    struct Entry {
+        Values values;
+        bool registered = false;
+    };
+    std::unordered_map<jlong, Entry> entries;
+    jlong next_id = 1;
+};
+
 namespace {
+
+MatrixStore::Entry* FindMatrix(JNIEnv* env, State& state, jlong handle) {
+    if (state.matrices) {
+        const auto it = state.matrices->entries.find(handle);
+        if (it != state.matrices->entries.end()) return &it->second;
+    }
+    Throw(env, "java/lang/IllegalStateException", "Invalid native Matrix handle");
+    return nullptr;
+}
+
+jlong CreateMatrix(JNIEnv* env, jclass, jlong source) {
+    return CallSafely(env, [&]() -> jlong {
+        State* state = GetState(env);
+        if (!state) return 0;
+        auto values = MatrixStore::identity;
+        if (source != 0) {
+            auto* entry = FindMatrix(env, *state, source);
+            if (!entry) return 0;
+            values = entry->values;
+        }
+        if (!state->matrices) state->matrices = std::make_shared<MatrixStore>();
+        auto& store = *state->matrices;
+        if (store.next_id == std::numeric_limits<jlong>::max()) {
+            Throw(env, "java/lang/OutOfMemoryError", "Matrix handles exhausted");
+            return 0;
+        }
+        const jlong handle = store.next_id++;
+        store.entries.emplace(handle, MatrixStore::Entry{values});
+        return handle;
+    });
+}
+
+void RetainMatrix(JNIEnv* env, jclass, jobject peer, jlong handle) {
+    CallSafely(env, [&] {
+        State* state = GetState(env);
+        if (!state) return;
+        auto* entry = FindMatrix(env, *state, handle);
+        if (!entry) return;
+        if (entry->registered) {
+            Throw(env, "java/lang/IllegalStateException", "Matrix already has a managed owner");
+            return;
+        }
+        // The deleter also removes an allocation if registering its owner fails.
+        std::shared_ptr<void> allocation(entry, [store = std::weak_ptr(state->matrices), handle](void*) {
+            if (const auto live = store.lock()) live->entries.erase(handle);
+        });
+        interp::JniBridge::From(env).RetainNativePeer(peer, std::move(allocation));
+        entry->registered = true;
+    });
+}
+
+MatrixStore::Values* MatrixValues(JNIEnv* env, jlong handle) {
+    State* state = GetState(env);
+    if (!state) return nullptr;
+    auto* entry = FindMatrix(env, *state, handle);
+    return entry ? &entry->values : nullptr;
+}
+
+jboolean IsIdentityMatrix(JNIEnv* env, jclass, jlong handle) {
+    const auto* values = MatrixValues(env, handle);
+    return values && *values == MatrixStore::identity;
+}
+
+void ResetMatrix(JNIEnv* env, jclass, jlong handle) {
+    if (auto* values = MatrixValues(env, handle)) *values = MatrixStore::identity;
+}
+
+void CopyMatrix(JNIEnv* env, jclass, jlong handle, jlong source) {
+    if (auto* dest = MatrixValues(env, handle)) {
+        if (const auto* src = MatrixValues(env, source)) *dest = *src;
+    }
+}
+
+void TranslateMatrix(JNIEnv* env, jclass, jlong handle, jfloat x, jfloat y) {
+    if (auto* values = MatrixValues(env, handle)) *values = {1, 0, x, 0, 1, y, 0, 0, 1};
+}
+
+void GetMatrixValues(JNIEnv* env, jclass, jlong handle, jfloatArray array) {
+    if (const auto* values = MatrixValues(env, handle)) {
+        env->SetFloatArrayRegion(array, 0, values->size(), values->data());
+    }
+}
+
+void SetMatrixValues(JNIEnv* env, jclass, jlong handle, jfloatArray array) {
+    if (auto* values = MatrixValues(env, handle)) {
+        env->GetFloatArrayRegion(array, 0, values->size(), values->data());
+    }
+}
+
+std::array<jfloat, 2> MapPoint(const MatrixStore::Values& m, jfloat x, jfloat y) {
+    const jfloat w = m[6] * x + m[7] * y + m[8];
+    const jfloat inverse = w == 0 ? 0 : 1 / w;
+    return {(m[0] * x + m[1] * y + m[2]) * inverse, (m[3] * x + m[4] * y + m[5]) * inverse};
+}
+
+void MapMatrixPoints(JNIEnv* env, jclass, jlong handle, jfloatArray dst, jint dst_index,
+                     jfloatArray src, jint src_index, jint count, jboolean include_translation) {
+    CallSafely(env, [&] {
+        const auto* values = MatrixValues(env, handle);
+        if (!values) return;
+        const auto size = 2 * static_cast<int64_t>(count);
+        if (count < 0 || src_index < 0 || dst_index < 0 ||
+            src_index + size > env->GetArrayLength(src) || dst_index + size > env->GetArrayLength(dst)) {
+            Throw(env, "java/lang/ArrayIndexOutOfBoundsException", "Matrix point range");
+            return;
+        }
+        if (size == 0) return;
+        // Read before writing because Java permits overlapping source and destination ranges.
+        std::vector<jfloat> points(size);
+        env->GetFloatArrayRegion(src, src_index, size, points.data());
+        if (env->ExceptionCheck()) return;
+        const auto& m = *values;
+        const auto origin = MapPoint(m, 0, 0);
+        const bool affine = m[6] == 0 && m[7] == 0 && m[8] == 1;
+        for (size_t i = 0; i < points.size(); i += 2) {
+            const jfloat x = points[i], y = points[i + 1];
+            if (!include_translation && affine) {
+                points[i] = m[0] * x + m[1] * y;
+                points[i + 1] = m[3] * x + m[4] * y;
+            } else {
+                const auto mapped = MapPoint(m, x, y);
+                points[i] = include_translation ? mapped[0] : mapped[0] - origin[0];
+                points[i + 1] = include_translation ? mapped[1] : mapped[1] - origin[1];
+            }
+        }
+        env->SetFloatArrayRegion(dst, dst_index, size, points.data());
+    });
+}
+
+jboolean InvertMatrix(JNIEnv* env, jclass, jlong handle, jlong inverse) {
+    const auto* m = MatrixValues(env, handle);
+    if (!m) return false;
+    const auto& [a, b, c, d, e, f, g, h, i] = *m;
+    const auto det2 = [](double x, double y, double z, double w) { return x * w - y * z; };
+    const std::array<double, 9> adj{
+        det2(e, f, h, i), det2(c, b, i, h), det2(b, c, e, f),
+        det2(f, d, i, g), det2(a, c, g, i), det2(c, a, f, d),
+        det2(d, e, g, h), det2(b, a, h, g), det2(a, b, d, e)};
+    const double det = a * adj[0] + b * adj[3] + c * adj[6];
+    if (det == 0 || !std::isfinite(det)) return false;
+    MatrixStore::Values result;
+    for (size_t pos = 0; pos < result.size(); ++pos) {
+        result[pos] = static_cast<jfloat>(adj[pos] / det);
+        if (!std::isfinite(result[pos])) return false;
+    }
+    if (inverse == 0) return true;
+    auto* dest = MatrixValues(env, inverse);
+    if (!dest) return false;
+    *dest = result;
+    return true;
+}
 
 void Shape(JNIEnv* env, jclass, jint op, jfloat a, jfloat b, jfloat c, jfloat d, jfloat e, jfloat f,
            jint color, jint style, jfloat stroke) {
@@ -241,6 +408,21 @@ void RegisterCanvas(interp::Vm& vm) {
              Method<DrawGradient>(vm, "nativeDrawGradient", "(FFFFFIIF)V"));
     Register(vm, "android/graphics/Paint",
              Method<MeasureText>(vm, "nativeMeasure", "(Ljava/lang/String;FII[F)F"));
+}
+
+void RegisterMatrix(interp::Vm& vm) {
+    if (!vm.HasClass("Landroid/graphics/Matrix$ExtraNatives;")) return;
+    Register(vm, "android/graphics/Matrix$ExtraNatives", Method<CreateMatrix>(vm, "nCreate", "(J)J"));
+    Register(vm, "android/graphics/Matrix",
+             Method<RetainMatrix>(vm, "nRegisterNativeAllocation", "(Landroid/graphics/Matrix;J)V"),
+             Method<IsIdentityMatrix>(vm, "nIsIdentity", "(J)Z"),
+             Method<ResetMatrix>(vm, "nReset", "(J)V"),
+             Method<CopyMatrix>(vm, "nSet", "(JJ)V"),
+             Method<TranslateMatrix>(vm, "nSetTranslate", "(JFF)V"),
+             Method<GetMatrixValues>(vm, "nGetValues", "(J[F)V"),
+             Method<SetMatrixValues>(vm, "nSetValues", "(J[F)V"),
+             Method<MapMatrixPoints>(vm, "nMapPoints", "(J[FI[FIIZ)V"),
+             Method<InvertMatrix>(vm, "nInvert", "(JJ)Z"));
 }
 
 } // namespace wa::ui_jni::detail

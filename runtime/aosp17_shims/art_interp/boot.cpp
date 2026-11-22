@@ -475,6 +475,7 @@ void InstallThrowable(Runtime& vm) {
   define("Ljava/lang/ReflectiveOperationException;", exception);
   define("Ljava/lang/ClassNotFoundException;", "Ljava/lang/ReflectiveOperationException;");
   define("Ljava/lang/NoSuchMethodException;", "Ljava/lang/ReflectiveOperationException;");
+  define("Ljava/lang/NoSuchFieldException;", "Ljava/lang/ReflectiveOperationException;");
   define("Ljava/lang/IllegalAccessException;", "Ljava/lang/ReflectiveOperationException;");
   auto& invocation_target = define("Ljava/lang/reflect/InvocationTargetException;",
                                    "Ljava/lang/ReflectiveOperationException;");
