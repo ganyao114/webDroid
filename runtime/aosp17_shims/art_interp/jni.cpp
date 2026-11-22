@@ -713,6 +713,14 @@ void JniBridge::DeleteLocal(jobject ref) {
 
 void JniBridge::DeleteGlobal(jobject ref) { globals_.erase(reinterpret_cast<JniReference*>(ref)); }
 
+void JniBridge::RetainNativePeer(jobject peer, std::shared_ptr<void> allocation) {
+  native_peers_.emplace(&runtime_.NonNull(Read(peer)), std::move(allocation));
+}
+
+void JniBridge::SweepNativePeers() {
+  std::erase_if(native_peers_, [](const auto& entry) { return !entry.first->marked; });
+}
+
 void JniBridge::PushFrame(size_t capacity) {
   std::vector<std::unique_ptr<JniReference>> frame;
   frame.reserve(capacity);

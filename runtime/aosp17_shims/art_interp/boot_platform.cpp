@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <limits>
 #include <numbers>
+#include <thread>
+#include <tuple>
 #include <unistd.h>
 
 #include <android-base/properties.h>
@@ -157,6 +159,45 @@ void InstallSystem(Runtime& vm) {
     if (!vm.gc_paused) vm.heap.Collect(vm);
     return Value{};
   });
+  const Builtin property = [](Runtime& vm, Object*, Values a) {
+    const auto key = EncodeUtf8(vm.NonNull(a[0].ref()).text, false);
+    if (key.empty()) vm.Fail("Ljava/lang/IllegalArgumentException;", "Empty property name");
+    const auto entry = vm.options.system_properties.find(key);
+    if (entry != vm.options.system_properties.end()) return StringValue(vm, entry->second);
+    if (key == "line.separator") return StringValue(vm, "\n");
+    if (key == "file.separator") return StringValue(vm, "/");
+    if (key == "path.separator") return StringValue(vm, ":");
+    return a.size() == 2 ? a[1] : Value{};
+  };
+  cl.AddMethod(sys, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic, property);
+  cl.AddMethod(sys, "getProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+               art::kAccStatic, property);
+  cl.AddMethod(sys, "getenv", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        const auto key = EncodeUtf8(vm.NonNull(a[0].ref()).text, false);
+        const auto entry = vm.options.environment.find(key);
+        return entry == vm.options.environment.end() ? Value{} : StringValue(vm, entry->second);
+      });
+  cl.AddMethod(sys, "lineSeparator", "()Ljava/lang/String;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values) {
+        const auto entry = vm.options.system_properties.find("line.separator");
+        return StringValue(vm, entry == vm.options.system_properties.end() ? "\n" : entry->second);
+      });
+
+  Class& runtime = cl.Define("Ljava/lang/Runtime;", kObject);
+  auto& singleton = cl.AddField(runtime, "currentRuntime", runtime.descriptor, true);
+  cl.AddMethod(runtime, "<clinit>", "()V", art::kAccStatic, [&runtime, &singleton](Runtime& vm, Object*, Values) {
+    singleton.value = Value::Ref(vm.heap.Allocate(vm, runtime));
+    return Value{};
+  });
+  cl.AddMethod(runtime, "getRuntime", "()Ljava/lang/Runtime;", art::kAccStatic,
+      [&singleton](Runtime&, Object*, Values) { return singleton.value; });
+  cl.AddMethod(runtime, "availableProcessors", "()I", 0,
+      [](Runtime&, Object*, Values) { return Value::Int(1); });
+  cl.AddMethod(runtime, "gc", "()V", 0, [](Runtime& vm, Object*, Values) {
+    if (!vm.gc_paused) vm.heap.Collect(vm);
+    return Value{};
+  });
   InstallMath(cl, "Ljava/lang/Math;");
   InstallMath(cl, "Ljava/lang/StrictMath;");
 
@@ -218,6 +259,277 @@ void InstallSystem(Runtime& vm) {
         };
         return Value::Ref(make(make, 0));
       });
+}
+
+void InstallThread(Runtime& vm) {
+  auto& cl = vm.linker;
+  constexpr auto kThread = "Ljava/lang/Thread;";
+  constexpr auto kHandler = "Ljava/lang/Thread$UncaughtExceptionHandler;";
+  constexpr auto kString = "Ljava/lang/String;";
+  auto& handler = cl.Define(kHandler, kObject, art::kAccInterface | art::kAccAbstract);
+  cl.AddMethod(handler, "uncaughtException", "(Ljava/lang/Thread;Ljava/lang/Throwable;)V", art::kAccAbstract);
+  auto& thread = cl.Define(kThread, kObject, 0, {"Ljava/lang/Runnable;"});
+  auto& main = cl.AddField(thread, "mainThread", kThread, true);
+  auto& next_id = cl.AddField(thread, "nextThreadId", "J", true, Value::Long(2));
+  auto& name = cl.AddField(thread, "name", kString, false);
+  auto& id = cl.AddField(thread, "tid", "J", false);
+  auto& interrupted = cl.AddField(thread, "interrupted", "Z", false);
+  auto& target = cl.AddField(thread, "target", "Ljava/lang/Runnable;", false);
+  auto& exception_handler = cl.AddField(thread, "uncaughtExceptionHandler", kHandler, false);
+  auto& default_handler = cl.AddField(thread, "defaultUncaughtExceptionHandler", kHandler, true);
+  auto& loader = cl.AddField(thread, "contextClassLoader", "Ljava/lang/ClassLoader;", false);
+  cl.AddMethod(thread, "<clinit>", "()V", art::kAccStatic, [&thread, &main, &name, &id](Runtime& vm, Object*, Values) {
+    auto* object = vm.heap.Allocate(vm, thread);
+    main.value = Value::Ref(object);
+    object->fields[name.slot] = StringValue(vm, "main");
+    object->fields[id.slot] = Value::Long(1);
+    return Value{};
+  });
+  const auto ctor = [&name, &id, &target, &next_id](Runtime& vm, Object* self, Values a) {
+    const auto thread_id = next_id.value.j();
+    if (thread_id == INT64_MAX) vm.Fail("Ljava/lang/OutOfMemoryError;", "Thread IDs exhausted");
+    next_id.value = Value::Long(thread_id + 1);
+    self->fields[id.slot] = Value::Long(thread_id);
+    if (!a.empty()) self->fields[target.slot] = a[0];
+    self->fields[name.slot] = a.size() == 2 ? Value::Ref(&vm.NonNull(a[1].ref()))
+                                         : StringValue(vm, "Thread-" + std::to_string(thread_id - 2));
+    return Value{};
+  };
+  for (const auto sig : {"()V", "(Ljava/lang/Runnable;)V", "(Ljava/lang/Runnable;Ljava/lang/String;)V"}) {
+    cl.AddMethod(thread, "<init>", sig, 0, ctor);
+  }
+  cl.AddMethod(thread, "currentThread", "()Ljava/lang/Thread;", art::kAccStatic,
+      [&main](Runtime&, Object*, Values) { return main.value; });
+  cl.AddMethod(thread, "getName", "()Ljava/lang/String;", 0,
+      [&name](Runtime&, Object* self, Values) { return self->fields[name.slot]; });
+  cl.AddMethod(thread, "setName", "(Ljava/lang/String;)V", 0, [&name](Runtime& vm, Object* self, Values a) {
+    self->fields[name.slot] = Value::Ref(&vm.NonNull(a[0].ref()));
+    return Value{};
+  });
+  cl.AddMethod(thread, "getId", "()J", 0, [&id](Runtime&, Object* self, Values) { return self->fields[id.slot]; });
+  cl.AddMethod(thread, "isInterrupted", "()Z", 0,
+      [&interrupted](Runtime&, Object* self, Values) { return self->fields[interrupted.slot]; });
+  cl.AddMethod(thread, "interrupt", "()V", 0, [&main, &interrupted](Runtime&, Object* self, Values) {
+    if (self == main.value.ref()) self->fields[interrupted.slot] = Value::Int(1);
+    return Value{};
+  });
+  const auto clear_interrupt = [&main, &interrupted](Runtime&, Object*, Values) {
+    return std::exchange(main.value.ref()->fields[interrupted.slot], Value{});
+  };
+  cl.AddMethod(thread, "interrupted", "()Z", art::kAccStatic, clear_interrupt);
+  cl.AddMethod(thread, "yield", "()V", art::kAccStatic, [](Runtime&, Object*, Values) {
+    std::this_thread::yield();
+    return Value{};
+  });
+  cl.AddMethod(thread, "sleep", "(J)V", art::kAccStatic,
+      [clear_interrupt](Runtime& vm, Object*, Values a) {
+        const auto millis = a[0].j();
+        if (millis < 0) vm.Fail("Ljava/lang/IllegalArgumentException;", "Negative sleep time");
+        if (clear_interrupt(vm, nullptr, {}).i()) vm.Fail("Ljava/lang/InterruptedException;");
+        if (millis == 0) std::this_thread::yield();
+        else {
+          const auto seconds = std::chrono::seconds(millis / 1000);
+          // Chunk the wait to keep conversions to nanoseconds representable.
+          constexpr auto chunk = std::chrono::hours(1);
+          for (auto remaining = seconds; remaining > std::chrono::seconds::zero(); remaining -= chunk) {
+            std::this_thread::sleep_for(std::min(remaining, std::chrono::seconds(chunk)));
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(millis % 1000));
+        }
+        return Value{};
+      });
+  cl.AddMethod(thread, "run", "()V", 0, [&target](Runtime& vm, Object* self, Values) {
+    if (auto* runnable = self->fields[target.slot].ref()) CallVirtual(vm, runnable, "run", "()V");
+    return Value{};
+  });
+  cl.AddMethod(thread, "getContextClassLoader", "()Ljava/lang/ClassLoader;", 0,
+      [&loader](Runtime&, Object* self, Values) { return self->fields[loader.slot]; });
+  cl.AddMethod(thread, "setContextClassLoader", "(Ljava/lang/ClassLoader;)V", 0,
+      [&loader](Runtime&, Object* self, Values a) {
+        self->fields[loader.slot] = a[0];
+        return Value{};
+      });
+  cl.AddMethod(thread, "getUncaughtExceptionHandler", "()Ljava/lang/Thread$UncaughtExceptionHandler;", 0,
+      [&exception_handler, &default_handler](Runtime&, Object* self, Values) {
+        const auto handler = self->fields[exception_handler.slot];
+        return handler.ref() ? handler : default_handler.value;
+      });
+  cl.AddMethod(thread, "setUncaughtExceptionHandler", "(Ljava/lang/Thread$UncaughtExceptionHandler;)V", 0,
+      [&exception_handler](Runtime&, Object* self, Values a) {
+        self->fields[exception_handler.slot] = a[0];
+        return Value{};
+      });
+  cl.AddMethod(thread, "getDefaultUncaughtExceptionHandler", "()Ljava/lang/Thread$UncaughtExceptionHandler;",
+               art::kAccStatic, [&default_handler](Runtime&, Object*, Values) { return default_handler.value; });
+  cl.AddMethod(thread, "setDefaultUncaughtExceptionHandler", "(Ljava/lang/Thread$UncaughtExceptionHandler;)V",
+               art::kAccStatic, [&default_handler](Runtime&, Object*, Values a) {
+                 default_handler.value = a[0];
+                 return Value{};
+               });
+}
+
+void InstallThreadLocal(ClassLinker& cl) {
+  // There is one interpreter thread per VM, so the current thread's slot can
+  // live in the ThreadLocal itself. An initialized slot may contain null.
+  constexpr auto kLocal = "Ljava/lang/ThreadLocal;";
+  constexpr auto kSupplied = "Ljava/lang/ThreadLocal$SuppliedThreadLocal;";
+  auto& local = cl.Define(kLocal, kObject);
+  auto& initialized = cl.AddField(local, "initialized", "Z", false);
+  auto& value = cl.AddField(local, "value", kObject, false);
+  auto& supplied = cl.Define(kSupplied, kLocal, art::kAccFinal);
+  auto& supplier = cl.AddField(supplied, "supplier", "Ljava/util/function/Supplier;", false);
+  const Builtin nothing = [](Runtime&, Object*, Values) { return Value{}; };
+  cl.AddMethod(local, "<init>", "()V", 0, nothing);
+  cl.AddMethod(local, "initialValue", "()Ljava/lang/Object;", art::kAccProtected, nothing);
+  cl.AddMethod(supplied, "initialValue", "()Ljava/lang/Object;", art::kAccProtected,
+      [&supplier](Runtime& vm, Object* self, Values) {
+        return CallVirtual(vm, self->fields[supplier.slot].ref(), "get", "()Ljava/lang/Object;");
+      });
+  cl.AddMethod(local, "withInitial", "(Ljava/util/function/Supplier;)Ljava/lang/ThreadLocal;", art::kAccStatic,
+      [&supplier](Runtime& vm, Object*, Values a) {
+        vm.NonNull(a[0].ref());
+        auto* wrapper = vm.heap.Allocate(vm, vm.linker.Resolve(kSupplied));
+        wrapper->fields[supplier.slot] = a[0];
+        return Value::Ref(wrapper);
+      });
+  cl.AddMethod(local, "get", "()Ljava/lang/Object;", 0,
+      [&initialized, &value](Runtime& vm, Object* self, Values) {
+        if (!self->fields[initialized.slot].i()) {
+          self->fields[value.slot] = CallVirtual(vm, self, "initialValue", "()Ljava/lang/Object;");
+          self->fields[initialized.slot] = Value::Int(1);
+        }
+        return self->fields[value.slot];
+      });
+  cl.AddMethod(local, "set", "(Ljava/lang/Object;)V", 0,
+      [&initialized, &value](Runtime&, Object* self, Values a) {
+        self->fields[value.slot] = a[0];
+        self->fields[initialized.slot] = Value::Int(1);
+        return Value{};
+      });
+  cl.AddMethod(local, "remove", "()V", 0, [&initialized, &value](Runtime&, Object* self, Values) {
+    self->fields[value.slot] = self->fields[initialized.slot] = {};
+    return Value{};
+  });
+}
+
+Class& AtomicReceiver(Runtime& vm, Field& field) {
+  Class* caller = nullptr;
+  for (const RootScope* scope = vm.roots; scope && !caller; scope = scope->previous) caller = scope->declaring_class;
+  const auto package = [](std::string_view descriptor) {
+    const auto slash = descriptor.rfind('/');
+    return slash == std::string_view::npos ? std::string_view{} : descriptor.substr(0, slash);
+  };
+  auto& owner = *field.owner;
+  const bool same_package = caller && package(caller->descriptor) == package(owner.descriptor);
+  const bool protected_subclass = caller && (field.flags & art::kAccProtected) &&
+      vm.linker.IsAssignable(owner, *caller);
+  const bool accessible = (same_package || (owner.flags & art::kAccPublic)) &&
+      ((field.flags & art::kAccPublic) || caller == &owner ||
+       (same_package && !(field.flags & art::kAccPrivate)) || protected_subclass);
+  if (!accessible) {
+    vm.Fail("Ljava/lang/RuntimeException;", {},
+            vm.MakeException("Ljava/lang/IllegalAccessException;", owner.descriptor + "->" + field.name));
+  }
+  return protected_subclass && !same_package ? *caller : owner;
+}
+
+Value& AtomicFieldValue(Runtime& vm, Object* updater, Object* target) {
+  auto& field = *updater->reflected_field;
+  const auto& receiver = *updater->payload.ref()->represented_class;
+  if (!target || !vm.linker.IsAssignable(receiver, *target->type)) {
+    if (&receiver == field.owner) vm.Fail("Ljava/lang/ClassCastException;");
+    vm.Fail("Ljava/lang/RuntimeException;", {}, vm.MakeException("Ljava/lang/IllegalAccessException;", field.name));
+  }
+  return target->fields[field.slot];
+}
+
+void CheckAtomicValue(Runtime& vm, const Object& updater, Value value) {
+  const auto& field = *updater.reflected_field;
+  if (IsReference(field.value_type) && value.ref() &&
+      !vm.linker.IsAssignable(vm.linker.Resolve(field.type), *value.ref()->type)) {
+    vm.Fail("Ljava/lang/ClassCastException;", field.type);
+  }
+}
+
+void InstallAtomicUpdaters(ClassLinker& cl) {
+  for (auto [type, kind] : {std::pair{"Reference", 'L'}, {"Integer", 'I'}, {"Long", 'J'}}) {
+    const auto name = std::string("Ljava/util/concurrent/atomic/Atomic") + type + "FieldUpdater;";
+    auto& api = cl.Define(name, kObject, art::kAccAbstract);
+    const auto impl_name = name.substr(0, name.size() - 1) + "$Impl;";
+    cl.Define(impl_name, name, art::kAccFinal);
+    const bool reference = kind == 'L';
+    const std::string value_type = reference ? std::string(kObject) : std::string(1, kind);
+    const std::string new_args = reference ? "(Ljava/lang/Class;Ljava/lang/Class;Ljava/lang/String;)"
+                                           : "(Ljava/lang/Class;Ljava/lang/String;)";
+    cl.AddMethod(api, "newUpdater", new_args + name, art::kAccStatic,
+        [impl_name, kind, reference](Runtime& vm, Object*, Values a) {
+          auto& owner = *vm.NonNull(a[0].ref()).represented_class;
+          const auto name = EncodeUtf8(vm.NonNull(a.back().ref()).text);
+          const auto field = std::ranges::find_if(owner.field_order, [&](const Field* member) {
+            return member->name == name;
+          });
+          if (field == owner.field_order.end()) {
+            vm.Fail("Ljava/lang/RuntimeException;", {},
+                    vm.MakeException("Ljava/lang/NoSuchFieldException;", owner.descriptor + "->" + name));
+          }
+          auto& receiver = AtomicReceiver(vm, **field);
+          if (reference) {
+            const auto& value_class = *vm.NonNull(a[1].ref()).represented_class;
+            if (value_class.descriptor != (*field)->type) vm.Fail("Ljava/lang/ClassCastException;");
+            if (value_class.IsPrimitive()) vm.Fail("Ljava/lang/IllegalArgumentException;", "Expected a reference field");
+          } else if ((*field)->value_type != kind) {
+            vm.Fail("Ljava/lang/IllegalArgumentException;", "Incorrect field type");
+          }
+          if ((*field)->is_static || !((*field)->flags & art::kAccVolatile)) {
+            vm.Fail("Ljava/lang/IllegalArgumentException;", "Expected a volatile instance field");
+          }
+          auto* updater = vm.heap.Allocate(vm, vm.linker.Resolve(impl_name));
+          updater->reflected_field = *field;
+          RootScope roots(vm, {}, updater);
+          updater->payload = Value::Ref(vm.ClassObject(receiver));
+          return Value::Ref(updater);
+        });
+    const std::string receiver = "(Ljava/lang/Object;";
+    cl.AddMethod(api, "get", receiver + ")" + value_type, 0,
+        [](Runtime& vm, Object* self, Values a) { return AtomicFieldValue(vm, self, a[0].ref()); });
+    for (auto method : {"set", "lazySet"}) {
+      cl.AddMethod(api, method, receiver + value_type + ")V", 0, [](Runtime& vm, Object* self, Values a) {
+        auto& slot = AtomicFieldValue(vm, self, a[0].ref());
+        CheckAtomicValue(vm, *self, a[1]);
+        slot = a[1];
+        return Value{};
+      });
+    }
+    cl.AddMethod(api, "getAndSet", receiver + value_type + ")" + value_type, 0,
+        [](Runtime& vm, Object* self, Values a) {
+          auto& slot = AtomicFieldValue(vm, self, a[0].ref());
+          CheckAtomicValue(vm, *self, a[1]);
+          return std::exchange(slot, a[1]);
+        });
+    for (auto method : {"compareAndSet", "weakCompareAndSet"}) {
+      cl.AddMethod(api, method, receiver + value_type + value_type + ")Z", 0,
+          [reference](Runtime& vm, Object* self, Values a) {
+            auto& slot = AtomicFieldValue(vm, self, a[0].ref());
+            CheckAtomicValue(vm, *self, a[2]);
+            const bool equal = reference ? slot.ref() == a[1].ref() : slot.bits() == a[1].bits();
+            if (equal) slot = a[2];
+            return Value::Int(equal);
+          });
+    }
+    if (reference) continue;
+    for (auto [method, delta, return_old] : {std::tuple{"getAndAdd", 0, true}, {"addAndGet", 0, false},
+          {"getAndIncrement", 1, true}, {"incrementAndGet", 1, false},
+          {"getAndDecrement", -1, true}, {"decrementAndGet", -1, false}}) {
+      cl.AddMethod(api, method, receiver + (delta == 0 ? value_type : "") + ")" + value_type, 0,
+          [delta, return_old, kind](Runtime& vm, Object* self, Values a) {
+            auto& slot = AtomicFieldValue(vm, self, a[0].ref());
+            const auto old = slot;
+            const auto addend = delta == 0 ? a[1].bits() : static_cast<uint64_t>(delta);
+            slot = Normalize(Value::Bits(old.bits() + addend), kind);
+            return return_old ? old : slot;
+          });
+    }
+  }
 }
 
 std::u16string NormalizePath(std::u16string_view path) {
@@ -376,6 +688,9 @@ void InstallAndroid(Runtime& vm) {
 
 void InstallPlatform(Runtime& vm) {
   InstallSystem(vm);
+  InstallThread(vm);
+  InstallThreadLocal(vm.linker);
+  InstallAtomicUpdaters(vm.linker);
   InstallFiles(vm);
   InstallAndroid(vm);
 }

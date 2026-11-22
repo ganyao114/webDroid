@@ -2,13 +2,31 @@
 
 #include <algorithm>
 #include <fstream>
-#include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 
 #include "dex/utf-inl.h"
 
 namespace wa::interp {
+namespace {
+
+std::vector<uint8_t> ReadDexFile(const std::string& path) {
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input) throw std::runtime_error("Cannot open DEX " + path);
+  const std::streamoff size = input.tellg();
+  if (size < 0 || static_cast<uint64_t>(size) > std::vector<uint8_t>().max_size() ||
+      size > std::numeric_limits<std::streamsize>::max()) {
+    throw std::runtime_error("Invalid DEX file size for " + path);
+  }
+  std::vector<uint8_t> bytes(static_cast<size_t>(size));
+  if (!input.seekg(0) || !input.read(reinterpret_cast<char*>(bytes.data()), size)) {
+    throw std::runtime_error("Cannot read DEX " + path);
+  }
+  return bytes;
+}
+
+}  // namespace
 
 std::u16string DecodeUtf8(std::string_view text) {
   if (text.empty()) return {};
@@ -145,8 +163,18 @@ Object* Runtime::MakeException(std::string_view type, std::string_view message) 
   return object;
 }
 
-void Runtime::Fail(std::string_view type, std::string_view message) {
+void Runtime::AppendExceptionFrame(const Method& method, uint32_t pc) {
+  if (!exception) return;
+  if (!exception->exception_stack) {
+    exception->exception_stack = std::make_unique<std::vector<Object::TraceFrame>>();
+  }
+  exception->exception_stack->push_back({&method, pc});
+}
+
+void Runtime::Fail(std::string_view type, std::string_view message, Object* cause) {
+  RootScope pinned(*this, {}, cause);
   exception = MakeException(type, message);
+  exception->payload = Value::Ref(cause);
   throw ManagedException{};
 }
 
@@ -172,17 +200,39 @@ std::string Runtime::ExceptionSummary() const {
   return description;
 }
 
+std::vector<std::string> Runtime::ExceptionStackTrace() const {
+  std::vector<std::string> trace;
+  std::unordered_set<const Object*> seen;
+  for (const Object* current = exception; current && seen.insert(current).second;
+       current = current->payload.ref()) {
+    if (!current->exception_stack || current->exception_stack->empty()) continue;
+    if (current != exception) trace.push_back("Caused by " + current->type->descriptor);
+    for (const auto& [method, pc] : *current->exception_stack) {
+      trace.push_back(method->QualifiedName() + " @ dex pc " + std::to_string(pc));
+    }
+  }
+  return trace;
+}
+
 Vm::Vm(Options options) : runtime_(std::make_unique<Runtime>(std::move(options))) {}
 Vm::~Vm() = default;
 
 void Vm::LoadDexFile(const std::string& path) {
-  std::ifstream input(path, std::ios::binary);
-  if (!input) throw std::runtime_error("Cannot open DEX " + path);
-  LoadDexFile(path, {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()});
+  LoadDexFile(path, ReadDexFile(path));
 }
 
 void Vm::LoadDexFile(std::string location, std::vector<uint8_t> bytes) {
   runtime_->linker.LoadDexFile(std::move(location), std::move(bytes));
+}
+
+void Vm::LoadFallbackDexFile(const std::string& path) {
+  runtime_->linker.LoadDexFile(path, ReadDexFile(path), true);
+}
+
+void Vm::LoadApkDexFiles(const std::string& apk_path) { runtime_->linker.LoadApkDexFiles(apk_path); }
+DexStats Vm::GetDexStats() const { return runtime_->linker.GetDexStats(); }
+std::string Vm::DexLocation(std::string_view descriptor) const {
+  return runtime_->linker.DexLocation(descriptor);
 }
 
 void Vm::RegisterResourceNatives() { runtime_->jni->RegisterResources(); }
@@ -227,6 +277,7 @@ std::string Vm::StringUtf8(const Object* string) const {
 }
 
 std::string Vm::ExceptionSummary() const { return runtime_->ExceptionSummary(); }
+std::vector<std::string> Vm::ExceptionStackTrace() const { return runtime_->ExceptionStackTrace(); }
 void Vm::ClearException() { runtime_->exception = nullptr; }
 GcStats Vm::Collect() { return runtime_->heap.Collect(*runtime_); }
 void Vm::CollectIfNeeded() {
@@ -236,6 +287,10 @@ void Vm::CollectIfNeeded() {
 GcStats Vm::HeapStats() const { return runtime_->heap.Stats(); }
 MethodStats Vm::GetMethodStats(std::string_view owner, std::string_view name, std::string_view signature) {
   return runtime_->linker.FindMethod(runtime_->linker.Resolve(owner), name, signature, true).stats;
+}
+MethodStats Vm::GetInstanceMethodStats(std::string_view owner, std::string_view name,
+                                       std::string_view signature) {
+  return runtime_->linker.FindMethod(runtime_->linker.Resolve(owner), name, signature, false).stats;
 }
 size_t Vm::ExecutedOpcodeCount() const { return std::ranges::count(runtime_->executed_opcodes, 1); }
 uint64_t Vm::NativeCalls(std::string_view owner) const { return runtime_->jni->Calls(owner); }

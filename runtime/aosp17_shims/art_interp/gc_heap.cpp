@@ -74,6 +74,7 @@ GcStats GcHeap::Collect(Runtime& runtime) {
   for (Object* object : worklist_) {
     if (object->weak_referent && !object->weak_referent->marked) object->weak_referent = nullptr;
   }
+  runtime.jni->SweepNativePeers();
   std::erase_if(runtime.interned, [](const auto& entry) { return !entry.second->marked; });
   for (const auto& slab : slabs_) {
     for (size_t i = 0; i < kSlabSize; ++i) {

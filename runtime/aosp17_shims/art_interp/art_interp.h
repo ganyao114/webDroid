@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace wa::interp {
@@ -54,6 +55,23 @@ struct Options {
   size_t gc_interval = 1024;  // In allocations. Zero enables explicit collection only.
   uint64_t hotness_threshold = 0;
   InstallWasm install_wasm;
+  bool verify_dex = true;  // Disable only for trusted, previously verified inputs.
+  bool capture_exception_stack = false;
+  // Java's process state is supplied by the embedder.
+  std::unordered_map<std::string, std::string> system_properties;
+  std::unordered_map<std::string, std::string> environment;
+};
+
+struct DexFileStats {
+  std::string location;
+  size_t bytes;
+  size_t class_definitions;
+};
+
+struct DexStats {
+  size_t indexed_classes;
+  size_t linked_classes;
+  std::vector<DexFileStats> files;
 };
 
 struct GcStats {
@@ -81,6 +99,14 @@ class Vm {
 
   void LoadDexFile(const std::string& path);
   void LoadDexFile(std::string location, std::vector<uint8_t> bytes);
+  // Fills holes in the existing class path without replacing earlier definitions.
+  void LoadFallbackDexFile(const std::string& path);
+  // Adds the numbered DEX entries atomically, in DEX order. DEX files loaded
+  // via LoadDexFile or LoadFallbackDexFile form the parent class path.
+  // Keep the APK immutable while it is in use because entries can be file-backed.
+  void LoadApkDexFiles(const std::string& apk_path);
+  DexStats GetDexStats() const;
+  std::string DexLocation(std::string_view descriptor) const;
   void RegisterResourceNatives();
   // Supply a typed adapter before RegisterNatives for additional JNI libraries.
   void AddNativeAdapter(void* function, NativeThunk adapter);
@@ -96,6 +122,7 @@ class Vm {
   Object* NewString(std::string_view modified_utf8);
   std::string StringUtf8(const Object* string) const;
   std::string ExceptionSummary() const;
+  std::vector<std::string> ExceptionStackTrace() const;
   void ClearException();
 
   GcStats Collect();
@@ -103,6 +130,8 @@ class Vm {
   GcStats HeapStats() const;
   MethodStats GetMethodStats(std::string_view owner, std::string_view name,
                              std::string_view signature);
+  MethodStats GetInstanceMethodStats(std::string_view owner, std::string_view name,
+                                     std::string_view signature);
   size_t ExecutedOpcodeCount() const;
   static size_t SupportedOpcodeCount();
   uint64_t NativeCalls(std::string_view owner) const;

@@ -18,6 +18,8 @@ class JniBridge {
   void RegisterResources();
   Value Invoke(Method& method, Object* receiver, std::span<const Value> args);
   void VisitRoots(const std::function<void(Object*)>& mark) const;
+  void RetainNativePeer(jobject peer, std::shared_ptr<void> allocation);
+  void SweepNativePeers();
   uint64_t Calls(std::string_view owner) const;
 
   JNIEnv* Env() { return &env_; }
@@ -51,6 +53,7 @@ class JniBridge {
   VirtualMachine vm_;
   std::vector<std::vector<std::unique_ptr<JniReference>>> frames_;
   std::unordered_map<JniReference*, std::unique_ptr<JniReference>> globals_;
+  std::unordered_multimap<Object*, std::shared_ptr<void>> native_peers_;
   std::unordered_map<void*, NativeThunk> adapters_;
   std::map<std::string, uint64_t, std::less<>> calls_;
   size_t frame_floor_ = 1;
