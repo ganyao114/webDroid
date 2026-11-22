@@ -1,0 +1,283 @@
+--- a/frameworks/base/graphics/java/android/graphics/text/MeasuredText.java
++++ b/frameworks/base/graphics/java/android/graphics/text/MeasuredText.java
+@@ -30,8 +30,6 @@
+ 
+ import dalvik.annotation.optimization.CriticalNative;
+ import dalvik.annotation.optimization.NeverInline;
+-
+-import libcore.util.NativeAllocationRegistry;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -69,9 +67,11 @@
+     private final int mBottom;
+ 
+     // Use builder instead.
+-    private MeasuredText(long ptr, @NonNull char[] chars, boolean computeHyphenation,
+-            boolean computeLayout, boolean computeBounds, int top, int bottom) {
+-        mNativePtr = ptr;
++    private MeasuredText(long builder, long hint, @NonNull char[] chars, boolean computeHyphenation,
++            boolean computeLayout, boolean computeBounds, boolean fastHyphenation, int top,
++            int bottom) {
++        mNativePtr = nBuildMeasuredText(this, builder, hint, chars, computeHyphenation,
++                computeLayout, computeBounds, fastHyphenation);
+         mChars = chars;
+         mComputeHyphenation = computeHyphenation;
+         mComputeLayout = computeLayout;
+@@ -191,9 +191,6 @@
+                                          @IntRange(from = 0) int end);
+ 
+     @CriticalNative
+-    private static native /* Non Zero */ long nGetReleaseFunc();
+-
+-    @CriticalNative
+     private static native int nGetMemoryUsage(/* Non Zero */ long nativePtr);
+ 
+     private static native void nGetBounds(long nativePtr, char[] buf, int start, int end,
+@@ -203,6 +200,10 @@
+     private static native float nGetCharWidthAt(long nativePtr, int offset);
+ 
+     private static native long nGetExtent(long nativePtr, char[] buf, int start, int end);
++
++    private static native long nBuildMeasuredText(MeasuredText owner, long builder, long hint,
++            char[] text, boolean computeHyphenation, boolean computeLayout, boolean computeBounds,
++            boolean fastHyphenation);
+ 
+     /**
+      * Helper class for creating a {@link MeasuredText}.
+@@ -221,10 +222,6 @@
+      * Note: The appendStyle and appendReplacementRun should be called to cover the text length.
+      */
+     public static final class Builder {
+-        private static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                MeasuredText.class.getClassLoader(), nGetReleaseFunc());
+-
+         private long mNativePtr;
+ 
+         private final @NonNull char[] mText;
+@@ -249,7 +246,7 @@
+         public Builder(@NonNull char[] text) {
+             Preconditions.checkNotNull(text);
+             mText = text;
+-            mNativePtr = nInitBuilder();
++            mNativePtr = nInitBuilder(this);
+         }
+ 
+         /**
+@@ -263,7 +260,7 @@
+         public Builder(@NonNull MeasuredText text) {
+             Preconditions.checkNotNull(text);
+             mText = text.mChars;
+-            mNativePtr = nInitBuilder();
++            mNativePtr = nInitBuilder(this);
+             if (!text.mComputeLayout) {
+                 throw new IllegalArgumentException(
+                     "The input MeasuredText must not be created with setComputeLayout(false).");
+@@ -486,12 +483,8 @@
+             }
+             try {
+                 long hintPtr = (mHintMt == null) ? 0 : mHintMt.getNativePtr();
+-                long ptr = nBuildMeasuredText(mNativePtr, hintPtr, mText, mComputeHyphenation,
+-                        mComputeLayout, mComputeBounds, mFastHyphenation);
+-                final MeasuredText res = new MeasuredText(ptr, mText, mComputeHyphenation,
+-                        mComputeLayout, mComputeBounds, mTop, mBottom);
+-                sRegistry.registerNativeAllocation(res, ptr);
+-                return res;
++                return new MeasuredText(mNativePtr, hintPtr, mText, mComputeHyphenation,
++                        mComputeLayout, mComputeBounds, mFastHyphenation, mTop, mBottom);
+             } finally {
+                 nFreeBuilder(mNativePtr);
+                 mNativePtr = 0;
+@@ -510,7 +503,7 @@
+             }
+         }
+ 
+-        private static native /* Non Zero */ long nInitBuilder();
++        private static native /* Non Zero */ long nInitBuilder(Builder owner);
+ 
+         /**
+          * Apply style to make native measured text.
+@@ -546,15 +539,6 @@
+                                                       @IntRange(from = 0) int end,
+                                                       @FloatRange(from = 0) float width);
+ 
+-        private static native long nBuildMeasuredText(
+-                /* Non Zero */ long nativeBuilderPtr,
+-                long hintMtPtr,
+-                @NonNull char[] text,
+-                boolean computeHyphenation,
+-                boolean computeLayout,
+-                boolean computeBounds,
+-                boolean fastHyphenationMode);
+-
+         private static native void nFreeBuilder(/* Non Zero */ long nativeBuilderPtr);
+     }
+ }
+--- a/frameworks/base/graphics/java/android/graphics/text/LineBreaker.java
++++ b/frameworks/base/graphics/java/android/graphics/text/LineBreaker.java
+@@ -32,8 +32,6 @@
+ 
+ import dalvik.annotation.optimization.CriticalNative;
+ import dalvik.annotation.optimization.FastNative;
+-
+-import libcore.util.NativeAllocationRegistry;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -387,14 +385,14 @@
+         private static final int END_HYPHEN_MASK = 0x7;  // 0b00111
+         private static final int START_HYPHEN_BITS_SHIFT = 3;
+ 
+-        private static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                Result.class.getClassLoader(), nGetReleaseResultFunc());
+         private final long mPtr;
+ 
+-        private Result(long ptr) {
+-            mPtr = ptr;
+-            sRegistry.registerNativeAllocation(this, mPtr);
++        private Result(LineBreaker breaker, MeasuredText paragraph, ParagraphConstraints constraints,
++                int lineNumber) {
++            mPtr = nComputeLineBreaks(this, breaker.mNativePtr, paragraph.getChars(),
++                    paragraph.getNativePtr(), paragraph.getChars().length, constraints.mFirstWidth,
++                    constraints.mFirstWidthLineCount, constraints.mWidth,
++                    constraints.mVariableTabStops, constraints.mDefaultTabStop, lineNumber);
+         }
+ 
+         /**
+@@ -481,12 +479,6 @@
+         public int getEndLineHyphenEdit(int lineIndex) {
+             return nGetLineFlag(mPtr, lineIndex) & END_HYPHEN_MASK;
+         }
+-    }
+-
+-    private static class NoImagePreloadHolder {
+-        private static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                        LineBreaker.class.getClassLoader(), nGetReleaseFunc());
+     }
+ 
+     private final long mNativePtr;
+@@ -503,9 +495,8 @@
+     private LineBreaker(@BreakStrategy int breakStrategy,
+             @HyphenationFrequency int hyphenationFrequency, @JustificationMode int justify,
+             @Nullable int[] indents, boolean useBoundsForWidth) {
+-        mNativePtr = nInit(breakStrategy, hyphenationFrequency,
++        mNativePtr = nInit(this, breakStrategy, hyphenationFrequency,
+                 justify == JUSTIFICATION_MODE_INTER_WORD, indents, useBoundsForWidth);
+-        NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, mNativePtr);
+ 
+         mBreakStrategy = breakStrategy;
+         mHyphenationFrequency = hyphenationFrequency;
+@@ -582,28 +573,13 @@
+             @NonNull MeasuredText measuredPara,
+             @NonNull ParagraphConstraints constraints,
+             @IntRange(from = 0) int lineNumber) {
+-        return new Result(nComputeLineBreaks(
+-                mNativePtr,
+-
+-                // Inputs
+-                measuredPara.getChars(),
+-                measuredPara.getNativePtr(),
+-                measuredPara.getChars().length,
+-                constraints.mFirstWidth,
+-                constraints.mFirstWidthLineCount,
+-                constraints.mWidth,
+-                constraints.mVariableTabStops,
+-                constraints.mDefaultTabStop,
+-                lineNumber));
++        return new Result(this, measuredPara, constraints, lineNumber);
+     }
+ 
+     @FastNative
+-    private static native long nInit(@BreakStrategy int breakStrategy,
++    private static native long nInit(LineBreaker owner, @BreakStrategy int breakStrategy,
+             @HyphenationFrequency int hyphenationFrequency, boolean isJustified,
+             @Nullable int[] indents, boolean useBoundsForWidth);
+-
+-    @CriticalNative
+-    private static native long nGetReleaseFunc();
+ 
+     // populates LineBreaks and returns the number of breaks found
+     //
+@@ -613,6 +589,7 @@
+     // The individual character widths will be returned in charWidths. The length of
+     // charWidths must be at least the length of the text.
+     private static native long nComputeLineBreaks(
++            Result owner,
+             /* non zero */ long nativePtr,
+ 
+             // Inputs
+@@ -639,6 +616,4 @@
+     private static native float nGetLineDescent(long ptr, int idx);
+     @CriticalNative
+     private static native int nGetLineFlag(long ptr, int idx);
+-    @CriticalNative
+-    private static native long nGetReleaseResultFunc();
+ }
+--- a/frameworks/base/graphics/java/android/graphics/text/LineBreakConfig.java
++++ b/frameworks/base/graphics/java/android/graphics/text/LineBreakConfig.java
+@@ -29,7 +29,6 @@
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ 
+-import dalvik.system.VMRuntime;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -486,7 +485,7 @@
+      * @hide
+      */
+     public static @LineBreakStyle int getResolvedLineBreakStyle(@Nullable LineBreakConfig config) {
+-        final int targetSdkVersion = VMRuntime.getRuntime().getTargetSdkVersion();
++        final int targetSdkVersion = nGetTargetSdkVersion();
+         final int defaultStyle;
+         final int vicVersion = Build.VERSION_CODES.VANILLA_ICE_CREAM;
+         if (targetSdkVersion >= vicVersion) {
+@@ -520,7 +519,7 @@
+      */
+     public static @LineBreakWordStyle int getResolvedLineBreakWordStyle(
+             @Nullable LineBreakConfig config) {
+-        final int targetSdkVersion = VMRuntime.getRuntime().getTargetSdkVersion();
++        final int targetSdkVersion = nGetTargetSdkVersion();
+         final int defaultWordStyle;
+         final int vicVersion = Build.VERSION_CODES.VANILLA_ICE_CREAM;
+         if (targetSdkVersion >= vicVersion) {
+@@ -651,4 +650,5 @@
+             return new LineBreakConfig[size];
+         }
+     };
++    private static native int nGetTargetSdkVersion();
+ }
+--- a/frameworks/base/graphics/java/android/graphics/text/PositionedGlyphs.java
++++ b/frameworks/base/graphics/java/android/graphics/text/PositionedGlyphs.java
+@@ -252,7 +252,7 @@
+         int fontCount = nGetFontCount(layoutPtr);
+         mFonts = new ArrayList<>(fontCount);
+         for (int i = 0; i < fontCount; ++i) {
+-            mFonts.add(new Font(nGetFontRef(layoutPtr, i)));
++            mFonts.add(nWrapFont(nGetFontRef(layoutPtr, i)));
+         }
+ 
+         NoImagePreloadHolder.REGISTRY.registerNativeAllocation(this, layoutPtr);
+@@ -338,4 +338,5 @@
+                 + ", mYOffset=" + mYOffset
+                 + '}';
+     }
++    private static native Font nWrapFont(long ptr);
+ }
+--- a/frameworks/base/core/java/android/text/TextDirectionHeuristics.java
++++ b/frameworks/base/core/java/android/text/TextDirectionHeuristics.java
+@@ -85,8 +85,10 @@
+     /* Returns STATE_TRUE for strong RTL characters, STATE_FALSE for strong LTR characters, and
+      * STATE_UNKNOWN for everything else.
+      */
++    private static native byte nGetStrongDirection(int codePoint);
++
+     private static int isRtlCodePoint(int codePoint) {
+-        switch (Character.getDirectionality(codePoint)) {
++        switch (nGetStrongDirection(codePoint)) {
+             case Character.DIRECTIONALITY_LEFT_TO_RIGHT:
+                 return STATE_FALSE;
+             case Character.DIRECTIONALITY_RIGHT_TO_LEFT:

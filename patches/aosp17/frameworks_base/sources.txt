@@ -24,7 +24,6 @@ frameworks/base/core/java/android/os/SimpleClock.java
 frameworks/base/core/java/android/os/SystemClock.java
 frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
 frameworks/base/core/java/android/os/TraceNameSupplier.java
-frameworks/base/core/java/android/text/GraphicsOperations.java
 frameworks/base/core/java/android/util/ArrayMap.java
 frameworks/base/core/java/android/util/AttributeSet.java
 frameworks/base/core/java/android/util/ContainerHelpers.java
@@ -111,7 +110,6 @@ libcore/luni/src/main/java/libcore/util/FP16.java
 libcore/luni/src/main/java/libcore/util/HexEncoding.java
 
 frameworks/base/core/java/android/app/WindowConfiguration.java
-frameworks/base/core/java/android/text/FontConfig.java
 frameworks/base/core/java/android/util/ArraySet.java
 frameworks/base/core/java/android/util/PathParser.java
 frameworks/base/core/java/android/util/SparseIntArray.java
@@ -119,6 +117,20 @@ frameworks/base/core/java/com/android/internal/util/Parcelling.java
 frameworks/base/core/java/com/android/internal/util/VirtualRefBasePtr.java
 frameworks/base/graphics/java/android/graphics/CanvasProperty.java
 frameworks/base/graphics/java/android/graphics/FontFamily.java
+
+# Phase 2 W2: upstream android.text & TextView
+@dir frameworks/base/core/java/android/text
+@dir frameworks/base/graphics/java/android/graphics/text
+frameworks/base/core/java/android/widget/Button.java
+
+frameworks/base/core/java/android/util/Patterns.java
+frameworks/base/core/java/android/util/TimeFormatException.java
+frameworks/base/graphics/java/android/graphics/LeakyTypefaceStorage.java
+libcore/luni/src/main/java/android/compat/Compatibility.java
+libcore/luni/src/main/java/libcore/api/CorePlatformApi.java
+libcore/luni/src/main/java/libcore/api/IntraCoreApi.java
+libcore/luni/src/main/java/libcore/util/NonNull.java
+libcore/luni/src/main/java/libcore/util/Nullable.java
 
 [sdk-support]
 # The SDK supplies the color appearance model used by ColorStateList lStar.
@@ -135,6 +147,76 @@ com/android/internal/util/XmlUtils.java
 com/android/modules/utils/TypedXmlPullParser.java
 com/android/modules/utils/TypedXmlSerializer.java
 org/xmlpull/v1/XmlSerializer.java
+
+# Phase 2 W2 text dependencies
+android/icu/platform/AndroidDataFiles.java
+com/android/i18n/phonenumbers/AsYouTypeFormatter.java
+com/android/i18n/phonenumbers/CountryCodeToRegionCodeMap.java
+com/android/i18n/phonenumbers/MetadataLoader.java
+com/android/i18n/phonenumbers/MissingMetadataException.java
+com/android/i18n/phonenumbers/NumberParseException.java
+com/android/i18n/phonenumbers/PhoneNumberMatch.java
+com/android/i18n/phonenumbers/PhoneNumberMatcher.java
+com/android/i18n/phonenumbers/PhoneNumberToTimeZonesMapper.java
+com/android/i18n/phonenumbers/PhoneNumberUtil.java
+com/android/i18n/phonenumbers/Phonemetadata.java
+com/android/i18n/phonenumbers/Phonenumber.java
+com/android/i18n/phonenumbers/ShortNumberInfo.java
+com/android/i18n/phonenumbers/geocoding/PhoneNumberOfflineGeocoder.java
+com/android/i18n/phonenumbers/internal/GeoEntityUtility.java
+com/android/i18n/phonenumbers/internal/MatcherApi.java
+com/android/i18n/phonenumbers/internal/RegexBasedMatcher.java
+com/android/i18n/phonenumbers/internal/RegexCache.java
+com/android/i18n/phonenumbers/metadata/DefaultMetadataDependenciesProvider.java
+com/android/i18n/phonenumbers/metadata/init/ClassPathResourceMetadataLoader.java
+com/android/i18n/phonenumbers/metadata/init/MetadataParser.java
+com/android/i18n/phonenumbers/metadata/source/BlockingMetadataBootstrappingGuard.java
+com/android/i18n/phonenumbers/metadata/source/CompositeMetadataContainer.java
+com/android/i18n/phonenumbers/metadata/source/FormattingMetadataSource.java
+com/android/i18n/phonenumbers/metadata/source/FormattingMetadataSourceImpl.java
+com/android/i18n/phonenumbers/metadata/source/MapBackedMetadataContainer.java
+com/android/i18n/phonenumbers/metadata/source/MetadataBootstrappingGuard.java
+com/android/i18n/phonenumbers/metadata/source/MetadataContainer.java
+com/android/i18n/phonenumbers/metadata/source/MetadataSource.java
+com/android/i18n/phonenumbers/metadata/source/MetadataSourceImpl.java
+com/android/i18n/phonenumbers/metadata/source/MultiFileModeFileNameProvider.java
+com/android/i18n/phonenumbers/metadata/source/NonGeographicalEntityMetadataSource.java
+com/android/i18n/phonenumbers/metadata/source/PhoneMetadataFileNameProvider.java
+com/android/i18n/phonenumbers/metadata/source/RegionMetadataSource.java
+com/android/i18n/phonenumbers/metadata/source/RegionMetadataSourceImpl.java
+com/android/i18n/phonenumbers/metadata/source/SingleFileModeFileNameProvider.java
+com/android/i18n/phonenumbers/prefixmapper/DefaultMapStorage.java
+com/android/i18n/phonenumbers/prefixmapper/FlyweightMapStorage.java
+com/android/i18n/phonenumbers/prefixmapper/MappingFileProvider.java
+com/android/i18n/phonenumbers/prefixmapper/PhonePrefixMap.java
+com/android/i18n/phonenumbers/prefixmapper/PhonePrefixMapStorageStrategy.java
+com/android/i18n/phonenumbers/prefixmapper/PrefixFileReader.java
+com/android/i18n/phonenumbers/prefixmapper/PrefixTimeZonesMap.java
+com/android/i18n/timezone/TimeZoneDataFiles.java
+com/android/i18n/timezone/TzDataSetVersion.java
+com/android/i18n/timezone/WallTime.java
+com/android/i18n/timezone/ZoneInfoData.java
+com/android/i18n/timezone/ZoneInfoDb.java
+com/android/i18n/timezone/internal/BasicLruCache.java
+com/android/i18n/timezone/internal/BufferIterator.java
+com/android/i18n/timezone/internal/ByteBufferIterator.java
+com/android/i18n/timezone/internal/Memory.java
+com/android/i18n/timezone/internal/MemoryMappedFile.java
+com/android/i18n/timezone/internal/NioBufferIterator.java
+com/android/net/module/util/Inet4AddressUtils.java
+dalvik/annotation/optimization/ReachabilitySensitive.java
+org/ccil/cowan/tagsoup/AttributesImpl.java
+org/ccil/cowan/tagsoup/AutoDetector.java
+org/ccil/cowan/tagsoup/Element.java
+org/ccil/cowan/tagsoup/ElementType.java
+org/ccil/cowan/tagsoup/HTMLModels.java
+org/ccil/cowan/tagsoup/HTMLScanner.java
+org/ccil/cowan/tagsoup/HTMLSchema.java
+org/ccil/cowan/tagsoup/PYXWriter.java
+org/ccil/cowan/tagsoup/Parser.java
+org/ccil/cowan/tagsoup/ScanHandler.java
+org/ccil/cowan/tagsoup/Scanner.java
+org/ccil/cowan/tagsoup/Schema.java
 
 [java-base]
 libcore/ojluni/src/main/java/java/io/InputStream.java
@@ -221,6 +303,12 @@ dalvik/annotation/optimization/CriticalNative.java
 dalvik/annotation/optimization/FastNative.java
 dalvik/annotation/optimization/NeverCompile.java
 
+# Phase 2 W2 text dependencies
+android/annotation/CallSuper.java
+android/annotation/CallbackExecutor.java
+android/annotation/RequiresPermission.java
+dalvik/annotation/optimization/NeverInline.java
+
 [aconfig]
 frameworks/base/core/java/android/app/privatecompute/flags/flags.aconfig
 frameworks/base/core/java/android/content/pm/flags.aconfig
@@ -229,6 +317,12 @@ frameworks/base/core/java/android/os/flags.aconfig
 frameworks/base/core/java/android/text/flags/24Q3.aconfig
 frameworks/base/core/java/android/text/flags/flags.aconfig
 frameworks/base/graphics/java/android/framework_graphics.aconfig
+
+# Phase 2 W2 text dependencies
+frameworks/base/core/java/android/view/accessibility/flags/accessibility_flags.aconfig
+frameworks/base/core/java/android/view/flags/view_flags.aconfig
+frameworks/base/core/java/android/view/inputmethod/flags.aconfig
+frameworks/base/core/java/android/widget/flags/flags.aconfig
 
 [aidl]
 frameworks/base/core/java/android/content/UriRelativeFilterGroupParcel.aidl
@@ -289,3 +383,9 @@ patches/212-adaptive-icon-software-mask.patch
 patches/213-solid-ripple-on-host.patch
 patches/214-host-resource-drawables.patch
 patches/215-flush-mounted-layout-cache.patch
+patches/501-calibrated-text-layout-jni.patch
+patches/502-text-sdk36-platform-edges.patch
+patches/503-text-input-sdk36-edges.patch
+patches/504-text-format-sdk36-edges.patch
+patches/505-guest-bidi-boundary.patch
+patches/506-button-sdk36-platform-edges.patch

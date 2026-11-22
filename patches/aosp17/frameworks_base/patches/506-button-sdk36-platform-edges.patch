@@ -1,0 +1,54 @@
+--- a/frameworks/base/core/java/android/widget/Button.java
++++ b/frameworks/base/core/java/android/widget/Button.java
+@@ -20,7 +20,7 @@
+ import static android.view.flags.Flags.enableArrowIconOnHoverWhenClickable;
+ 
+ import android.annotation.FlaggedApi;
+-import android.app.compat.CompatChanges;
++import android.compat.Compatibility;
+ import android.compat.annotation.ChangeId;
+ import android.compat.annotation.EnabledSince;
+ import android.content.Context;
+@@ -205,12 +205,18 @@
+         // to null, it will be an arrow. Therefore, we don't need to change the icon when
+         // enableArrowIconOnHoverWhenClickable() and the pointer icon is a null. We only need to do
+         // that when we want the hand icon for hover.
+-        if (!enableArrowIconOnHoverWhenClickable() && getPointerIcon() == null && isClickable()
+-                && isEnabled() && event.isFromSource(InputDevice.SOURCE_MOUSE)
+-        ) {
++        PointerIcon icon;
++        try {
++            icon = super.onResolvePointerIcon(event, pointerIndex);
++        } catch (NoSuchMethodError unused) {
++            // The software view bridge does not expose pointer icons.
++            return null;
++        }
++        if (!enableArrowIconOnHoverWhenClickable() && icon == null && isClickable()
++                && isEnabled() && event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+             return PointerIcon.getSystemIcon(getContext(), PointerIcon.TYPE_HAND);
+         }
+-        return super.onResolvePointerIcon(event, pointerIndex);
++        return icon;
+     }
+ 
+     private static int getButtonDefaultStyleAttr(Context context) {
+@@ -229,8 +235,17 @@
+     }
+ 
+     private static boolean useWearMaterial3Style(Context context) {
+-        return Flags.useWearMaterial3Ui() && CompatChanges.isChangeEnabled(WEAR_MATERIAL3_BUTTON)
++        return Flags.useWearMaterial3Ui() && Compatibility.isChangeEnabled(WEAR_MATERIAL3_BUTTON)
+                 && context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WATCH)
+-                && context.getThemeResId() == com.android.internal.R.style.Theme_DeviceDefault;
++                && isDeviceDefaultTheme(context);
++    }
++
++    private static boolean isDeviceDefaultTheme(Context context) {
++        try {
++            return (Integer) context.getClass().getMethod("getThemeResId").invoke(context)
++                    == com.android.internal.R.style.Theme_DeviceDefault;
++        } catch (ReflectiveOperationException unused) {
++            return false;
++        }
+     }
+ }

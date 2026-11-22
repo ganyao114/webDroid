@@ -12,6 +12,9 @@
 #include <stdexcept>
 #include <unordered_map>
 
+// Both framework targets compile this bridge.
+#include "text_layout_jni.cpp"
+
 namespace wa::ui_jni::detail {
 namespace {
 
@@ -514,8 +517,10 @@ UiBridge::UiBridge() : state_(std::make_unique<detail::State>()) {}
 
 UiBridge::~UiBridge() {
     state_->Abort();
-    if (state_->env)
+    if (state_->env) {
+        detail::UnregisterTextLayout(state_->env);
         detail::bindings.erase(state_->env);
+    }
 }
 
 void UiBridge::RegisterNatives(interp::Vm& vm) {
@@ -574,6 +579,7 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     detail::RegisterPath(vm);
     detail::RegisterBitmaps(vm);
     detail::RegisterVectors(vm);
+    detail::RegisterTextLayout(vm);
     detail::bindings.emplace(env, state_.get());
     state_->env = env;
     state_->vm = &vm;

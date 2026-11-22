@@ -1,0 +1,417 @@
+--- a/libcore/luni/src/main/java/android/compat/Compatibility.java
++++ b/libcore/luni/src/main/java/android/compat/Compatibility.java
+@@ -171,7 +171,7 @@
+         @SystemApi(client = MODULE_LIBRARIES)
+         default void onChangeReported(long changeId) {
+             // Do not use String.format here (b/160912695)
+-            System.logW("No Compatibility callbacks set! Reporting change " + changeId);
++            android.util.Log.w("Compatibility", "Reporting change " + changeId);
+         }
+ 
+         /**
+--- a/frameworks/base/core/java/android/text/ShowSecretsSetting.java
++++ b/frameworks/base/core/java/android/text/ShowSecretsSetting.java
+@@ -29,7 +29,6 @@
+ import android.database.ContentObserver;
+ import android.net.Uri;
+ import android.os.Build;
+-import android.os.UserHandle;
+ import android.provider.Settings.Secure;
+ 
+ import com.android.text.flags.Flags;
+@@ -46,6 +45,8 @@
+ public final class ShowSecretsSetting {
+     private static final int SHOW = 1;
+     private static final int HIDE = 0;
++    private static final String TEXT_SHOW_PASSWORD_TOUCH = "text_show_password_touch";
++    private static final String TEXT_SHOW_PASSWORD_PHYSICAL = "text_show_password_physical";
+ 
+     private ShowSecretsSetting() {}
+ 
+@@ -56,7 +57,7 @@
+      * @hide
+      */
+     @ChangeId
+-    @EnabledSince(targetSdkVersion = Build.VERSION_CODES.CINNAMON_BUN)
++    @EnabledSince(targetSdkVersion = 37 /* CINNAMON_BUN */)
+     @TestApi
+     public static final long SPLIT_SHOW_PASSWORDS_TO_TOUCH_AND_PHYSICAL = 417951523;
+ 
+@@ -65,11 +66,10 @@
+      * touch/virtual input sources should either be shown or echoed briefly.
+      */
+     public static boolean shouldShowTouchInput(@NonNull Context context) {
+-        return Secure.getIntForUser(
++        return Secure.getInt(
+                         Objects.requireNonNull(context).getContentResolver(),
+-                        Secure.TEXT_SHOW_PASSWORD_TOUCH,
+-                        SHOW,
+-                        context.getUser().getIdentifier())
++                        TEXT_SHOW_PASSWORD_TOUCH,
++                        SHOW)
+                 == SHOW;
+     }
+ 
+@@ -78,11 +78,10 @@
+      * hardware/physical input sources should either be shown or echoed briefly.
+      */
+     public static boolean shouldShowPhysicalInput(@NonNull Context context) {
+-        return Secure.getIntForUser(
++        return Secure.getInt(
+                         Objects.requireNonNull(context).getContentResolver(),
+-                        Secure.TEXT_SHOW_PASSWORD_PHYSICAL,
+-                        HIDE,
+-                        context.getUser().getIdentifier())
++                        TEXT_SHOW_PASSWORD_PHYSICAL,
++                        HIDE)
+                 == SHOW;
+     }
+ 
+@@ -99,9 +98,8 @@
+     public static void setShouldShowTouchInput(@NonNull Context context, boolean shouldShow) {
+         setSettingValue(
+                 Objects.requireNonNull(context).getContentResolver(),
+-                Secure.TEXT_SHOW_PASSWORD_TOUCH,
+-                shouldShow,
+-                context.getUser());
++                TEXT_SHOW_PASSWORD_TOUCH,
++                shouldShow);
+     }
+ 
+     /**
+@@ -117,9 +115,8 @@
+     public static void setShouldShowPhysicalInput(@NonNull Context context, boolean shouldShow) {
+         setSettingValue(
+                 Objects.requireNonNull(context).getContentResolver(),
+-                Secure.TEXT_SHOW_PASSWORD_PHYSICAL,
+-                shouldShow,
+-                context.getUser());
++                TEXT_SHOW_PASSWORD_PHYSICAL,
++                shouldShow);
+     }
+ 
+     /**
+@@ -163,15 +160,15 @@
+                 };
+         ContentResolver resolver = context.getContentResolver();
+         resolver.registerContentObserver(
+-                Secure.getUriFor(Secure.TEXT_SHOW_PASSWORD_TOUCH), true, observer);
++                Secure.getUriFor(TEXT_SHOW_PASSWORD_TOUCH), true, observer);
+         resolver.registerContentObserver(
+-                Secure.getUriFor(Secure.TEXT_SHOW_PASSWORD_PHYSICAL), true, observer);
++                Secure.getUriFor(TEXT_SHOW_PASSWORD_PHYSICAL), true, observer);
+         return () -> resolver.unregisterContentObserver(observer);
+     }
+ 
+     @RequiresPermission(Manifest.permission.WRITE_SECURE_SETTINGS)
+     private static void setSettingValue(
+-            ContentResolver resolver, String key, boolean newValue, UserHandle user) {
+-        Secure.putIntForUser(resolver, key, newValue ? SHOW : HIDE, user.getIdentifier());
++            ContentResolver resolver, String key, boolean newValue) {
++        Secure.putInt(resolver, key, newValue ? SHOW : HIDE);
+     }
+ }
+--- a/frameworks/base/core/java/android/text/method/ArrowKeyMovementMethod.java
++++ b/frameworks/base/core/java/android/text/method/ArrowKeyMovementMethod.java
+@@ -69,7 +69,7 @@
+ 
+     @Override
+     protected boolean left(TextView widget, Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+@@ -82,7 +82,7 @@
+ 
+     @Override
+     protected boolean right(TextView widget, Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+@@ -95,7 +95,7 @@
+ 
+     @Override
+     protected boolean up(TextView widget, Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+@@ -108,7 +108,7 @@
+ 
+     @Override
+     protected boolean down(TextView widget, Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+@@ -121,7 +121,7 @@
+ 
+     @Override
+     protected boolean pageUp(TextView widget, Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+@@ -148,7 +148,7 @@
+ 
+     @Override
+     protected boolean pageDown(TextView widget, Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+@@ -195,7 +195,7 @@
+ 
+     @Override
+     protected boolean lineStart(TextView widget, Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+@@ -208,7 +208,7 @@
+ 
+     @Override
+     protected boolean lineEnd(TextView widget, Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+@@ -223,7 +223,7 @@
+     @Override
+     protected boolean leftWord(TextView widget, Spannable buffer) {
+         final int selectionEnd = widget.getSelectionEnd();
+-        final WordIterator wordIterator = widget.getWordIterator();
++        final WordIterator wordIterator = new WordIterator(widget.getTextLocale());
+         wordIterator.setCharSequence(buffer, selectionEnd, selectionEnd);
+         return Selection.moveToPreceding(buffer, wordIterator, isSelecting(buffer));
+     }
+@@ -232,7 +232,7 @@
+     @Override
+     protected boolean rightWord(TextView widget, Spannable buffer) {
+         final int selectionEnd = widget.getSelectionEnd();
+-        final WordIterator wordIterator = widget.getWordIterator();
++        final WordIterator wordIterator = new WordIterator(widget.getTextLocale());
+         wordIterator.setCharSequence(buffer, selectionEnd, selectionEnd);
+         return Selection.moveToFollowing(buffer, wordIterator, isSelecting(buffer));
+     }
+@@ -249,7 +249,7 @@
+ 
+     @Override
+     public boolean previousParagraph(@NonNull TextView widget, @NonNull Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+@@ -262,7 +262,7 @@
+ 
+     @Override
+     public boolean nextParagraph(@NonNull TextView widget, @NonNull  Spannable buffer) {
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             return false;
+         }
+         final Layout layout = widget.getLayout();
+--- a/frameworks/base/core/java/android/text/method/BaseKeyListener.java
++++ b/frameworks/base/core/java/android/text/method/BaseKeyListener.java
+@@ -16,7 +16,7 @@
+ 
+ package android.text.method;
+ 
+-import android.app.compat.CompatChanges;
++import android.compat.Compatibility;
+ import android.graphics.Paint;
+ import android.icu.lang.UCharacter;
+ import android.icu.lang.UProperty;
+@@ -405,7 +405,7 @@
+ 
+         WordIterator wordIterator = null;
+         if (view instanceof TextView) {
+-            wordIterator = ((TextView)view).getWordIterator();
++            wordIterator = new WordIterator(((TextView) view).getTextLocale());
+         }
+ 
+         if (wordIterator == null) {
+@@ -468,7 +468,7 @@
+ 
+             final TextView textView = (TextView) view;
+             final Layout layout = textView.getLayout();
+-            if (layout != null && !textView.isOffsetMappingAvailable()) {
++            if (layout != null && !(textView.getLayout() != null && textView.getLayout().getText() instanceof OffsetMapping)) {
+                 final int line = layout.getLineForOffset(Selection.getSelectionStart(content));
+                 final int start = layout.getLineStart(line);
+                 final int end = layout.getLineEnd(line);
+@@ -560,7 +560,7 @@
+         PhysicalInputSpan physicalInputSpan = null;
+         if (event.getDeviceId() >= 0
+                 && Flags.splitShowPasswordsToTouchAndPhysical()
+-                && CompatChanges.isChangeEnabled(
++                && Compatibility.isChangeEnabled(
+                         ShowSecretsSetting.SPLIT_SHOW_PASSWORDS_TO_TOUCH_AND_PHYSICAL)) {
+             physicalInputSpan = new PhysicalInputSpan();
+             content.setSpan(physicalInputSpan, start, end, Spannable.SPAN_INCLUSIVE_INCLUSIVE);
+--- a/frameworks/base/core/java/android/text/method/LinkMovementMethod.java
++++ b/frameworks/base/core/java/android/text/method/LinkMovementMethod.java
+@@ -17,7 +17,6 @@
+ package android.text.method;
+ 
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.os.Build;
+ import android.text.Layout;
+ import android.text.NoCopySpan;
+ import android.text.Selection;
+@@ -26,7 +25,6 @@
+ import android.view.KeyEvent;
+ import android.view.MotionEvent;
+ import android.view.View;
+-import android.view.textclassifier.TextLinks.TextLinkSpan;
+ import android.widget.TextView;
+ 
+ /**
+@@ -39,7 +37,6 @@
+     private static final int UP = 2;
+     private static final int DOWN = 3;
+ 
+-    private static final int HIDE_FLOATING_TOOLBAR_DELAY_MS = 200;
+ 
+     @Override
+     public boolean canSelectArbitrarily() {
+@@ -101,7 +98,7 @@
+ 
+     private boolean action(int what, TextView widget, Spannable buffer) {
+         Layout layout = widget.getLayout();
+-        if (widget.isOffsetMappingAvailable()) {
++        if ((widget.getLayout() != null && widget.getLayout().getText() instanceof OffsetMapping)) {
+             // The text in the layout is transformed and has OffsetMapping, don't do anything.
+             return false;
+         }
+@@ -149,11 +146,7 @@
+                 }
+ 
+                 ClickableSpan link = links[0];
+-                if (link instanceof TextLinkSpan) {
+-                    ((TextLinkSpan) link).onClick(widget, TextLinkSpan.INVOCATION_METHOD_KEYBOARD);
+-                } else {
+-                    link.onClick(widget);
+-                }
++                link.onClick(widget);
+                 break;
+ 
+             case UP:
+@@ -238,19 +231,8 @@
+             if (links != null && links.length != 0) {
+                 ClickableSpan link = links[0];
+                 if (action == MotionEvent.ACTION_UP) {
+-                    if (link instanceof TextLinkSpan) {
+-                        ((TextLinkSpan) link).onClick(
+-                                widget, TextLinkSpan.INVOCATION_METHOD_TOUCH);
+-                    } else {
+-                        link.onClick(widget);
+-                    }
++                    link.onClick(widget);
+                 } else if (action == MotionEvent.ACTION_DOWN) {
+-                    if (widget.getContext().getApplicationInfo().targetSdkVersion
+-                            >= Build.VERSION_CODES.P) {
+-                        // Selection change will reposition the toolbar. Hide it for a few ms for a
+-                        // smoother transition.
+-                        widget.hideFloatingToolbar(HIDE_FLOATING_TOOLBAR_DELAY_MS);
+-                    }
+                     Selection.setSelection(buffer,
+                             buffer.getSpanStart(link),
+                             buffer.getSpanEnd(link));
+--- a/frameworks/base/core/java/android/text/method/MetaKeyKeyListener.java
++++ b/frameworks/base/core/java/android/text/method/MetaKeyKeyListener.java
+@@ -92,20 +92,20 @@
+     /**
+      * Flag that indicates that the SHIFT key is locked in CAPS mode.
+      */
+-    public static final int META_CAP_LOCKED = KeyEvent.META_CAP_LOCKED;
++    public static final int META_CAP_LOCKED = 0x100;
+     /**
+      * Flag that indicates that the ALT key is locked.
+      */
+-    public static final int META_ALT_LOCKED = KeyEvent.META_ALT_LOCKED;
++    public static final int META_ALT_LOCKED = 0x200;
+     /**
+      * Flag that indicates that the SYM key is locked.
+      */
+-    public static final int META_SYM_LOCKED = KeyEvent.META_SYM_LOCKED;
++    public static final int META_SYM_LOCKED = 0x400;
+ 
+     /**
+      * @hide pending API review
+      */
+-    public static final int META_SELECTING = KeyEvent.META_SELECTING;
++    public static final int META_SELECTING = 0x800;
+ 
+     // These bits are privately used by the meta key key listener.
+     // They are deliberately assigned values outside of the representable range of an 'int'
+--- a/frameworks/base/core/java/android/text/method/PasswordTransformationMethod.java
++++ b/frameworks/base/core/java/android/text/method/PasswordTransformationMethod.java
+@@ -16,7 +16,7 @@
+ 
+ package android.text.method;
+ 
+-import android.app.compat.CompatChanges;
++import android.compat.Compatibility;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.graphics.Rect;
+ import android.os.Build;
+@@ -113,7 +113,7 @@
+             boolean shouldShowPassword;
+ 
+             if (Flags.splitShowPasswordsToTouchAndPhysical()
+-                    && CompatChanges.isChangeEnabled(
++                    && Compatibility.isChangeEnabled(
+                             ShowSecretsSetting.SPLIT_SHOW_PASSWORDS_TO_TOUCH_AND_PHYSICAL)) {
+                 final boolean showTouch = (pref & TextKeyListener.SHOW_PASSWORD_TOUCH) != 0;
+                 final boolean showPhysical = (pref & TextKeyListener.SHOW_PASSWORD_PHYSICAL) != 0;
+--- a/frameworks/base/core/java/android/text/method/TextKeyListener.java
++++ b/frameworks/base/core/java/android/text/method/TextKeyListener.java
+@@ -16,7 +16,7 @@
+ 
+ package android.text.method;
+ 
+-import android.app.compat.CompatChanges;
++import android.compat.Compatibility;
+ import android.content.ContentResolver;
+ import android.content.Context;
+ import android.database.ContentObserver;
+@@ -286,7 +286,7 @@
+                     Settings.System.CONTENT_URI, true, mSystemObserver);
+         }
+         if (Flags.splitShowPasswordsToTouchAndPhysical()
+-                && CompatChanges.isChangeEnabled(
++                && Compatibility.isChangeEnabled(
+                         ShowSecretsSetting.SPLIT_SHOW_PASSWORDS_TO_TOUCH_AND_PHYSICAL)) {
+             if (mShowSecretsUnregisterRunnable == null) {
+                 mShowSecretsUnregisterRunnable =
+@@ -332,7 +332,7 @@
+         boolean physical = false;
+ 
+         if (Flags.splitShowPasswordsToTouchAndPhysical()
+-                && CompatChanges.isChangeEnabled(
++                && Compatibility.isChangeEnabled(
+                         ShowSecretsSetting.SPLIT_SHOW_PASSWORDS_TO_TOUCH_AND_PHYSICAL)) {
+             touch = ShowSecretsSetting.shouldShowTouchInput(context);
+             physical = ShowSecretsSetting.shouldShowPhysicalInput(context);
+--- a/frameworks/base/core/java/android/text/method/Touch.java
++++ b/frameworks/base/core/java/android/text/method/Touch.java
+@@ -44,7 +44,7 @@
+         boolean ltr = layout.getParagraphDirection(top) > 0;
+ 
+         int left, right;
+-        if (widget.getHorizontallyScrolling()) {
++        if (widget.isHorizontallyScrollable()) {
+             final int verticalPadding = widget.getTotalPaddingTop() + widget.getTotalPaddingBottom();
+             final int bottom = layout.getLineForVertical(y + widget.getHeight() - verticalPadding);
+ 
