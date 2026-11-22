@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -66,11 +67,17 @@ struct State {
         Require(std::sscanf(Value(key).data(), "{\"x\":%f,\"y\":%f}", &center.x, &center.y) == 2, text);
         return center;
     }
-    Position SearchCenter() const {
-        float left, top, right, bottom;
+    wa_rect_t SearchBounds() const {
+        wa_rect_t bounds{};
         Require(std::sscanf(Value("searchBounds").data(),
-            "{\"left\":%f,\"top\":%f,\"right\":%f,\"bottom\":%f}", &left, &top, &right, &bottom) == 4, text);
-        return {(left + right) / 2, (top + bottom) / 2};
+            "{\"left\":%f,\"top\":%f,\"right\":%f,\"bottom\":%f}",
+            &bounds.l, &bounds.t, &bounds.r, &bounds.b) == 4, text);
+        return bounds;
+    }
+    int NavigationInset() const {
+        int top, bottom;
+        Require(std::sscanf(Value("systemUiInsets").data(), "{\"top\":%d,\"bottom\":%d}", &top, &bottom) == 2, text);
+        return bottom;
     }
     void Print(const char* locale, const char* phase) const {
         std::printf("%s %s %s\n", locale, phase, text);
@@ -80,6 +87,12 @@ struct State {
 
 struct Transform {
     Position At(float x, float y) const { return {tx + a * x + c * y, ty + b * x + d * y}; }
+    wa_rect_t Bounds(wa_rect_t rect) const {
+        const auto tl = At(rect.l, rect.t), tr = At(rect.r, rect.t);
+        const auto bl = At(rect.l, rect.b), br = At(rect.r, rect.b);
+        return {std::min({tl.x, tr.x, bl.x, br.x}), std::min({tl.y, tr.y, bl.y, br.y}),
+                std::max({tl.x, tr.x, bl.x, br.x}), std::max({tl.y, tr.y, bl.y, br.y})};
+    }
     void Translate(float x, float y) {
         const auto next = At(x, y);
         tx = next.x;
@@ -105,26 +118,57 @@ struct Path {
     Position start, position;
 };
 
+float Width(wa_rect_t bounds) { return bounds.r - bounds.l; }
+float Height(wa_rect_t bounds) { return bounds.b - bounds.t; }
+float CenterX(wa_rect_t bounds) { return (bounds.l + bounds.r) / 2; }
+bool HasArea(wa_rect_t bounds) { return Width(bounds) > 0 && Height(bounds) > 0; }
+wa_rect_t Intersect(wa_rect_t a, wa_rect_t b) {
+    return {std::max(a.l, b.l), std::max(a.t, b.t), std::min(a.r, b.r), std::min(a.b, b.b)};
+}
+constexpr float kGeometryTolerance = 0.02f;
+bool SameBounds(wa_rect_t a, wa_rect_t b, float tolerance = kGeometryTolerance) {
+    return std::abs(a.l - b.l) <= tolerance && std::abs(a.t - b.t) <= tolerance &&
+        std::abs(a.r - b.r) <= tolerance && std::abs(a.b - b.b) <= tolerance;
+}
+
+struct Text {
+    std::string label;
+    Position position;
+    wa_rect_t line, clip;
+};
+
+struct Bitmap {
+    uint32_t id;
+    wa_rect_t bounds, clip;
+};
+
+struct Rounded {
+    wa_rect_t bounds, clip;
+    float rx, ry;
+    uint32_t alpha, style;
+};
+
+bool MatchesLabel(std::string_view drawn, std::string_view label) {
+    if (drawn == label) return true;
+    constexpr std::string_view ellipsis = "…";
+    const auto end = drawn.find_last_not_of(' ');
+    if (end == drawn.npos) return false;
+    const auto prefix = drawn.substr(0, end + 1);
+    return (label.size() > prefix.size() && label.starts_with(prefix) && label[prefix.size()] == ' ') ||
+        (prefix.size() > ellipsis.size() && prefix.ends_with(ellipsis) &&
+         label.starts_with(prefix.substr(0, prefix.size() - ellipsis.size())));
+}
+
 struct Layer {
     bool Has(uint16_t opcode) const { return opcodes[opcode]; }
     Position Find(std::string_view label) const {
-        constexpr std::string_view ellipsis = "…";
         for (auto it = labels.rbegin(); it != labels.rend(); ++it) {
-            if (it->first == label) return it->second;
-            const std::string_view text = it->first;
-            const auto end = text.find_last_not_of(' ');
-            if (end == text.npos) continue;
-            const auto prefix = text.substr(0, end + 1);
-            if ((label.size() > prefix.size() && label.starts_with(prefix) && label[prefix.size()] == ' ') ||
-                    (prefix.size() > ellipsis.size() && prefix.ends_with(ellipsis) &&
-                     label.starts_with(prefix.substr(0, prefix.size() - ellipsis.size())))) {
-                return it->second;
-            }
+            if (MatchesLabel(it->label, label)) return it->position;
         }
         std::string message = "Rendered label missing: " + std::string(label) + "\nDisplayed text:";
-        for (const auto& [text, position] : labels) {
-            message += " [" + text + " at " + std::to_string(position.x) + "," +
-                std::to_string(position.y) + "]";
+        for (const auto& text : labels) {
+            message += " [" + text.label + " at " + std::to_string(text.position.x) + "," +
+                std::to_string(text.position.y) + "]";
         }
         throw std::runtime_error(message);
     }
@@ -135,8 +179,10 @@ struct Layer {
         });
     }
     std::array<bool, WA_CANVAS_DRAW_TEXT + 1> opcodes{};
-    std::vector<std::pair<std::string, Position>> labels;
+    std::vector<Text> labels;
     std::vector<Path> paths;
+    std::vector<Bitmap> bitmaps;
+    std::vector<Rounded> rounds;
     bool gesture_handle = false;
 };
 
@@ -171,8 +217,10 @@ std::array<Layer, 2> Inspect(wa_sf_t* scene, uint32_t width = 960, uint32_t heig
         auto& details = result[index];
         const uint8_t* list = wa_sf_frame_list(frame, &layer);
         Require(list != nullptr && layer.list_size, "Display list");
-        Transform transform;
-        std::vector<Transform> stack;
+        struct CanvasState { Transform transform; wa_rect_t clip; };
+        CanvasState state{{}, {0, 0, static_cast<float>(width), static_cast<float>(height)}};
+        auto& [transform, clip] = state;
+        std::vector<CanvasState> stack;
         for (size_t offset = 0; offset < layer.list_size;) {
             const auto* record = list + offset;
             const auto header = ReadRecord<wa_canvas_record_t>(record, layer.list_size - offset);
@@ -182,10 +230,10 @@ std::array<Layer, 2> Inspect(wa_sf_t* scene, uint32_t width = 960, uint32_t heig
             const auto length = header.byte_size - sizeof(header);
             details.opcodes[header.opcode] = true;
             switch (header.opcode) {
-            case WA_CANVAS_SAVE: stack.push_back(transform); break;
+            case WA_CANVAS_SAVE: stack.push_back(state); break;
             case WA_CANVAS_RESTORE:
                 Require(!stack.empty(), "Canvas restore");
-                transform = stack.back();
+                state = stack.back();
                 stack.pop_back();
                 break;
             case WA_CANVAS_TRANSLATE: {
@@ -201,6 +249,10 @@ std::array<Layer, 2> Inspect(wa_sf_t* scene, uint32_t width = 960, uint32_t heig
             case WA_CANVAS_ROTATE:
                 transform.Rotate(ReadRecord<wa_canvas_rotation_t>(payload, length));
                 break;
+            case WA_CANVAS_CLIP_RECT:
+            case WA_CANVAS_CLIP_ROUND_RECT:
+                clip = Intersect(clip, transform.Bounds(ReadRecord<wa_rect_t>(payload, length)));
+                break;
             case WA_CANVAS_DRAW_PATH: {
                 const auto path = ReadRecord<wa_canvas_path_t>(payload, length);
                 const auto verb = ReadRecord<uint32_t>(payload + sizeof(path), length - sizeof(path));
@@ -212,11 +264,30 @@ std::array<Layer, 2> Inspect(wa_sf_t* scene, uint32_t width = 960, uint32_t heig
             }
             case WA_CANVAS_DRAW_ROUND_RECT: {
                 const auto round = ReadRecord<wa_canvas_round_draw_t>(payload, length);
-                const auto& rect = round.shape.rect;
-                const auto left = transform.At(rect.l, rect.t), right = transform.At(rect.r, rect.b);
-                details.gesture_handle |= left.y > height - 32 && right.y <= height &&
-                    right.x - left.x > 60 && right.y - left.y <= 8 && round.shape.rx > 0 &&
-                    (round.paint.argb >> 24) != 0;
+                const auto bounds = transform.Bounds(round.shape.rect);
+                const auto alpha = round.paint.argb >> 24;
+                if (alpha && HasArea(Intersect(bounds, clip))) {
+                    details.rounds.push_back({bounds, clip, round.shape.rx, round.shape.ry, alpha, round.paint.style});
+                }
+                details.gesture_handle |= bounds.t > height - 32 && bounds.b <= height &&
+                    Width(bounds) > 60 && Height(bounds) <= 8 && round.shape.rx > 0 && alpha != 0;
+                break;
+            }
+            case WA_CANVAS_DRAW_CIRCLE: {
+                const auto circle = ReadRecord<wa_canvas_circle_t>(payload, length);
+                const auto [x, y, r, paint] = circle;
+                const auto bounds = transform.Bounds({x - r, y - r, x + r, y + r});
+                if ((paint.argb >> 24) && HasArea(Intersect(bounds, clip))) {
+                    details.rounds.push_back({bounds, clip, r, r, paint.argb >> 24, paint.style});
+                }
+                break;
+            }
+            case WA_CANVAS_DRAW_BITMAP: {
+                const auto bitmap = ReadRecord<wa_canvas_bitmap_t>(payload, length);
+                const auto bounds = transform.Bounds(bitmap.dst);
+                if (bitmap.alpha > 0 && HasArea(Intersect(bounds, clip))) {
+                    details.bitmaps.push_back({bitmap.bitmap_id, bounds, clip});
+                }
                 break;
             }
             case WA_CANVAS_DRAW_TEXT: {
@@ -224,9 +295,13 @@ std::array<Layer, 2> Inspect(wa_sf_t* scene, uint32_t width = 960, uint32_t heig
                 Require(text.utf8_offset <= header.byte_size &&
                         text.utf8_len <= header.byte_size - text.utf8_offset, "Display text bounds");
                 const auto point = transform.At(text.x, text.y);
-                if (point.x >= 0 && point.x < width && point.y >= 0 && point.y < height) {
-                    details.labels.emplace_back(std::string(
-                        reinterpret_cast<const char*>(record + text.utf8_offset), text.utf8_len), point);
+                if (point.x >= 0 && point.x < width && point.y >= 0 && point.y < height && (text.argb >> 24)) {
+                    const auto* utf8 = reinterpret_cast<const char*>(record + text.utf8_offset);
+                    const auto metrics = wa_canvas_measure_text(scene, utf8, text.utf8_len,
+                        text.font_size, text.weight, text.font_face);
+                    const auto line = transform.Bounds({text.x, text.y - metrics.ascent,
+                        text.x, text.y + metrics.descent});
+                    details.labels.push_back({std::string(utf8, text.utf8_len), point, line, clip});
                 }
                 break;
             }
@@ -240,8 +315,8 @@ std::array<Layer, 2> Inspect(wa_sf_t* scene, uint32_t width = 960, uint32_t heig
 
 void CheckSystemUiFrame(const Layer& window, float height, bool gestural = false) {
     Require(std::ranges::any_of(window.labels, [](const auto& label) {
-        const auto& [text, at] = label;
-        return at.y < 24 && text.size() == 5 && text[2] == ':' &&
+        const auto& text = label.label;
+        return label.position.y < 24 && text.size() == 5 && text[2] == ':' &&
             text.find_first_not_of("0123456789:") == std::string::npos && std::count(text.begin(), text.end(), ':') == 1;
     }), "SystemUI Clock text in the Android window");
     Require(window.Find("100%").y < 24 && window.HasPath(3.5f, 2, 0, 24), "SystemUI battery text and perimeter");
@@ -252,6 +327,145 @@ void CheckSystemUiFrame(const Layer& window, float height, bool gestural = false
     const bool recents = window.HasPath(4.47634f, 2.5f, height - 48, height);
     Require(gestural ? window.gesture_handle && !back && !home && !recents : back && home && recents,
         "Upstream navigation icon geometry for the active mode");
+}
+
+void PublishBrowserFontMetrics(wa_sf_t* scene) {
+    auto* fonts = wa_sf_font_metrics(scene);
+    for (int i = 0; i < WA_FONT_FACE_COUNT * WA_FONT_WEIGHT_COUNT; ++i) {
+        // Browser font calibration can arrive after the first frame.
+        fonts[i] = {2, 35389, 65536, 60416, 15360};
+    }
+}
+
+std::vector<std::string_view> CheckIconLabel(const Layer& window, const Bitmap& icon) {
+    std::vector<std::string_view> labels;
+    const auto& bounds = icon.bounds;
+    for (const auto& text : window.labels) {
+        const auto [x, y] = text.position;
+        if (std::abs(x - CenterX(bounds)) >= 1 || y <= bounds.b || y >= bounds.b + 36 ||
+                x < text.clip.l || x >= text.clip.r) continue;
+        Require(text.line.t >= bounds.b - kGeometryTolerance &&
+                text.line.t >= text.clip.t - kGeometryTolerance &&
+                text.line.b <= text.clip.b + kGeometryTolerance,
+            "Clipped or misplaced app label " + text.label + " at baseline " + std::to_string(y) +
+                " with line bottom " + std::to_string(text.line.b) + " and clip bottom " + std::to_string(text.clip.b));
+        labels.push_back(text.label);
+    }
+    Require(!labels.empty(), "Visible label centered below each app icon");
+    return labels;
+}
+
+std::vector<Rounded> PaginationDots(const Layer& window, int width, float hotseat_top) {
+    std::vector<Rounded> dots;
+    for (const auto& shape : window.rounds) {
+        const auto bounds = shape.bounds;
+        if (shape.style == WA_PAINT_FILL && Height(bounds) >= 4 && Height(bounds) <= 10 &&
+                Width(bounds) <= 24 && bounds.b <= hotseat_top && bounds.b >= hotseat_top - 48 &&
+                std::abs(CenterX(bounds) - width / 2.f) < 24) {
+            dots.push_back(shape);
+        }
+    }
+    std::ranges::sort(dots, {}, [](const Rounded& dot) { return dot.bounds.l; });
+    return dots;
+}
+
+struct HomeGeometry {
+    float hotseat_top;
+    std::vector<Rounded> dots;
+};
+
+HomeGeometry CheckHome(const Layer& window, int width, int height, int page, int navigation_inset) {
+    const auto qsb = std::ranges::find_if(window.rounds, [&](const Rounded& shape) {
+        return shape.style == WA_PAINT_FILL && Width(shape.bounds) > width / 2.f &&
+            shape.bounds.t > height * .65f && shape.bounds.b <= height - navigation_inset;
+    });
+    Require(qsb != window.rounds.end() && SameBounds(qsb->bounds, Intersect(qsb->bounds, qsb->clip)),
+        "Entire Hotseat Search pill is visible above SystemUI");
+    Require(std::ranges::any_of(window.labels, [](const Text& text) {
+        return text.label == "Search" || text.label == "搜索";
+    }), "Visible QSB label");
+
+    float bottom = 0;
+    for (const auto& icon : window.bitmaps) bottom = std::max(bottom, icon.bounds.b);
+    float hotseat_top = bottom;
+    int hotseat_count = 0;
+    for (const auto& icon : window.bitmaps) {
+        if (std::abs(icon.bounds.b - bottom) > kGeometryTolerance) continue;
+        ++hotseat_count;
+        hotseat_top = std::min(hotseat_top, icon.bounds.t);
+        Require(icon.bounds.b <= qsb->bounds.t && !HasArea(Intersect(icon.bounds, qsb->bounds)),
+            "Hotseat icon overlaps QSB");
+    }
+    Require(hotseat_count == (width == 960 ? 4 : 3), "All configured Hotseat icons draw");
+
+    auto dots = PaginationDots(window, width, hotseat_top);
+    Require(dots.size() == 2, "Both workspace page dots draw on Home");
+    for (const auto& dot : dots)
+        Require(SameBounds(dot.bounds, Intersect(dot.bounds, dot.clip)), "Page indicator dots fit their clips");
+    Require(dots[page].alpha > dots[1 - page].alpha &&
+        Width(dots[page].bounds) > Width(dots[1 - page].bounds), "Current page dot is active");
+
+    int workspace_count = 0;
+    for (const auto& icon : window.bitmaps) {
+        if (icon.bounds.b > dots[0].bounds.t) continue;
+        ++workspace_count;
+        CheckIconLabel(window, icon);
+    }
+    Require(workspace_count > 0, "Visible workspace icons");
+    return {hotseat_top, std::move(dots)};
+}
+
+void CheckIconPixels(wa_sf_t* scene, uint32_t id, uint32_t rgb) {
+    auto* store = wa_sf_bitmaps(scene);
+    const auto* view = wa_bitmap_acquire(store, id);
+    Require(view != nullptr, "Bitmap pixels are available");
+    const auto* pixels = wa_bitmap_pixels(view);
+    bool found = false;
+    for (size_t i = 0; i + 3 < view->byte_size; i += 4) {
+        if (pixels[i] == (rgb >> 16) && pixels[i + 1] == ((rgb >> 8) & 0xff) &&
+                pixels[i + 2] == (rgb & 0xff) && pixels[i + 3] == 255) {
+            found = true;
+            break;
+        }
+    }
+    wa_bitmap_release(store, view);
+    Require(found, "App bitmap is missing fixture RGB " + std::to_string(rgb));
+}
+
+void CheckDrawer(wa_sf_t* scene, const Layer& window, wa_rect_t search, bool english, const char* cube_label) {
+    const Rounded* fill = nullptr;
+    const Rounded* stroke = nullptr;
+    for (const auto& shape : window.rounds) {
+        if (!SameBounds(shape.bounds, search, 1.f)) continue;
+        if (shape.style == WA_PAINT_FILL) fill = &shape;
+        if (shape.style == WA_PAINT_STROKE) stroke = &shape;
+    }
+    Require(fill && stroke, "All Apps Search fill and stroke draw");
+    for (const auto* shape : {fill, stroke}) {
+        Require(std::abs(shape->rx - shape->ry) <= kGeometryTolerance &&
+            std::abs(shape->rx - Height(shape->bounds) / 2) <= kGeometryTolerance &&
+            SameBounds(shape->bounds, fill->bounds), "Search pill has concentric circular ends");
+    }
+
+    const std::array<std::string_view, 6> app_labels = english
+        ? std::array<std::string_view, 6>{"Settings", "Browser", "Gallery", "Calculator", "Clock", cube_label}
+        : std::array<std::string_view, 6>{"设置", "浏览器", "图库", "计算器", "时钟", cube_label};
+    constexpr std::array colors{0x366990u, 0x1a7866u, 0x725296u, 0x9c5200u, 0x344da0u, 0u};
+    std::array<bool, colors.size()> seen{};
+    int icon_count = 0;
+    for (const auto& icon : window.bitmaps) {
+        if (icon.clip.t < search.t || icon.bounds.t < search.b) continue;
+        ++icon_count;
+        const auto labels = CheckIconLabel(window, icon);
+        for (size_t i = 0; i < app_labels.size(); ++i) {
+            if (!std::ranges::any_of(labels, [&](auto label) { return MatchesLabel(label, app_labels[i]); })) continue;
+            Require(!seen[i], "Duplicate All Apps icon");
+            seen[i] = true;
+            if (colors[i]) CheckIconPixels(scene, icon.id, colors[i]);
+        }
+    }
+    Require(icon_count == app_labels.size() && std::ranges::all_of(seen, [](bool found) { return found; }),
+        "All Apps draws every fixture icon and label");
 }
 
 struct Session {
@@ -319,7 +533,7 @@ struct Session {
         Push(WA_INPUT_MOTION, WA_ACTION_MOVE, 10, x + dx * .75f, y + dy * .75f);
         Push(WA_INPUT_MOTION, WA_ACTION_UP, 15, x + dx, y + dy);
     }
-    void Swipe(int from, int to) {
+    void Swipe(int from, int to, const HomeGeometry& home) {
         const State before;
         Require(before.Integer("workspacePage") == from, before.text);
         const int start = before.Integer("workspaceScrollX");
@@ -328,9 +542,15 @@ struct Session {
         const float dx = width * (to > from ? -.64f : .64f);
         Push(WA_INPUT_MOTION, WA_ACTION_DOWN, 1, x, y);
         Tick();
+        bool dots_moved = false;
         for (int step = 1; step <= 4; ++step) {
             Push(WA_INPUT_MOTION, WA_ACTION_MOVE, 1, x + dx * step / 4, y);
             Tick();
+            const auto dots = PaginationDots(ReadFrame()[1], width, home.hotseat_top);
+            dots_moved |= dots.size() == 2 && dots[0].alpha != home.dots[0].alpha &&
+                dots[1].alpha != home.dots[1].alpha &&
+                std::abs(Width(dots[0].bounds) - Width(home.dots[0].bounds)) > kGeometryTolerance &&
+                std::abs(Width(dots[1].bounds) - Width(home.dots[1].bounds)) > kGeometryTolerance;
         }
         Push(WA_INPUT_MOTION, WA_ACTION_UP, 1, x + dx, y);
         std::array<int, 36> scrolls;
@@ -345,6 +565,7 @@ struct Session {
         Require(std::ranges::any_of(scrolls, [&](int x) {
             return x > std::min(start, end) && x < std::max(start, end);
         }), "Intermediate animation positions");
+        Require(dots_moved, "Page indicator widths and opacity animate with the swipe");
     }
     int width, height;
     wa_sf_t* scene;
@@ -389,28 +610,34 @@ void Run(int width, int height, const char* locale, const char* composition, con
     Require(layers[1].Has(WA_CANVAS_DRAW_ROUND_RECT) && layers[1].Has(WA_CANVAS_DRAW_TEXT) &&
             layers[1].Has(WA_CANVAS_DRAW_BITMAP), "Launcher view tree");
     CheckSystemUiFrame(layers[1], height);
+    const int navigation_inset = boot.NavigationInset();
+    CheckHome(layers[1], width, height, 0, navigation_inset);
+    PublishBrowserFontMetrics(session.scene);
 
     session.Tick(120);
     State().Print(locale, "home-120");
-    const auto first_page = session.ReadFrame()[1].labels;
-    Require(std::ranges::any_of(first_page, [](const auto& label) { return label.second.y >= 24; }),
+    const auto first_page = session.ReadFrame()[1];
+    const auto first_home = CheckHome(first_page, width, height, 0, navigation_inset);
+    Require(std::ranges::any_of(first_page.labels, [](const auto& label) { return label.position.y >= 24; }),
         "First workspace page contains labels");
-    session.Swipe(0, 1);
-    const auto second_page = session.ReadFrame()[1].labels;
-    Require(std::ranges::any_of(second_page, [&](const auto& label) {
-        return label.second.y >= 24 &&
-            std::ranges::none_of(first_page, [&](const auto& first) { return first.first == label.first; });
+    session.Swipe(0, 1, first_home);
+    const auto second_page = session.ReadFrame()[1];
+    const auto second_home = CheckHome(second_page, width, height, 1, navigation_inset);
+    Require(std::ranges::any_of(second_page.labels, [&](const auto& label) {
+        return label.position.y >= 24 &&
+            std::ranges::none_of(first_page.labels, [&](const auto& first) { return first.label == label.label; });
     }), "Real app label on second workspace page");
-    session.Swipe(1, 0);
-    session.Swipe(0, 1);
+    session.Swipe(1, 0, second_home);
+    session.Swipe(0, 1, first_home);
     session.Drag(width * .54f, height * .78f, 0, -height * .42f);
     session.Tick(36);
     const State drawer;
     Require(drawer.Boolean("drawerOpen") && drawer.Number("drawerProgress") > 0.9 &&
             drawer.Integer("searchResults") == static_cast<int>(apps.size()), drawer.text);
 
-    const Position search = drawer.SearchCenter();
-    session.Tap(search.x, search.y);
+    const auto search = drawer.SearchBounds();
+    CheckDrawer(session.scene, session.ReadFrame()[1], search, std::string_view(locale) == "en-US", cube_label);
+    session.Tap(CenterX(search), (search.t + search.b) / 2);
     session.Push(WA_INPUT_IME, WA_IME_COMPOSING, 8, 0, 0, composition);
     session.Tick(12);
     const State composing;

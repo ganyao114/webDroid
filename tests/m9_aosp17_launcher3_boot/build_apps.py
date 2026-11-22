@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Build small, executable APKs with localized labels and adaptive vector icons."""
+"""Build small APKs with localized labels and adaptive, vector and PNG icons."""
 
 import argparse
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 from xml.sax.saxutils import escape
 import zipfile
+import zlib
 
 NS = "http://schemas.android.com/apk/res/android"
 ACTIVITY = "org.wasmandroid.fixtures.DemoActivity"
@@ -41,6 +43,31 @@ def write(directory, name, text):
     return path
 
 
+def write_settings_icon(stage, background, foreground):
+    # Draw the fixture's settings glyph at its xhdpi resource size.
+    size = 108
+    background, foreground = (bytes.fromhex(color[3:]) for color in (background, foreground))
+    rectangles = [(43, 28, 65, 36), (47, 38, 61, 70), (35, 47, 73, 61), (43, 72, 65, 80)]
+    rows = bytearray()
+    for y in range(size):
+        rows.append(0)  # PNG filter None
+        for x in range(size):
+            glyph = any(left <= x < right and top <= y < bottom
+                        for left, top, right, bottom in rectangles)
+            hole = (x - 54) ** 2 + (y - 54) ** 2 < 8 ** 2
+            rows.extend(foreground if glyph and not hole else background)
+
+    def chunk(kind, data):
+        checksum = zlib.crc32(kind + data)
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", checksum)
+
+    path = stage / "res/mipmap-xhdpi/icon.png"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" +
+                     chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)) +
+                     chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
 def build_app(args, stage, dex, name, app):
     english, chinese, background, foreground, silhouette, details, accent, category = app
     optional_filter = f"""
@@ -49,9 +76,10 @@ def build_app(args, stage, dex, name, app):
             <category android:name="android.intent.category.{category}"/>
             <category android:name="android.intent.category.DEFAULT"/>
         </intent-filter>""" if category else ""
+    icon_type = "mipmap" if name in ("browser", "settings") else "drawable"
     manifest = write(stage, "AndroidManifest.xml", f"""<manifest xmlns:android="{NS}"
         package="org.wasmandroid.fixtures.{name}" android:versionCode="1">
-    <application android:label="@string/app_name" android:icon="@drawable/icon">
+    <application android:label="@string/app_name" android:icon="@{icon_type}/icon">
       <activity android:name="{ACTIVITY}" android:exported="true">
         <intent-filter>
           <action android:name="android.intent.action.MAIN"/>
@@ -66,17 +94,28 @@ def build_app(args, stage, dex, name, app):
     <string name="app_name">{escape(label)}</string>
     <color name="icon_background">{background}</color>
 </resources>""")
-    write(stage, "res/drawable/icon.xml", f"""<adaptive-icon xmlns:android="{NS}">
-    <background android:drawable="@color/icon_background"/>
-    <foreground android:drawable="@drawable/icon_foreground"/>
-</adaptive-icon>""")
-    write(stage, "res/drawable/icon_foreground.xml", f"""<vector xmlns:android="{NS}"
+    if name == "settings":
+        write_settings_icon(stage, background, foreground)
+    else:
+        standalone_vector = name == "calculator"
+        vector_name = "icon" if standalone_vector else "icon_foreground"
+        background_path = (f'<path android:fillColor="{background}" android:pathData="M0,0h108v108H0z"/>'
+                           if standalone_vector else "")
+        write(stage, f"res/drawable/{vector_name}.xml", f"""<vector xmlns:android="{NS}"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    {background_path}
     <group android:translateX="22" android:translateY="22">
       <path android:fillColor="{foreground}" android:pathData="{silhouette}"/>
       <path android:fillColor="{accent}" android:pathData="{details}"/>
     </group>
 </vector>""")
+        if not standalone_vector:
+            background_ref = "@android:color/white" if name == "browser" else "@color/icon_background"
+            directory = "mipmap-anydpi-v26" if icon_type == "mipmap" else "drawable"
+            write(stage, f"res/{directory}/icon.xml", f"""<adaptive-icon xmlns:android="{NS}">
+    <background android:drawable="{background_ref}"/>
+    <foreground android:drawable="@drawable/icon_foreground"/>
+</adaptive-icon>""")
     compiled = stage / "resources.zip"
     apk = stage / f"{name}.apk"
     run(args.aapt2, "compile", "--dir", stage / "res", "-o", compiled)

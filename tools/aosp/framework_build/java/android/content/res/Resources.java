@@ -54,7 +54,14 @@ public class Resources implements AutoCloseable {
     /** Creates resources for a companion package while sharing this application's framework APK. */
     public Resources forApkWithFramework(String path, String locale, int dpi) throws IOException {
         if (closed || ownedSystemResources == null) throw new IOException("Framework resources are unavailable");
-        return loadApks(new String[] {path}, locale, dpi, assets.getApkAssets()[0]);
+        return forPackage(path, locale, dpi);
+    }
+
+    /** Loads an installed package along with any framework resources available to the caller. */
+    public Resources forPackage(String path, String locale, int dpi) throws IOException {
+        if (closed) throw new IOException("Resources are closed");
+        ApkAssets framework = ownedSystemResources == null ? null : assets.getApkAssets()[0];
+        return loadApks(new String[] {path}, locale, dpi, framework);
     }
 
     private static Resources loadApks(String[] paths, String locale, int dpi, ApkAssets framework)

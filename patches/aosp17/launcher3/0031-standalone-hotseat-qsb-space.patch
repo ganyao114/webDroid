@@ -1,0 +1,130 @@
+--- a/packages/apps/Launcher3/res/values/dimens.xml
++++ b/packages/apps/Launcher3/res/values/dimens.xml
+@@ -413,7 +413,8 @@
+     </dimen>
+     <dimen name="taskbar_stashed_size">0dp</dimen>
+     <dimen name="qsb_widget_height">63dp</dimen>
+-    <dimen name="qsb_shadow_height">6dp</dimen>
++    <!-- The standalone search capsule fills its view. -->
++    <dimen name="qsb_shadow_height">0dp</dimen>
+     <dimen name="qsb_default_widget_height">52dp</dimen>
+     <dimen name="qsb_search_icon_tap_size">48dp</dimen>
+     <dimen name="qsb_search_icon_padding_start">10dp</dimen>
+--- a/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/HotseatProfileInitialValues.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/HotseatProfileInitialValues.kt
+@@ -20,6 +20,7 @@
+ import android.util.DisplayMetrics
+ import com.android.launcher3.InvariantDeviceProfile
+ import com.android.launcher3.R
++import com.android.launcher3.Utilities.getIconSizeWithOverlap
+ import com.android.launcher3.deviceprofile.parser.DeviceTypedMap.INDEX_DEFAULT
+ import com.android.launcher3.deviceprofile.parser.DeviceTypedMap.INDEX_LANDSCAPE
+ import com.android.launcher3.deviceprofile.parser.DeviceTypedMap.INDEX_TWO_PANEL_LANDSCAPE
+@@ -75,7 +76,8 @@
+             } else if (isQsbInline) {
+                 return (max(hotseatIconSizePx, qsbVisualHeight) + barBottomSpacePx)
+             } else {
+-                return (hotseatIconSizePx + qsbSpace + qsbVisualHeight + barBottomSpacePx)
++                return getIconSizeWithOverlap(hotseatIconSizePx) + qsbSpace +
++                    qsbVisualHeight + barBottomSpacePx
+             }
+         }
+
+--- a/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/WorkspaceProfile.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/WorkspaceProfile.kt
+@@ -271,22 +271,16 @@
+             hotseatQsbSpace: Int,
+             isQsbInline: Boolean,
+         ): Int {
+-            return when {
+-                isVerticalLayout -> {
+-                    (iconSizePx +
+-                        hotseatProfile.barEdgePaddingPx +
+-                        hotseatProfile.barWorkspaceSpacePx)
+-                }
+-                isQsbInline -> {
+-                    (max(iconSizePx, hotseatProfile.qsbVisualHeight) + hotseatBarBottomSpacePx)
+-                }
+-                else -> {
+-                    (iconSizePx +
+-                        hotseatQsbSpace +
+-                        hotseatProfile.qsbVisualHeight +
+-                        hotseatBarBottomSpacePx)
+-                }
+-            }
++            return HotseatProfileInitialValues.calculateHotseatBarSizePx(
++                hotseatIconSizePx = iconSizePx,
++                barEdgePaddingPx = hotseatProfile.barEdgePaddingPx,
++                isVerticalBarLayout = isVerticalLayout,
++                barWorkspaceSpacePx = hotseatProfile.barWorkspaceSpacePx,
++                qsbVisualHeight = hotseatProfile.qsbVisualHeight,
++                barBottomSpacePx = hotseatBarBottomSpacePx,
++                qsbSpace = hotseatQsbSpace,
++                isQsbInline = isQsbInline,
++            )
+         }
+
+         private fun createWorkspacePadding(
+--- a/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/HotseatProfile.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/deviceprofile/HotseatProfile.kt
+@@ -115,7 +115,8 @@
+          * width of the hotseat.
+          */
+         private fun calculateQsbWidth(
+-            borderAndSpace: HotseatBorderAndSpace,
++            columnSpan: Int,
++            borderSpace: Int,
+             workspaceProfile: WorkspaceProfile,
+             inv: InvariantDeviceProfile,
+             panelCount: Int,
+@@ -127,11 +128,10 @@
+             return if (isQsbInline) {
+                 (workspaceProfile.getIconToIconWidthForColumns(panelCount * inv.numColumns) -
+                     workspaceProfile.iconSizePx * numShownHotseatIcons -
+-                    borderAndSpace.borderSpace * numShownHotseatIcons -
++                    borderSpace * numShownHotseatIcons -
+                     iconExtraSpacePx)
+             } else {
+-                (workspaceProfile.getIconToIconWidthForColumns(borderAndSpace.columnSpan) -
+-                    iconExtraSpacePx)
++                (workspaceProfile.getIconToIconWidthForColumns(columnSpan) - iconExtraSpacePx)
+             }
+         }
+
+@@ -145,14 +145,24 @@
+             isVerticalBarLayout: Boolean,
+             numShownHotseatIconsParam: Int,
+         ): HotseatWithBorderAndSpace {
+-            if (!isScalableGrid)
++            if (!isScalableGrid) {
++                val qsbWidth = calculateQsbWidth(
++                    columnSpan = inv.numColumns,
++                    borderSpace = 0,
++                    workspaceProfile = workspaceProfile,
++                    inv = inv,
++                    panelCount = panelCount,
++                    numShownHotseatIcons = numShownHotseatIconsParam,
++                    isQsbInline = hotseatProfileInitialValues.isQsbInline,
++                )
+                 return HotseatWithBorderAndSpace(
+                     widthPx = 0,
+                     numShownIcons = numShownHotseatIconsParam,
+                     columnSpan = inv.numColumns,
+-                    qsbWidth = 0,
++                    qsbWidth = qsbWidth.coerceAtLeast(0),
+                     borderSpace = 0,
+                 )
++            }
+
+             var numShownHotseatIcons = numShownHotseatIconsParam
+             var borderAndSpace =
+@@ -214,7 +224,8 @@
+             }
+             var hotseatQsbWidth =
+                 calculateQsbWidth(
+-                    borderAndSpace = borderAndSpace,
++                    columnSpan = borderAndSpace.columnSpan,
++                    borderSpace = borderAndSpace.borderSpace,
+                     workspaceProfile = workspaceProfile,
+                     inv = inv,
+                     panelCount = panelCount,
