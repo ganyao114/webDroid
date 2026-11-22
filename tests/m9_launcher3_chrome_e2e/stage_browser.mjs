@@ -4,20 +4,17 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { WORKTREE } from '../../tools/chrome_harness/serve.mjs';
-import { cubeName, fallbackDexName, fixtureNames, frameworkDexName, launcherName, manifestName, resourcesName,
-  systemUiName } from '../../web/launcher/assets.mjs';
+import { cubeName, fallbackDexName, frameworkDexName, launcherName, manifestName, resourcesName, settingsName,
+  systemAppNames, systemUiName } from '../../web/launcher/assets.mjs';
 import { stageM6Browser } from '../m6_apk_chrome_e2e/stage_m6_browser.mjs';
 
 const suite = 'tests/m9_launcher3_chrome_e2e';
 export const page = `${suite}/launcher3_e2e.html`;
 export const defaultWasmBuild = resolve(WORKTREE, 'build-wasm');
-export { fixtureNames };
 const m6 = 'tests/m6_apk_chrome_e2e';
 const m1 = 'tests/m1_chrome_ndk_cube';
-const fixtureRoot = 'tests/m9_aosp17_launcher3_boot/apps';
 const systemRoot = 'runtime/android_system';
 const provenanceName = 'upstream_provenance.json';
-const builtInNames = ['DeskClock', 'Browser2', 'Music', 'Gallery2'].map(name => `${name}-upstream.apk`);
 const shellFiles = ['index.html', 'launcher.css', 'launcher_playground.mjs', 'runtime.mjs', 'elf_inspector.mjs'];
 const launcherFiles = ['abi_helpers.mjs', 'assets.mjs', 'foreground_apk.mjs', 'foreground_java_apk.mjs',
   'launcher_host.mjs', 'scene_labels.mjs'];
@@ -38,13 +35,6 @@ async function firstFile(paths, required = true) {
 export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostBuild } = {}) {
   const builds = [wasmBuild, hostBuild].filter(Boolean).map(dir => resolve(dir));
   const artifact = (paths, required) => firstFile(builds.flatMap(dir => paths.map(path => join(dir, path))), required);
-  const builtIns = (await Promise.all(builtInNames.map(async name => ({
-    name,
-    path: await artifact([name, `upstream-apps/${name}`, `${systemRoot}/upstream-apps/${name}`], false),
-  })))).filter(({ path }) => path);
-  const apps = builtIns.length ? builtIns : await Promise.all(fixtureNames.map(async name => ({
-    name, path: await artifact([name, `apps/${name}`, `${fixtureRoot}/${name}`]),
-  })));
   const [cube, launcher, systemUi, dex, fallback, resources] = await Promise.all([
     artifact([cubeName, `${m6}/${cubeName}`]),
     artifact([launcherName, `${systemRoot}/launcher/${launcherName}`, `apk/${launcherName}`]),
@@ -56,6 +46,10 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
     artifact([resourcesName, `${systemRoot}/upstream-framework/framework-res-upstream.apk`]),
     // stageM6Browser also validates and copies the two unified module files.
   ]);
+  const apps = await Promise.all(systemAppNames.map(async name => {
+    const directory = name === settingsName ? 'upstream-settings' : 'upstream-apps';
+    return { name, path: await artifact([name, `${directory}/${name}`, `${systemRoot}/${directory}/${name}`]) };
+  }));
   const provenancePath = join(dirname(launcher), provenanceName);
   const provenance = JSON.parse(await readFile(provenancePath, 'utf8'));
   const launcherSources = Object.values(provenance.launcher_source_counts)
@@ -87,7 +81,7 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
   const failures = results.filter(result => result.status === 'rejected');
   if (failures.length) throw new Error(failures.map(({ reason }) => reason.message).join('\n'));
   await writeFile(join(root, 'build', manifestName), JSON.stringify({
-    fixtures: apps.map(({ name }) => name), resources: resourcesName, launcherSources,
+    resources: resourcesName, launcherSources,
   }));
 }
 

@@ -97,6 +97,46 @@ void VisitXml(const AssetManager2& manager, const char* path, Visitor visit) {
     Require(tags.empty(), path);
 }
 
+void CheckDefaultWorkspaces(const AssetManager2& manager) {
+    constexpr char ns[] = "http://schemas.android.com/apk/res-auto/com.android.launcher3";
+    constexpr std::u16string_view packages[] = {
+        u"org.chromium.webview_shell", u"com.android.deskclock", u"com.android.gallery3d",
+        u"com.android.music", u"com.android.settings", u"com.android.settings", u"com.android.deskclock",
+        u"org.wasmandroid.cube", u"com.android.gallery3d", u"com.android.music", u"org.chromium.webview_shell",
+    };
+    constexpr std::u16string_view activities[] = {
+        u"org.chromium.webview_shell.WebViewBrowserActivity", u"com.android.deskclock.DeskClock",
+        u"com.android.gallery3d.app.GalleryActivity", u"com.android.music.MusicBrowserActivity",
+        u"com.android.settings.homepage.SettingsHomepageActivity",
+        u"com.android.settings.homepage.SettingsHomepageActivity", u"com.android.deskclock.DeskClock",
+        u"org.wasmandroid.cube.CubeActivity",
+        u"com.android.gallery3d.app.GalleryActivity", u"com.android.music.MusicBrowserActivity",
+        u"org.chromium.webview_shell.WebViewBrowserActivity",
+    };
+    for (const char* path : {"res/xml/default_workspace_4x4.xml", "res/xml/default_workspace_5x5.xml",
+                             "res/xml/default_workspace_6x5.xml"}) {
+        size_t index = 0;
+        VisitXml(manager, path, [&](const ResXMLTree& xml, const auto& tags, bool start) {
+            if (!start || tags.size() == 1) return;
+            Require(tags.size() == 2 && tags.back() == u"favorite" && index < std::size(activities), path);
+            const auto integer = [&](const char* name, int32_t fallback = 0) {
+                const auto attribute = xml.indexOfAttribute(ns, name);
+                return attribute < 0 ? fallback : static_cast<int32_t>(xml.getAttributeData(attribute));
+            };
+            const bool hotseat = index < 5;
+            const int32_t column = hotseat ? index : (index - 5) % 3;
+            const int32_t screen = hotseat ? index : (index - 5) / 3;
+            Require(Attribute(xml, ns, "className") == activities[index] &&
+                    Attribute(xml, ns, "packageName") == packages[index] &&
+                    integer("container", -100) == (hotseat ? -101 : -100) &&
+                    integer("screen") == screen && integer("x") == column && integer("y") == (hotseat ? 0 : 1),
+                    path);
+            ++index;
+        });
+        Require(index == std::size(activities), path);
+    }
+}
+
 void CheckResources(const char* path) {
     const auto apk = android::ApkAssets::Load(path);
     Require(apk != nullptr, "Load APK with libandroidfw");
@@ -137,6 +177,7 @@ void CheckResources(const char* path) {
         if (start && tags.back() == u"grid-option") grid |= Attribute(xml, kGridNs, "name") == u"4_by_4";
     });
     Require(grid, "Decode the upstream 4-by-4 device profile");
+    CheckDefaultWorkspaces(manager);
     bool icon = false;
     VisitXml(manager, "res/drawable/ic_launcher_home.xml", [&](const auto&, const auto& tags, bool start) {
         if (start && tags.size() == 1) icon = tags.back() == u"adaptive-icon";

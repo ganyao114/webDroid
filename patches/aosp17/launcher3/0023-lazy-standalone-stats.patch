@@ -140,3 +140,14 @@
                  ? LAUNCHER_ALLAPPS_PERSONAL_SCROLLED_DOWN
                  : LAUNCHER_ALLAPPS_PERSONAL_SCROLLED_UP);
      }
+--- a/packages/apps/Launcher3/src/com/android/launcher3/touch/WorkspaceTouchListener.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/touch/WorkspaceTouchListener.java
+@@ -182,7 +182,7 @@
+             mLauncher.getStatsLogManager().logger()
+                     .withSrcState(ALL_APPS.statsLogOrdinal)
+                     .withDstState(NORMAL.statsLogOrdinal)
+-                    .withContainerInfo(LauncherAtom.ContainerInfo.newBuilder()
++                    .withContainerInfoSupplier(() -> LauncherAtom.ContainerInfo.newBuilder()
+                             .setWorkspace(
+                                     LauncherAtom.WorkspaceContainer.newBuilder()
+                                             .setPageIndex(

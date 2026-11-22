@@ -17,7 +17,8 @@ extern "C" {
 //   3. wa_system_launcher_set_framework_res_apk(framework_res_bytes, res_len)
 //   4. wa_system_launcher_install_apk("wa_cube_app.apk", cube_bytes, cube_len) [1..N installed apps]
 //   5. wa_system_launcher_load_systemui_apk("SystemUI-upstream.apk", systemui_bytes, systemui_len)
-//   6. wa_system_launcher_boot_apk("Launcher3-upstream.apk", launcher_bytes, launcher_len)
+//   6. wa_system_launcher_stage_apk("Launcher3-upstream.apk", launcher_bytes, launcher_len)
+//      Release the APK upload buffer, then call wa_system_launcher_boot_staged_apk().
 //   7. Per Choreographer vsync (60 Hz):
 //        wa_system_launcher_tick(frame_time_ns)
 //      Compositor reads wa_sf_frame_acquire(wa_system_launcher_sf_ctx(), ...).
@@ -49,9 +50,13 @@ int32_t wa_system_launcher_install_apk(const char* name, const uint8_t* apk_byte
 // resources are used to inflate the real phone bars into the Launcher window.
 int32_t wa_system_launcher_load_systemui_apk(const char* name, const uint8_t* apk_bytes, size_t apk_len);
 
-// Mounts Launcher3-upstream.apk, loads all its DEX files, registers aosp17_core_jni +
+// Mounts Launcher3-upstream.apk. The caller can release apk_bytes after this returns.
+int32_t wa_system_launcher_stage_apk(const char* name, const uint8_t* apk_bytes, size_t apk_len);
+// Loads all staged DEX files, registers aosp17_core_jni +
 // aosp17_ui_jni natives, and launches com.android.launcher3.Launcher through
 // real onCreate -> onStart -> onResume + initial measure/layout/draw frame.
+int32_t wa_system_launcher_boot_staged_apk(void);
+// Convenience entry point for native callers that already own the APK bytes.
 int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* apk_bytes, size_t apk_len);
 
 // Drains wa_sf_input() events, advances Looper/Handler/Choreographer/ValueAnimator,

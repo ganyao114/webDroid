@@ -31,8 +31,8 @@ export function mountLauncherPlayground(root, options = {}) {
     const { phase } = host;
     view.dataset.phase = phase;
     appSurface.inert = phase !== 'app';
-    launcher.inert = !['launcher', 'app'].includes(phase);
     const available = ['launcher', 'opening-app', 'app'].includes(phase);
+    launcher.inert = !available;
     const state = host.state();
     if (available && state?.launcherUpstream && state.systemUiMounted) {
       const launcher = host.launcherSources ? `Launcher3 (${host.launcherSources} upstream sources)` : 'Upstream Launcher3';

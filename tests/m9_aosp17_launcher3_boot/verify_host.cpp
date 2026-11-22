@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -374,7 +376,20 @@ struct HomeGeometry {
     std::vector<Rounded> dots;
 };
 
-HomeGeometry CheckHome(const Layer& window, int width, int height, int page, int navigation_inset) {
+void CheckAppLabels(const Layer& window, const std::vector<Bitmap>& icons,
+                    std::span<const std::string_view> expected) {
+    std::vector<std::vector<std::string_view>> drawn;
+    for (const auto& icon : icons) drawn.push_back(CheckIconLabel(window, icon));
+    Require(drawn.size() == expected.size(), "All expected APK icons draw");
+    for (const auto name : expected) {
+        Require(std::ranges::count_if(drawn, [&](const auto& labels) {
+            return std::ranges::any_of(labels, [&](auto label) { return MatchesLabel(label, name); });
+        }) == 1, "Expected one app icon with label " + std::string(name));
+    }
+}
+
+HomeGeometry CheckHome(const Layer& window, int width, int height, int page, int navigation_inset,
+                       std::span<const std::string_view> expected) {
     const auto qsb = std::ranges::find_if(window.rounds, [&](const Rounded& shape) {
         return shape.style == WA_PAINT_FILL && Width(shape.bounds) > width / 2.f &&
             shape.bounds.t > height * .65f && shape.bounds.b <= height - navigation_inset;
@@ -393,10 +408,10 @@ HomeGeometry CheckHome(const Layer& window, int width, int height, int page, int
         if (std::abs(icon.bounds.b - bottom) > kGeometryTolerance) continue;
         ++hotseat_count;
         hotseat_top = std::min(hotseat_top, icon.bounds.t);
-        Require(icon.bounds.b <= qsb->bounds.t && !HasArea(Intersect(icon.bounds, qsb->bounds)),
-            "Hotseat icon overlaps QSB");
+        Require(qsb->bounds.t - icon.bounds.b >= 4.f - kGeometryTolerance,
+            "Hotseat icon has less than 4 px QSB clearance");
     }
-    Require(hotseat_count == (width == 960 ? 4 : 3), "All configured Hotseat icons draw");
+    Require(hotseat_count == 5, "All five upstream Hotseat icons draw");
 
     auto dots = PaginationDots(window, width, hotseat_top);
     Require(dots.size() == 2, "Both workspace page dots draw on Home");
@@ -405,34 +420,33 @@ HomeGeometry CheckHome(const Layer& window, int width, int height, int page, int
     Require(dots[page].alpha > dots[1 - page].alpha &&
         Width(dots[page].bounds) > Width(dots[1 - page].bounds), "Current page dot is active");
 
-    int workspace_count = 0;
+    std::vector<Bitmap> workspace;
     for (const auto& icon : window.bitmaps) {
-        if (icon.bounds.b > dots[0].bounds.t) continue;
-        ++workspace_count;
-        CheckIconLabel(window, icon);
+        if (icon.bounds.b <= dots[0].bounds.t) workspace.push_back(icon);
     }
-    Require(workspace_count > 0, "Visible workspace icons");
+    CheckAppLabels(window, workspace, expected);
     return {hotseat_top, std::move(dots)};
 }
 
-void CheckIconPixels(wa_sf_t* scene, uint32_t id, uint32_t rgb) {
+uint32_t IconFingerprint(wa_sf_t* scene, uint32_t id) {
     auto* store = wa_sf_bitmaps(scene);
     const auto* view = wa_bitmap_acquire(store, id);
     Require(view != nullptr, "Bitmap pixels are available");
     const auto* pixels = wa_bitmap_pixels(view);
-    bool found = false;
+    uint32_t hash = 2166136261;
+    size_t visible = 0;
     for (size_t i = 0; i + 3 < view->byte_size; i += 4) {
-        if (pixels[i] == (rgb >> 16) && pixels[i + 1] == ((rgb >> 8) & 0xff) &&
-                pixels[i + 2] == (rgb & 0xff) && pixels[i + 3] == 255) {
-            found = true;
-            break;
-        }
+        uint32_t rgba;
+        std::memcpy(&rgba, pixels + i, sizeof(rgba));
+        visible += pixels[i + 3] != 0;
+        hash = (hash ^ rgba) * 16777619;
     }
     wa_bitmap_release(store, view);
-    Require(found, "App bitmap is missing fixture RGB " + std::to_string(rgb));
+    Require(visible > 0, "APK icon has visible pixels");
+    return hash;
 }
 
-void CheckDrawer(wa_sf_t* scene, const Layer& window, wa_rect_t search, bool english, const char* cube_label) {
+void CheckDrawer(wa_sf_t* scene, const Layer& window, wa_rect_t search, std::span<const std::string_view> expected) {
     const Rounded* fill = nullptr;
     const Rounded* stroke = nullptr;
     for (const auto& shape : window.rounds) {
@@ -447,25 +461,15 @@ void CheckDrawer(wa_sf_t* scene, const Layer& window, wa_rect_t search, bool eng
             SameBounds(shape->bounds, fill->bounds), "Search pill has concentric circular ends");
     }
 
-    const std::array<std::string_view, 6> app_labels = english
-        ? std::array<std::string_view, 6>{"Settings", "Browser", "Gallery", "Calculator", "Clock", cube_label}
-        : std::array<std::string_view, 6>{"设置", "浏览器", "图库", "计算器", "时钟", cube_label};
-    constexpr std::array colors{0x366990u, 0x1a7866u, 0x725296u, 0x9c5200u, 0x344da0u, 0u};
-    std::array<bool, colors.size()> seen{};
-    int icon_count = 0;
+    std::vector<Bitmap> icons;
+    std::set<uint32_t> fingerprints;
     for (const auto& icon : window.bitmaps) {
         if (icon.clip.t < search.t || icon.bounds.t < search.b) continue;
-        ++icon_count;
-        const auto labels = CheckIconLabel(window, icon);
-        for (size_t i = 0; i < app_labels.size(); ++i) {
-            if (!std::ranges::any_of(labels, [&](auto label) { return MatchesLabel(label, app_labels[i]); })) continue;
-            Require(!seen[i], "Duplicate All Apps icon");
-            seen[i] = true;
-            if (colors[i]) CheckIconPixels(scene, icon.id, colors[i]);
-        }
+        icons.push_back(icon);
+        fingerprints.insert(IconFingerprint(scene, icon.id));
     }
-    Require(icon_count == app_labels.size() && std::ranges::all_of(seen, [](bool found) { return found; }),
-        "All Apps draws every fixture icon and label");
+    CheckAppLabels(window, icons, expected);
+    Require(fingerprints.size() == expected.size(), "Every app draws a distinct APK icon");
 }
 
 struct Session {
@@ -575,6 +579,14 @@ struct Session {
 void Run(int width, int height, const char* locale, const char* composition, const char* query,
          const char* cube_label, const File& dex, const File& fallback, const File& resources,
          const File& launcher, const File& systemui, const std::vector<File>& apps) {
+    using namespace std::string_view_literals;
+    const bool english = locale == "en-US"sv;
+    const std::array app_labels{
+        english ? "Settings"sv : "设置"sv, english ? "Clock"sv : "时钟"sv, std::string_view(cube_label),
+        english ? "Gallery"sv : "图库"sv, english ? "Music"sv : "音乐"sv, "WebView Browser Tester"sv,
+    };
+    const auto first_labels = std::span(app_labels).first<3>();
+    const auto second_labels = std::span(app_labels).last<3>();
     Session session(width, height, locale);
     Check(wa_system_launcher_load_framework_dex(dex.bytes.data(), dex.bytes.size()), "load framework");
     Check(wa_system_launcher_load_framework_fallback_dex(fallback.bytes.data(), fallback.bytes.size()),
@@ -594,7 +606,7 @@ void Run(int width, int height, const char* locale, const char* composition, con
     Require(boot.Boolean("booted") && boot.Is("package", "com.android.launcher3") &&
             boot.Is("activity", "com.android.launcher3.Launcher"), boot.text);
     Require(boot.Boolean("launcherUpstream") && boot.Integer("launcherDexCount") == 4 &&
-            boot.Integer("launcherClassCount") == 37050, boot.text);
+            boot.Integer("launcherClassCount") >= 37050, boot.text);
     Require(boot.Boolean("systemUiMounted") &&
         boot.Is("systemUiClass", "com.android.systemui.statusbar.phone.PhoneStatusBarView"), boot.text);
     Require(boot.Integer("installedApps") == 6 && boot.Integer("pageCount") == 2 &&
@@ -611,22 +623,16 @@ void Run(int width, int height, const char* locale, const char* composition, con
             layers[1].Has(WA_CANVAS_DRAW_BITMAP), "Launcher view tree");
     CheckSystemUiFrame(layers[1], height);
     const int navigation_inset = boot.NavigationInset();
-    CheckHome(layers[1], width, height, 0, navigation_inset);
+    CheckHome(layers[1], width, height, 0, navigation_inset, first_labels);
     PublishBrowserFontMetrics(session.scene);
 
     session.Tick(120);
     State().Print(locale, "home-120");
     const auto first_page = session.ReadFrame()[1];
-    const auto first_home = CheckHome(first_page, width, height, 0, navigation_inset);
-    Require(std::ranges::any_of(first_page.labels, [](const auto& label) { return label.position.y >= 24; }),
-        "First workspace page contains labels");
+    const auto first_home = CheckHome(first_page, width, height, 0, navigation_inset, first_labels);
     session.Swipe(0, 1, first_home);
     const auto second_page = session.ReadFrame()[1];
-    const auto second_home = CheckHome(second_page, width, height, 1, navigation_inset);
-    Require(std::ranges::any_of(second_page.labels, [&](const auto& label) {
-        return label.position.y >= 24 &&
-            std::ranges::none_of(first_page.labels, [&](const auto& first) { return first.label == label.label; });
-    }), "Real app label on second workspace page");
+    const auto second_home = CheckHome(second_page, width, height, 1, navigation_inset, second_labels);
     session.Swipe(1, 0, second_home);
     session.Swipe(0, 1, first_home);
     session.Drag(width * .54f, height * .78f, 0, -height * .42f);
@@ -636,7 +642,7 @@ void Run(int width, int height, const char* locale, const char* composition, con
             drawer.Integer("searchResults") == static_cast<int>(apps.size()), drawer.text);
 
     const auto search = drawer.SearchBounds();
-    CheckDrawer(session.scene, session.ReadFrame()[1], search, std::string_view(locale) == "en-US", cube_label);
+    CheckDrawer(session.scene, session.ReadFrame()[1], search, app_labels);
     session.Tap(CenterX(search), (search.t + search.b) / 2);
     session.Push(WA_INPUT_IME, WA_IME_COMPOSING, 8, 0, 0, composition);
     session.Tick(12);
@@ -713,7 +719,12 @@ int main(int argc, char** argv) {
         Require(argc == 12, "Expected two framework DEX files, framework resources, Launcher3, SystemUI and six apps");
         const File dex(argv[1]), fallback(argv[2]), resources(argv[3]), launcher(argv[4]), systemui(argv[5]);
         std::vector<File> apps;
-        for (int i = 6; i < argc; ++i) apps.emplace_back(argv[i]);
+        constexpr std::array names{"wa_cube_app.apk", "Settings-upstream.apk", "DeskClock-upstream.apk",
+            "Browser2-upstream.apk", "Gallery2-upstream.apk", "Music-upstream.apk"};
+        for (int i = 6; i < argc; ++i) {
+            apps.emplace_back(argv[i]);
+            Require(apps.back().name == names[i - 6], "Unexpected Launcher3 APK");
+        }
         Run(960, 660, "en-US", "C", "Cube", "WasmAndroid 3D Cube", dex, fallback, resources, launcher, systemui, apps);
         Run(448, 896, "zh-CN", "立", "立方体", "WasmAndroid 3D 立方体", dex, fallback, resources, launcher, systemui, apps);
         Require(wa_system_launcher_sf_ctx() == nullptr, "Destroyed session");

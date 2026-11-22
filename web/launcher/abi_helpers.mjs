@@ -3,7 +3,7 @@ import { encoder, Memory } from '../surfaceflinger/abi.mjs';
 const textCapacity = 64 * 1024;
 const launcherExports = [
   'create', 'destroy', 'sf_ctx', 'load_framework_dex', 'load_framework_fallback_dex', 'set_framework_res_apk', 'install_apk',
-  'load_systemui_apk', 'boot_apk', 'tick', 'resize', 'pause', 'resume', 'send_home', 'send_back',
+  'load_systemui_apk', 'stage_apk', 'boot_staged_apk', 'tick', 'resize', 'pause', 'resume', 'send_home', 'send_back',
   'set_gesture_navigation', 'consume_recents', 'open_all_apps', 'touch_navigation',
   'state_json', 'consume_launch', 'last_error',
 ].map(name => `_wa_system_launcher_${name}`);
@@ -119,7 +119,10 @@ export class LauncherAbi {
 
   installApk(name, bytes) { this.#apk('install_apk', name, bytes); }
   loadSystemUiApk(name, bytes) { this.#apk('load_systemui_apk', name, bytes); }
-  bootApk(name, bytes) { this.#apk('boot_apk', name, bytes); }
+  bootApk(name, bytes) {
+    this.#apk('stage_apk', name, bytes);
+    this.#check('boot_staged_apk', this.#call('boot_staged_apk'));
+  }
   tick(timestamp) { this.#check('tick', this.#call('tick', frameTimeNs(timestamp))); }
   resize({ width, height, densityDpi }) {
     this.#check('resize', this.#call('resize', width, height, densityDpi));

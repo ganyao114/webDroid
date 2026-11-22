@@ -1,6 +1,6 @@
 --- a/AndroidManifest.xml
 +++ b/AndroidManifest.xml
-@@ -32,10 +32,18 @@
+@@ -32,10 +32,19 @@
      <!-- App Declaration -->
      <application
              android:allowBackup="true"
@@ -10,7 +10,8 @@
              android:launchMode="singleTop"
              android:requestLegacyExternalStorage="true">
 +
-+        <activity android:name=".MusicBrowserActivity" android:exported="true">
++        <activity android:name=".MusicBrowserActivity" android:exported="true"
++                  android:label="@string/musicbrowserlabel">
 +            <intent-filter>
 +                <action android:name="android.intent.action.MAIN" />
 +                <category android:name="android.intent.category.LAUNCHER" />

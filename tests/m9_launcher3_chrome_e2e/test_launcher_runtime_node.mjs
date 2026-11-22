@@ -7,13 +7,14 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { LauncherAbi, frameTimeNs } from '../../web/launcher/abi_helpers.mjs';
-import { fallbackDexName, launcherName, loadAndroidSystem, loadLauncherAssets, systemUiName } from '../../web/launcher/assets.mjs';
+import { cubeName, fallbackDexName, launcherName, loadAndroidSystem, loadLauncherAssets, settingsName,
+  systemAppNames, systemUiName } from '../../web/launcher/assets.mjs';
 import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
 import { mountLauncherPlayground } from '../../web/shell/launcher_playground.mjs';
 import { createMilestones, runLauncher3E2E } from './launcher3_e2e.mjs';
 import { documentFrom, fire, installBrowser, pointer } from './mock_browser.mjs';
-import { mockLauncherWasm } from './mock_launcher_wasm.mjs';
-import { fixtureNames, page, stageM9Browser } from './stage_browser.mjs';
+import { launchers, mockLauncherWasm } from './mock_launcher_wasm.mjs';
+import { page, stageM9Browser } from './stage_browser.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const e2eHtml = await readFile(join(root, page), 'utf8');
@@ -46,7 +47,7 @@ test('all owned JavaScript and HTML modules parse, and Chrome help exits without
   }
   const help = node([join(root, 'tests/m9_launcher3_chrome_e2e/run_chrome_e2e.mjs'), '--help']);
   for (const flag of ['wasm-build', 'host-build', 'chrome', 'headed', 'backend', 'screenshot-home',
-    'screenshot-allapps', 'screenshot-app', 'timeout']) assert(help.includes(`--${flag}`));
+    'screenshot-allapps', 'screenshot-app', 'screenshot-settings', 'timeout']) assert(help.includes(`--${flag}`));
   assert(shellHtml.includes("params.get('mode') === 'apk'"));
   assert(shellHtml.includes("await import('./runtime.mjs')"));
 });
@@ -70,13 +71,16 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
     await put(hostBuild, 'tests/m6_apk_chrome_e2e/wa_cube_app.apk', Uint8Array.of(3, 253));
     await put(hostBuild, 'tests/m8_aosp17_launcher3_apk/apk/Launcher3.apk', Uint8Array.of(6, 250));
     await put(hostBuild, `${systemRoot}/launcher/${systemUiName}`, Uint8Array.of(7, 249));
-    for (const name of fixtureNames) await put(hostBuild, `tests/m9_aosp17_launcher3_boot/apps/${name}`, Uint8Array.of(4, 252));
+    for (const name of systemAppNames.filter(name => name !== settingsName))
+      await put(hostBuild, `${systemRoot}/upstream-apps/${name}`, Uint8Array.of(4, 252));
     await assert.rejects(stageM9Browser(staged, { wasmBuild, hostBuild }), /Launcher3-upstream\.apk/);
     await put(hostBuild, `${systemRoot}/launcher/${launcherName}`, Uint8Array.of(6, 250));
     await put(hostBuild, `${systemRoot}/launcher/upstream_provenance.json`, JSON.stringify({
       tag: 'android-17.0.0_r1',
       launcher_source_counts: { java: { verbatim: 385, patched: 17 }, kt: { verbatim: 452, patched: 25 } },
     }));
+    await assert.rejects(stageM9Browser(staged, { wasmBuild, hostBuild }), /Settings-upstream\.apk/);
+    await put(hostBuild, `${systemRoot}/upstream-settings/${settingsName}`, Uint8Array.of(4, 252));
     await stageM9Browser(staged, { wasmBuild, hostBuild });
     const files = await readdir(staged, { recursive: true });
     for (const name of files.filter(path => path.endsWith('.mjs'))) {
@@ -108,7 +112,7 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
     };
     try {
       const assets = await loadLauncherAssets({ base });
-      assert.deepEqual(assets.apks.map(({ name }) => name), ['wa_cube_app.apk', ...fixtureNames]);
+      assert.deepEqual(assets.apks.map(({ name }) => name), [cubeName, ...systemAppNames]);
       assert.deepEqual(assets.resources, Uint8Array.of(2, 254));
       assert.deepEqual(assets.fallbackDex, Uint8Array.of(8, 248));
       assert.deepEqual(assets.systemUi, Uint8Array.of(7, 249));
@@ -166,7 +170,7 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
   try {
     await browser.ready();
     const journey = runLauncher3E2E(fake.options);
-    for (let frame = 0; frame < 350 && !globalThis.__waM9LauncherResult; ++frame) {
+    for (let frame = 0; frame < 450 && !globalThis.__waM9LauncherResult; ++frame) {
       await browser.step();
       const control = globalThis.__waM9Launcher;
       const request = control.request;
@@ -174,8 +178,9 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
       const { id, step, point, from, to, text } = request;
       steps.push(step);
       const canvas = document.querySelector('.wa-launcher-surface').querySelector('canvas');
+      const appCanvas = document.querySelector('.wa-app-surface').querySelector('canvas');
       switch (step) {
-        case 'screenshot-home': case 'screenshot-allapps': case 'screenshot-app': {
+        case 'screenshot-home': case 'screenshot-allapps': case 'screenshot-app': case 'screenshot-settings': {
           const snapshot = control.snapshot();
           screenshots.push({ step, ...snapshot });
           if (step === 'screenshot-app') {
@@ -186,21 +191,26 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
           assert.equal(control.request.id, id);
           break;
         }
-        case 'swipe-workspace':
-          pointer(canvas, 'pointerdown', from, browser.time());
+        case 'swipe-workspace': case 'scroll-settings': {
+          const target = step === 'swipe-workspace' ? canvas : appCanvas;
+          pointer(target, 'pointerdown', from, browser.time());
           for (let index = 1; index <= 12; ++index) {
             await browser.step();
-            pointer(canvas, 'pointermove', { x: from.x + (to.x - from.x) * index / 12, y: from.y }, browser.time());
+            pointer(target, 'pointermove', { x: from.x + (to.x - from.x) * index / 12,
+              y: from.y + (to.y - from.y) * index / 12 }, browser.time());
           }
-          pointer(canvas, 'pointerup', to, browser.time());
+          pointer(target, 'pointerup', to, browser.time());
           break;
+        }
         case 'open-allapps': document.querySelector('[data-nav="all-apps"]').click(); break;
-        case 'focus-search': case 'launch-cube': case 'return-home':
-        case 'systemui-back': case 'systemui-home': case 'systemui-recents':
-          pointer(canvas, 'pointerdown', point, browser.time());
+        case 'focus-search': case 'launch-settings': case 'open-settings-page': case 'launch-cube': case 'return-home':
+        case 'systemui-back': case 'systemui-home': case 'systemui-recents': {
+          const target = step === 'open-settings-page' ? appCanvas : canvas;
+          pointer(target, 'pointerdown', point, browser.time());
           await browser.step();
-          pointer(canvas, 'pointerup', point, browser.time());
+          pointer(target, 'pointerup', point, browser.time());
           break;
+        }
         case 'type-search': {
           const editor = document.activeElement;
           assert.equal(editor.attributes.get('aria-label'), 'Launcher search');
@@ -219,10 +229,12 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     const report = await journey;
     assert.equal(report.ok, true, report.error);
     assert.deepEqual(steps, ['screenshot-home', 'swipe-workspace', 'open-allapps', 'systemui-back', 'open-allapps',
-      'systemui-home', 'systemui-recents', 'open-allapps', 'focus-search', 'type-search', 'screenshot-allapps',
+      'systemui-home', 'systemui-recents', 'launch-settings', 'screenshot-settings',
+      'open-settings-page', 'systemui-back', 'open-settings-page', 'systemui-back', 'scroll-settings',
+      'systemui-home', 'open-allapps', 'focus-search', 'type-search', 'screenshot-allapps',
       'launch-cube', 'screenshot-app', 'return-home']);
-    assert.deepEqual(screenshots.map(({ phase }) => phase), ['launcher', 'launcher', 'app']);
-    assert.deepEqual(screenshots.map(({ state }) => state.searchQuery), ['', 'Cube', 'Cube']);
+    assert.deepEqual(screenshots.map(({ phase }) => phase), ['launcher', 'app', 'launcher', 'app']);
+    assert.deepEqual(screenshots.map(({ state }) => state.searchQuery), ['', '', 'Cube', 'Cube']);
     assert.equal(report.frames, 120);
     assert(Math.abs(report.avg_fps - 60) < 1e-7);
     assert(report.p95_frame_ms >= 16 && report.p95_frame_ms < 17 && report.avg_wasm_tick_ms > 0);
@@ -237,6 +249,11 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.equal(report.system_ui_mounted, true);
     assert.equal(report.system_ui_class, 'com.android.systemui.statusbar.phone.PhoneStatusBarView');
     assert.equal(report.system_ui_navigation, true);
+    assert.equal(report.settings.activity, 'com.android.settings.homepage.SettingsHomepageActivity');
+    assert.equal(report.settings_installed_apps, 6);
+    assert.equal(report.settings_display_opened, true);
+    assert.equal(report.settings_back_to_homepage, true);
+    assert.equal(report.settings_returned_home, true);
     assert(report.cube_frames >= 10);
     assert.equal(report.cube_tier0_fallbacks, 0);
     assert.equal(report.cube.audio_frames, 140);
@@ -244,8 +261,15 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.deepEqual(report.page_errors, []);
     assert.deepEqual(fake.events.filter(event => event.kind === 3).map(event => event.text), ['', 'Cu', 'Cube']);
     assert(fake.events.some(event => event.action === 2 && event.dx < 0 && event.vx < -100));
-    assert.deepEqual(fake.calls.slice(0, 8).map(([call]) => call),
-      ['create', 'framework', 'fallback-framework', 'resources', 'install', 'install', 'systemui', 'boot']);
+    assert.deepEqual(fake.calls.filter(([call]) => call === 'install').map(([, name]) => name),
+      [cubeName, ...systemAppNames]);
+    const [foreground] = fake.foregrounds;
+    assert.notEqual(foreground.module, fake.module);
+    assert.deepEqual(foreground.calls.filter(([call]) => call === 'catalog').map(([, name]) => name),
+      [cubeName, ...systemAppNames.filter(name => name !== settingsName)]);
+    assert.deepEqual(foreground.calls.filter(([call]) => call === 'app-back'), [['app-back', 'Apps'], ['app-back', 'Display']]);
+    assert.deepEqual(foreground.calls.at(-1), ['app-destroy']);
+    assert.equal(foreground.allocations.size, 0);
     assert(browser.workers[0].didShutdown && browser.workers[0].terminated);
   } finally {
     await globalThis.__waM9Launcher?.close();
@@ -264,10 +288,65 @@ test('selects the upstream gestural layout through the launcher ABI after mounti
   try {
     await host.start();
     await browser.step();
-    assert.deepEqual(fake.calls.slice(-3), [['systemui'], ['boot'], ['gestural', 1]]);
+    assert.deepEqual(fake.calls.slice(-4), [['systemui'], ['stage-apk'], ['boot'], ['gestural', 1]]);
     assert.equal(host.state().systemUiMounted, true);
     assert.equal(host.state().systemUiGestural, true);
     assert.deepEqual(host.state().systemUiButtons, { back: null, home: null, recents: null });
+  } finally {
+    await host.close();
+    browser.close();
+  }
+  assert.equal(fake.allocations.size, 0);
+});
+
+test('returns from all six foreground apps and releases isolated sessions and input', async () => {
+  const document = documentFrom(e2eHtml), browser = installBrowser(document);
+  const fake = mockLauncherWasm(), errors = [];
+  const appSurface = document.querySelector('.wa-app-surface');
+  const host = new LauncherHost({ ...fake.options, canvas: document.querySelector('canvas'), appSurface,
+    onError: error => errors.push(error) });
+  const tap = async point => {
+    pointer(host.canvas, 'pointerdown', point, browser.time());
+    await browser.step();
+    pointer(host.canvas, 'pointerup', point, browser.time());
+    await browser.step();
+  };
+  try {
+    await browser.ready();
+    await host.start();
+    await browser.step();
+    for (const id of [4, 9, 10, 11, 12, 3]) {
+      const { label, package: pkg } = launchers.get(id);
+      const target = host.labels().find(entry => entry.text === label);
+      assert(target, label);
+      await tap(target);
+      for (let frame = 0; frame < 12 && host.phase !== 'app'; ++frame) await browser.step();
+      assert.equal(host.phase, 'app');
+      assert.equal(host.activeLaunch.package, pkg);
+      const foreground = id === 3 ? undefined : fake.foregrounds.at(-1);
+      if (foreground) {
+        assert.equal(host.app.catalogPackages, 6);
+        assert.equal(host.app.wasmLinearBytes, 268435456);
+      }
+      const canvas = appSurface.querySelector('canvas');
+      const button = id === 4 ? 'back' : 'home';
+      const before = host.state();
+      await tap(before.systemUiButtons[button]);
+      assert.equal(host.phase, 'launcher');
+      assert.equal(host.state().systemUiKeyEvents, before.systemUiKeyEvents + 2);
+      assert.equal(host.activeLaunch, undefined);
+      assert.equal(appSurface.children.length, 0);
+      assert.equal(fire(canvas, 'wheel', { deltaY: 1, clientX: 3, clientY: 3 }).defaultPrevented, false);
+      if (foreground) {
+        assert.equal(foreground.module._wa_system_app_sf_ctx(), 0);
+        assert.equal(foreground.allocations.size, 0);
+        assert.deepEqual(foreground.calls.at(-1), ['app-destroy']);
+        if (id === 4) assert.deepEqual(foreground.calls.at(-2), ['app-back', undefined]);
+      }
+    }
+    assert.equal(new Set(fake.foregrounds.map(({ module }) => module)).size, 5);
+    assert(browser.workers.every(worker => worker.didShutdown && worker.terminated));
+    assert.deepEqual(errors, []);
   } finally {
     await host.close();
     browser.close();
@@ -334,7 +413,7 @@ test('shell controls install, compose CJK, switch locale and recover from a fore
     assert(fire(device, 'drop', { dataTransfer }).defaultPrevented);
     await browser.flush();
     await browser.step();
-    assert.equal(host.state().installedApps, 3);
+    assert.equal(host.state().installedApps, 7);
     assert(host.labels().some(({ text }) => text === 'Extra'));
     assert.equal(root.querySelector('.wa-status').textContent, 'Installed 新应用.apk');
 
@@ -398,7 +477,7 @@ test('shell controls install, compose CJK, switch locale and recover from a fore
     await browser.step();
     assert.notEqual(host.canvas, canvas);
     assert.equal(host.locale, 'zh-CN');
-    assert.equal(host.state().installedApps, 3);
+    assert.equal(host.state().installedApps, 7);
     allApps.click();
     await browser.step();
     assert(host.labels().some(({ text }) => text === '搜索应用'));

@@ -29,7 +29,6 @@ PROFILE = ROOT / "patches/aosp17/settings"
 PREFERENCE_LINK = PROFILE / "PreferenceLink.java"
 FRAMEWORK_ADAPTERS = (
     TOOLS / "framework_build/java/android/app/Fragment.java",
-    TOOLS / "framework_build/java/android/content/IntentFilter.java",
     TOOLS / "framework_build/java/org/wasmandroid/ui/PreferenceGridView.java",
     TOOLS / "framework_build/java/org/wasmandroid/ui/PreferenceRuntime.java",
 )

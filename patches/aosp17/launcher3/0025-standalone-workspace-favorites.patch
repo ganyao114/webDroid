@@ -1,99 +1,362 @@
 --- a/packages/apps/Launcher3/res/xml/default_workspace_4x4.xml
 +++ b/packages/apps/Launcher3/res/xml/default_workspace_4x4.xml
-@@ -26,6 +26,8 @@
-         <favorite launcher:uri="#Intent;action=android.intent.action.DIAL;end" />
-         <favorite launcher:uri="tel:123" />
-         <favorite launcher:uri="#Intent;action=android.intent.action.CALL_BUTTON;end" />
-+        <favorite launcher:packageName="org.wasmandroid.cube"
-+            launcher:className="org.wasmandroid.cube.CubeActivity" />
-     </resolve>
- 
-     <resolve
-@@ -38,6 +40,8 @@
-         <favorite launcher:uri="smsto:" />
-         <favorite launcher:uri="mms:" />
-         <favorite launcher:uri="mmsto:" />
-+        <favorite launcher:packageName="org.wasmandroid.fixtures.calculator"
-+            launcher:className="org.wasmandroid.fixtures.DemoActivity" />
-     </resolve>
- 
-     <resolve
-@@ -84,4 +88,12 @@
-         <favorite launcher:uri="market://details?id=com.android.launcher" />
-     </resolve>
- 
-+    <!-- Additional standalone demo apps. -->
-+    <favorite launcher:packageName="org.wasmandroid.fixtures.clock"
-+        launcher:className="org.wasmandroid.fixtures.DemoActivity"
+@@ -16,72 +16,43 @@
+
+ <favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3">
+
+-    <!-- Hotseat (We use the screen as the position of the item in the hotseat) -->
+-    <!-- Dialer, Messaging, Browser, Camera -->
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="0"
+-        launcher:x="0"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.DIAL;end" />
+-        <favorite launcher:uri="tel:123" />
+-        <favorite launcher:uri="#Intent;action=android.intent.action.CALL_BUTTON;end" />
+-    </resolve>
++    <!-- Hotseat positions -->
++    <favorite launcher:packageName="org.chromium.webview_shell"
++        launcher:className="org.chromium.webview_shell.WebViewBrowserActivity"
++        launcher:container="-101" launcher:screen="0" launcher:x="0" launcher:y="0" />
++    <favorite launcher:packageName="com.android.deskclock"
++        launcher:className="com.android.deskclock.DeskClock"
++        launcher:container="-101" launcher:screen="1" launcher:x="1" launcher:y="0" />
++    <favorite launcher:packageName="com.android.gallery3d"
++        launcher:className="com.android.gallery3d.app.GalleryActivity"
++        launcher:container="-101" launcher:screen="2" launcher:x="2" launcher:y="0" />
++    <favorite launcher:packageName="com.android.music"
++        launcher:className="com.android.music.MusicBrowserActivity"
++        launcher:container="-101" launcher:screen="3" launcher:x="3" launcher:y="0" />
++    <favorite launcher:packageName="com.android.settings"
++        launcher:className="com.android.settings.homepage.SettingsHomepageActivity"
++        launcher:container="-101" launcher:screen="4" launcher:x="4" launcher:y="0" />
+
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="1"
+-        launcher:x="1"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_MESSAGING;end" />
+-        <favorite launcher:uri="sms:" />
+-        <favorite launcher:uri="smsto:" />
+-        <favorite launcher:uri="mms:" />
+-        <favorite launcher:uri="mmsto:" />
+-    </resolve>
++    <!-- Workspace page 0 -->
++    <favorite launcher:packageName="com.android.settings"
++        launcher:className="com.android.settings.homepage.SettingsHomepageActivity"
++        launcher:screen="0" launcher:x="0" launcher:y="1" />
++    <favorite launcher:packageName="com.android.deskclock"
++        launcher:className="com.android.deskclock.DeskClock"
++        launcher:screen="0" launcher:x="1" launcher:y="1" />
++    <favorite launcher:packageName="org.wasmandroid.cube"
++        launcher:className="org.wasmandroid.cube.CubeActivity"
 +        launcher:screen="0" launcher:x="2" launcher:y="1" />
-+    <favorite launcher:packageName="org.wasmandroid.fixtures.settings"
-+        launcher:className="org.wasmandroid.fixtures.DemoActivity"
+
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="2"
+-        launcher:x="2"
+-        launcher:y="0" >
+-        <favorite
+-            launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_BROWSER;end" />
+-        <favorite launcher:uri="http://www.example.com/" />
+-    </resolve>
+-
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="3"
+-        launcher:x="3"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.media.action.STILL_IMAGE_CAMERA;end" />
+-        <favorite launcher:uri="#Intent;action=android.intent.action.CAMERA_BUTTON;end" />
+-    </resolve>
+-
+-    <!-- Bottom row -->
+-    <resolve
+-        launcher:screen="0"
+-        launcher:x="0"
+-        launcher:y="-1" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_EMAIL;end" />
+-        <favorite launcher:uri="mailto:" />
+-    </resolve>
+-
+-    <resolve
+-        launcher:screen="0"
+-        launcher:x="1"
+-        launcher:y="-1" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_GALLERY;end" />
+-        <favorite launcher:uri="#Intent;type=images/*;end" />
+-    </resolve>
+-
+-    <resolve
+-        launcher:screen="0"
+-        launcher:x="3"
+-        launcher:y="-1" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_MARKET;end" />
+-        <favorite launcher:uri="market://details?id=com.android.launcher" />
+-    </resolve>
++    <!-- Workspace page 1 -->
++    <favorite launcher:packageName="com.android.gallery3d"
++        launcher:className="com.android.gallery3d.app.GalleryActivity"
++        launcher:screen="1" launcher:x="0" launcher:y="1" />
++    <favorite launcher:packageName="com.android.music"
++        launcher:className="com.android.music.MusicBrowserActivity"
 +        launcher:screen="1" launcher:x="1" launcher:y="1" />
-+
++    <favorite launcher:packageName="org.chromium.webview_shell"
++        launcher:className="org.chromium.webview_shell.WebViewBrowserActivity"
++        launcher:screen="1" launcher:x="2" launcher:y="1" />
+
  </favorites>
 --- a/packages/apps/Launcher3/res/xml/default_workspace_5x5.xml
 +++ b/packages/apps/Launcher3/res/xml/default_workspace_5x5.xml
-@@ -26,6 +26,8 @@
-         <favorite launcher:uri="#Intent;action=android.intent.action.DIAL;end" />
-         <favorite launcher:uri="tel:123" />
-         <favorite launcher:uri="#Intent;action=android.intent.action.CALL_BUTTON;end" />
-+        <favorite launcher:packageName="org.wasmandroid.cube"
-+            launcher:className="org.wasmandroid.cube.CubeActivity" />
-     </resolve>
- 
-     <resolve
-@@ -38,6 +40,8 @@
-         <favorite launcher:uri="smsto:" />
-         <favorite launcher:uri="mms:" />
-         <favorite launcher:uri="mmsto:" />
-+        <favorite launcher:packageName="org.wasmandroid.fixtures.calculator"
-+            launcher:className="org.wasmandroid.fixtures.DemoActivity" />
-     </resolve>
- 
-     <resolve
-@@ -95,4 +99,12 @@
-         <favorite launcher:uri="market://details?id=com.android.launcher" />
-     </resolve>
- 
-+    <!-- Additional standalone demo apps. -->
-+    <favorite launcher:packageName="org.wasmandroid.fixtures.clock"
-+        launcher:className="org.wasmandroid.fixtures.DemoActivity"
+@@ -16,83 +16,43 @@
+
+ <favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3">
+
+-    <!-- Hotseat (We use the screen as the position of the item in the hotseat) -->
+-    <!-- Dialer, Messaging, [Maps/Music], Browser, Camera -->
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="0"
+-        launcher:x="0"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.DIAL;end" />
+-        <favorite launcher:uri="tel:123" />
+-        <favorite launcher:uri="#Intent;action=android.intent.action.CALL_BUTTON;end" />
+-    </resolve>
++    <!-- Hotseat positions -->
++    <favorite launcher:packageName="org.chromium.webview_shell"
++        launcher:className="org.chromium.webview_shell.WebViewBrowserActivity"
++        launcher:container="-101" launcher:screen="0" launcher:x="0" launcher:y="0" />
++    <favorite launcher:packageName="com.android.deskclock"
++        launcher:className="com.android.deskclock.DeskClock"
++        launcher:container="-101" launcher:screen="1" launcher:x="1" launcher:y="0" />
++    <favorite launcher:packageName="com.android.gallery3d"
++        launcher:className="com.android.gallery3d.app.GalleryActivity"
++        launcher:container="-101" launcher:screen="2" launcher:x="2" launcher:y="0" />
++    <favorite launcher:packageName="com.android.music"
++        launcher:className="com.android.music.MusicBrowserActivity"
++        launcher:container="-101" launcher:screen="3" launcher:x="3" launcher:y="0" />
++    <favorite launcher:packageName="com.android.settings"
++        launcher:className="com.android.settings.homepage.SettingsHomepageActivity"
++        launcher:container="-101" launcher:screen="4" launcher:x="4" launcher:y="0" />
+
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="1"
+-        launcher:x="1"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_MESSAGING;end" />
+-        <favorite launcher:uri="sms:" />
+-        <favorite launcher:uri="smsto:" />
+-        <favorite launcher:uri="mms:" />
+-        <favorite launcher:uri="mmsto:" />
+-    </resolve>
++    <!-- Workspace page 0 -->
++    <favorite launcher:packageName="com.android.settings"
++        launcher:className="com.android.settings.homepage.SettingsHomepageActivity"
++        launcher:screen="0" launcher:x="0" launcher:y="1" />
++    <favorite launcher:packageName="com.android.deskclock"
++        launcher:className="com.android.deskclock.DeskClock"
++        launcher:screen="0" launcher:x="1" launcher:y="1" />
++    <favorite launcher:packageName="org.wasmandroid.cube"
++        launcher:className="org.wasmandroid.cube.CubeActivity"
 +        launcher:screen="0" launcher:x="2" launcher:y="1" />
-+    <favorite launcher:packageName="org.wasmandroid.fixtures.settings"
-+        launcher:className="org.wasmandroid.fixtures.DemoActivity"
+
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="2"
+-        launcher:x="2"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_MAPS;end" />
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_MUSIC;end" />
+-    </resolve>
+-
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="3"
+-        launcher:x="3"
+-        launcher:y="0" >
+-        <favorite
+-            launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_BROWSER;end" />
+-        <favorite launcher:uri="http://www.example.com/" />
+-    </resolve>
+-
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="4"
+-        launcher:x="4"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.media.action.STILL_IMAGE_CAMERA;end" />
+-        <favorite launcher:uri="#Intent;action=android.intent.action.CAMERA_BUTTON;end" />
+-    </resolve>
+-
+-    <!-- Bottom row -->
+-    <resolve
+-        launcher:screen="0"
+-        launcher:x="0"
+-        launcher:y="-1" >
+-	    <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_EMAIL;end" />
+-	    <favorite launcher:uri="mailto:" />
+-
+-    </resolve>
+-
+-    <resolve
+-        launcher:screen="0"
+-        launcher:x="1"
+-        launcher:y="-1" >
+-	    <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_GALLERY;end" />
+-	    <favorite launcher:uri="#Intent;type=images/*;end" />
+-
+-    </resolve>
+-
+-    <resolve
+-        launcher:screen="0"
+-        launcher:x="4"
+-        launcher:y="-1" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_MARKET;end" />
+-        <favorite launcher:uri="market://details?id=com.android.launcher" />
+-    </resolve>
++    <!-- Workspace page 1 -->
++    <favorite launcher:packageName="com.android.gallery3d"
++        launcher:className="com.android.gallery3d.app.GalleryActivity"
++        launcher:screen="1" launcher:x="0" launcher:y="1" />
++    <favorite launcher:packageName="com.android.music"
++        launcher:className="com.android.music.MusicBrowserActivity"
 +        launcher:screen="1" launcher:x="1" launcher:y="1" />
-+
++    <favorite launcher:packageName="org.chromium.webview_shell"
++        launcher:className="org.chromium.webview_shell.WebViewBrowserActivity"
++        launcher:screen="1" launcher:x="2" launcher:y="1" />
+
  </favorites>
 --- a/packages/apps/Launcher3/res/xml/default_workspace_6x5.xml
 +++ b/packages/apps/Launcher3/res/xml/default_workspace_6x5.xml
-@@ -25,6 +25,8 @@
-         launcher:y="0" >
-         <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_EMAIL;end" />
-         <favorite launcher:uri="mailto:" />
-+        <favorite launcher:packageName="org.wasmandroid.cube"
-+            launcher:className="org.wasmandroid.cube.CubeActivity" />
-     </resolve>
- 
-     <resolve
-@@ -33,6 +35,8 @@
-         launcher:x="1"
-         launcher:y="0" >
-         <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_CALENDAR;end" />
-+        <favorite launcher:packageName="org.wasmandroid.fixtures.calculator"
-+            launcher:className="org.wasmandroid.fixtures.DemoActivity" />
-     </resolve>
- 
-     <resolve
-@@ -73,4 +77,12 @@
-         <favorite launcher:uri="#Intent;action=android.intent.action.CAMERA_BUTTON;end" />
-     </resolve>
- 
-+    <!-- Additional standalone demo apps. -->
-+    <favorite launcher:packageName="org.wasmandroid.fixtures.clock"
-+        launcher:className="org.wasmandroid.fixtures.DemoActivity"
+@@ -16,61 +16,43 @@
+
+ <favorites xmlns:launcher="http://schemas.android.com/apk/res-auto/com.android.launcher3">
+
+-    <!-- Hotseat (We use the screen as the position of the item in the hotseat) -->
+-    <!-- Mail Calendar Gallery Store Internet Camera -->
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="0"
+-        launcher:x="0"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_EMAIL;end" />
+-        <favorite launcher:uri="mailto:" />
+-    </resolve>
++    <!-- Hotseat positions -->
++    <favorite launcher:packageName="org.chromium.webview_shell"
++        launcher:className="org.chromium.webview_shell.WebViewBrowserActivity"
++        launcher:container="-101" launcher:screen="0" launcher:x="0" launcher:y="0" />
++    <favorite launcher:packageName="com.android.deskclock"
++        launcher:className="com.android.deskclock.DeskClock"
++        launcher:container="-101" launcher:screen="1" launcher:x="1" launcher:y="0" />
++    <favorite launcher:packageName="com.android.gallery3d"
++        launcher:className="com.android.gallery3d.app.GalleryActivity"
++        launcher:container="-101" launcher:screen="2" launcher:x="2" launcher:y="0" />
++    <favorite launcher:packageName="com.android.music"
++        launcher:className="com.android.music.MusicBrowserActivity"
++        launcher:container="-101" launcher:screen="3" launcher:x="3" launcher:y="0" />
++    <favorite launcher:packageName="com.android.settings"
++        launcher:className="com.android.settings.homepage.SettingsHomepageActivity"
++        launcher:container="-101" launcher:screen="4" launcher:x="4" launcher:y="0" />
+
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="1"
+-        launcher:x="1"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_CALENDAR;end" />
+-    </resolve>
++    <!-- Workspace page 0 -->
++    <favorite launcher:packageName="com.android.settings"
++        launcher:className="com.android.settings.homepage.SettingsHomepageActivity"
++        launcher:screen="0" launcher:x="0" launcher:y="1" />
++    <favorite launcher:packageName="com.android.deskclock"
++        launcher:className="com.android.deskclock.DeskClock"
++        launcher:screen="0" launcher:x="1" launcher:y="1" />
++    <favorite launcher:packageName="org.wasmandroid.cube"
++        launcher:className="org.wasmandroid.cube.CubeActivity"
 +        launcher:screen="0" launcher:x="2" launcher:y="1" />
-+    <favorite launcher:packageName="org.wasmandroid.fixtures.settings"
-+        launcher:className="org.wasmandroid.fixtures.DemoActivity"
+
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="2"
+-        launcher:x="2"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_GALLERY;end" />
+-        <favorite launcher:uri="#Intent;type=images/*;end" />
+-    </resolve>
+-
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="3"
+-        launcher:x="3"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_MARKET;end" />
+-        <favorite launcher:uri="market://details?id=com.android.launcher" />
+-    </resolve>
+-
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="4"
+-        launcher:x="4"
+-        launcher:y="0" >
+-        <favorite
+-            launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_BROWSER;end" />
+-        <favorite launcher:uri="http://www.example.com/" />
+-    </resolve>
+-
+-    <!-- Resolve camera intent if GoogleCamera is not available e.g. on emulator -->
+-    <resolve
+-        launcher:container="-101"
+-        launcher:screen="5"
+-        launcher:x="5"
+-        launcher:y="0" >
+-        <favorite launcher:uri="#Intent;action=android.media.action.STILL_IMAGE_CAMERA;end" />
+-        <favorite launcher:uri="#Intent;action=android.intent.action.CAMERA_BUTTON;end" />
+-    </resolve>
++    <!-- Workspace page 1 -->
++    <favorite launcher:packageName="com.android.gallery3d"
++        launcher:className="com.android.gallery3d.app.GalleryActivity"
++        launcher:screen="1" launcher:x="0" launcher:y="1" />
++    <favorite launcher:packageName="com.android.music"
++        launcher:className="com.android.music.MusicBrowserActivity"
 +        launcher:screen="1" launcher:x="1" launcher:y="1" />
-+
++    <favorite launcher:packageName="org.chromium.webview_shell"
++        launcher:className="org.chromium.webview_shell.WebViewBrowserActivity"
++        launcher:screen="1" launcher:x="2" launcher:y="1" />
+
  </favorites>
+--- a/packages/apps/Launcher3/res/xml/device_profiles.xml
++++ b/packages/apps/Launcher3/res/xml/device_profiles.xml
+@@ -56,7 +56,7 @@
+         launcher:numColumns="4"
+         launcher:numFolderRows="3"
+         launcher:numFolderColumns="4"
+-        launcher:numHotseatIcons="4"
++        launcher:numHotseatIcons="5"
+         launcher:numExtendedHotseatIcons="6"
+         launcher:dbFile="launcher_4_by_4.db"
+         launcher:inlineNavButtonsEndSpacing="@dimen/taskbar_button_margin_split"
+@@ -167,7 +167,7 @@
+         launcher:numSearchContainerColumns="3"
+         launcher:numFolderRows="3"
+         launcher:numFolderColumns="3"
+-        launcher:numHotseatIcons="6"
++        launcher:numHotseatIcons="5"
+         launcher:numAllAppsColumns="6"
+         launcher:isScalable="true"
+         launcher:inlineNavButtonsEndSpacing="@dimen/taskbar_button_margin_6_5"
+@@ -214,7 +214,7 @@
+         launcher:numSearchContainerColumns="3"
+         launcher:numFolderRows="3"
+         launcher:numFolderColumns="3"
+-        launcher:numHotseatIcons="6"
++        launcher:numHotseatIcons="5"
+         launcher:numAllAppsColumns="6"
+         launcher:isScalable="true"
+         launcher:inlineNavButtonsEndSpacing="@dimen/taskbar_button_margin_6_5"

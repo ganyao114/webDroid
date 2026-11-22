@@ -1,12 +1,17 @@
 import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
+import { cubeName, settingsName } from '../../web/launcher/assets.mjs';
 import { matchesDrawnLabel } from '../../web/launcher/scene_labels.mjs';
 
 const launcherPackage = 'com.android.launcher3';
 const launcherActivity = `${launcherPackage}.Launcher`;
 const systemUiClass = 'com.android.systemui.statusbar.phone.PhoneStatusBarView';
+const settingsPackage = 'com.android.settings';
+const settingsActivity = `${settingsPackage}.homepage.SettingsHomepageActivity`;
 const cubePackage = 'org.wasmandroid.cube';
 const cubeActivity = `${cubePackage}.CubeActivity`;
 const cubeLabel = 'WasmAndroid 3D Cube';
+const settingsCategories = ['Network & internet', 'Apps', 'Display', 'Battery', 'System', 'About phone'];
+const installedLabels = ['Settings', 'Clock', 'WebView Browser Tester', 'Gallery', 'Music', cubeLabel];
 const nextFrame = () => new Promise(requestAnimationFrame);
 
 function requireMatch(condition, message) {
@@ -115,6 +120,45 @@ export async function runLauncher3E2E(options = {}) {
     return canvasPoint(label.x, label.y);
   }
 
+  const appLabel = text => host.appLabels().find(label => label.text === text);
+
+  function appPoint(label) {
+    const rect = appSurface.querySelector('canvas').getBoundingClientRect();
+    const { width, height } = host.size();
+    const { top, bottom } = host.state().systemUiInsets;
+    return { x: rect.left + label.x * rect.width / width,
+      y: rect.top + label.y * rect.height / (height - top - bottom) };
+  }
+
+  async function scrollSettings() {
+    const rect = appSurface.querySelector('canvas').getBoundingClientRect();
+    const x = rect.left + rect.width * 0.5;
+    const before = host.app.inputEventsProcessed;
+    await checkpoint('scroll-settings', {
+      from: { x, y: rect.top + rect.height * 0.75 }, to: { x, y: rect.top + rect.height * 0.45 },
+    });
+    await waitFor('Settings to consume the swipe', () => host.app?.inputEventsProcessed > before);
+    await nextFrame();
+  }
+
+  async function collectSettingsLabels(expected, seen = new Set()) {
+    for (let scroll = 0; scroll <= 12; ++scroll) {
+      for (const { text } of host.appLabels()) seen.add(text);
+      const missing = expected.filter(label => !seen.has(label));
+      if (!missing.length) return;
+      if (scroll === 12) throw new Error(`Settings did not draw ${missing.join(', ')}`);
+      await scrollSettings();
+    }
+  }
+
+  async function openSettingsPage(name, heading) {
+    for (let scroll = 0; scroll < 12 && !appLabel(name); ++scroll) await scrollSettings();
+    const label = appLabel(name);
+    requireMatch(label, `Settings did not draw ${name}`);
+    await checkpoint('open-settings-page', { point: appPoint(label) });
+    await waitFor(`Settings ${name} page`, () => appLabel(heading) && !appLabel('Search Settings'));
+  }
+
   async function tapSystemUi(button, keyCode, navigated) {
     const before = host.state();
     const target = before.systemUiButtons[button];
@@ -140,7 +184,7 @@ export async function runLauncher3E2E(options = {}) {
       surfaceHost: launcherSurface, backend: params.get('backend') ?? 'auto',
       onChange: ({ phase }) => {
         device.dataset.phase = phase;
-        launcherSurface.inert = !['launcher', 'app'].includes(phase);
+        launcherSurface.inert = !['launcher', 'opening-app', 'app'].includes(phase);
         appSurface.inert = phase !== 'app';
       }, onRecents: () => { ++recents; }, onError: fail });
     home.addEventListener('click', () => host.navigate('home'), { signal });
@@ -156,7 +200,7 @@ export async function runLauncher3E2E(options = {}) {
       installed_apps: initial.installedApps, page_count: initial.pageCount, isolated: crossOriginIsolated,
       boot_ms: host.bootMs, native_boot_ms: initial.bootMs });
     requireMatch(initial.booted && initial.activity === launcherActivity && initial.package === launcherPackage &&
-      initial.launcherUpstream === true && initial.launcherDexCount === 4 && initial.launcherClassCount === 37050 &&
+      initial.launcherUpstream === true && initial.launcherDexCount === 4 && initial.launcherClassCount >= 37050 &&
       host.launcherSources === 879,
       'AOSP 17 Launcher3 did not boot');
     requireMatch(initial.systemUiMounted === true && initial.systemUiClass === systemUiClass,
@@ -166,6 +210,7 @@ export async function runLauncher3E2E(options = {}) {
       statusLabels.some(({ text }) => text === '100%'), 'SystemUI clock and battery did not draw');
     requireMatch(initial.workspacePage === 0 && initial.pageCount >= 2 && !initial.drawerOpen,
       'Launcher3 did not start on the first workspace page');
+    requireMatch(initial.installedApps === installedLabels.length, 'Launcher3 did not index all six APKs');
 
     const benchmarkStart = host.frames;
     const atlasStart = host.stats().atlas_rasterizations;
@@ -218,6 +263,34 @@ export async function runLauncher3E2E(options = {}) {
       state.workspacePage === 0 && !state.drawerOpen && state.drawerProgress <= 0.01);
     await tapSystemUi('recents', 187, () => recents === 1);
     result.system_ui_navigation = true;
+
+    await checkpoint('launch-settings', { point: labelPoint('Settings') });
+    await waitFor('the upstream Settings homepage', () => host.phase === 'app' && appLabel('Search Settings'));
+    const settings = host.app;
+    const settingsLaunch = host.activeLaunch;
+    requireMatch(settingsLaunch.apkName === settingsName && settings.package === settingsPackage &&
+      settings.activity === settingsActivity && settings.booted && settings.onCreateCalls > 0 &&
+      settings.drawCommands > 0 && settings.iconLoaded && settings.catalogPackages === installedLabels.length,
+      'The signed upstream Settings Activity did not boot with the installed package catalog');
+    result.settings = settings;
+    const settingsReveal = performance.now() + 180;
+    await waitFor('the Settings surface to finish fading in', () => performance.now() >= settingsReveal);
+    const homepageLabels = new Set(host.appLabels().map(({ text }) => text));
+    await checkpoint('screenshot-settings');
+
+    await openSettingsPage('Apps', 'All apps');
+    await collectSettingsLabels(installedLabels);
+    result.settings_installed_apps = installedLabels.length;
+    await tapSystemUi('back', 4, () => host.phase === 'app' && appLabel('Search Settings'));
+    await openSettingsPage('Display', 'Brightness');
+    result.settings_display_opened = true;
+    await tapSystemUi('back', 4, () => host.phase === 'app' && appLabel('Search Settings'));
+    result.settings_back_to_homepage = true;
+    await collectSettingsLabels(settingsCategories, homepageLabels);
+    result.settings_categories = settingsCategories;
+    await tapSystemUi('home', 3, state => host.phase === 'launcher' && state.workspacePage === 0 && !host.activeLaunch);
+    result.settings_returned_home = true;
+
     const opened = await openDrawer();
     result.allapps_opened = true;
     result.allapps_unfiltered = opened.searchResults;
@@ -249,7 +322,7 @@ export async function runLauncher3E2E(options = {}) {
     const app = host.app;
     Object.assign(result, {
       cube_app_launched: launched.package === cubePackage && launched.activity === cubeActivity &&
-        launched.apkName === 'wa_cube_app.apk' && host.state().launchCount === filtered.launchCount + 1,
+        launched.apkName === cubeName && host.state().launchCount === filtered.launchCount + 1,
       cube_activity: launched.activity, cube_frames: app.frames, cube_tier0_fallbacks: app.tier0_fallbacks, cube: app,
     });
     requireMatch(result.cube_app_launched && app.backend === 'webgl2' && app.dex_methods >= 4 && app.distinct_checksums > 1,

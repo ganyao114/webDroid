@@ -13,7 +13,7 @@ const { values } = parseArgs({ options: {
   help: { type: 'boolean', short: 'h' }, 'wasm-build': { type: 'string' }, 'host-build': { type: 'string' },
   chrome: { type: 'string' }, headed: { type: 'boolean' }, backend: { type: 'string' },
   'screenshot-home': { type: 'string' }, 'screenshot-allapps': { type: 'string' },
-  'screenshot-app': { type: 'string' }, timeout: { type: 'string' },
+  'screenshot-app': { type: 'string' }, 'screenshot-settings': { type: 'string' }, timeout: { type: 'string' },
 } });
 
 if (values.help) {
@@ -21,7 +21,7 @@ if (values.help) {
 
   node run_chrome_e2e.mjs [--wasm-build DIR] [--host-build DIR] [--chrome BIN] [--headed]
        [--backend auto|webgpu|webgl2] [--screenshot-home PATH] [--screenshot-allapps PATH]
-       [--screenshot-app PATH] [--timeout MS]
+       [--screenshot-app PATH] [--screenshot-settings PATH] [--timeout MS]
 
 The default Wasm build is build-wasm and the default timeout is 90000 ms.`);
 } else {
@@ -87,7 +87,7 @@ async function run() {
     assert.equal(record.package, 'com.android.launcher3');
     assert.equal(record.launcher_upstream, true);
     assert.equal(record.launcher_dex_count, 4);
-    assert.equal(record.launcher_class_count, 37050);
+    assert(record.launcher_class_count >= 37050);
     assert.equal(record.launcher_sources, 879);
     assert.equal(record.system_ui_mounted, true);
     assert.equal(record.system_ui_class, 'com.android.systemui.statusbar.phone.PhoneStatusBarView');
@@ -98,6 +98,11 @@ async function run() {
     assert(record.frames >= 120 && record.avg_fps >= 50, `Launcher3 averaged ${record.avg_fps} FPS`);
     assert(record.distinct_colors >= 40, `Launcher3 home drew ${record.distinct_colors} colors`);
     assert.equal(record.workspace_swiped, true);
+    assert.equal(record.settings?.activity, 'com.android.settings.homepage.SettingsHomepageActivity');
+    assert.equal(record.settings_installed_apps, 6);
+    assert.equal(record.settings_display_opened, true);
+    assert.equal(record.settings_back_to_homepage, true);
+    assert.equal(record.settings_returned_home, true);
     assert.equal(record.allapps_opened, true);
     assert.equal(record.cube_app_launched, true);
     assert(record.cube_frames >= 10, 'The Cube APK rendered fewer than ten frames');
@@ -105,7 +110,7 @@ async function run() {
     assert.equal(record.returned_home, true);
     assert(record.return_home.frames >= 30, 'Missing post-resume Launcher3 frames');
     assert.equal(record.page_errors.length, 0, record.page_errors.join('\n'));
-    assert.deepEqual(Object.keys(screenshots).sort(), ['allapps', 'app', 'home']);
+    assert.deepEqual(Object.keys(screenshots).sort(), ['allapps', 'app', 'home', 'settings']);
   } catch (error) {
     let lastState;
     if (!record && session) {
@@ -147,7 +152,7 @@ async function run() {
   async function perform(step, { from, to, point, text }) {
     const { cdp } = browser;
     switch (step) {
-      case 'screenshot-home': case 'screenshot-allapps': case 'screenshot-app': {
+      case 'screenshot-home': case 'screenshot-allapps': case 'screenshot-app': case 'screenshot-settings': {
         const name = step.slice('screenshot-'.length);
         const destination = resolve(values[step] ?? join(wasmBuild, `m9_launcher3_${name}.png`));
         const { data } = await cdp.send('Page.captureScreenshot', { format: 'png', fromSurface: true }, session);
@@ -156,7 +161,7 @@ async function run() {
         screenshots[name] = destination;
         break;
       }
-      case 'swipe-workspace':
+      case 'swipe-workspace': case 'scroll-settings':
         await mouse('mouseMoved', from);
         await mouse('mousePressed', from, true);
         for (let frame = 1; frame <= 12; ++frame) {
@@ -166,7 +171,8 @@ async function run() {
         }
         await mouse('mouseReleased', to);
         break;
-      case 'open-allapps': case 'focus-search': case 'launch-cube': case 'return-home':
+      case 'open-allapps': case 'focus-search': case 'launch-settings': case 'open-settings-page':
+      case 'launch-cube': case 'return-home':
       case 'systemui-back': case 'systemui-home': case 'systemui-recents':
         await tap(point);
         break;

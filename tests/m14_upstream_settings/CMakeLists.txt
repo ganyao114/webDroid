@@ -9,31 +9,14 @@ endif()
 get_filename_component(wa_root "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 include("${wa_root}/cmake/Aosp17UiFramework.cmake")
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
-set(WA_SETTINGS_DEPS_DIR "${wa_root}/third_party/aosp17_deps" CACHE PATH "Offline Settings dependencies")
-
-set(builder "${wa_root}/tools/aosp/build_upstream_settings.py")
-set(profile "${wa_root}/patches/aosp17/settings")
-file(GLOB patches CONFIGURE_DEPENDS "${profile}/*.patch")
-set(output "${CMAKE_CURRENT_BINARY_DIR}/apk")
-set(apk "${output}/Settings-upstream.apk")
-set(provenance "${output}/upstream_provenance.json")
-set(deps "${output}/settings.d")
-set(build_settings "${Python3_EXECUTABLE}" "${builder}"
-    --aosp-root "${AOSP17_SOURCE_DIR}" --deps-dir "${WA_SETTINGS_DEPS_DIR}"
-    --sdk "${WA_ANDROID_SDK}" --android-jar "${WA_ANDROID_JAR}"
-    --javac "${WA_JAVAC_EXECUTABLE}" --d8 "${WA_D8_EXECUTABLE}" --out-dir "${output}")
-add_custom_command(OUTPUT "${apk}" "${provenance}"
-    COMMAND ${build_settings} --depfile "${deps}"
-    DEPENDS "${builder}" "${profile}/sources.txt" "${profile}/resources.txt"
-        "${profile}/PreferenceLink.java" ${patches}
-    DEPFILE "${deps}"
-    COMMENT "Building the signed upstream Settings APK"
-    VERBATIM)
-add_custom_target(m14_upstream_settings_apk DEPENDS "${apk}" "${provenance}")
+if(NOT TARGET wa_upstream_settings_apk)
+    set(wa_settings_output "${CMAKE_CURRENT_BINARY_DIR}/apk")
+    include("${wa_root}/runtime/android_system/UpstreamLauncher.cmake")
+endif()
 
 get_target_property(framework aosp17_framework_core WA_FRAMEWORK_DEX)
 add_executable(test_m14_upstream_settings test_upstream_settings.cpp)
-add_dependencies(test_m14_upstream_settings m14_upstream_settings_apk aosp17_framework_core)
+add_dependencies(test_m14_upstream_settings wa_upstream_settings_apk wa_foreground_framework_assets)
 target_link_libraries(test_m14_upstream_settings PRIVATE aosp17_ui_jni aosp17_libandroidfw)
 target_compile_features(test_m14_upstream_settings PRIVATE cxx_std_20)
 
@@ -52,9 +35,11 @@ if(EMSCRIPTEN)
         "-sEXPORTED_RUNTIME_METHODS=FS,NODEFS,callMain")
     set(test_command "${WA_SETTINGS_NODE}" "${CMAKE_CURRENT_LIST_DIR}/verify_wasm.mjs"
         "$<TARGET_FILE:test_m14_upstream_settings>")
+    set(test_name test_m14_upstream_settings_wasm)
 else()
     set(test_command "$<TARGET_FILE:test_m14_upstream_settings>")
+    set(test_name test_m14_upstream_settings)
 endif()
-add_test(NAME test_m14_upstream_settings
-    COMMAND ${test_command} "${apk}" "${framework}" "${WA_ANDROID_JAR}")
-set_tests_properties(test_m14_upstream_settings PROPERTIES TIMEOUT 120)
+add_test(NAME ${test_name} COMMAND ${test_command} "${WA_SETTINGS_APK}" "${framework}"
+    "${WA_LAUNCHER_FRAMEWORK_DEX}" "${WA_LAUNCHER_FRAMEWORK_RES}")
+set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)

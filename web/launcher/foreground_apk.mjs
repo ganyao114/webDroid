@@ -105,7 +105,9 @@ export class ForegroundApk {
     try {
       const sample = await worker.request('audio');
       if (signal.aborted) return;
-      void this.audio.play(sample, signal).then(read => { this.#audioFrames = read; }).catch(error => {
+      void this.audio.play(sample, signal).then(read => {
+        if (!signal.aborted) this.#audioFrames = read;
+      }).catch(error => {
         this.#audioError = error.message;
       });
     } catch (error) {
@@ -159,6 +161,8 @@ export class ForegroundApk {
 
   sendBack() { return this.#java?.sendBack() ?? false; }
 
+  labels() { return this.#java?.labels() ?? []; }
+
   stats() {
     if (this.#java) return this.#java.stats();
     return {
@@ -183,25 +187,35 @@ export class ForegroundApk {
   }
 
   close() {
+    if (this.#abort.signal.aborted) return this.#shutdown;
     this.#abort.abort();
-    if (this.#java) return this.#java.close();
+    this.#audioFrames = undefined;
+    if (this.#java) {
+      const java = this.#java;
+      this.#java = undefined;
+      this.#shutdown = java.close();
+      return this.#shutdown;
+    }
+    this.surface.replaceChildren();
     if (this.#raf !== undefined) cancelAnimationFrame(this.#raf);
-    if (this.#worker) this.#shutdown ??= this.#stopWorker();
+    const worker = this.#worker;
+    this.#worker = undefined;
+    if (worker) this.#shutdown = this.#stopWorker(worker);
     return this.#shutdown;
   }
 
-  async #stopWorker() {
+  async #stopWorker(worker) {
     let timer;
     try {
       await Promise.race([
-        this.#worker.request('shutdown'),
+        worker.request('shutdown'),
         new Promise((_, reject) => {
           timer = setTimeout(() => reject(new Error('APK worker shutdown timed out')), 3000);
         }),
       ]);
     } finally {
       clearTimeout(timer);
-      this.#worker.close();
+      worker.close();
     }
   }
 }
