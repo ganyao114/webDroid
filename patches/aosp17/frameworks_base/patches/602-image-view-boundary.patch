@@ -1,0 +1,302 @@
+--- a/frameworks/base/core/java/android/widget/ImageView.java
++++ b/frameworks/base/core/java/android/widget/ImageView.java
+@@ -19,7 +19,6 @@
+ import android.annotation.DrawableRes;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.ContentResolver;
+ import android.content.Context;
+@@ -30,7 +29,6 @@
+ import android.graphics.BlendMode;
+ import android.graphics.Canvas;
+ import android.graphics.ColorFilter;
+-import android.graphics.ImageDecoder;
+ import android.graphics.Matrix;
+ import android.graphics.PixelFormat;
+ import android.graphics.PorterDuff;
+@@ -50,14 +48,12 @@
+ import android.view.RemotableViewMethod;
+ import android.view.View;
+ import android.view.ViewDebug;
+-import android.view.ViewHierarchyEncoder;
+ import android.view.accessibility.AccessibilityEvent;
+ import android.view.inspector.InspectableProperty;
+ import android.widget.RemoteViews.RemoteView;
+ 
+ import com.android.internal.R;
+ 
+-import java.io.IOException;
+ 
+ /**
+  * Displays image resources, for example {@link android.graphics.Bitmap}
+@@ -255,7 +251,7 @@
+         mScaleType = ScaleType.FIT_CENTER;
+ 
+         if (!sCompatDone) {
+-            final int targetSdkVersion = mContext.getApplicationInfo().targetSdkVersion;
++            final int targetSdkVersion = getContext().getApplicationInfo().targetSdkVersion;
+             sCompatAdjustViewBounds = targetSdkVersion <= Build.VERSION_CODES.JELLY_BEAN_MR1;
+             sCompatUseCorrectStreamDensity = targetSdkVersion > Build.VERSION_CODES.M;
+             sCompatDrawableVisibilityDispatch = targetSdkVersion < Build.VERSION_CODES.N;
+@@ -266,9 +262,6 @@
+         // Developers can override these defaults via the corresponding attributes.
+         if (getImportantForAutofill() == IMPORTANT_FOR_AUTOFILL_AUTO) {
+             setImportantForAutofill(IMPORTANT_FOR_AUTOFILL_NO);
+-        }
+-        if (getImportantForContentCapture() == IMPORTANT_FOR_CONTENT_CAPTURE_AUTO) {
+-            setImportantForContentCapture(IMPORTANT_FOR_CONTENT_CAPTURE_YES);
+         }
+     }
+ 
+@@ -317,8 +310,8 @@
+ 
+     /** @hide */
+     @Override
+-    public void onPopulateAccessibilityEventInternal(AccessibilityEvent event) {
+-        super.onPopulateAccessibilityEventInternal(event);
++    public void onPopulateAccessibilityEvent(AccessibilityEvent event) {
++        super.onPopulateAccessibilityEvent(event);
+ 
+         final CharSequence contentDescription = getContentDescription();
+         if (!TextUtils.isEmpty(contentDescription)) {
+@@ -620,12 +613,12 @@
+      */
+     @android.view.RemotableViewMethod(asyncImpl="setImageIconAsync")
+     public void setImageIcon(@Nullable Icon icon) {
+-        setImageDrawable(icon == null ? null : icon.loadDrawable(mContext));
++        setImageDrawable(icon == null ? null : icon.loadDrawable(getContext()));
+     }
+ 
+     /** @hide **/
+     public Runnable setImageIconAsync(@Nullable Icon icon) {
+-        return new ImageDrawableCallback(icon == null ? null : icon.loadDrawable(mContext), null, 0);
++        return new ImageDrawableCallback(icon == null ? null : icon.loadDrawable(getContext()), null, 0);
+     }
+ 
+     /**
+@@ -761,7 +754,7 @@
+         // instead of doing an object reference comparison
+         mDrawable = null;
+         if (mRecycleableBitmapDrawable == null) {
+-            mRecycleableBitmapDrawable = new BitmapDrawable(mContext.getResources(), bm);
++            mRecycleableBitmapDrawable = new BitmapDrawable(getContext().getResources(), bm);
+         } else {
+             mRecycleableBitmapDrawable.setBitmap(bm);
+         }
+@@ -978,7 +971,7 @@
+ 
+         if (mResource != 0) {
+             try {
+-                d = mContext.getDrawable(mResource);
++                d = getContext().getDrawable(mResource);
+             } catch (Exception e) {
+                 Log.w(LOG_TAG, "Unable to find resource: " + mResource, e);
+                 // Don't try again.
+@@ -1004,24 +997,30 @@
+         if (ContentResolver.SCHEME_ANDROID_RESOURCE.equals(scheme)) {
+             try {
+                 // Load drawable through Resources, to get the source density information
+-                ContentResolver.OpenResourceIdResult r =
+-                        mContext.getContentResolver().getResourceId(uri);
+-                return r.r.getDrawable(r.id, mContext.getTheme());
++                // Resolve the Android resource URI against the mounted application or system APK.
++                final String pkg = uri.getAuthority();
++                final Resources res = "android".equals(pkg) ? Resources.getSystem() : getResources();
++                if (!getContext().getPackageName().equals(pkg) && !"android".equals(pkg)) {
++                    return null;
++                }
++                final java.util.List<String> segments = uri.getPathSegments();
++                final int id;
++                if (segments.size() == 1) {
++                    id = Integer.parseInt(segments.get(0));
++                } else if (segments.size() == 2) {
++                    id = res.getIdentifier(segments.get(1), segments.get(0), pkg);
++                } else {
++                    return null;
++                }
++                return id == 0 ? null : res.getDrawable(id, getContext().getTheme());
+             } catch (Exception e) {
+                 Log.w(LOG_TAG, "Unable to open content: " + uri, e);
+             }
+-        } else if (ContentResolver.SCHEME_CONTENT.equals(scheme)
+-                || ContentResolver.SCHEME_FILE.equals(scheme)) {
+-            try {
+-                Resources res = sCompatUseCorrectStreamDensity ? getResources() : null;
+-                ImageDecoder.Source src = ImageDecoder.createSource(mContext.getContentResolver(),
+-                        uri, res);
+-                return ImageDecoder.decodeDrawable(src, (decoder, info, s) -> {
+-                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+-                });
+-            } catch (IOException e) {
+-                Log.w(LOG_TAG, "Unable to open content: " + uri, e);
+-            }
++        } else if (ContentResolver.SCHEME_FILE.equals(scheme)) {
++            final Bitmap bitmap = android.graphics.BitmapFactory.decodeFile(uri.getPath());
++            return bitmap == null ? null : new BitmapDrawable(getResources(), bitmap);
++        } else if (ContentResolver.SCHEME_CONTENT.equals(scheme)) {
++            Log.w(LOG_TAG, "Content providers are unavailable for image URI: " + uri);
+         } else {
+             return Drawable.createFromPath(uri.toString());
+         }
+@@ -1050,8 +1049,10 @@
+ 
+         if (mDrawable != null) {
+             sameDrawable = mDrawable == d;
++            if (mDrawable != d && mDrawable instanceof android.graphics.drawable.Animatable) {
++                ((android.graphics.drawable.Animatable) mDrawable).stop();
++            }
+             mDrawable.setCallback(null);
+-            unscheduleDrawable(mDrawable);
+             if (!sCompatDrawableVisibilityDispatch && !sameDrawable && isAttachedToWindow()) {
+                 mDrawable.setVisible(false, false);
+             }
+@@ -1164,10 +1165,10 @@
+             }
+         }
+ 
+-        final int pleft = mPaddingLeft;
+-        final int pright = mPaddingRight;
+-        final int ptop = mPaddingTop;
+-        final int pbottom = mPaddingBottom;
++        final int pleft = getPaddingLeft();
++        final int pright = getPaddingRight();
++        final int ptop = getPaddingTop();
++        final int pbottom = getPaddingBottom();
+ 
+         int widthSize;
+         int heightSize;
+@@ -1271,11 +1272,10 @@
+     }
+ 
+     @Override
+-    protected boolean setFrame(int l, int t, int r, int b) {
+-        final boolean changed = super.setFrame(l, t, r, b);
++    protected void onLayout(boolean changed, int l, int t, int r, int b) {
++        super.onLayout(changed, l, t, r, b);
+         mHaveFrame = true;
+         configureBounds();
+-        return changed;
+     }
+ 
+     private void configureBounds() {
+@@ -1286,8 +1286,8 @@
+         final int dwidth = mDrawableWidth;
+         final int dheight = mDrawableHeight;
+ 
+-        final int vwidth = getWidth() - mPaddingLeft - mPaddingRight;
+-        final int vheight = getHeight() - mPaddingTop - mPaddingBottom;
++        final int vwidth = getWidth() - getPaddingLeft() - getPaddingRight();
++        final int vheight = getHeight() - getPaddingTop() - getPaddingBottom();
+ 
+         final boolean fits = (dwidth < 0 || vwidth == dwidth)
+                 && (dheight < 0 || vheight == dheight);
+@@ -1398,8 +1398,8 @@
+             return;
+         }
+         if (matrix == null) {
+-            final int vwidth = getWidth() - mPaddingLeft - mPaddingRight;
+-            final int vheight = getHeight() - mPaddingTop - mPaddingBottom;
++            final int vwidth = getWidth() - getPaddingLeft() - getPaddingRight();
++            final int vheight = getHeight() - getPaddingTop() - getPaddingBottom();
+             mDrawable.setBounds(0, 0, vwidth, vheight);
+             mDrawMatrix = null;
+         } else {
+@@ -1424,21 +1424,21 @@
+             return;     // nothing to draw (empty bounds)
+         }
+ 
+-        if (mDrawMatrix == null && mPaddingTop == 0 && mPaddingLeft == 0) {
++        if (mDrawMatrix == null && getPaddingTop() == 0 && getPaddingLeft() == 0) {
+             mDrawable.draw(canvas);
+         } else {
+             final int saveCount = canvas.getSaveCount();
+             canvas.save();
+ 
+             if (mCropToPadding) {
+-                final int scrollX = mScrollX;
+-                final int scrollY = mScrollY;
+-                canvas.clipRect(scrollX + mPaddingLeft, scrollY + mPaddingTop,
+-                        scrollX + mRight - mLeft - mPaddingRight,
+-                        scrollY + mBottom - mTop - mPaddingBottom);
+-            }
+-
+-            canvas.translate(mPaddingLeft, mPaddingTop);
++                final int scrollX = getScrollX();
++                final int scrollY = getScrollY();
++                canvas.clipRect(scrollX + getPaddingLeft(), scrollY + getPaddingTop(),
++                        scrollX + getWidth() - getPaddingRight(),
++                        scrollY + getHeight() - getPaddingBottom());
++            }
++
++            canvas.translate(getPaddingLeft(), getPaddingTop());
+ 
+             if (mDrawMatrix != null) {
+                 canvas.concat(mDrawMatrix);
+@@ -1722,34 +1722,4 @@
+         return ImageView.class.getName();
+     }
+ 
+-    /** @hide */
+-    @Override
+-    protected void encodeProperties(@NonNull ViewHierarchyEncoder stream) {
+-        super.encodeProperties(stream);
+-        stream.addProperty("layout:baseline", getBaseline());
+-    }
+-
+-    /** @hide */
+-    @Override
+-    @TestApi
+-    public boolean isDefaultFocusHighlightNeeded(Drawable background, Drawable foreground) {
+-        final boolean lackFocusState = mDrawable == null || !mDrawable.isStateful()
+-                || !mDrawable.hasFocusStateSpecified();
+-        return super.isDefaultFocusHighlightNeeded(background, foreground) && lackFocusState;
+-    }
+-
+-    /** @hide */
+-    @Override
+-    public void onFrameRateHint(@NonNull Drawable source, float fps) {
+-        // This is the crucial check. An ImageView's primary animated content is
+-        // the drawable set via setImageDrawable(). We must ensure we're only responding
+-        // to hints from that specific drawable. This avoids ambiguity if, for example,
+-        // a complex background drawable also happened to be animated. By placing this
+-        // logic in ImageView and not View, we ensure the class that owns the content
+-        // is the one that processes the hint.
+-        if (com.android.graphics.hwui.flags.Flags.animatedImageFrameRateHint()
+-                && source == getDrawable()) {
+-            setRequestedFrameRate(fps);
+-        }
+-    }
+ }
+--- a/frameworks/base/core/java/android/widget/ImageButton.java
++++ b/frameworks/base/core/java/android/widget/ImageButton.java
+@@ -16,10 +16,7 @@
+ 
+ package android.widget;
+ 
+-import static android.view.flags.Flags.enableArrowIconOnHoverWhenClickable;
+-import static android.view.flags.Flags.FLAG_ENABLE_ARROW_ICON_ON_HOVER_WHEN_CLICKABLE;
+ 
+-import android.annotation.FlaggedApi;
+ import android.content.Context;
+ import android.util.AttributeSet;
+ import android.view.InputDevice;
+@@ -102,16 +99,12 @@
+         return ImageButton.class.getName();
+     }
+ 
+-    @FlaggedApi(FLAG_ENABLE_ARROW_ICON_ON_HOVER_WHEN_CLICKABLE)
+     @Override
+     public PointerIcon onResolvePointerIcon(MotionEvent event, int pointerIndex) {
+         if (getPointerIcon() == null && isClickable() && isEnabled()
+                 && event.isFromSource(InputDevice.SOURCE_MOUSE)) {
+ 
+-            int pointerIcon = enableArrowIconOnHoverWhenClickable()
+-                    ? PointerIcon.TYPE_ARROW
+-                    : PointerIcon.TYPE_HAND;
+-            return PointerIcon.getSystemIcon(getContext(), pointerIcon);
++            return PointerIcon.getSystemIcon(getContext(), PointerIcon.TYPE_HAND);
+         }
+         return super.onResolvePointerIcon(event, pointerIndex);
+     }

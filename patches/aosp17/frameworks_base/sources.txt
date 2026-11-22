@@ -1,6 +1,48 @@
 # Upstream program sources are relative to the android-17.0.0_r1 checkout.
 # @dir includes all Java sources recursively. @exclude omits one named file.
 [framework]
+# Phase 2 W3: upstream android.widget
+frameworks/base/core/java/android/widget/AbsListView.java
+frameworks/base/core/java/android/widget/AbsSeekBar.java
+frameworks/base/core/java/android/widget/Adapter.java
+frameworks/base/core/java/android/widget/AdapterView.java
+frameworks/base/core/java/android/widget/Advanceable.java
+frameworks/base/core/java/android/widget/ArrayAdapter.java
+frameworks/base/core/java/android/widget/BaseAdapter.java
+frameworks/base/core/java/android/widget/CheckBox.java
+frameworks/base/core/java/android/widget/CompoundButton.java
+frameworks/base/core/java/android/widget/EdgeEffect.java
+frameworks/base/core/java/android/widget/Filter.java
+frameworks/base/core/java/android/widget/Filterable.java
+frameworks/base/core/java/android/widget/FrameLayout.java
+frameworks/base/core/java/android/widget/GridView.java
+frameworks/base/core/java/android/widget/HeaderViewListAdapter.java
+frameworks/base/core/java/android/widget/HorizontalScrollView.java
+frameworks/base/core/java/android/widget/ImageButton.java
+frameworks/base/core/java/android/widget/ImageView.java
+frameworks/base/core/java/android/widget/LinearLayout.java
+frameworks/base/core/java/android/widget/ListAdapter.java
+frameworks/base/core/java/android/widget/ListView.java
+frameworks/base/core/java/android/widget/OverScroller.java
+frameworks/base/core/java/android/widget/ProgressBar.java
+frameworks/base/core/java/android/widget/RadioButton.java
+frameworks/base/core/java/android/widget/RelativeLayout.java
+frameworks/base/core/java/android/widget/ScrollView.java
+frameworks/base/core/java/android/widget/Scroller.java
+frameworks/base/core/java/android/widget/SectionIndexer.java
+frameworks/base/core/java/android/widget/SeekBar.java
+frameworks/base/core/java/android/widget/Space.java
+frameworks/base/core/java/android/widget/SpinnerAdapter.java
+frameworks/base/core/java/android/widget/Switch.java
+frameworks/base/core/java/android/widget/Toast.java
+frameworks/base/core/java/android/widget/WrapperListAdapter.java
+
+# Widget interfaces and annotations shared with layout inflation and adapters.
+frameworks/base/core/java/android/view/RemotableViewMethod.java
+frameworks/base/core/java/android/view/inspector/InspectableProperty.java
+frameworks/base/core/java/android/widget/Checkable.java
+frameworks/base/core/java/android/widget/ThemedSpinnerAdapter.java
+
 frameworks/base/core/java/android/animation/TimeInterpolator.java
 frameworks/base/core/java/android/content/ComponentName.java
 frameworks/base/core/java/android/content/IntentFilter.java
@@ -367,6 +409,16 @@ frameworks/base/core/java/android/content/UriRelativeFilterParcel.aidl
 frameworks/base/core/java/android/os/IMessenger.aidl
 
 [patches]
+patches/601-layout-view-boundary.patch
+patches/602-image-view-boundary.patch
+patches/603-edge-effect-canvas-boundary.patch
+patches/604-adapter-view-sdk-boundary.patch
+patches/605-scroller-sdk-boundary.patch
+patches/606-scroll-view-platform-boundaries.patch
+patches/607-control-view-boundaries.patch
+patches/608-list-view-platform-boundaries.patch
+patches/609-toast-window-boundary.patch
+
 01-offline-proto-diagnostics.patch
 02-interpreter-arrays.patch
 04-long-array-validation.patch
