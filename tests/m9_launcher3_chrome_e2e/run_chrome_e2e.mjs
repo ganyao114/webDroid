@@ -85,6 +85,10 @@ async function run() {
     assert.equal(record.ok, true, record.error);
     assert.equal(record.booted, true);
     assert.equal(record.package, 'com.android.launcher3');
+    assert.equal(record.launcher_upstream, true);
+    assert.equal(record.launcher_dex_count, 4);
+    assert.equal(record.launcher_class_count, 37050);
+    assert.equal(record.launcher_sources, 879);
     assert.equal(record.system_ui_mounted, true);
     assert.equal(record.system_ui_class, 'com.android.systemui.statusbar.phone.PhoneStatusBarView');
     assert.equal(record.system_ui_navigation, true);

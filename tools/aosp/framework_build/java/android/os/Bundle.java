@@ -31,6 +31,8 @@ public final class Bundle implements Cloneable {
     public void putInt(String key, int value) { values.put(key, value); }
     public int getInt(String key) { return getInt(key, 0); }
     public int getInt(String key, int fallback) { Object v = get(key); return v instanceof Integer ? (Integer) v : fallback; }
+    public void putIntArray(String key, int[] value) { values.put(key, value); }
+    public int[] getIntArray(String key) { Object v = get(key); return v instanceof int[] ? (int[]) v : null; }
     public void putLong(String key, long value) { values.put(key, value); }
     public long getLong(String key) { return getLong(key, 0); }
     public long getLong(String key, long fallback) { Object v = get(key); return v instanceof Long ? (Long) v : fallback; }

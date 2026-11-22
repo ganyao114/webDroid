@@ -2,9 +2,9 @@ import { encoder, Memory } from '../surfaceflinger/abi.mjs';
 
 const textCapacity = 64 * 1024;
 const launcherExports = [
-  'create', 'destroy', 'sf_ctx', 'load_framework_dex', 'set_framework_res_apk', 'install_apk',
+  'create', 'destroy', 'sf_ctx', 'load_framework_dex', 'load_framework_fallback_dex', 'set_framework_res_apk', 'install_apk',
   'load_systemui_apk', 'boot_apk', 'tick', 'resize', 'pause', 'resume', 'send_home', 'send_back',
-  'set_gesture_navigation', 'consume_recents',
+  'set_gesture_navigation', 'consume_recents', 'open_all_apps', 'touch_navigation',
   'state_json', 'consume_launch', 'last_error',
 ].map(name => `_wa_system_launcher_${name}`);
 const compositorExports = [
@@ -107,6 +107,11 @@ export class LauncherAbi {
       this.#check('load_framework_dex', this.#call('load_framework_dex', data, size)));
   }
 
+  loadFallbackDex(bytes) {
+    this.#withBytes(bytes, (data, size) =>
+      this.#check('load_framework_fallback_dex', this.#call('load_framework_fallback_dex', data, size)));
+  }
+
   setFrameworkResources(bytes) {
     this.#withBytes(bytes, (data, size) =>
       this.#check('set_framework_res_apk', this.#call('set_framework_res_apk', data, size)));
@@ -123,10 +128,14 @@ export class LauncherAbi {
   resume() { this.#check('resume', this.#call('resume')); }
   home() { this.#check('send_home', this.#call('send_home')); }
   back() { this.#check('send_back', this.#call('send_back')); }
+  openAllApps() { this.#check('open_all_apps', this.#call('open_all_apps')); }
   setGestureNavigation(enabled) {
     this.#check('set_gesture_navigation', this.#call('set_gesture_navigation', Number(enabled)));
   }
   consumeRecents() { return this.#check('consume_recents', this.#call('consume_recents')) === 1; }
+  touchNavigation(action, time, x, y) {
+    return this.#check('touch_navigation', this.#call('touch_navigation', BigInt(Math.round(time)), action, x, y));
+  }
   state() { return this.#json('state_json'); }
   consumeLaunch() { return this.#json('consume_launch'); }
 

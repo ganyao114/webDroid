@@ -15,6 +15,7 @@ public final class ViewRootImpl implements ViewParent {
     private boolean requested = true;
     private boolean insetsRequested = true;
     private boolean drawRequested = true;
+    private boolean windowFocused;
     private Canvas canvas;
     private int width, height, density;
 
@@ -32,6 +33,8 @@ public final class ViewRootImpl implements ViewParent {
 
     public View getView() { return decor; }
     public Handler getHandler() { return handler; }
+    public boolean hasWindowFocus() { return windowFocused; }
+    public void setWindowFocus(boolean focused) { windowFocused = focused; }
     ViewTreeObserver getTreeObserver() { return treeObserver; }
     android.os.IBinder getWindowToken() { return windowToken; }
     WindowId getWindowId() { return windowId; }

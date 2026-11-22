@@ -6,7 +6,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 /** Completion stages on a cooperative interpreter thread. */
-public class CompletableFuture<T> implements Future<T> {
+public class CompletableFuture<T> implements Future<T>, CompletionStage<T> {
     private final ArrayList<Runnable> continuations = new ArrayList<>();
     private boolean done;
     private T value;
@@ -65,10 +65,10 @@ public class CompletableFuture<T> implements Future<T> {
         return error == null || error instanceof CompletionException ? error : new CompletionException(error);
     }
 
-    public <U> CompletableFuture<U> thenApply(Function<? super T, ? extends U> transform) {
+    @Override public <U> CompletableFuture<U> thenApply(Function<? super T, ? extends U> transform) {
         return thenApplyAsync(transform, Runnable::run);
     }
-    public <U> CompletableFuture<U> thenApplyAsync(Function<? super T, ? extends U> transform, Executor executor) {
+    @Override public <U> CompletableFuture<U> thenApplyAsync(Function<? super T, ? extends U> transform, Executor executor) {
         Objects.requireNonNull(transform);
         Objects.requireNonNull(executor);
         CompletableFuture<U> next = new CompletableFuture<>();
@@ -92,8 +92,8 @@ public class CompletableFuture<T> implements Future<T> {
         onComplete(continuation);
         return next;
     }
-    public <U> CompletableFuture<U> thenCompose(
-            Function<? super T, ? extends CompletableFuture<U>> transform) {
+    @Override public <U> CompletableFuture<U> thenCompose(
+            Function<? super T, ? extends CompletionStage<U>> transform) {
         Objects.requireNonNull(transform);
         CompletableFuture<U> next = new CompletableFuture<>();
         onComplete(() -> {
@@ -102,7 +102,7 @@ public class CompletableFuture<T> implements Future<T> {
                 return;
             }
             try {
-                CompletableFuture<U> stage = Objects.requireNonNull(transform.apply(value));
+                CompletableFuture<U> stage = Objects.requireNonNull(transform.apply(value)).toCompletableFuture();
                 stage.onComplete(() -> next.finish(stage.value, propagatedFailure(stage.failure)));
             } catch (Throwable error) {
                 next.completeExceptionally(error);
@@ -110,12 +110,14 @@ public class CompletableFuture<T> implements Future<T> {
         });
         return next;
     }
-    public CompletableFuture<Void> thenAcceptAsync(Consumer<? super T> consumer, Executor executor) {
+    @Override public CompletableFuture<Void> thenAcceptAsync(Consumer<? super T> consumer, Executor executor) {
         Objects.requireNonNull(consumer);
         return thenApplyAsync(result -> { consumer.accept(result); return null; }, executor);
     }
-    public CompletableFuture<Void> thenRunAsync(Runnable action, Executor executor) {
+    @Override public CompletableFuture<Void> thenRunAsync(Runnable action, Executor executor) {
         Objects.requireNonNull(action);
         return thenAcceptAsync(result -> action.run(), executor);
     }
+
+    @Override public CompletableFuture<T> toCompletableFuture() { return this; }
 }

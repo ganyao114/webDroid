@@ -1,6 +1,6 @@
 --- a/packages/apps/Launcher3/src/com/android/launcher3/logging/StatsLogManager.kt
 +++ b/packages/apps/Launcher3/src/com/android/launcher3/logging/StatsLogManager.kt
-@@ -777,6 +777,10 @@
+@@ -777,6 +777,12 @@
           */
          fun withContainerInfo(containerInfo: ContainerInfo?) = this
  
@@ -8,12 +8,14 @@
 +        fun withContainerInfoSupplier(containerInfo: java.util.function.Supplier<ContainerInfo>): StatsLogger =
 +            withContainerInfo(containerInfo.get())
 +
++        fun isLoggingEnabled(): Boolean = true
++
          /** Sets logging fields from provided [SliceItem]. */
          fun withSliceItem(sliceItem: SliceItem) = this
  
 --- a/packages/apps/Launcher3/src/com/android/launcher3/dagger/NoOpLoggerModule.kt
 +++ b/packages/apps/Launcher3/src/com/android/launcher3/dagger/NoOpLoggerModule.kt
-@@ -16,16 +16,22 @@
+@@ -16,16 +16,23 @@
  
  package com.android.launcher3.dagger
  
@@ -33,6 +35,7 @@
 +    @Provides
 +    fun provideStatsLogger(): StatsLogger = object : StatsLogger {
 +        override fun withContainerInfoSupplier(containerInfo: Supplier<ContainerInfo>): StatsLogger = this
++        override fun isLoggingEnabled(): Boolean = false
 +    }
  
      @JvmStatic
@@ -66,3 +69,74 @@
                          .setWorkspace(WorkspaceContainer.newBuilder()
                                  .setPageIndex(visible ? 0 : -1))
                          .build())
+--- a/packages/apps/Launcher3/src/com/android/launcher3/Workspace.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/Workspace.java
+@@ -1485,8 +1485,9 @@
+         if (prevPage != mCurrentPage) {
+             StatsLogManager.EventEnum event = (prevPage < mCurrentPage)
+                     ? LAUNCHER_SWIPERIGHT : LAUNCHER_SWIPELEFT;
+-            mLauncher.getStatsLogManager().logger()
+-                    .withSrcState(LAUNCHER_STATE_HOME)
++            StatsLogManager.StatsLogger logger = mLauncher.getStatsLogManager().logger();
++            if (!logger.isLoggingEnabled()) return;
++            logger.withSrcState(LAUNCHER_STATE_HOME)
+                     .withDstState(LAUNCHER_STATE_HOME)
+                     .withContainerInfo(LauncherAtom.ContainerInfo.newBuilder()
+                             .setWorkspace(
+--- a/packages/apps/Launcher3/src/com/android/launcher3/touch/AbstractStateChangeTouchController.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/touch/AbstractStateChangeTouchController.java
+@@ -411,8 +411,9 @@
+             return;
+         }
+         // Transition complete. log the action
+-        mLauncher.getStatsLogManager().logger()
+-                .withSrcState(mStartState.statsLogOrdinal)
++        StatsLogManager.StatsLogger logger = mLauncher.getStatsLogManager().logger();
++        if (!logger.isLoggingEnabled()) return;
++        logger.withSrcState(mStartState.statsLogOrdinal)
+                 .withDstState(targetState.statsLogOrdinal)
+                 .withContainerInfo(getContainerInfo(targetState))
+                 .log(StatsLogManager.getLauncherAtomEvent(mStartState.statsLogOrdinal,
+--- a/packages/apps/Launcher3/src/com/android/launcher3/allapps/AllAppsRecyclerView.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/allapps/AllAppsRecyclerView.java
+@@ -447,6 +447,7 @@
+     private void logCumulativeVerticalScroll() {
+         ActivityContext context = ActivityContext.lookupContext(getContext());
+-        StatsLogManager mgr = context.getStatsLogManager();
++        StatsLogManager.StatsLogger logger = context.getStatsLogManager().logger();
++        if (!logger.isLoggingEnabled()) return;
+         ActivityAllAppsContainerView<?> appsView = context.getAppsView();
+         ExtendedEditText editText = appsView.getSearchUiManager().getEditText();
+         ContainerInfo containerInfo = ContainerInfo.newBuilder().setSearchResultContainer(
+@@ -456,12 +457,12 @@
+         if (mCumulativeVerticalScroll == 0) {
+             // mCumulativeVerticalScroll == 0 when user comes back to original position, we
+             // don't know the direction of scrolling.
+-            mgr.logger().withContainerInfo(containerInfo).log(
++            logger.withContainerInfo(containerInfo).log(
+                     LAUNCHER_ALLAPPS_SCROLLED_UNKNOWN_DIRECTION);
+             return;
+         } else if (appsView.isSearching()) {
+             // In search results page
+-            mgr.logger().withContainerInfo(containerInfo).log((mCumulativeVerticalScroll > 0)
++            logger.withContainerInfo(containerInfo).log((mCumulativeVerticalScroll > 0)
+                     ? LAUNCHER_ALLAPPS_SEARCH_SCROLLED_DOWN
+                     : LAUNCHER_ALLAPPS_SEARCH_SCROLLED_UP);
+             return;
+@@ -469,14 +470,14 @@
+             int currentPage = appsView.mViewPager.getCurrentPage();
+             if (currentPage == ActivityAllAppsContainerView.AdapterHolder.WORK) {
+                 // In work A-Z list
+-                mgr.logger().withContainerInfo(containerInfo).log((mCumulativeVerticalScroll > 0)
++                logger.withContainerInfo(containerInfo).log((mCumulativeVerticalScroll > 0)
+                         ? LAUNCHER_WORK_FAB_BUTTON_COLLAPSE
+                         : LAUNCHER_WORK_FAB_BUTTON_EXTEND);
+                 return;
+             }
+         }
+         // In personal A-Z list
+-        mgr.logger().withContainerInfo(containerInfo).log((mCumulativeVerticalScroll > 0)
++        logger.withContainerInfo(containerInfo).log((mCumulativeVerticalScroll > 0)
+                 ? LAUNCHER_ALLAPPS_PERSONAL_SCROLLED_DOWN
+                 : LAUNCHER_ALLAPPS_PERSONAL_SCROLLED_UP);
+     }

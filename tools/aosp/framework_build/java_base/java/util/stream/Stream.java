@@ -9,7 +9,6 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.OptionalInt;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -141,23 +140,7 @@ final class SequentialStream<T> implements Stream<T> {
 
     @Override public IntStream mapToInt(ToIntFunction<? super T> mapper) {
         Objects.requireNonNull(mapper);
-        SequentialStream<T> upstream = new SequentialStream<>(consume());
-        return new IntStream() {
-            @Override public OptionalInt min() {
-                Iterator<T> cursor = upstream.consume().get();
-                if (!cursor.hasNext()) return OptionalInt.empty();
-                int min = mapper.applyAsInt(cursor.next());
-                while (cursor.hasNext()) min = Math.min(min, mapper.applyAsInt(cursor.next()));
-                return OptionalInt.of(min);
-            }
-
-            @Override public int sum() {
-                Iterator<T> cursor = upstream.consume().get();
-                int sum = 0;
-                while (cursor.hasNext()) sum += mapper.applyAsInt(cursor.next());
-                return sum;
-            }
-        };
+        return new SequentialIntStream(map(value -> mapper.applyAsInt(value)));
     }
 
     @Override public <R, A> R collect(Collector<? super T, A, R> collector) {

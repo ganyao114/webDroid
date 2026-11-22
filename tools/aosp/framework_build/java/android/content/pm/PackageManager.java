@@ -102,6 +102,14 @@ public class PackageManager {
         List<ResolveInfo> result = queryIntentActivities(intent, flags);
         return result.isEmpty() ? null : result.get(0);
     }
+    public ActivityInfo getActivityInfo(ComponentName component, int flags) throws NameNotFoundException {
+        ResolveInfo result = resolveActivity(new Intent().setComponent(component), flags);
+        if (result == null) throw new NameNotFoundException(component.flattenToString());
+        return result.activityInfo;
+    }
+    public String[] currentToCanonicalPackageNames(String[] names) {
+        return names.clone();
+    }
     public ApplicationInfo getApplicationInfo(String pkg, ApplicationInfoFlags flags) throws NameNotFoundException {
         return getApplicationInfoAsUser(pkg, flags.getValue(), UserHandle.USER_SYSTEM);
     }

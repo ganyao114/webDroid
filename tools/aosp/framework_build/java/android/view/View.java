@@ -198,8 +198,10 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     private ViewOutlineProvider outlineProvider;
     private Rect clipBounds;
     private int layerType;
+    private int transientStateCount;
     private Paint layerPaint;
     private boolean clipToOutline;
+    private Boolean forcedOverlappingRendering;
     private int[] drawableState;
     private boolean hapticFeedbackEnabled = true, defaultFocusHighlightEnabled = true;
     private int id = NO_ID, visibility = VISIBLE, layoutDirection = LAYOUT_DIRECTION_INHERIT;
@@ -320,12 +322,14 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
 
     public final ViewParent getParent() { return parent; }
     void assignParent(ViewParent parent) { this.parent = parent; }
+    void assignLayoutParams(ViewGroup.LayoutParams params) { layoutParams = params; }
     public View getRootView() {
         View root = this;
         while (root.parent instanceof View) root = (View) root.parent;
         return root;
     }
     public boolean isAttachedToWindow() { return root != null; }
+    public boolean hasWindowFocus() { return root != null && root.hasWindowFocus(); }
     public Display getDisplay() { return root == null ? null : context.getDisplay(); }
     public boolean isInEditMode() { return false; }
     public int getWindowVisibility() { return root == null ? GONE : root.getView().getVisibility(); }
@@ -425,6 +429,11 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     public void invalidateOutline() { invalidate(); }
     public void setHapticFeedbackEnabled(boolean enabled) { hapticFeedbackEnabled = enabled; }
     public boolean isHapticFeedbackEnabled() { return hapticFeedbackEnabled; }
+    public boolean performHapticFeedback(int effect) { return performHapticFeedback(effect, 0); }
+    public boolean performHapticFeedback(int effect, int flags) {
+        // Haptic effects require a host vibrator.
+        return false;
+    }
     public void setDefaultFocusHighlightEnabled(boolean enabled) { defaultFocusHighlightEnabled = enabled; }
     public boolean getDefaultFocusHighlightEnabled() { return defaultFocusHighlightEnabled; }
     public void onVisibilityAggregated(boolean visible) {}
@@ -698,12 +707,42 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     public float getRotation() { return rotation; }
     public void setRotation(float rotation) { this.rotation = rotation; invalidate(); }
     public float getAlpha() { return alpha; }
+    public boolean hasTransientState() { return transientStateCount > 0; }
+    public void setHasTransientState(boolean transientState) {
+        transientStateCount = Math.max(0, transientStateCount + (transientState ? 1 : -1));
+    }
+    public void clearAnimation() {
+        // Property animators track their own lifecycle.
+    }
+    public void forceHasOverlappingRendering(boolean overlaps) { forcedOverlappingRendering = overlaps; }
+    public boolean hasOverlappingRendering() { return true; }
+    public final boolean getHasOverlappingRendering() {
+        return forcedOverlappingRendering == null ? hasOverlappingRendering() : forcedOverlappingRendering;
+    }
     public void setAlpha(float alpha) {
         float value = Math.max(0, Math.min(1, alpha));
         if (this.alpha != value) { this.alpha = value; invalidate(); }
     }
     public void getHitRect(Rect out) { out.set(left, top, right, bottom); }
     public void getDrawingRect(Rect out) { out.set(scrollX, scrollY, scrollX + getWidth(), scrollY + getHeight()); }
+    public void getFocusedRect(Rect out) { getDrawingRect(out); }
+    public boolean requestRectangleOnScreen(Rect rectangle) { return requestRectangleOnScreen(rectangle, false); }
+    public boolean requestRectangleOnScreen(Rect rectangle, boolean immediate) {
+        if (parent == null) return false;
+        Rect position = new Rect(rectangle);
+        Rect requested = new Rect();
+        boolean scrolled = false;
+        View child = this;
+        while (child.parent != null) {
+            ViewParent owner = child.parent;
+            requested.set(position);
+            scrolled |= owner.requestChildRectangleOnScreen(child, requested, immediate);
+            if (!(owner instanceof View view)) break;
+            position.offset(child.left - child.scrollX, child.top - child.scrollY);
+            child = view;
+        }
+        return scrolled;
+    }
     public final boolean getLocalVisibleRect(Rect out) {
         Point origin = new Point();
         if (!getGlobalVisibleRect(out, origin)) return false;

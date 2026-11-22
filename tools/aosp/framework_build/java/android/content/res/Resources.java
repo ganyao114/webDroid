@@ -48,16 +48,28 @@ public class Resources implements AutoCloseable {
 
     /** Load base and split APKs in Android asset-cookie order. */
     public static Resources forApk(String[] paths, String locale, int dpi) throws IOException {
+        return loadApks(paths, locale, dpi, null);
+    }
+
+    /** Creates resources for a companion package while sharing this application's framework APK. */
+    public Resources forApkWithFramework(String path, String locale, int dpi) throws IOException {
+        if (closed || ownedSystemResources == null) throw new IOException("Framework resources are unavailable");
+        return loadApks(new String[] {path}, locale, dpi, assets.getApkAssets()[0]);
+    }
+
+    private static Resources loadApks(String[] paths, String locale, int dpi, ApkAssets framework)
+            throws IOException {
         ApkAssets[] apks = new ApkAssets[paths.length];
         AssetManager assets = new AssetManager();
         try {
             for (int i = 0; i < paths.length; ++i) apks[i] = ApkAssets.loadFromPath(paths[i]);
-            assets.setApkAssets(apks);
+            assets.setApkAssets(framework == null ? apks : new ApkAssets[] {framework, apks[0]});
             Configuration config = new Configuration();
             config.setLocaleTag(locale);
             config.densityDpi = dpi;
             Resources resources = new Resources(assets, new DisplayMetrics(), config, apks, true);
-            if (apks.length > 1 && "android".equals(assets.resourcePackageName(android.R.string.ok))) {
+            if (framework == null && apks.length > 1 &&
+                    "android".equals(assets.resourcePackageName(android.R.string.ok))) {
                 resources.ownedSystemResources = resourcesForFramework(apks[0], config);
                 systemResources = resources.ownedSystemResources;
             }

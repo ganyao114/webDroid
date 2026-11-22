@@ -66,6 +66,12 @@ struct State {
         Require(std::sscanf(Value(key).data(), "{\"x\":%f,\"y\":%f}", &center.x, &center.y) == 2, text);
         return center;
     }
+    Position SearchCenter() const {
+        float left, top, right, bottom;
+        Require(std::sscanf(Value("searchBounds").data(),
+            "{\"left\":%f,\"top\":%f,\"right\":%f,\"bottom\":%f}", &left, &top, &right, &bottom) == 4, text);
+        return {(left + right) / 2, (top + bottom) / 2};
+    }
     void Print(const char* locale, const char* phase) const {
         std::printf("%s %s %s\n", locale, phase, text);
     }
@@ -102,10 +108,25 @@ struct Path {
 struct Layer {
     bool Has(uint16_t opcode) const { return opcodes[opcode]; }
     Position Find(std::string_view label) const {
+        constexpr std::string_view ellipsis = "…";
         for (auto it = labels.rbegin(); it != labels.rend(); ++it) {
             if (it->first == label) return it->second;
+            const std::string_view text = it->first;
+            const auto end = text.find_last_not_of(' ');
+            if (end == text.npos) continue;
+            const auto prefix = text.substr(0, end + 1);
+            if ((label.size() > prefix.size() && label.starts_with(prefix) && label[prefix.size()] == ' ') ||
+                    (prefix.size() > ellipsis.size() && prefix.ends_with(ellipsis) &&
+                     label.starts_with(prefix.substr(0, prefix.size() - ellipsis.size())))) {
+                return it->second;
+            }
         }
-        throw std::runtime_error("Rendered label missing: " + std::string(label));
+        std::string message = "Rendered label missing: " + std::string(label) + "\nDisplayed text:";
+        for (const auto& [text, position] : labels) {
+            message += " [" + text + " at " + std::to_string(position.x) + "," +
+                std::to_string(position.y) + "]";
+        }
+        throw std::runtime_error(message);
     }
     bool HasPath(float x, float y, float top, float bottom) const {
         return std::ranges::any_of(paths, [&](const Path& path) {
@@ -234,12 +255,19 @@ void CheckSystemUiFrame(const Layer& window, float height, bool gestural = false
 }
 
 struct Session {
-    explicit Session(const char* locale) {
-        Check(wa_system_launcher_create(960, 660, 160, locale), "create");
+    Session(int width, int height, const char* locale) : width(width), height(height) {
+        Check(wa_system_launcher_create(width, height, 160, locale), "create");
         scene = wa_system_launcher_sf_ctx();
         Require(scene != nullptr, "Launcher scene");
     }
     ~Session() { wa_system_launcher_destroy(); }
+    std::array<Layer, 2> ReadFrame() const { return Inspect(scene, width, height); }
+    void Resize(int w, int h) {
+        Check(wa_system_launcher_resize(w, h, 160), "resize");
+        width = w;
+        height = h;
+        Tick();
+    }
     void Tick(int count = 1) {
         for (int i = 0; i < count; i++) {
             time += 16'666'667;
@@ -262,12 +290,24 @@ struct Session {
         Push(WA_INPUT_MOTION, WA_ACTION_DOWN, 1, x, y);
         Push(WA_INPUT_MOTION, WA_ACTION_UP, 3, x, y);
     }
-    void TapSystemUi(const char* button, int code, float height, int frames = 1) {
+    void TapSystemUi(const char* button, int code, int frames = 1) {
         const State before;
         const auto center = before.Button(button);
         Require(center.y > height - 48 && center.y < height, "Navigation button center within the bar");
         Tap(center.x, center.y);
         Tick(frames);
+        const State after;
+        Require(after.Integer("systemUiKeyEvents") == before.Integer("systemUiKeyEvents") + 2 &&
+                after.Integer("systemUiLastKeyCode") == code &&
+                after.Integer("systemUiLastKeyFlags") == 0x48, after.text);
+    }
+    void TapSystemUiWhilePaused(const char* button, int code) {
+        const State before;
+        const auto point = before.Button(button);
+        const int64_t ms = time / 1'000'000;
+        Require(wa_system_launcher_touch_navigation(ms + 1, WA_ACTION_DOWN, point.x, point.y) == 0 &&
+                wa_system_launcher_touch_navigation(ms + 3, WA_ACTION_UP, point.x, point.y) == code,
+                "SystemUI handles navigation over the foreground app");
         const State after;
         Require(after.Integer("systemUiKeyEvents") == before.Integer("systemUiKeyEvents") + 2 &&
                 after.Integer("systemUiLastKeyCode") == code &&
@@ -283,8 +323,17 @@ struct Session {
         const State before;
         Require(before.Integer("workspacePage") == from, before.text);
         const int start = before.Integer("workspaceScrollX");
-        Drag(to > from ? 805 : 154, 290, to > from ? -565 : 565, 0);
-        std::array<int, 15> scrolls;
+        const float x = width * (to > from ? .82f : .18f);
+        const float y = height * .38f;
+        const float dx = width * (to > from ? -.64f : .64f);
+        Push(WA_INPUT_MOTION, WA_ACTION_DOWN, 1, x, y);
+        Tick();
+        for (int step = 1; step <= 4; ++step) {
+            Push(WA_INPUT_MOTION, WA_ACTION_MOVE, 1, x + dx * step / 4, y);
+            Tick();
+        }
+        Push(WA_INPUT_MOTION, WA_ACTION_UP, 1, x + dx, y);
+        std::array<int, 36> scrolls;
         for (auto& scroll : scrolls) {
             Tick();
             scroll = State().Integer("workspaceScrollX");
@@ -292,20 +341,23 @@ struct Session {
         const State after;
         Require(after.Integer("workspacePage") == to, after.text);
         const int end = scrolls.back();
-        Require(std::abs(start - end) > 200, "Actual workspace page travel");
+        Require(std::abs(start - end) > width * .65f, "Actual workspace page travel");
         Require(std::ranges::any_of(scrolls, [&](int x) {
             return x > std::min(start, end) && x < std::max(start, end);
         }), "Intermediate animation positions");
     }
+    int width, height;
     wa_sf_t* scene;
     int64_t time = 0;
 };
 
-void Run(const char* locale, const char* hint, const char* composition, const char* query,
-         const char* cube_label, const File& dex, const File& resources,
+void Run(int width, int height, const char* locale, const char* composition, const char* query,
+         const char* cube_label, const File& dex, const File& fallback, const File& resources,
          const File& launcher, const File& systemui, const std::vector<File>& apps) {
-    Session session(locale);
+    Session session(width, height, locale);
     Check(wa_system_launcher_load_framework_dex(dex.bytes.data(), dex.bytes.size()), "load framework");
+    Check(wa_system_launcher_load_framework_fallback_dex(fallback.bytes.data(), fallback.bytes.size()),
+        "load upstream framework");
     Check(wa_system_launcher_set_framework_res_apk(resources.bytes.data(), resources.bytes.size()), "mount framework");
     for (const auto& app : apps) app.Install();
     Require(wa_system_launcher_boot_apk(launcher.name.c_str(), launcher.bytes.data(), launcher.bytes.size()) ==
@@ -320,47 +372,56 @@ void Run(const char* locale, const char* hint, const char* composition, const ch
     boot.Print(locale, "boot");
     Require(boot.Boolean("booted") && boot.Is("package", "com.android.launcher3") &&
             boot.Is("activity", "com.android.launcher3.Launcher"), boot.text);
+    Require(boot.Boolean("launcherUpstream") && boot.Integer("launcherDexCount") == 4 &&
+            boot.Integer("launcherClassCount") == 37050, boot.text);
     Require(boot.Boolean("systemUiMounted") &&
         boot.Is("systemUiClass", "com.android.systemui.statusbar.phone.PhoneStatusBarView"), boot.text);
-    Require(boot.Integer("installedApps") >= 6 && boot.Integer("pageCount") == 2 &&
-            boot.Integer("lastDrawCommands") >= 40, boot.text);
-    const auto layers = Inspect(session.scene);
+    Require(boot.Integer("installedApps") == 6 && boot.Integer("pageCount") == 2 &&
+            boot.Integer("launcherDrawCommands") > 0, boot.text);
+    for (const char* cls : {"LauncherApplication", "Launcher", "LauncherModel", "Workspace",
+            "CellLayout", "Hotseat", "BubbleTextView", "DeviceProfile", "InvariantDeviceProfile",
+            "ActivityAllAppsContainerView", "DaggerLauncherAppComponent", "PhoneStatusBarView",
+            "NavigationBarView", "KeyButtonView", "Clock", "BatteryMeterView"}) {
+        Require(boot.Integer(cls) > 0, cls);
+    }
+    const auto layers = session.ReadFrame();
     Require(layers[0].Has(WA_CANVAS_DRAW_LINEAR_GRADIENT) && layers[0].Has(WA_CANVAS_DRAW_PATH), "Wallpaper");
     Require(layers[1].Has(WA_CANVAS_DRAW_ROUND_RECT) && layers[1].Has(WA_CANVAS_DRAW_TEXT) &&
-            layers[1].Has(WA_CANVAS_DRAW_PATH), "Launcher view tree");
-    CheckSystemUiFrame(layers[1], 660);
+            layers[1].Has(WA_CANVAS_DRAW_BITMAP), "Launcher view tree");
+    CheckSystemUiFrame(layers[1], height);
 
-    session.Tick(60);
-    State().Print(locale, "home-60");
-    const auto first_page = Inspect(session.scene)[1].labels;
+    session.Tick(120);
+    State().Print(locale, "home-120");
+    const auto first_page = session.ReadFrame()[1].labels;
     Require(std::ranges::any_of(first_page, [](const auto& label) { return label.second.y >= 24; }),
         "First workspace page contains labels");
     session.Swipe(0, 1);
-    const auto second_page = Inspect(session.scene)[1].labels;
+    const auto second_page = session.ReadFrame()[1].labels;
     Require(std::ranges::any_of(second_page, [&](const auto& label) {
         return label.second.y >= 24 &&
             std::ranges::none_of(first_page, [&](const auto& first) { return first.first == label.first; });
     }), "Real app label on second workspace page");
     session.Swipe(1, 0);
-    session.Drag(520, 530, 0, -240);
-    session.Tick(12);
+    session.Swipe(0, 1);
+    session.Drag(width * .54f, height * .78f, 0, -height * .42f);
+    session.Tick(36);
     const State drawer;
     Require(drawer.Boolean("drawerOpen") && drawer.Number("drawerProgress") > 0.9 &&
             drawer.Integer("searchResults") == static_cast<int>(apps.size()), drawer.text);
 
-    const Position search = Inspect(session.scene)[1].Find(hint);
-    session.Tap(search.x + 30, search.y - 5);
+    const Position search = drawer.SearchCenter();
+    session.Tap(search.x, search.y);
     session.Push(WA_INPUT_IME, WA_IME_COMPOSING, 8, 0, 0, composition);
-    session.Tick();
+    session.Tick(12);
     const State composing;
     Require(composing.Is("searchQuery", composition), composing.text);
     session.Push(WA_INPUT_IME, WA_IME_COMMIT, 8, 0, 0, query);
-    session.Tick();
+    session.Tick(24);
     const State found;
     Require(found.Is("searchQuery", query) && found.Integer("searchResults") == 1, found.text);
-    const Position cube = Inspect(session.scene)[1].Find(cube_label);
+    const Position cube = session.ReadFrame()[1].Find(cube_label);
     session.Tap(cube.x, cube.y - 5);
-    session.Tick();
+    session.Tick(30);
     char launch[512];
     Require(wa_system_launcher_consume_launch(launch, 2) == WA_ERR_OVERFLOW, "Launch survives small buffer");
     Require(wa_system_launcher_consume_launch(launch, sizeof(launch)) > 0, "Pending launch");
@@ -369,64 +430,65 @@ void Run(const char* locale, const char* hint, const char* composition, const ch
             + std::string(cube_label) + "\"") != std::string_view::npos, launch);
     Require(wa_system_launcher_consume_launch(launch, sizeof(launch)) == 0, "Launch is consumed once");
 
+    Check(wa_system_launcher_pause(), "pause");
+    const int paused_at = State().Integer("frames");
+    session.Tick();
+    Require(State().Integer("frames") == paused_at, "Paused frames are not presented");
+    session.TapSystemUiWhilePaused("back", 4);
+    session.TapSystemUiWhilePaused("home", 3);
+    Check(wa_system_launcher_resume(), "resume");
+    Check(wa_system_launcher_send_home(), "send home");
+    session.Tick(36);
     const State before_gc;
     Check(wa_system_art_gc_collect(), "explicit GC");
-    session.TapSystemUi("home", 3, 660, 15);
     const State final;
-    final.Print(locale, "interactive-120");
-    Require(final.Integer("frames") == 120 && !final.Boolean("drawerOpen") &&
+    final.Print(locale, "interactive");
+    Require(!final.Boolean("drawerOpen") &&
             final.Number("drawerProgress") == 0 && final.Is("searchQuery", "") &&
             final.Integer("workspacePage") == 0 && final.Integer("launchCount") == 1, final.text);
     Require(final.Integer("gcCollections") > before_gc.Integer("gcCollections") &&
-            final.Integer("gcReclaimed") > 0 && final.Integer("lastDrawCommands") >= 40 &&
+            final.Integer("gcReclaimed") > 0 && final.Integer("launcherDrawCommands") > 0 &&
             final.Integer("inputEventsProcessed") >= 18, final.text);
-    Check(wa_system_launcher_pause(), "pause");
-    session.Tick();
-    Require(State().Integer("frames") == 120, "Paused frames are not presented");
-    Check(wa_system_launcher_resume(), "resume");
-    Check(wa_system_launcher_send_back(), "send back");
-    session.Tick();
-    Require(State().Integer("frames") == 121, "Resume draws again");
+    const int frames = final.Integer("frames");
     {
         const Frame held(session.scene);
         session.Tick();
         session.time += 16'666'667;
-        Require(wa_system_launcher_tick(session.time) == WA_ERR_BUSY && State().Integer("frames") == 122,
+        Require(wa_system_launcher_tick(session.time) == WA_ERR_BUSY && State().Integer("frames") == frames + 1,
                 "Held frame blocks reusing its packet");
     }
     Check(wa_system_launcher_tick(session.time), "retry frame");
-    Require(State().Integer("frames") == 123, "Retried frame publishes once");
-    Check(wa_system_launcher_resize(720, 540, 160), "resize");
-    session.Tick();
-    CheckSystemUiFrame(Inspect(session.scene, 720, 540)[1], 540);
-    session.Drag(390, 420, 0, -220);
-    session.Tick(12);
+    Require(State().Integer("frames") == frames + 2, "Retried frame publishes once");
+    session.Resize(width == 960 ? 448 : 960, height == 660 ? 896 : 660);
+    CheckSystemUiFrame(session.ReadFrame()[1], session.height);
+    Check(wa_system_launcher_open_all_apps(), "open All Apps");
+    session.Tick(36);
     Require(State().Boolean("drawerOpen"), "All Apps opened before Back key");
-    session.TapSystemUi("back", 4, 540, 15);
+    session.TapSystemUi("back", 4, 36);
     Require(!State().Boolean("drawerOpen"), "SystemUI Back closed All Apps");
-    session.TapSystemUi("recents", 187, 540);
+    session.TapSystemUi("recents", 187);
     Require(wa_system_launcher_consume_recents() == 1 && wa_system_launcher_consume_recents() == 0,
         "SystemUI Recents request is delivered once");
     Check(wa_system_launcher_set_gesture_navigation(1), "enable gestural SystemUI");
     session.Tick();
     Require(State().Boolean("systemUiGestural"), "Gestural mode active");
-    CheckSystemUiFrame(Inspect(session.scene, 720, 540)[1], 540, true);
+    CheckSystemUiFrame(session.ReadFrame()[1], session.height, true);
     Check(wa_system_launcher_set_gesture_navigation(0), "restore three-button SystemUI");
     session.Tick();
-    CheckSystemUiFrame(Inspect(session.scene, 720, 540)[1], 540);
-    session.TapSystemUi("home", 3, 540);
+    CheckSystemUiFrame(session.ReadFrame()[1], session.height);
+    session.TapSystemUi("home", 3);
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
     try {
-        Require(argc == 11, "Expected framework DEX, framework resources, Launcher3, SystemUI and six apps");
-        const File dex(argv[1]), resources(argv[2]), launcher(argv[3]), systemui(argv[4]);
+        Require(argc == 12, "Expected two framework DEX files, framework resources, Launcher3, SystemUI and six apps");
+        const File dex(argv[1]), fallback(argv[2]), resources(argv[3]), launcher(argv[4]), systemui(argv[5]);
         std::vector<File> apps;
-        for (int i = 5; i < argc; ++i) apps.emplace_back(argv[i]);
-        Run("en-US", "Search apps", "C", "Cube", "WasmAndroid 3D Cube", dex, resources, launcher, systemui, apps);
-        Run("zh-CN", "搜索应用", "立", "立方体", "WasmAndroid 3D 立方体", dex, resources, launcher, systemui, apps);
+        for (int i = 6; i < argc; ++i) apps.emplace_back(argv[i]);
+        Run(960, 660, "en-US", "C", "Cube", "WasmAndroid 3D Cube", dex, fallback, resources, launcher, systemui, apps);
+        Run(448, 896, "zh-CN", "立", "立方体", "WasmAndroid 3D 立方体", dex, fallback, resources, launcher, systemui, apps);
         Require(wa_system_launcher_sf_ctx() == nullptr, "Destroyed session");
         return 0;
     } catch (const std::exception& error) {

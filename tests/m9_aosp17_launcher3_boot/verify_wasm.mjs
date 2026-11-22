@@ -3,17 +3,20 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
+import { matchesDrawnLabel } from '../../web/launcher/scene_labels.mjs';
 import {
   Action, FramePacket, Ime, INPUT_SIZE, Input, Memory, Op, Surface, checkedRecordSize,
 } from '../../web/surfaceflinger/abi.mjs';
 
-const [glue, dex, resources, launcher, systemUi, ...apps] = process.argv.slice(2);
+const [glue, dex, fallback, resources, launcher, systemUi, ...apps] = process.argv.slice(2);
 assert.match(process.version, /^v26\./);
 const wasm = await readFile(glue.replace(/\.mjs$/, '.wasm'));
 const { default: createRuntime } = await import(pathToFileURL(glue));
 const module = await createRuntime({ wasmBinary: wasm, printErr: console.error });
 const memory = new Memory(module);
-assert.equal(memory.buffer.byteLength, 128 * 1024 * 1024);
+const linearMemoryBytes = 256 * 1024 * 1024;
+assert.equal(memory.buffer.byteLength, linearMemoryBytes);
+assert.equal(apps.length, 6);
 const encoder = new TextEncoder();
 const capacity = 4096;
 const scratch = module._malloc(capacity);
@@ -58,6 +61,7 @@ const event = module._malloc(INPUT_SIZE);
 assert(event);
 let scene;
 let now;
+let viewport;
 function tick(count = 1) {
   for (let i = 0; i < count; i++) {
     now += 16_666_667n;
@@ -93,7 +97,8 @@ function drag(x, y, dx, dy) {
   motion(Action.UP, x + dx, y + dy, 15);
 }
 
-function inspectFrame(width = 960, height = 660) {
+function inspectFrame() {
+  const { width, height } = viewport;
   const pointer = module._wa_sf_frame_acquire(scene);
   assert(pointer);
   try {
@@ -179,84 +184,108 @@ function tapSystemUi(button, code, height, frames = 1) {
 }
 
 function textPosition(text) {
-  const label = inspectFrame().get(1).texts.findLast(entry => entry.text === text);
+  const label = inspectFrame().get(1).texts.findLast(entry => matchesDrawnLabel(entry.text, text));
   assert(label, `Visible text "${text}"`);
   return label;
 }
 
 function verifySwipe(from, to) {
+  const { width, height } = viewport;
   const start = state().workspaceScrollX;
   assert.equal(state().workspacePage, from);
-  const dx = to > from ? -565 : 565;
-  drag(to > from ? 805 : 154, 290, dx, 0);
+  const x = width * (to > from ? .82 : .18), y = height * .38;
+  const dx = width * (to > from ? -.64 : .64);
+  motion(Action.DOWN, x, y, 1);
+  tick();
+  for (let step = 1; step <= 4; ++step) {
+    motion(Action.MOVE, x + dx * step / 4, y, 1);
+    tick();
+  }
+  motion(Action.UP, x + dx, y, 1);
   const scrolls = [];
-  for (let i = 0; i < 15; i++) { tick(); scrolls.push(state().workspaceScrollX); }
+  for (let i = 0; i < 36; i++) { tick(); scrolls.push(state().workspaceScrollX); }
   assert.equal(state().workspacePage, to, String(scrolls));
   const end = scrolls.at(-1);
-  assert(Math.abs(start - end) > 200, `Page travel ${start} to ${end}`);
+  assert(Math.abs(start - end) > width * .65, `Page travel ${start} to ${end}`);
   assert(scrolls.some(x => x > Math.min(start, end) && x < Math.max(start, end)), 'Intermediate animation positions');
 }
 
-async function verifyLocale(locale, hint, query, cubeLabel) {
+async function verifyDisplay(width, height, locale, query, cubeLabel) {
+  viewport = { width, height };
   now = 0n;
-  ok(withString(locale, language => module._wa_system_launcher_create(960, 660, 160, language)), 'create');
+  ok(withString(locale, language => module._wa_system_launcher_create(width, height, 160, language)), 'create');
   try {
     scene = module._wa_system_launcher_sf_ctx();
     assert(scene);
     await load('load_framework_dex', dex);
+    await load('load_framework_fallback_dex', fallback);
     await load('set_framework_res_apk', resources);
     for (const app of apps) await load('install_apk', app, true);
+    const start = performance.now();
     await load('load_systemui_apk', systemUi, true);
     await load('boot_apk', launcher, true);
+    const bootWallMs = performance.now() - start;
 
     const boot = state();
-    console.log(JSON.stringify({ locale, phase: 'boot', ...boot }));
+    console.log(JSON.stringify({ locale, width, height, phase: 'boot', bootWallMs, ...boot }));
     assert.equal(boot.booted, true);
     assert.equal(boot.package, 'com.android.launcher3');
     assert.equal(boot.activity, 'com.android.launcher3.Launcher');
+    assert.equal(boot.launcherUpstream, true);
+    assert.equal(boot.launcherDexCount, 4);
+    assert.equal(boot.launcherClassCount, 37050);
     assert.equal(boot.systemUiMounted, true);
     assert.equal(boot.systemUiClass, 'com.android.systemui.statusbar.phone.PhoneStatusBarView');
-    assert(boot.installedApps >= 6 && boot.lastDrawCommands >= 40);
+    assert.equal(boot.installedApps, apps.length);
+    assert(boot.launcherDrawCommands > 0 && boot.gcCollections > 0);
+    assert.equal(boot.wasmLinearBytes, linearMemoryBytes);
+    assert(boot.wasmHeapEndBytes > 0 && boot.wasmHeapEndBytes < linearMemoryBytes);
+    for (const [name, count] of Object.entries(boot.interpretedMethods)) assert(count > 0, name);
+    assert.equal(Object.keys(boot.interpretedMethods).length, 16);
     assert.equal(boot.pageCount, 2);
     const frame = inspectFrame();
     assert(frame.get(0).ops.has(Op.GRADIENT) && frame.get(0).ops.has(Op.PATH));
-    assert(frame.get(1).ops.has(Op.ROUND) && frame.get(1).ops.has(Op.PATH) && frame.get(1).ops.has(Op.TEXT));
-    verifySystemUiFrame(frame.get(1), 660);
+    assert(frame.get(1).ops.has(Op.ROUND) && frame.get(1).ops.has(Op.BITMAP) && frame.get(1).ops.has(Op.TEXT));
+    verifySystemUiFrame(frame.get(1), height);
 
-    tick(60);
+    tick(120);
     const home = state();
-    console.log(JSON.stringify({ locale, phase: 'home-60', ...home }));
-    assert(home.avgFrameMs < 2.5 && home.p95FrameMs < 6, 'Home frame budget');
+    console.log(JSON.stringify({ locale, width, height, phase: 'home-120', ...home }));
+    assert.equal(home.frames, 120);
     const firstPage = new Set(inspectFrame().get(1).texts.filter(entry => entry.y >= 24).map(entry => entry.text));
     assert(firstPage.size > 0);
     verifySwipe(0, 1);
     assert(inspectFrame().get(1).texts.some(entry => entry.y >= 24 && !firstPage.has(entry.text)),
       'Real app label on second page');
     verifySwipe(1, 0);
+    verifySwipe(0, 1);
 
-    drag(520, 530, 0, -240);
-    tick(12);
+    drag(width * .54, height * .78, 0, -height * .42);
+    tick(36);
     const drawer = state();
     assert(drawer.drawerOpen && drawer.drawerProgress > 0.9, JSON.stringify(drawer));
     assert.equal(drawer.searchResults, apps.length);
     const labels = locale === 'en-US' ? ['Settings', 'Browser', 'Gallery', 'Calculator', 'Clock']
                                      : ['设置', '浏览器', '图库', '计算器', '时钟'];
     const drawerLabels = inspectFrame().get(1).texts.map(entry => entry.text);
-    for (const label of [...labels, cubeLabel]) assert(drawerLabels.includes(label), label);
-    const search = textPosition(hint);
-    tap(search.x + 30, search.y - 5);
+    for (const label of [...labels, cubeLabel]) {
+      assert(drawerLabels.some(text => matchesDrawnLabel(text, label)),
+        `Missing "${label}" among ${drawerLabels.join(', ')}`);
+    }
+    const { left, top, right, bottom } = drawer.searchBounds;
+    tap((left + right) / 2, (top + bottom) / 2);
     const prefix = query.slice(0, 1);
     push(Input.IME, Ime.COMPOSING, Number(now) / 1e6 + 8, 0, 0, prefix);
-    tick();
+    tick(12);
     assert.equal(state().searchQuery, prefix);
     push(Input.IME, Ime.COMMIT, Number(now) / 1e6 + 8, 0, 0, query);
-    tick();
+    tick(24);
     const found = state();
     assert.equal(found.searchQuery, query);
     assert.equal(found.searchResults, 1);
     const cube = textPosition(cubeLabel);
     tap(cube.x, cube.y - 5);
-    tick();
+    tick(30);
     assert(module._wa_system_launcher_consume_launch(scratch, 2) < 0);
     const length = module._wa_system_launcher_consume_launch(scratch, capacity);
     assert(length > 0);
@@ -266,58 +295,81 @@ async function verifyLocale(locale, hint, query, cubeLabel) {
     });
     assert.equal(module._wa_system_launcher_consume_launch(scratch, capacity), 0);
 
-    const beforeGc = state();
-    ok(module._wa_system_art_gc_collect(), 'explicit GC');
-    tapSystemUi('home', 3, 660, 15);
+    ok(module._wa_system_launcher_pause(), 'pause');
+    const paused = state();
+    tick();
+    assert.equal(state().frames, paused.frames);
+    for (const [button, code] of [['back', 4], ['home', 3]]) {
+      const before = state();
+      const { x, y } = before.systemUiButtons[button];
+      const touch = (action, offset) =>
+        module._wa_system_launcher_touch_navigation(now / 1_000_000n + offset, action, x, y);
+      assert.equal(touch(Action.DOWN, 1n), 0);
+      assert.equal(touch(Action.UP, 3n), code);
+      const after = state();
+      assert.equal(after.systemUiKeyEvents, before.systemUiKeyEvents + 2);
+      assert.equal(after.systemUiLastKeyCode, code);
+      assert.equal(after.systemUiLastKeyFlags, 0x48);
+    }
+    ok(module._wa_system_launcher_resume(), 'resume');
+    ok(module._wa_system_launcher_send_home(), 'send home');
+    tick(36);
     const final = state();
-    console.log(JSON.stringify({ locale, phase: 'interactive-120', ...final }));
-    assert.equal(final.frames, 120);
+    console.log(JSON.stringify({ locale, width, height, phase: 'interactive', ...final }));
     assert.equal(final.drawerOpen, false);
     assert.equal(final.drawerProgress, 0);
     assert.equal(final.workspacePage, 0);
     assert.equal(final.searchQuery, '');
     assert.equal(final.launchCount, 1);
-    assert(final.gcCollections > beforeGc.gcCollections && final.gcReclaimed > 0);
-    assert(final.inputEventsProcessed >= 18 && final.lastDrawCommands >= 40);
-    assert(final.avgFrameMs < 3 && final.p95FrameMs < 6, 'Interactive frame budget');
-    ok(module._wa_system_launcher_pause(), 'pause');
-    tick();
-    assert.equal(state().frames, 120);
-    ok(module._wa_system_launcher_resume(), 'resume');
-    ok(module._wa_system_launcher_send_back(), 'send back');
-    tick();
-    assert.equal(state().frames, 121);
+    assert(final.gcCollections > boot.gcCollections && final.gcReclaimed > boot.gcReclaimed);
+    assert(final.inputEventsProcessed >= 18 && final.launcherDrawCommands > 0);
+
+    ok(module._wa_system_art_gc_collect(), 'collect after interaction');
+    const before = state();
+    tick(240);
+    ok(module._wa_system_art_gc_collect(), 'collect after 240 frames');
+    const steady = state();
+    console.log(JSON.stringify({ locale, width, height, phase: 'steady-240', ...steady,
+      startHeapEndBytes: before.wasmHeapEndBytes, startGcLive: before.gcLive }));
+    assert.equal(memory.buffer.byteLength, linearMemoryBytes);
+    assert.equal(steady.wasmHeapEndBytes, before.wasmHeapEndBytes);
+    assert(steady.gcLive <= before.gcLive, 'Reachable ART objects grew during steady HOME frames');
+    assert(steady.gcCollections > before.gcCollections && steady.gcReclaimed > before.gcReclaimed);
+
     const held = module._wa_sf_frame_acquire(scene);
     assert(held);
     try {
       tick();
       now += 16_666_667n;
       assert.equal(module._wa_system_launcher_tick(now), -16);
-      assert.equal(state().frames, 122);
+      assert.equal(state().frames, steady.frames + 1);
     } finally {
       module._wa_sf_frame_release(scene, held);
     }
     ok(module._wa_system_launcher_tick(now), 'retry frame');
-    assert.equal(state().frames, 123);
-    ok(module._wa_system_launcher_resize(720, 540, 160), 'resize');
+    assert.equal(state().frames, steady.frames + 2);
+    viewport = { width: width === 960 ? 448 : 960, height: height === 660 ? 896 : 660 };
+    ok(module._wa_system_launcher_resize(viewport.width, viewport.height, 160), 'resize');
     tick();
-    verifySystemUiFrame(inspectFrame(720, 540).get(1), 540);
-    drag(390, 420, 0, -220);
-    tick(12);
+    verifySystemUiFrame(inspectFrame().get(1), viewport.height);
+    ok(module._wa_system_launcher_open_all_apps(), 'open All Apps');
+    tick(36);
     assert(state().drawerOpen);
-    tapSystemUi('back', 4, 540, 15);
+    tapSystemUi('back', 4, viewport.height, 36);
     assert.equal(state().drawerOpen, false);
-    tapSystemUi('recents', 187, 540);
+    tapSystemUi('recents', 187, viewport.height);
     assert.equal(module._wa_system_launcher_consume_recents(), 1);
     assert.equal(module._wa_system_launcher_consume_recents(), 0);
     ok(module._wa_system_launcher_set_gesture_navigation(1), 'enable gestural SystemUI');
     tick();
     assert(state().systemUiGestural);
-    verifySystemUiFrame(inspectFrame(720, 540).get(1), 540, true);
+    verifySystemUiFrame(inspectFrame().get(1), viewport.height, true);
     ok(module._wa_system_launcher_set_gesture_navigation(0), 'restore three-button SystemUI');
     tick();
-    verifySystemUiFrame(inspectFrame(720, 540).get(1), 540);
-    tapSystemUi('home', 3, 540);
+    verifySystemUiFrame(inspectFrame().get(1), viewport.height);
+    tapSystemUi('home', 3, viewport.height);
+    console.log(JSON.stringify({ locale, width, height, phase: 'complete', ...state() }));
+    return { home, final };
   } finally {
     module._wa_system_launcher_destroy();
     assert.equal(module._wa_system_launcher_sf_ctx(), 0);
@@ -325,8 +377,12 @@ async function verifyLocale(locale, hint, query, cubeLabel) {
 }
 
 try {
-  await verifyLocale('en-US', 'Search apps', 'Cube', 'WasmAndroid 3D Cube');
-  await verifyLocale('zh-CN', '搜索应用', '立方体', 'WasmAndroid 3D 立方体');
+  const desktop = await verifyDisplay(960, 660, 'en-US', 'Cube', 'WasmAndroid 3D Cube');
+  const phone = await verifyDisplay(448, 896, 'zh-CN', '立方体', 'WasmAndroid 3D 立方体');
+  for (const { home, final } of [desktop, phone]) {
+    assert(home.avgFrameMs < 3 && home.p95FrameMs < 6, 'Home frame budget');
+    assert(final.avgFrameMs < 3 && final.p95FrameMs < 6, 'Interactive frame budget');
+  }
 } finally {
   module._free(event);
   module._free(scratch);

@@ -120,6 +120,7 @@ public class Activity extends ContextThemeWrapper implements KeyEvent.Callback, 
         onResume();
         dispatchLifecycle(callback -> callback.onActivityPostResumed(this));
         app.dispatchActivityPostResumed(this);
+        root.setWindowFocus(true);
         onWindowFocusChanged(true);
     }
     final void performPause() {
@@ -128,6 +129,7 @@ public class Activity extends ContextThemeWrapper implements KeyEvent.Callback, 
         Application app = getApplication();
         app.dispatchActivityPrePaused(this);
         dispatchLifecycle(callback -> callback.onActivityPrePaused(this));
+        root.setWindowFocus(false);
         onWindowFocusChanged(false);
         onPause();
         dispatchLifecycle(callback -> callback.onActivityPostPaused(this));
@@ -224,6 +226,7 @@ public class Activity extends ContextThemeWrapper implements KeyEvent.Callback, 
     public boolean isDestroyed() { return destroyed; }
     public void setRequestedOrientation(int orientation) { requestedOrientation = orientation; }
     public int getRequestedOrientation() { return requestedOrientation; }
+    public boolean hasWindowFocus() { return root != null && root.hasWindowFocus(); }
     final boolean isResumed() { return resumed; }
     final ViewRootImpl viewRoot() { return root; }
 

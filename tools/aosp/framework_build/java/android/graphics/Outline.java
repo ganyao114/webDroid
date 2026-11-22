@@ -6,6 +6,9 @@ public final class Outline {
     public void setEmpty() { bounds.setEmpty(); radius = 0; }
     public boolean isEmpty() { return bounds.isEmpty(); }
     public void setRect(int l, int t, int r, int b) { setRoundRect(l, t, r, b, 0); }
+    public void setRoundRect(Rect rect, float radius) {
+        setRoundRect(rect.left, rect.top, rect.right, rect.bottom, radius);
+    }
     public void setRoundRect(int l, int t, int r, int b, float radius) {
         bounds.set(l, t, r, b);
         this.radius = radius;

@@ -114,7 +114,7 @@ void ClassLinker::LoadDexFile(std::string location, std::vector<uint8_t> bytes, 
   IndexDexFiles(std::move(files), fallback ? DexSource::Fallback : DexSource::File);
 }
 
-void ClassLinker::LoadApkDexFiles(const std::string& path) {
+void ClassLinker::LoadApkDexFiles(const std::string& path, bool fallback) {
   ZipArchiveHandle handle = nullptr;
   const int32_t opened = OpenArchive(path.c_str(), &handle);
   const std::unique_ptr<ZipArchive, decltype(&CloseArchive)> archive(handle, CloseArchive);
@@ -146,10 +146,12 @@ void ClassLinker::LoadApkDexFiles(const std::string& path) {
     const std::string location = path + '!' + art::DexFileLoader::GetMultiDexZipEntryName(number - 1);
     files.push_back(OpenApkEntry(handle, entry, location, runtime_.options.verify_dex));
   }
-  IndexDexFiles(std::move(files), DexSource::Apk);
+  IndexDexFiles(std::move(files), fallback ? DexSource::FallbackApk : DexSource::Apk);
 }
 
 void ClassLinker::IndexDexFiles(DexFiles files, DexSource source) {
+  const bool from_apk = source == DexSource::Apk || source == DexSource::FallbackApk;
+  const bool fallback = source == DexSource::Fallback || source == DexSource::FallbackApk;
   size_t definitions = 0;
   for (const auto& dex : files) {
     if (dex->NumClassDefs() > static_cast<uint32_t>(std::numeric_limits<uint16_t>::max()) + 1) {
@@ -168,9 +170,9 @@ void ClassLinker::IndexDexFiles(DexFiles files, DexSource source) {
       if (loaded != classes_.end() && !loaded->second.dex) continue;
       const auto existing = dex_index_.find(descriptor);
       const bool inherits = existing != dex_index_.end() &&
-          (source == DexSource::Fallback || (source == DexSource::Apk && !existing->second.from_apk));
+          (fallback || (from_apk && !existing->second.from_apk));
       if ((existing != dex_index_.end() && !inherits) ||
-          !pending.try_emplace(descriptor, DexClass{dex.get(), definition, source == DexSource::Apk}).second) {
+          !pending.try_emplace(descriptor, DexClass{dex.get(), definition, from_apk}).second) {
         throw std::runtime_error("Duplicate DEX class " + std::string(descriptor) + " from " +
                                  dex->GetLocation());
       }

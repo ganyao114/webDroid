@@ -158,32 +158,74 @@ public abstract class ViewGroup extends View implements ViewParent {
     public void addView(View child, int width, int height) { addView(child, -1, new LayoutParams(width, height)); }
     public void addView(View child, LayoutParams params) { addView(child, -1, params); }
     public void addView(View child, int index, LayoutParams params) {
+        addChild(child, index, params, false);
+        requestLayout();
+        invalidate();
+    }
+
+    protected boolean addViewInLayout(View child, int index, LayoutParams params, boolean preventRequestLayout) {
+        addChild(child, index, params, preventRequestLayout);
+        return true;
+    }
+
+    private void addChild(View child, int index, LayoutParams params, boolean preventRequestLayout) {
         if (child.getParent() != null) throw new IllegalStateException("View already has a parent");
         if (params == null) params = generateDefaultLayoutParams();
         else if (!checkLayoutParams(params)) params = generateLayoutParams(params);
-        child.setLayoutParams(params);
+        if (preventRequestLayout) child.assignLayoutParams(params);
+        else child.setLayoutParams(params);
         if (index < 0) index = children.size();
         children.add(index, child);
         child.assignParent(this);
         if (attachment != null) child.attach(attachment);
         onViewAdded(child);
         if (hierarchyListener != null) hierarchyListener.onChildViewAdded(this, child);
-        requestLayout();
-        invalidate();
     }
     public void removeView(View child) { int index = indexOfChild(child); if (index >= 0) removeViewAt(index); }
     public void removeViewAt(int index) {
-        View child = children.remove(index);
-        if (touchTarget == child) touchTarget = null;
-        if (attachment != null) child.detach();
-        child.assignParent(null);
-        onViewRemoved(child);
-        if (hierarchyListener != null) hierarchyListener.onChildViewRemoved(this, child);
+        removeChildFromWindow(children.remove(index));
         requestLayout();
         invalidate();
     }
+
+    protected void detachViewFromParent(int index) {
+        // Recycled children retain their window attachment until reattached or removed.
+        children.remove(index).assignParent(null);
+    }
+
+    protected void detachViewFromParent(View child) {
+        detachViewFromParent(indexOfChild(child));
+    }
+
+    protected void attachViewToParent(View child, int index, LayoutParams params) {
+        if (child.getParent() != null) throw new IllegalStateException("View already has a parent");
+        children.add(index < 0 ? children.size() : index, child);
+        child.assignLayoutParams(params);
+        child.assignParent(this);
+        if (child.hasFocus()) requestChildFocus(child, child.findFocus());
+    }
+
+    protected void removeDetachedView(View child, boolean animate) {
+        removeChildFromWindow(child);
+    }
+
+    private void removeChildFromWindow(View child) {
+        if (touchTarget == child) touchTarget = null;
+        if (child.isAttachedToWindow()) child.detach();
+        if (focusedChild == child) clearChildFocus(child);
+        child.assignParent(null);
+        onViewRemoved(child);
+        if (hierarchyListener != null) hierarchyListener.onChildViewRemoved(this, child);
+    }
     public void removeViews(int start, int count) { for (int i = 0; i < count; ++i) removeViewAt(start); }
     public void removeAllViews() { removeViews(0, getChildCount()); }
+    public void removeAllViewsInLayout() {
+        for (int i = children.size() - 1; i >= 0; --i) removeChildFromWindow(children.remove(i));
+    }
+    public void removeViewInLayout(View child) {
+        int index = indexOfChild(child);
+        if (index >= 0) removeChildFromWindow(children.remove(index));
+    }
     public void onViewAdded(View child) {}
     public void onViewRemoved(View child) {}
     public void bringChildToFront(View child) {

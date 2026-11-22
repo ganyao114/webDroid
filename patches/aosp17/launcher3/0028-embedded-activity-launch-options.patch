@@ -1,0 +1,41 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/views/ActivityContext.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/views/ActivityContext.java
+@@ -420,7 +420,7 @@
+                 getStatsLogManager().logger().withItemInfo(item).withInstanceId(instanceId)
+                         .log(LAUNCHER_APP_LAUNCH_PENDING_INTENT);
+             }
+-            return options.onEndCallback;
++            return options == null ? new RunnableList() : options.onEndCallback;
+         } catch (PendingIntent.CanceledException e) {
+             Toast.makeText(v.getContext(),
+                     v.getContext().getResources().getText(R.string.shortcut_not_available),
+@@ -454,11 +454,16 @@
+         if (isShortcut && !WIDGETS_ENABLED) {
+             return null;
+         }
+-        ActivityOptionsWrapper options = v != null ? getActivityLaunchOptions(v, item)
+-                : makeDefaultActivityOptions(item != null && item.animationType == DEFAULT_NO_ICON
+-                        ? SPLASH_SCREEN_STYLE_SOLID_COLOR : -1 /* SPLASH_SCREEN_STYLE_UNDEFINED */);
++        ActivityOptionsWrapper options = null;
++        try {
++            options = v != null ? getActivityLaunchOptions(v, item)
++                    : makeDefaultActivityOptions(item != null && item.animationType == DEFAULT_NO_ICON
++                            ? SPLASH_SCREEN_STYLE_SOLID_COLOR : -1 /* SPLASH_SCREEN_STYLE_UNDEFINED */);
++        } catch (NoClassDefFoundError unavailable) {
++            // The embedded window host handles the foreground transition.
++        }
+         UserHandle user = item == null ? null : item.user;
+-        Bundle optsBundle = options.toBundle();
++        Bundle optsBundle = options == null ? null : options.toBundle();
+         // Prepare intent
+         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+         if (v != null) {
+@@ -481,7 +486,7 @@
+                 InstanceId instanceId = new InstanceIdSequence().newInstanceId();
+                 logAppLaunch(getStatsLogManager(), item, instanceId);
+             }
+-            return options.onEndCallback;
++            return options == null ? new RunnableList() : options.onEndCallback;
+         } catch (NullPointerException | ActivityNotFoundException | SecurityException e) {
+             Toast.makeText(context, R.string.activity_not_found, Toast.LENGTH_SHORT).show();
+             Log.e(TAG, "Unable to launch. tag=" + item + " intent=" + intent, e);

@@ -112,6 +112,7 @@ void InstallMath(ClassLinker& cl, std::string_view descriptor) {
   for (const auto& [name, function] : std::initializer_list<std::pair<const char*, Unary>>{
            {"floor", std::floor}, {"ceil", std::ceil}, {"sqrt", std::sqrt}, {"cbrt", std::cbrt},
            {"exp", std::exp}, {"log", std::log}, {"sin", std::sin}, {"cos", std::cos}, {"tan", std::tan},
+           {"atan", std::atan},
            {"toRadians", [](double degrees) { return degrees * (std::numbers::pi / 180.0); }},
            {"toDegrees", [](double radians) { return radians * (180.0 / std::numbers::pi); }},
            {"signum", [](double value) { return value == 0 || std::isnan(value) ? value : std::copysign(1., value); }}}) {

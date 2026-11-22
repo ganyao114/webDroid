@@ -427,6 +427,12 @@ void InstallObject(Runtime& vm) {
       [](Runtime&, Object* self, Values args) { return Value::Int(self == args[0].ref()); });
   cl.AddMethod(object, "hashCode", "()I", 0,
       [](Runtime&, Object* self, Values) { return Value::Int(IdentityHash(self)); });
+  cl.AddMethod(object, "notify", "()V", art::kAccFinal,
+      [](Runtime& vm, Object* self, Values) {
+        if (!self->monitor_depth) vm.Fail("Ljava/lang/IllegalMonitorStateException;");
+        // The cooperative interpreter has a single guest thread.
+        return Value{};
+      });
   cl.AddMethod(object, "toString", "()Ljava/lang/String;", 0,
       [](Runtime& vm, Object* self, Values) {
         return StringValue(vm, ClassName(*self->type) + "@" + Hex(static_cast<uint32_t>(IdentityHash(self))));
@@ -1547,6 +1553,11 @@ void InstallStrings(Runtime& vm) {
   }
 }
 
+bool IsLetter(uint32_t cp) {
+  const auto* letter = std::ranges::lower_bound(unicode::kLetters, cp, {}, &unicode::CodePointRange::last);
+  return letter != std::end(unicode::kLetters) && letter->first <= cp;
+}
+
 int DecimalDigit(uint32_t cp) {
   if (cp < 128) return cp >= '0' && cp <= '9' ? static_cast<int>(cp - '0') : -1;
   const auto* next = std::ranges::upper_bound(unicode::kDigitZeros, cp);
@@ -1800,6 +1811,8 @@ void InstallNumbers(Runtime& vm) {
   auto& lng = *classes['J'];
   cl.AddMethod(lng, "bitCount", "(J)I", art::kAccStatic,
       [](Runtime&, Object*, Values a) { return Value::Int(std::popcount(static_cast<uint64_t>(a[0].j()))); });
+  cl.AddMethod(lng, "rotateRight", "(JI)J", art::kAccStatic,
+      [](Runtime&, Object*, Values a) { return Value::Bits(std::rotr(a[0].bits(), a[1].i())); });
   const Builtin parse_int = [](Runtime& vm, Object*, Values a) {
     return Value::Int(ParseInteger<int32_t>(vm, a[0].ref(), a.size() > 1 ? a[1].i() : 10));
   };
@@ -1873,11 +1886,11 @@ void InstallNumbers(Runtime& vm) {
         [](Runtime&, Object*, Values a) { return Value::Int(IsWhitespace(a[0].i())); });
     cl.AddMethod(character, "isDigit", sig, art::kAccStatic,
         [](Runtime&, Object*, Values a) { return Value::Int(DecimalDigit(a[0].i()) >= 0); });
+    cl.AddMethod(character, "isLetter", sig, art::kAccStatic,
+        [](Runtime&, Object*, Values a) { return Value::Int(IsLetter(a[0].i())); });
     cl.AddMethod(character, "isLetterOrDigit", sig, art::kAccStatic, [](Runtime&, Object*, Values a) {
       const auto code_point = static_cast<uint32_t>(a[0].i());
-      const auto* letter = std::ranges::lower_bound(unicode::kLetters, code_point, {}, &unicode::CodePointRange::last);
-      return Value::Int((letter != std::end(unicode::kLetters) && letter->first <= code_point) ||
-                        DecimalDigit(code_point) >= 0);
+      return Value::Int(IsLetter(code_point) || DecimalDigit(code_point) >= 0);
     });
   }
   for (auto sig : {"(CI)I", "(II)I"}) {

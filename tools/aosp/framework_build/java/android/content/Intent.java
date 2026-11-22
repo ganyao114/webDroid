@@ -2,6 +2,7 @@ package android.content;
 
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.ArraySet;
@@ -12,6 +13,7 @@ public class Intent implements Cloneable {
     public static final String ACTION_MAIN = "android.intent.action.MAIN", ACTION_VIEW = "android.intent.action.VIEW";
     public static final String ACTION_CREATE_SHORTCUT = "android.intent.action.CREATE_SHORTCUT";
     public static final String ACTION_SEND = "android.intent.action.SEND";
+    public static final String ACTION_ALL_APPS = "android.intent.action.ALL_APPS";
     public static final String CATEGORY_DEFAULT = "android.intent.category.DEFAULT";
     public static final String CATEGORY_LAUNCHER = "android.intent.category.LAUNCHER";
     public static final String CATEGORY_HOME = "android.intent.category.HOME";
@@ -26,6 +28,7 @@ public class Intent implements Cloneable {
     private ComponentName component;
     private ArraySet<String> categories;
     private Bundle extras;
+    private Rect sourceBounds;
     private int flags;
 
     public Intent() {}
@@ -37,6 +40,7 @@ public class Intent implements Cloneable {
         component = other.component; flags = other.flags;
         if (other.categories != null) for (String category : other.categories) addCategory(category);
         if (other.extras != null) extras = new Bundle(other.extras);
+        if (other.sourceBounds != null) sourceBounds = new Rect(other.sourceBounds);
     }
     @Override public Object clone() { return new Intent(this); }
     public static Intent makeMainActivity(ComponentName component) {
@@ -161,6 +165,8 @@ public class Intent implements Cloneable {
     public Intent addFlags(int flags) { this.flags |= flags; return this; }
     public void removeFlags(int flags) { this.flags &= ~flags; }
     public int getFlags() { return flags; }
+    public void setSourceBounds(Rect bounds) { sourceBounds = bounds == null ? null : new Rect(bounds); }
+    public Rect getSourceBounds() { return sourceBounds; }
 
     public Intent addCategory(String category) {
         if (categories == null) categories = new ArraySet<>();

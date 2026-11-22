@@ -19,6 +19,8 @@ public class ValueAnimator extends Animator implements Choreographer.FrameCallba
     private float[] keyframeFractions;
     private TimeInterpolator[] keyframeInterpolators;
     private int[] ints;
+    private Object[] objects;
+    private TypeEvaluator<Object> evaluator;
     private Object value;
     private TimeInterpolator interpolator = new AccelerateDecelerateInterpolator();
 
@@ -35,6 +37,8 @@ public class ValueAnimator extends Animator implements Choreographer.FrameCallba
     public void setFloatValues(float... values) {
         floats = values.length == 1 ? new float[] {0, values[0]} : values.clone();
         ints = null;
+        objects = null;
+        evaluator = null;
         keyframeFractions = null;
         keyframeInterpolators = null;
     }
@@ -46,6 +50,17 @@ public class ValueAnimator extends Animator implements Choreographer.FrameCallba
     public void setIntValues(int... values) {
         ints = values.length == 1 ? new int[] {0, values[0]} : values.clone();
         floats = null;
+        objects = null;
+        evaluator = null;
+        keyframeFractions = null;
+        keyframeInterpolators = null;
+    }
+    @SuppressWarnings("unchecked")
+    void setObjectValues(TypeEvaluator<?> evaluator, Object[] values) {
+        objects = values.clone();
+        this.evaluator = (TypeEvaluator<Object>) evaluator;
+        floats = null;
+        ints = null;
         keyframeFractions = null;
         keyframeInterpolators = null;
     }
@@ -121,7 +136,7 @@ public class ValueAnimator extends Animator implements Choreographer.FrameCallba
     }
     private void animate(float progress) {
         fraction = interpolator == null ? progress : interpolator.getInterpolation(progress);
-        int count = floats != null ? floats.length : ints == null ? 0 : ints.length;
+        int count = floats != null ? floats.length : ints != null ? ints.length : objects != null ? objects.length : 0;
         if (count > 0) {
             float i = fraction * (count - 1);
             int from = Math.max(0, Math.min(count - 2, (int) i));
@@ -137,7 +152,8 @@ public class ValueAnimator extends Animator implements Choreographer.FrameCallba
                 if (between != null) local = between.getInterpolation(local);
             }
             if (floats != null) value = floats[from] + (floats[to] - floats[from]) * local;
-            else value = ints[from] + (int) ((ints[to] - (float) ints[from]) * local);
+            else if (ints != null) value = ints[from] + (int) ((ints[to] - (float) ints[from]) * local);
+            else value = evaluator.evaluate(local, objects[from], objects[to]);
         }
         AnimatorUpdateListener[] snapshot = new AnimatorUpdateListener[updates.size()];
         for (int i = 0; i < snapshot.length; i++) snapshot[i] = updates.get(i);
