@@ -1,0 +1,75 @@
+--- a/frameworks/base/core/java/com/android/internal/util/ArrayUtils.java
++++ b/frameworks/base/core/java/com/android/internal/util/ArrayUtils.java
+@@ -24,7 +24,6 @@
+ import android.util.ArraySet;
+ import android.util.EmptyArray;
+ 
+-import dalvik.system.VMRuntime;
+ 
+ import java.io.File;
+ import java.lang.reflect.Array;
+@@ -55,38 +54,38 @@
+     private ArrayUtils() { /* cannot be instantiated */ }
+ 
+     public static byte[] newUnpaddedByteArray(int minLen) {
+-        return (byte[])VMRuntime.getRuntime().newUnpaddedArray(byte.class, minLen);
++        return new byte[minLen];
+     }
+ 
+     public static char[] newUnpaddedCharArray(int minLen) {
+-        return (char[])VMRuntime.getRuntime().newUnpaddedArray(char.class, minLen);
++        return new char[minLen];
+     }
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public static int[] newUnpaddedIntArray(int minLen) {
+-        return (int[])VMRuntime.getRuntime().newUnpaddedArray(int.class, minLen);
++        return new int[minLen];
+     }
+ 
+     public static boolean[] newUnpaddedBooleanArray(int minLen) {
+-        return (boolean[])VMRuntime.getRuntime().newUnpaddedArray(boolean.class, minLen);
++        return new boolean[minLen];
+     }
+ 
+     public static long[] newUnpaddedLongArray(int minLen) {
+-        return (long[])VMRuntime.getRuntime().newUnpaddedArray(long.class, minLen);
++        return new long[minLen];
+     }
+ 
+     public static float[] newUnpaddedFloatArray(int minLen) {
+-        return (float[])VMRuntime.getRuntime().newUnpaddedArray(float.class, minLen);
++        return new float[minLen];
+     }
+ 
+     public static Object[] newUnpaddedObjectArray(int minLen) {
+-        return (Object[])VMRuntime.getRuntime().newUnpaddedArray(Object.class, minLen);
++        return new Object[minLen];
+     }
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     @SuppressWarnings("unchecked")
+     public static <T> T[] newUnpaddedArray(Class<T> clazz, int minLen) {
+-        return (T[])VMRuntime.getRuntime().newUnpaddedArray(clazz, minLen);
++        return (T[]) Array.newInstance(clazz, minLen);
+     }
+ 
+     /**
+@@ -100,7 +99,7 @@
+      * @return the new array
+      */
+     public static byte[] newNonMovableByteArray(int length) {
+-        return (byte[]) VMRuntime.getRuntime().newNonMovableArray(byte.class, length);
++        return new byte[length];
+     }
+ 
+     /**
+@@ -110,7 +109,7 @@
+      * @return the new array
+      */
+     public static char[] newNonMovableCharArray(int length) {
+-        return (char[]) VMRuntime.getRuntime().newNonMovableArray(char.class, length);
++        return new char[length];
+     }
+ 
+     /**

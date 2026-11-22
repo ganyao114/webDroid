@@ -1,0 +1,96 @@
+--- a/frameworks/base/graphics/java/android/graphics/Matrix.java
++++ b/frameworks/base/graphics/java/android/graphics/Matrix.java
+@@ -21,7 +21,6 @@
+ import dalvik.annotation.optimization.CriticalNative;
+ import dalvik.annotation.optimization.FastNative;
+ 
+-import libcore.util.NativeAllocationRegistry;
+ 
+ import java.io.PrintWriter;
+ 
+@@ -227,11 +226,8 @@
+         }
+     };
+ 
+-    private static class NoImagePreloadHolder {
+-        public static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                Matrix.class.getClassLoader(), ExtraNatives.nGetNativeFinalizer());
+-    }
++    // The host owns the native handle for the lifetime of this peer.
++    private static native void nRegisterNativeAllocation(Matrix matrix, long handle);
+ 
+     private final long native_instance;
+ 
+@@ -240,7 +236,7 @@
+      */
+     public Matrix() {
+         native_instance = ExtraNatives.nCreate(0);
+-        NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, native_instance);
++        nRegisterNativeAllocation(this, native_instance);
+     }
+ 
+     /**
+@@ -250,7 +246,7 @@
+      */
+     public Matrix(Matrix src) {
+         native_instance = ExtraNatives.nCreate(src != null ? src.native_instance : 0);
+-        NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, native_instance);
++        nRegisterNativeAllocation(this, native_instance);
+     }
+ 
+     /**
+--- a/frameworks/base/graphics/java/android/graphics/Path.java
++++ b/frameworks/base/graphics/java/android/graphics/Path.java
+@@ -27,7 +27,6 @@
+ import dalvik.annotation.optimization.CriticalNative;
+ import dalvik.annotation.optimization.FastNative;
+ 
+-import libcore.util.NativeAllocationRegistry;
+ 
+ /**
+  * The Path class encapsulates compound (multiple contour) geometric paths
+@@ -38,13 +37,9 @@
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class Path {
+-    // See b/337329128 for why we need an inner class here.
+-    private static class NoImagePreloadHolder {
+-        static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                        Path.class.getClassLoader(), nGetFinalizer());
+-    }
+-
++    // The host owns the native handle for the lifetime of this peer.
++    private static native void nRegisterNativeAllocation(Path path, long handle);
++    private static native float[] nativeParsePathData(String pathData);
+     /**
+      * @hide
+      */
+@@ -55,7 +50,7 @@
+      */
+     public Path() {
+         mNativePath = nInit();
+-        NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, mNativePath);
++        nRegisterNativeAllocation(this, mNativePath);
+     }
+ 
+     /**
+@@ -65,7 +60,7 @@
+      */
+     public Path(@Nullable Path src) {
+         mNativePath = nInit(src != null ? src.mNativePath : 0);
+-        NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, mNativePath);
++        nRegisterNativeAllocation(this, mNativePath);
+     }
+ 
+     /**
+@@ -104,7 +99,7 @@
+      */
+     @NonNull
+     public PathIterator getPathIterator() {
+-        return new PathIterator(this);
++        throw new UnsupportedOperationException("The host path iterator is unavailable");
+     }
+ 
+     /**

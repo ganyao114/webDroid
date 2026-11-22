@@ -1,0 +1,447 @@
+--- a/frameworks/base/graphics/java/android/graphics/BaseCanvas.java
++++ b/frameworks/base/graphics/java/android/graphics/BaseCanvas.java
+@@ -28,14 +28,11 @@
+ import android.graphics.text.MeasuredText;
+ import android.graphics.text.TextRunShaper;
+ import android.text.GraphicsOperations;
+-import android.text.MeasuredParagraph;
+-import android.text.PrecomputedText;
+ import android.text.SpannableString;
+ import android.text.SpannedString;
+ import android.text.TextShaper;
+ import android.text.TextUtils;
+ 
+-import com.android.internal.util.Preconditions;
+ 
+ import java.util.Objects;
+ 
+@@ -123,7 +120,7 @@
+         throwIfHasHwFeaturesInSwMode(paint);
+         nDrawBitmap(mNativeCanvasWrapper, bitmap.getNativeInstance(), left, top,
+                 paint != null ? paint.getNativeInstance() : 0, mDensity, mScreenDensity,
+-                bitmap.mDensity);
++                bitmap.getDensity());
+     }
+ 
+     public void drawBitmap(@NonNull Bitmap bitmap, @NonNull Matrix matrix, @Nullable Paint paint) {
+@@ -155,7 +152,7 @@
+ 
+         nDrawBitmap(mNativeCanvasWrapper, bitmap.getNativeInstance(), left, top, right, bottom,
+                 dst.left, dst.top, dst.right, dst.bottom, nativePaint, mScreenDensity,
+-                bitmap.mDensity);
++                bitmap.getDensity());
+     }
+ 
+     public void drawBitmap(@NonNull Bitmap bitmap, @Nullable Rect src, @NonNull RectF dst,
+@@ -181,7 +178,7 @@
+ 
+         nDrawBitmap(mNativeCanvasWrapper, bitmap.getNativeInstance(), left, top, right, bottom,
+                 dst.left, dst.top, dst.right, dst.bottom, nativePaint, mScreenDensity,
+-                bitmap.mDensity);
++                bitmap.getDensity());
+     }
+ 
+     @Deprecated
+@@ -491,7 +488,9 @@
+         Objects.requireNonNull(positions, "positions must not be null.");
+         Objects.requireNonNull(font, "font must not be null.");
+         Objects.requireNonNull(paint, "paint must not be null.");
+-        Preconditions.checkArgumentNonnegative(glyphCount);
++        if (glyphCount < 0) {
++            throw new IllegalArgumentException("glyphCount must be nonnegative");
++        }
+ 
+         if (glyphIdOffset < 0 || glyphIdOffset + glyphCount > glyphIds.length) {
+             throw new IndexOutOfBoundsException(
+@@ -618,22 +617,6 @@
+             ((GraphicsOperations) text).drawTextRun(this, start, end,
+                     contextStart, contextEnd, x, y, isRtl, paint);
+         } else {
+-            if (text instanceof PrecomputedText) {
+-                final PrecomputedText pt = (PrecomputedText) text;
+-                final int paraIndex = pt.findParaIndex(start);
+-                if (end <= pt.getParagraphEnd(paraIndex)) {
+-                    final int paraStart = pt.getParagraphStart(paraIndex);
+-                    final MeasuredParagraph mp = pt.getMeasuredParagraph(paraIndex);
+-                    // Only support the text in the same paragraph.
+-                    drawTextRun(mp.getMeasuredText(),
+-                                start - paraStart,
+-                                end - paraStart,
+-                                contextStart - paraStart,
+-                                contextEnd - paraStart,
+-                                x, y, isRtl, paint);
+-                    return;
+-                }
+-            }
+             int contextLen = contextEnd - contextStart;
+             int len = end - start;
+             char[] buf = TemporaryBuffer.obtain(contextLen);
+--- a/frameworks/base/graphics/java/android/graphics/Canvas.java
++++ b/frameworks/base/graphics/java/android/graphics/Canvas.java
+@@ -18,7 +18,6 @@
+ 
+ import android.annotation.ColorInt;
+ import android.annotation.ColorLong;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.IntRange;
+ import android.annotation.NonNull;
+@@ -31,12 +30,10 @@
+ import android.os.Build;
+ import android.text.TextShaper;
+ 
+-import com.android.graphics.hwui.flags.Flags;
+ 
+ import dalvik.annotation.optimization.CriticalNative;
+ import dalvik.annotation.optimization.FastNative;
+ 
+-import libcore.util.NativeAllocationRegistry;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -77,14 +74,9 @@
+     // (see SkCanvas.cpp, SkDraw.cpp)
+     private static final int MAXIMUM_BITMAP_SIZE = 32766;
+ 
+-    // Use a Holder to allow static initialization of Canvas in the boot image.
+-    private static class NoImagePreloadHolder {
+-        public static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                Canvas.class.getClassLoader(), nGetNativeFinalizer());
+-    }
+-
+     // This field is used to finalize the native Canvas properly
++    private static native Runnable nRegisterNativeAllocation(Canvas canvas, long handle);
++
+     private Runnable mFinalizer;
+ 
+     /**
+@@ -97,8 +89,7 @@
+         if (!isHardwareAccelerated()) {
+             // 0 means no native bitmap
+             mNativeCanvasWrapper = nInitRaster(0);
+-            mFinalizer = NoImagePreloadHolder.sRegistry.registerNativeAllocation(
+-                    this, mNativeCanvasWrapper);
++            mFinalizer = nRegisterNativeAllocation(this, mNativeCanvasWrapper);
+         } else {
+             mFinalizer = null;
+         }
+@@ -120,10 +111,9 @@
+         throwIfCannotDraw(bitmap);
+         bitmap.setGainmap(null);
+         mNativeCanvasWrapper = nInitRaster(bitmap.getNativeInstance());
+-        mFinalizer = NoImagePreloadHolder.sRegistry.registerNativeAllocation(
+-                this, mNativeCanvasWrapper);
++        mFinalizer = nRegisterNativeAllocation(this, mNativeCanvasWrapper);
+         mBitmap = bitmap;
+-        mDensity = bitmap.mDensity;
++        mDensity = bitmap.getDensity();
+     }
+ 
+     /**
+@@ -135,8 +125,7 @@
+             throw new IllegalStateException();
+         }
+         mNativeCanvasWrapper = nativeCanvas;
+-        mFinalizer = NoImagePreloadHolder.sRegistry.registerNativeAllocation(
+-                this, mNativeCanvasWrapper);
++        mFinalizer = nRegisterNativeAllocation(this, mNativeCanvasWrapper);
+         mDensity = Bitmap.getDefaultDensity();
+     }
+ 
+@@ -197,7 +186,7 @@
+             throwIfCannotDraw(bitmap);
+             bitmap.setGainmap(null);
+             nSetBitmap(mNativeCanvasWrapper, bitmap.getNativeInstance());
+-            mDensity = bitmap.mDensity;
++            mDensity = bitmap.getDensity();
+         }
+ 
+         if (preservedMatrix != null) {
+@@ -789,7 +778,6 @@
+      *
+      * @param m The 4x4 matrix to preconcatenate with the current matrix
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public void concat(@Nullable Matrix44 m) {
+         if (m != null) nConcat(mNativeCanvasWrapper, m.mBackingArray);
+     }
+@@ -1145,7 +1133,6 @@
+      *
+      * @param shader The shader to intersect with the current clip
+      */
+-    @FlaggedApi(Flags.FLAG_CLIP_SHADER)
+     public void clipShader(@NonNull Shader shader) {
+         nClipShader(mNativeCanvasWrapper, shader.getNativeInstance(),
+                 Region.Op.INTERSECT.nativeInt);
+@@ -1157,7 +1144,6 @@
+      *
+      * @param shader The shader to intersect with the current clip
+      */
+-    @FlaggedApi(Flags.FLAG_CLIP_SHADER)
+     public void clipOutShader(@NonNull Shader shader) {
+         nClipShader(mNativeCanvasWrapper, shader.getNativeInstance(),
+                 Region.Op.DIFFERENCE.nativeInt);
+@@ -1937,7 +1923,6 @@
+      * @param region The region to be drawn
+      * @param paint The paint used to draw the region
+      */
+-    @FlaggedApi(Flags.FLAG_DRAW_REGION)
+     public void drawRegion(@NonNull Region region, @NonNull Paint paint) {
+         super.drawRegion(region, paint);
+     }
+--- a/frameworks/base/graphics/java/android/graphics/BitmapShader.java
++++ b/frameworks/base/graphics/java/android/graphics/BitmapShader.java
+@@ -16,13 +16,11 @@
+ 
+ package android.graphics;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.IntRange;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ 
+-import com.android.graphics.hwui.flags.Flags;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -37,7 +35,6 @@
+      * Prevent garbage collection.
+      */
+     /*package*/ Bitmap mBitmap;
+-    private Gainmap mOverrideGainmap;
+ 
+     private int mTileX;
+     private int mTileY;
+@@ -184,16 +181,8 @@
+      *
+      * @param overrideGainmap The gainmap to draw instead, null to use any gainmap on the Bitmap
+      */
+-    @FlaggedApi(Flags.FLAG_GAINMAP_ANIMATIONS)
+     public void setOverrideGainmap(@Nullable Gainmap overrideGainmap) {
+-        if (!Flags.gainmapAnimations()) throw new IllegalStateException("API not available");
+-
+-        if (overrideGainmap == null) {
+-            mOverrideGainmap = null;
+-        } else {
+-            mOverrideGainmap = new Gainmap(overrideGainmap, overrideGainmap.getGainmapContents());
+-        }
+-        discardNativeInstance();
++        throw new UnsupportedOperationException("The HWUI gainmap flag is unavailable");
+     }
+ 
+     /**
+@@ -225,7 +214,7 @@
+         mRequestDirectSampling = false;
+         return nativeCreate(nativeMatrix, mBitmap.getNativeInstance(), mTileX,
+                 mTileY, mMaxAniso, enableLinearFilter, mIsDirectSampled,
+-                mOverrideGainmap != null ? mOverrideGainmap.mNativePtr : 0);
++                0);
+     }
+ 
+     /** @hide */
+--- a/frameworks/base/graphics/java/android/graphics/Matrix44.java
++++ b/frameworks/base/graphics/java/android/graphics/Matrix44.java
+@@ -16,12 +16,10 @@
+ 
+ package android.graphics;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntRange;
+ import android.annotation.NonNull;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ 
+-import com.android.graphics.hwui.flags.Flags;
+ 
+ import java.util.Arrays;
+ 
+@@ -30,14 +28,12 @@
+  * {@link Matrix}, and should be used when you want to manipulate the canvas in 3D. Values are kept
+  * in row-major order. The values and operations are treated as column vectors.
+  */
+-@FlaggedApi(Flags.FLAG_MATRIX_44)
+ @RavenwoodKeepWholeClass
+ public class Matrix44 {
+     final float[] mBackingArray;
+     /**
+      * The default Matrix44 constructor will instantiate an identity matrix.
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public Matrix44() {
+         mBackingArray = new float[]{1.0f, 0.0f, 0.0f, 0.0f,
+                                     0.0f, 1.0f, 0.0f, 0.0f,
+@@ -58,7 +54,6 @@
+      *
+      * @param mat A 3x3 Matrix to be converted (original Matrix will not be changed)
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public Matrix44(@NonNull Matrix mat) {
+         float[] m = new float[9];
+         mat.getValues(m);
+@@ -74,7 +69,6 @@
+      * @param dst The float array where values will be copied, must be of length 16
+      * @throws IllegalArgumentException if the destination float array is not of length 16
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public void getValues(@NonNull float [] dst) {
+         if (dst.length == 16) {
+             System.arraycopy(mBackingArray, 0, dst, 0, mBackingArray.length);
+@@ -89,7 +83,6 @@
+      * @param src A float array of length 16. Floats are treated in row-major order
+      * @throws IllegalArgumentException if the destination float array is not of length 16
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public void setValues(@NonNull float[] src) {
+         if (src.length == 16) {
+             System.arraycopy(src, 0, mBackingArray, 0, mBackingArray.length);
+@@ -104,7 +97,6 @@
+      * @param row An integer from 0 to 3 indicating the row of the value to get
+      * @param col An integer from 0 to 3 indicating the column of the value to get
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public float get(@IntRange(from = 0, to = 3) int row, @IntRange(from = 0, to = 3) int col) {
+         if (row >= 0 && row < 4 && col >= 0 && col < 4) {
+             return mBackingArray[row * 4 + col];
+@@ -119,7 +111,6 @@
+      * @param col An integer from 0 to 3 indicating the column of the value to change
+      * @param val The value the element at the specified index will be set to
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public void set(@IntRange(from = 0, to = 3) int row, @IntRange(from = 0, to = 3) int col,
+             float val) {
+         if (row >= 0 && row < 4 && col >= 0 && col < 4) {
+@@ -132,7 +123,6 @@
+     /**
+      * Sets the Matrix44 to the identity matrix.
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public void reset() {
+         for (int i = 0; i < mBackingArray.length; i++) {
+             mBackingArray[i] = (i % 4 == i / 4) ? 1.0f : 0.0f;
+@@ -144,7 +134,6 @@
+      *
+      * @return {@code true} on success, {@code false} otherwise
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public boolean invert() {
+         float a00 = mBackingArray[0];
+         float a01 = mBackingArray[1];
+@@ -201,7 +190,6 @@
+     /**
+      * Returns true if Matrix44 is equal to identity matrix.
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public boolean isIdentity() {
+         for (int i = 0; i < mBackingArray.length; i++) {
+             float expected = (i % 4 == i / 4) ? 1.0f : 0.0f;
+@@ -210,7 +198,6 @@
+         return true;
+     }
+ 
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     private static float dot(Matrix44 a, Matrix44 b, int row, int col) {
+         return (a.get(row, 0) * b.get(0, col))
+                 + (a.get(row, 1) * b.get(1, col))
+@@ -218,7 +205,6 @@
+                 + (a.get(row, 3) * b.get(3, col));
+     }
+ 
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     private static float dot(float r0, float r1, float r2, float r3,
+                              float c0, float c1, float c2, float c3) {
+         return (r0 * c0) + (r1 * c1) + (r2 * c2) + (r3 * c3);
+@@ -231,7 +217,6 @@
+      * @return An array of length 4 that represents the x, y, z, w (where w is perspective) value
+      * after multiplying x, y, z, 1 by the matrix
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public @NonNull float[] map(float x, float y, float z, float w) {
+         float[] dst = new float[4];
+         this.map(x, y, z, w, dst);
+@@ -242,7 +227,6 @@
+      * Multiplies (x, y, z, w) vector by the Matrix44, then returns the new (x, y, z, w). Users
+      * should set {@code w} to 1 to indicate the coordinates are normalized.
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public void map(float x, float y, float z, float w, @NonNull float[] dst) {
+         if (dst.length != 4) {
+             throw new IllegalArgumentException("Dst array must be of length 4");
+@@ -264,7 +248,6 @@
+      * @param b The second Matrix in the concatenation operation
+      * @return A reference to this Matrix, which can be used to chain Matrix operations
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public @NonNull Matrix44 concat(@NonNull Matrix44 b) {
+         float val00 = dot(this, b, 0, 0);
+         float val01 = dot(this, b, 0, 1);
+@@ -315,7 +298,6 @@
+      * @param zComp Z component of the rotation axis
+      * @return A reference to this Matrix, which can be used to chain Matrix operations
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public @NonNull Matrix44 rotate(float deg, float xComp, float yComp, float zComp) {
+         float sum = xComp + yComp + zComp;
+         float x = xComp / sum;
+@@ -397,7 +379,6 @@
+      * @param z Scaling factor for the z-axis
+      * @return A reference to this Matrix, which can be used to chain Matrix operations
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public @NonNull Matrix44 scale(float x, float y, float z) {
+         mBackingArray[0] *= x;
+         mBackingArray[4] *= x;
+@@ -423,7 +404,6 @@
+      * @param z Translation for the z-axis
+      * @return A reference to this Matrix, which can be used to chain Matrix operations
+      */
+-    @FlaggedApi(Flags.FLAG_MATRIX_44)
+     public @NonNull Matrix44 translate(float x, float y, float z) {
+         float newX = x * mBackingArray[0] + y * mBackingArray[1]
+                 + z * mBackingArray[2] + mBackingArray[3];
+--- a/frameworks/base/graphics/java/android/graphics/NinePatch.java
++++ b/frameworks/base/graphics/java/android/graphics/NinePatch.java
+@@ -208,7 +208,7 @@
+      * {@link Bitmap#getDensity() Bitmap.getDensity()}.
+      */
+     public int getDensity() {
+-        return mBitmap.mDensity;
++        return mBitmap.getDensity();
+     }
+ 
+     /**
+--- a/frameworks/base/graphics/java/android/graphics/Shader.java
++++ b/frameworks/base/graphics/java/android/graphics/Shader.java
+@@ -21,7 +21,6 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ 
+-import libcore.util.NativeAllocationRegistry;
+ 
+ /**
+  * Shader is the base class for objects that return horizontal spans of colors
+@@ -31,12 +30,8 @@
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class Shader {
+-
+-    private static class NoImagePreloadHolder {
+-        public static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                Shader.class.getClassLoader(), nativeGetFinalizer());
+-    }
++    private static native Runnable nRegisterNativeAllocation(
++            Shader shader, long handle);
+ 
+     /**
+      * @deprecated Use subclass constructors directly instead.
+@@ -192,8 +187,7 @@
+             mNativeInstance = createNativeInstance(mLocalMatrix == null
+                     ? 0 : mLocalMatrix.ni(), filterFromPaint);
+             if (mNativeInstance != 0) {
+-                mCleaner = NoImagePreloadHolder.sRegistry.registerNativeAllocation(
+-                        this, mNativeInstance);
++                mCleaner = nRegisterNativeAllocation(this, mNativeInstance);
+             }
+         }
+         return mNativeInstance;

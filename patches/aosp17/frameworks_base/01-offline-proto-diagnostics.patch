@@ -1,0 +1,100 @@
+--- a/frameworks/base/graphics/java/android/graphics/Rect.java
++++ b/frameworks/base/graphics/java/android/graphics/Rect.java
+@@ -21,7 +21,6 @@
+ import android.annotation.Nullable;
+ import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.internal.perfetto.protos.Rect.RectProto;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.text.TextUtils;
+@@ -243,12 +242,7 @@
+      * @hide
+      */
+     public void dumpDebug(@NonNull ProtoOutputStream protoOutputStream, long fieldId) {
+-        final long token = protoOutputStream.start(fieldId);
+-        protoOutputStream.write(RectProto.LEFT, left);
+-        protoOutputStream.write(RectProto.TOP, top);
+-        protoOutputStream.write(RectProto.RIGHT, right);
+-        protoOutputStream.write(RectProto.BOTTOM, bottom);
+-        protoOutputStream.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /**
+@@ -261,28 +255,7 @@
+      */
+     public void readFromProto(@NonNull ProtoInputStream proto, long fieldId) throws IOException,
+             WireTypeMismatchException {
+-        final long token = proto.start(fieldId);
+-        try {
+-            while (proto.nextField() != ProtoInputStream.NO_MORE_FIELDS) {
+-                switch (proto.getFieldNumber()) {
+-                    case (int) RectProto.LEFT:
+-                        left = proto.readInt(RectProto.LEFT);
+-                        break;
+-                    case (int) RectProto.TOP:
+-                        top = proto.readInt(RectProto.TOP);
+-                        break;
+-                    case (int) RectProto.RIGHT:
+-                        right = proto.readInt(RectProto.RIGHT);
+-                        break;
+-                    case (int) RectProto.BOTTOM:
+-                        bottom = proto.readInt(RectProto.BOTTOM);
+-                        break;
+-                }
+-            }
+-        } finally {
+-            // Let caller handle any exceptions
+-            proto.end(token);
+-        }
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /**
+--- a/frameworks/base/graphics/java/android/graphics/Insets.java
++++ b/frameworks/base/graphics/java/android/graphics/Insets.java
+@@ -215,12 +215,7 @@
+      * @hide
+      */
+     public void dumpDebug(@NonNull ProtoOutputStream protoOutputStream, long fieldId) {
+-        final long token = protoOutputStream.start(fieldId);
+-        protoOutputStream.write(InsetsProto.LEFT, left);
+-        protoOutputStream.write(InsetsProto.TOP, top);
+-        protoOutputStream.write(InsetsProto.RIGHT, right);
+-        protoOutputStream.write(InsetsProto.BOTTOM, bottom);
+-        protoOutputStream.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     public static final @android.annotation.NonNull Parcelable.Creator<Insets> CREATOR = new Parcelable.Creator<Insets>() {
+--- a/frameworks/base/core/java/android/content/ComponentName.java
++++ b/frameworks/base/core/java/android/content/ComponentName.java
+@@ -304,10 +304,7 @@
+      * @hide
+      */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-        proto.write(ComponentNameProto.PACKAGE_NAME, mPackage);
+-        proto.write(ComponentNameProto.CLASS_NAME, mClass);
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/os/PatternMatcher.java
++++ b/frameworks/base/core/java/android/os/PatternMatcher.java
+@@ -172,12 +172,7 @@
+ 
+     /** @hide */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        long token = proto.start(fieldId);
+-        proto.write(PatternMatcherProto.PATTERN, mPattern);
+-        proto.write(PatternMatcherProto.TYPE, mType);
+-        // PatternMatcherProto.PARSED_PATTERN is too much to dump, but the field is reserved to
+-        // match the current data structure.
+-        proto.end(token);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /**

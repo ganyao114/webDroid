@@ -1,0 +1,876 @@
+--- a/frameworks/base/core/java/android/os/Looper.java
++++ b/frameworks/base/core/java/android/os/Looper.java
+@@ -16,28 +16,18 @@
+ 
+ package android.os;
+ 
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidMessageQueue.MESSAGE_CODE;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidMessageQueue.MESSAGE_DELAY_MS;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidMessageQueue.RECEIVING_THREAD_NAME;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidMessageQueue.SENDING_THREAD_NAME;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidTrackEvent.MESSAGE_QUEUE;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.app.compat.CompatChanges;
+ import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledSince;
+ import android.compat.annotation.Overridable;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.ravenwood.annotation.RavenwoodRedirect;
+ import android.ravenwood.annotation.RavenwoodRedirectionClass;
+ import android.util.Log;
+ import android.util.Printer;
+-import android.util.Slog;
+ import android.util.proto.ProtoOutputStream;
+ 
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+ import java.util.Objects;
+ 
+ /**
+@@ -85,24 +75,17 @@
+ 
+     private static final String TAG = "Looper";
+ 
+-    private static class NoImagePreloadHolder {
+-        // Enable/Disable verbose logging with a system prop. e.g.
+-        // adb shell 'setprop log.looper.slow.verbose false && stop && start'
+-        private static final boolean sVerboseLogging =
+-                SystemProperties.getBoolean("log.looper.slow.verbose", false);
+-    }
+-
+-    // sThreadLocal.get() will return null unless you've called prepare().
+-    @UnsupportedAppUsage
+-    static final ThreadLocal<Looper> sThreadLocal = new ThreadLocal<Looper>();
++    // This interpreter has one guest thread per VM.
++    private static Looper sGuestLooper;
+     @UnsupportedAppUsage
+     private static Looper sMainLooper;  // guarded by Looper.class
+     private static Observer sObserver;
+ 
+     @UnsupportedAppUsage
+     final MessageQueue mQueue;
+-    final Thread mThread;
+     private boolean mInLoop;
++
++    private static native long nativeClearCallingIdentity();
+ 
+     @UnsupportedAppUsage
+     private Printer mLogging;
+@@ -134,7 +117,6 @@
+      * @hide
+      */
+     @ChangeId
+-    @EnabledSince(targetSdkVersion = android.os.Build.VERSION_CODES.CINNAMON_BUN)
+     @Overridable // Can be overridden on user builds
+     public static final long LOOPER_CLEARS_THREAD_INTERRUPTED = 458413887L;
+ 
+@@ -149,10 +131,10 @@
+     }
+ 
+     private static void prepare(boolean quitAllowed) {
+-        if (sThreadLocal.get() != null) {
++        if (sGuestLooper != null) {
+             throw new RuntimeException("Only one Looper may be created per thread");
+         }
+-        sThreadLocal.set(new Looper(quitAllowed));
++        sGuestLooper = new Looper(quitAllowed);
+     }
+ 
+     /**
+@@ -213,13 +195,6 @@
+      */
+     public static void setObserver(@Nullable Observer observer) {
+         sObserver = observer;
+-    }
+-
+-    // On Ravenwood, compat-IDs may not be initialized when it's called,
+-    // so we have a separate check in Looper_ravenwood.
+-    @RavenwoodRedirect(bug = 470164731)
+-    private static boolean isLooperClearsThreadInterruptedEnabled() {
+-        return CompatChanges.isChangeEnabled(LOOPER_CLEARS_THREAD_INTERRUPTED);
+     }
+ 
+     /**
+@@ -235,22 +210,6 @@
+             return false;
+         }
+ 
+-        if (android.os.Flags.perfettoSdkTracingV3() && PerfettoCategories.MQ_CATEGORY.isEnabled()) {
+-            final long messageDelayMs = Math.max(0L, msg.when - SystemClock.uptimeMillis());
+-            com.android.internal.dev.perfetto.sdk.PerfettoTrace
+-                    .begin(PerfettoCategories.MQ_CATEGORY, "message_queue_receive")
+-                    .beginProto()
+-                    .beginNested(MESSAGE_QUEUE)
+-                    .addField(SENDING_THREAD_NAME, msg.sendingThreadName)
+-                    .addField(RECEIVING_THREAD_NAME, Thread.currentThread().getName())
+-                    .addField(MESSAGE_CODE, msg.what)
+-                    .addField(MESSAGE_DELAY_MS, messageDelayMs)
+-                    .endNested()
+-                    .endProto()
+-                    .setTerminatingFlow(msg.eventId)
+-                    .emit();
+-        }
+-
+         // This must be in a local variabe, in case a UI event sets the logger
+         final Printer logging = me.mLogging;
+         if (logging != null) {
+@@ -276,8 +235,8 @@
+         final boolean needStartTime = logSlowDelivery || logSlowDispatch;
+         final boolean needEndTime = logSlowDispatch;
+ 
+-        if (traceTag != 0 && Trace.isTagEnabled(traceTag)) {
+-            Trace.traceBegin(traceTag, msg.target.getTraceName(msg));
++        if (traceTag != 0 && Trace.isEnabled()) {
++            Trace.beginSection(msg.target.getTraceName(msg));
+         }
+ 
+         final long dispatchStart = needStartTime ? SystemClock.uptimeMillis() : 0;
+@@ -288,17 +247,8 @@
+         }
+         long origWorkSource = ThreadLocalWorkSource.setUid(msg.workSourceUid);
+ 
+-        final LooperDoctor doctor = Flags.messageQueueMonitoringEnabled() ? me.mLooperDoctor : null;
+-        if (doctor != null) {
+-            doctor.startMessageTimer(me.mAlarm);
+-        }
+         try {
+             msg.target.dispatchMessage(msg);
+-            if (isLooperClearsThreadInterruptedEnabled()) {
+-                // Clear the interrupted state of the thread after dispatching the message.
+-                // This ensures that a new message dispatch starts with a clean interrupted state.
+-                Thread.interrupted();
+-            }
+             if (observer != null) {
+                 observer.messageDispatched(token, msg);
+             }
+@@ -309,24 +259,21 @@
+             }
+             throw exception;
+         } finally {
+-            if (doctor != null) {
+-                doctor.stopMessageTimer(me.mAlarm);
+-            }
+             ThreadLocalWorkSource.restore(origWorkSource);
+             if (traceTag != 0) {
+-                Trace.traceEnd(traceTag);
++                Trace.endSection();
+             }
+         }
+         if (logSlowDelivery) {
+             boolean slow = false;
+ 
+-            if (!me.mSlowDeliveryDetected || NoImagePreloadHolder.sVerboseLogging) {
++            if (!me.mSlowDeliveryDetected) {
+                 slow = showSlowLog(slowDeliveryThresholdMs, msg.when, dispatchStart,
+                         "delivery", msg);
+             }
+             if (me.mSlowDeliveryDetected) {
+                 if (!slow && (dispatchStart - msg.when) <= 10) {
+-                    Slog.w(TAG, "Drained");
++                    Log.w(TAG, "Drained");
+                     me.mSlowDeliveryDetected = false;
+                 }
+             } else if (slow) {
+@@ -345,7 +292,7 @@
+ 
+         // Make sure that during the course of dispatching the
+         // identity of the thread wasn't corrupted.
+-        final long newIdent = Binder.clearCallingIdentity();
++        final long newIdent = nativeClearCallingIdentity();
+         if (ident != newIdent) {
+             Log.wtf(TAG, "Thread identity changed from 0x"
+                     + Long.toHexString(ident) + " to 0x"
+@@ -353,11 +300,6 @@
+                     + msg.target.getClass().getName() + " "
+                     + msg.callback + " what=" + msg.what);
+         }
+-        if (android.os.Flags.perfettoSdkTracingV3() && PerfettoCategories.MQ_CATEGORY.isEnabled()) {
+-            com.android.internal.dev.perfetto.sdk.PerfettoTrace.end(PerfettoCategories.MQ_CATEGORY)
+-                    .emit();
+-        }
+-
+         msg.recycleUnchecked();
+ 
+         return true;
+@@ -376,7 +318,7 @@
+             throw new RuntimeException("No Looper; Looper.prepare() wasn't called on this thread.");
+         }
+         if (me.mInLoop) {
+-            Slog.w(TAG, "Loop again would have the queued messages be executed"
++            Log.w(TAG, "Loop again would have the queued messages be executed"
+                     + " before this one completed.");
+         }
+ 
+@@ -384,12 +326,12 @@
+ 
+         // Make sure the identity of this thread is that of the local process,
+         // and keep track of what that identity token actually is.
+-        Binder.clearCallingIdentity();
+-        final long ident = Binder.clearCallingIdentity();
++        nativeClearCallingIdentity();
++        final long ident = nativeClearCallingIdentity();
+ 
+         // Allow overriding a threshold with a system prop. e.g.
+         // adb shell 'setprop log.looper.1000.main.slow 1 && stop && start'
+-        final int thresholdOverride = getThresholdOverride();
++        final int thresholdOverride = -1;
+ 
+         me.mSlowDeliveryDetected = false;
+ 
+@@ -397,63 +339,6 @@
+             if (!loopOnce(me, ident, thresholdOverride)) {
+                 return;
+             }
+-        }
+-    }
+-
+-    @android.ravenwood.annotation.RavenwoodRedirect
+-    private static int getThresholdOverride() {
+-        // Allow overriding the threshold for all processes' main looper with a system prop.
+-        // e.g. adb shell 'setprop log.looper.any.main.slow 1 && stop && start'
+-        if (myLooper() == getMainLooper()) {
+-            final int globalOverride = SystemProperties.getInt("log.looper.any.main.slow", -1);
+-            if (globalOverride >= 0) {
+-                return globalOverride;
+-            }
+-        }
+-
+-        // Allow overriding the threshold for all threads within a process with a system prop.
+-        // e.g. adb shell 'setprop log.looper.1000.any.slow 1 && stop && start'
+-        final int processOverride = SystemProperties.getInt("log.looper."
+-                + Process.myUid() + ".any.slow", -1);
+-        if (processOverride >= 0) {
+-            return processOverride;
+-        }
+-
+-        return SystemProperties.getInt("log.looper."
+-                + Process.myUid() + "."
+-                + Thread.currentThread().getName()
+-                + ".slow", -1);
+-    }
+-
+-    private static int getThreadGroup() {
+-        int threadGroup = Process.THREAD_GROUP_DEFAULT;
+-
+-        if (!Process.isIsolated()) {
+-            threadGroup = Process.getProcessGroup(Process.myTid());
+-        }
+-        return threadGroup;
+-    }
+-
+-    private static String threadGroupToString(int threadGroup) {
+-        switch (threadGroup) {
+-            case Process.THREAD_GROUP_BACKGROUND:
+-                return "BACKGROUND";
+-            case Process.THREAD_GROUP_FOREGROUND:
+-                return "FOREGROUND";
+-            case Process.THREAD_GROUP_SYSTEM:
+-                return "SYSTEM";
+-            case Process.THREAD_GROUP_AUDIO_APP:
+-                return "AUDIO_APP";
+-            case Process.THREAD_GROUP_AUDIO_SYS:
+-                return "AUDIO_SYS";
+-            case Process.THREAD_GROUP_TOP_APP:
+-                return "TOP_APP";
+-            case Process.THREAD_GROUP_RT_APP:
+-                return "RT_APP";
+-            case Process.THREAD_GROUP_RESTRICTED:
+-                return "RESTRICTED";
+-            default:
+-                return "UNKNOWN";
+         }
+     }
+ 
+@@ -464,14 +349,11 @@
+             return false;
+         }
+ 
+-        String name = Process.myProcessName();
+-        String threadGroup = threadGroupToString(getThreadGroup());
+         boolean isMain = myLooper() == getMainLooper();
+ 
+         // For slow delivery, the current message isn't really important, but log it anyway.
+-        Slog.w(TAG, "Slow " + what + " took " + actualTime + "ms "
+-                + Thread.currentThread().getName() + " app=" + name
+-                + " main=" + isMain + " group=" + threadGroup
++        Log.w(TAG, "Slow " + what + " took " + actualTime + "ms "
++                + "main=" + isMain
+                 + " h=" + msg.target.getClass().getName() + " c=" + msg.callback
+                 + " m=" + msg.what);
+         return true;
+@@ -482,7 +364,7 @@
+      * null if the calling thread is not associated with a Looper.
+      */
+     public static @Nullable Looper myLooper() {
+-        return sThreadLocal.get();
++        return sGuestLooper;
+     }
+ 
+     /**
+@@ -496,14 +378,13 @@
+ 
+     private Looper(boolean quitAllowed) {
+         mQueue = new MessageQueue(quitAllowed);
+-        mThread = Thread.currentThread();
+     }
+ 
+     /**
+      * Returns true if the current thread is this looper's thread.
+      */
+     public boolean isCurrentThread() {
+-        return Thread.currentThread() == mThread;
++        return myLooper() == this;
+     }
+ 
+     /**
+@@ -560,7 +441,6 @@
+      * @see #quitSafely
+      */
+     public void quit() {
+-        clearLooperDoctor();
+         mQueue.quit(false);
+     }
+ 
+@@ -580,7 +460,6 @@
+      * </p>
+      */
+     public void quitSafely() {
+-        clearLooperDoctor();
+         mQueue.quit(true);
+     }
+ 
+@@ -590,7 +469,7 @@
+      * @return The looper's thread.
+      */
+     public @NonNull Thread getThread() {
+-        return mThread;
++        throw new UnsupportedOperationException("A guest java.lang.Thread object is unavailable");
+     }
+ 
+     /**
+@@ -600,48 +479,6 @@
+      */
+     public @NonNull MessageQueue getQueue() {
+         return mQueue;
+-    }
+-
+-    private static final VarHandle sLooperDoctor;
+-    private volatile LooperDoctor mLooperDoctor;
+-    private LooperDoctor.LooperDoctorAlarm mAlarm;
+-
+-    static {
+-        try {
+-            MethodHandles.Lookup l = MethodHandles.lookup();
+-            sLooperDoctor = l.findVarHandle(Looper.class, "mLooperDoctor", LooperDoctor.class);
+-        } catch (ReflectiveOperationException e) {
+-            throw new ExceptionInInitializerError(e);
+-        }
+-    }
+-
+-    /**
+-     * Set a Looper Doctor for this Looper.
+-     *
+-     * This method is NOT thread-safe. It must be called ideally at most once, and never
+-     * concurrently on the same looper instance.
+-     *
+-     * @hide
+-     */
+-    public void setLooperDoctor(LooperDoctor d) {
+-        if (mLooperDoctor == null) {
+-            mAlarm = d.notifyLooperStartedLooping(mThread);
+-            mLooperDoctor = d;
+-            mQueue.setLooperDoctor(d);
+-        }
+-    }
+-
+-    /**
+-     * Clear the Looper Doctor for this Looper.
+-     *
+-     * @hide
+-     */
+-    public void clearLooperDoctor() {
+-        LooperDoctor doctor = mLooperDoctor;
+-        if (doctor != null && sLooperDoctor.compareAndSet(this, doctor, null)) {
+-            doctor.notifyLooperQuit(mAlarm);
+-            mQueue.setLooperDoctor(null);
+-        }
+     }
+ 
+     /**
+@@ -670,19 +507,12 @@
+ 
+     /** @hide */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long looperToken = proto.start(fieldId);
+-        proto.write(LooperProto.THREAD_NAME, mThread.getName());
+-        proto.write(LooperProto.THREAD_ID, mThread.getId());
+-        if (mQueue != null) {
+-            mQueue.dumpDebug(proto, LooperProto.QUEUE);
+-        }
+-        proto.end(looperToken);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     @Override
+     public String toString() {
+-        return "Looper (" + mThread.getName() + ", tid " + mThread.getId()
+-                + ") {" + Integer.toHexString(System.identityHashCode(this)) + "}";
++        return "Looper {" + Integer.toHexString(System.identityHashCode(this)) + "}";
+     }
+ 
+     /** @hide */
+--- a/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
++++ b/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
+@@ -21,7 +21,6 @@
+ import android.annotation.Nullable;
+ import android.annotation.SuppressLint;
+ import android.annotation.TestApi;
+-import android.app.ActivityThread;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ import android.ravenwood.annotation.RavenwoodRedirect;
+@@ -81,8 +80,9 @@
+     @UnsupportedAppUsage
+     private int mNextBarrierToken;
+ 
+-    private final Thread mLooperThread;
+-
++
++    private static native void requireInstrumentation();
++    private static native int getFileDescriptorNumber(FileDescriptor fd);
+     private native static long nativeInit();
+     private native static void nativeDestroy(long ptr);
+     @UnsupportedAppUsage
+@@ -95,11 +95,10 @@
+     MessageQueue(boolean quitAllowed) {
+         mQuitAllowed = quitAllowed;
+         mPtr = nativeInit();
+-        mLooperThread = Thread.currentThread();
+     }
+ 
+     Thread getLooperThread() {
+-        return mLooperThread;
++        throw new UnsupportedOperationException("A guest java.lang.Thread object is unavailable");
+     }
+ 
+     @Override
+@@ -271,7 +270,7 @@
+ 
+     private void updateOnFileDescriptorEventListenerLocked(FileDescriptor fd, int events,
+             OnFileDescriptorEventListener listener) {
+-        final int fdNum = fd.getInt$();
++        final int fdNum = getFileDescriptorNumber(fd);
+ 
+         int index = -1;
+         FileDescriptorRecord record = null;
+@@ -356,7 +355,7 @@
+         return newWatchedEvents;
+     }
+ 
+-    private static final AtomicLong mMessagesDelivered = new AtomicLong();
++    private static final AtomicLong mMessagesDelivered = TRACE ? new AtomicLong() : null;
+ 
+     @UnsupportedAppUsage
+     Message next() {
+@@ -484,7 +483,7 @@
+      * @hide
+      */
+     public @Nullable Message peekLastMessageForTest() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         synchronized (this) {
+             Message lastMsg = null;
+ 
+@@ -506,7 +505,7 @@
+      * @hide
+      */
+     public void resetForTest() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         onResetForTestCalled();
+         synchronized (this) {
+             // This queue is already quitting, so we can't reset its state and continue using it.
+@@ -825,7 +824,7 @@
+      */
+     @SuppressLint("VisiblySynchronized") // Legacy MessageQueue synchronizes on this
+     Long peekWhenForTest() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         Message ret = legacyPeekOrPoll(true);
+         return ret != null ? ret.when : null;
+     }
+@@ -839,7 +838,7 @@
+     @SuppressLint("VisiblySynchronized") // Legacy MessageQueue synchronizes on this
+     @Nullable
+     Message pollForTest() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         return legacyPeekOrPoll(false);
+     }
+ 
+@@ -851,7 +850,7 @@
+      * and may not be resumed until after returning from this method.
+      */
+     boolean isBlockedOnSyncBarrier() {
+-        ActivityThread.throwIfNotInstrumenting();
++        requireInstrumentation();
+         synchronized (this) {
+             Message msg = mMessages;
+             return msg != null && msg.target == null;
+@@ -1272,15 +1271,7 @@
+ 
+     @NeverCompile
+     void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long messageQueueToken = proto.start(fieldId);
+-        synchronized (this) {
+-            for (Message msg = mMessages; msg != null; msg = msg.next) {
+-                msg.dumpDebug(proto, MessageQueueProto.MESSAGES);
+-            }
+-            proto.write(MessageQueueProto.IS_POLLING_LOCKED, isPollingLocked());
+-            proto.write(MessageQueueProto.IS_QUITTING, mQuitting);
+-        }
+-        proto.end(messageQueueToken);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     /**
+@@ -1390,12 +1381,5 @@
+     /**
+      * @hide
+      */
+-    public void setLooperDoctor(LooperDoctor d) {
+-        // This version of MessageQueue does not use LooperDoctor
+-    }
+-
+-    /**
+-     * @hide
+-     */
+     public static final long USE_NEW_MESSAGEQUEUE = 421623328L;
+ }
+--- a/frameworks/base/core/java/android/os/Message.java
++++ b/frameworks/base/core/java/android/os/Message.java
+@@ -22,13 +22,10 @@
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ import android.ravenwood.annotation.RavenwoodRedirect;
+ import android.ravenwood.annotation.RavenwoodRedirectionClass;
+-import android.util.TimeUtils;
+ import android.util.proto.ProtoOutputStream;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+ 
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+ 
+ /**
+  *
+@@ -136,35 +133,18 @@
+ 
+     @UnsupportedAppUsage
+     /*package*/ volatile int flags;
+-    /*package*/ static final VarHandle sFlags;
+-    static {
+-        try {
+-            MethodHandles.Lookup l = MethodHandles.lookup();
+-            sFlags = l.findVarHandle(Message.class, "flags", int.class);
+-        } catch (ReflectiveOperationException e) {
+-            throw new ExceptionInInitializerError(e);
+-        }
+-    }
+-
+-    /**
+-     * CAS flags with FLAG_REMOVED to indicate that this message should be removed. Returns false if
++    /**
++     * Set FLAG_REMOVED to indicate that this message should be removed. Returns false if
+      * the message has already been marked for removal.
+      *
+-     * The CAS loop shouldn't fail due to FLAG_IN_USE or FLAG_ASYNCHRONOUS being set because those
+-     * are only changed when a message is initially created and enqueued. However, we loop anyways
+-     * in case additional flags that can be modified are added in the future.
+-     *
+      * @hide
+      */
+     @VisibleForTesting
+-    public boolean markRemoved() {
+-        int localFlags;
+-        do {
+-            localFlags = this.flags;
+-            if ((localFlags & FLAG_REMOVED) != 0) {
+-                return false;
+-            }
+-        } while (!sFlags.compareAndSet(this, localFlags, localFlags | FLAG_REMOVED));
++    public synchronized boolean markRemoved() {
++        if ((flags & FLAG_REMOVED) != 0) {
++            return false;
++        }
++        flags |= FLAG_REMOVED;
+         return true;
+     }
+ 
+@@ -633,19 +613,12 @@
+     }
+ 
+     /**
+-     * CAS flags with FLAG_IN_USE to indicate that this message is in-use and cannot be recycled or
++     * Set FLAG_IN_USE to indicate that this message is in-use and cannot be recycled or
+      * sent.
+      */
+     @UnsupportedAppUsage
+-    /*package*/ void markInUse() {
+-        int localFlags;
+-        do {
+-            localFlags = this.flags;
+-            if ((localFlags & FLAG_IN_USE) != 0) {
+-                return;
+-            }
+-        } while (!sFlags.compareAndSet(this, localFlags, localFlags | FLAG_IN_USE));
+-        return;
++    /*package*/ synchronized void markInUse() {
++        flags |= FLAG_IN_USE;
+     }
+ 
+     /** Constructor (but the preferred way to get a Message is to call {@link #obtain() Message.obtain()}).
+@@ -676,7 +649,7 @@
+     String toString(long now) {
+         StringBuilder b = new StringBuilder();
+         b.append("{ when=");
+-        TimeUtils.formatDuration(when - now, b);
++        b.append(when - now).append("ms");
+ 
+         if (target != null) {
+             if (callback != null) {
+@@ -718,34 +691,7 @@
+     }
+ 
+     void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long messageToken = proto.start(fieldId);
+-        proto.write(MessageProto.WHEN, when);
+-
+-        if (target != null) {
+-            if (callback != null) {
+-                proto.write(MessageProto.CALLBACK, callback.getClass().getName());
+-            } else {
+-                proto.write(MessageProto.WHAT, what);
+-            }
+-
+-            if (arg1 != 0) {
+-                proto.write(MessageProto.ARG1, arg1);
+-            }
+-
+-            if (arg2 != 0) {
+-                proto.write(MessageProto.ARG2, arg2);
+-            }
+-
+-            if (obj != null) {
+-                proto.write(MessageProto.OBJ, obj.toString());
+-            }
+-
+-            proto.write(MessageProto.TARGET, target.getClass().getName());
+-        } else {
+-            proto.write(MessageProto.BARRIER, arg1);
+-        }
+-
+-        proto.end(messageToken);
++        throw new UnsupportedOperationException("Platform proto diagnostics is unavailable");
+     }
+ 
+     public static final @NonNull Parcelable.Creator<Message> CREATOR
+--- a/frameworks/base/core/java/android/os/Handler.java
++++ b/frameworks/base/core/java/android/os/Handler.java
+@@ -120,7 +120,7 @@
+     /**
+      * Handle system messages here.
+      */
+-    @RavenwoodRedirect(comment = "Allow ravenwood to hook message dispatches.")
++    @RavenwoodRedirect
+     public void dispatchMessage(@NonNull Message msg) {
+         dispatchMessageImpl(msg);
+     }
+@@ -260,7 +260,7 @@
+         mLooper = Looper.myLooper();
+         if (mLooper == null) {
+             throw new RuntimeException(
+-                "Can't create handler inside thread " + Thread.currentThread()
++                "Can't create handler inside the guest thread"
+                         + " that has not called Looper.prepare()");
+         }
+         mQueue = mLooper.mQueue;
+@@ -838,7 +838,7 @@
+         return sendMessage(msg);
+     }
+ 
+-    @RavenwoodRedirect(comment = "Allow ravenwood to hook message enqueues.")
++    @RavenwoodRedirect
+     private static void onBeforeEnqueue(@NonNull MessageQueue queue, @NonNull Message msg,
+             long uptimeMillis) {}
+ 
+--- a/frameworks/base/core/java/android/os/SystemClock.java
++++ b/frameworks/base/core/java/android/os/SystemClock.java
+@@ -18,15 +18,9 @@
+ 
+ import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+-import android.app.IAlarmManager;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.Context;
+-import android.location.ILocationManager;
+-import android.location.LocationTime;
+ import android.text.format.DateUtils;
+-import android.util.Slog;
+-
+-import com.android.internal.os.ApplicationSharedMemory;
++
+ 
+ import dalvik.annotation.optimization.CriticalNative;
+ 
+@@ -107,10 +101,6 @@
+  */
+ @android.ravenwood.annotation.RavenwoodKeepPartialClass
+ public final class SystemClock {
+-    private static final String TAG = "SystemClock";
+-
+-    private static volatile IAlarmManager sIAlarmManager;
+-
+     /**
+      * Since {@code nanoTime()} is arbitrary, anchor our Ravenwood clocks against it.
+      */
+@@ -164,31 +154,9 @@
+      * @return if the clock was successfully set to the specified time.
+      */
+     public static boolean setCurrentTimeMillis(long millis) {
+-        final IAlarmManager mgr = getIAlarmManager();
+-        if (mgr == null) {
+-            Slog.e(TAG, "Unable to set RTC: mgr == null");
+-            return false;
+-        }
+-
+-        try {
+-            return mgr.setTime(millis);
+-        } catch (RemoteException e) {
+-            Slog.e(TAG, "Unable to set RTC", e);
+-        } catch (SecurityException e) {
+-            Slog.e(TAG, "Unable to set RTC", e);
+-        }
+-
+         return false;
+     }
+ 
+-    private static IAlarmManager getIAlarmManager() {
+-        if (sIAlarmManager == null) {
+-            sIAlarmManager = IAlarmManager.Stub
+-                    .asInterface(ServiceManager.getService(Context.ALARM_SERVICE));
+-        }
+-        return sIAlarmManager;
+-    }
+-
+     /**
+      * Returns milliseconds since boot, not counting time spent in deep sleep.
+      *
+@@ -196,7 +164,9 @@
+      */
+     @CriticalNative
+     @android.ravenwood.annotation.RavenwoodReplace
+-    native public static long uptimeMillis();
++    public static long uptimeMillis() {
++        return elapsedRealtimeNanos() / 1_000_000;
++    }
+ 
+     /** @hide */
+     public static long uptimeMillis$ravenwood() {
+@@ -240,7 +210,9 @@
+      */
+     @CriticalNative
+     @android.ravenwood.annotation.RavenwoodReplace
+-    native public static long elapsedRealtime();
++    public static long elapsedRealtime() {
++        return elapsedRealtimeNanos() / 1_000_000;
++    }
+ 
+     /** @hide */
+     public static long elapsedRealtime$ravenwood() {
+@@ -335,10 +307,7 @@
+      * @hide
+      */
+     public static long currentNetworkTimeMillis() {
+-        final long latestNetworkTimeUnixEpochMillisAtZeroElapsedRealtimeMillis =
+-                ApplicationSharedMemory.getInstance()
+-                        .getLatestNetworkTimeUnixEpochMillisAtZeroElapsedRealtimeMillis();
+-        return latestNetworkTimeUnixEpochMillisAtZeroElapsedRealtimeMillis + elapsedRealtime();
++        throw new DateTimeException("Network time is unavailable");
+     }
+ 
+     /**
+@@ -377,22 +346,9 @@
+      */
+     public static @NonNull Clock currentGnssTimeClock() {
+         return new SimpleClock(ZoneOffset.UTC) {
+-            private final ILocationManager mMgr = ILocationManager.Stub
+-                    .asInterface(ServiceManager.getService(Context.LOCATION_SERVICE));
+             @Override
+             public long millis() {
+-                LocationTime time;
+-                try {
+-                    time = mMgr.getGnssTimeMillis();
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-                if (time == null) {
+-                    throw new DateTimeException("Gnss based time is not available.");
+-                }
+-                long currentNanos = elapsedRealtimeNanos();
+-                long deltaMs = (currentNanos - time.getElapsedRealtimeNanos()) / 1000000L;
+-                return time.getUnixEpochTimeMillis() + deltaMs;
++                throw new DateTimeException("GNSS time is unavailable");
+             }
+         };
+     }
+--- a/frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
++++ b/frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
+@@ -40,8 +40,8 @@
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public final class ThreadLocalWorkSource {
+     public static final int UID_NONE = Message.UID_NONE;
+-    private static final ThreadLocal<int []> sWorkSourceUid =
+-            ThreadLocal.withInitial(() -> new int[] {UID_NONE});
++    // Work attribution follows the interpreter's single guest thread.
++    private static int sWorkSourceUid = UID_NONE;
+ 
+     /**
+      * Returns the UID to blame for the code currently executed on this thread.
+@@ -51,7 +51,7 @@
+      * <p>It can also be set manually using {@link #setUid(int)}.
+      */
+     public static int getUid() {
+-        return sWorkSourceUid.get()[0];
++        return sWorkSourceUid;
+     }
+ 
+     /**
+@@ -66,7 +66,7 @@
+      */
+     public static long setUid(int uid) {
+         final long token = getToken();
+-        sWorkSourceUid.get()[0] = uid;
++        sWorkSourceUid = uid;
+         return token;
+     }
+ 
+@@ -74,7 +74,7 @@
+      * Restores the state using the provided token.
+      */
+     public static void restore(long token) {
+-        sWorkSourceUid.get()[0] = parseUidFromToken(token);
++        sWorkSourceUid = parseUidFromToken(token);
+     }
+ 
+     /**
+@@ -99,7 +99,7 @@
+     }
+ 
+     private static long getToken() {
+-        return sWorkSourceUid.get()[0];
++        return sWorkSourceUid;
+     }
+ 
+     private ThreadLocalWorkSource() {
