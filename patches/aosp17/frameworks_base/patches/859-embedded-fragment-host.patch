@@ -1,0 +1,898 @@
+--- a/frameworks/base/core/java/android/app/Fragment.java
++++ b/frameworks/base/core/java/android/app/Fragment.java
+@@ -38,6 +38,4 @@
+ import android.os.UserHandle;
+ import android.transition.Transition;
+-import android.transition.TransitionInflater;
+-import android.transition.TransitionSet;
+ import android.util.AndroidRuntimeException;
+ import android.util.ArrayMap;
+@@ -53,5 +51,4 @@
+ import android.view.MenuItem;
+ import android.view.View;
+-import android.view.View.OnCreateContextMenuListener;
+ import android.view.ViewGroup;
+ import android.widget.AdapterView;
+@@ -269,5 +266,5 @@
+  */
+ @Deprecated
+-public class Fragment implements ComponentCallbacks2, OnCreateContextMenuListener {
++public class Fragment implements ComponentCallbacks2 {
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+     private static final ArrayMap<String, Class<?>> sClassMap =
+@@ -282,5 +279,5 @@
+     static final int RESUMED = 5;          // Created started and resumed.
+ 
+-    private static final Transition USE_DEFAULT_TRANSITION = new TransitionSet();
++    private static final Object USE_DEFAULT_TRANSITION = new Object();
+ 
+     int mState = INITIALIZING;
+@@ -615,20 +612,6 @@
+     @Override
+     public String toString() {
+-        StringBuilder sb = new StringBuilder(128);
+-        DebugUtils.buildShortClassTag(this, sb);
+-        if (mIndex >= 0) {
+-            sb.append(" #");
+-            sb.append(mIndex);
+-        }
+-        if (mFragmentId != 0) {
+-            sb.append(" id=0x");
+-            sb.append(Integer.toHexString(mFragmentId));
+-        }
+-        if (mTag != null) {
+-            sb.append(" ");
+-            sb.append(mTag);
+-        }
+-        sb.append('}');
+-        return sb.toString();
++        return getClass().getSimpleName() + "{"
++                + Integer.toHexString(System.identityHashCode(this)) + "}";
+     }
+ 
+@@ -759,5 +742,5 @@
+      */
+     public Context getContext() {
+-        return mHost == null ? null : mHost.getContext();
++        return mHost == null ? mEmbeddedContext : mHost.getContext();
+     }
+ 
+@@ -766,5 +749,6 @@
+      */
+     final public Activity getActivity() {
+-        return mHost == null ? null : mHost.getActivity();
++        final Context context = getContext();
++        return context instanceof Activity ? (Activity) context : null;
+     }
+ 
+@@ -782,8 +766,7 @@
+      */
+     final public Resources getResources() {
+-        if (mHost == null) {
+-            throw new IllegalStateException("Fragment " + this + " not attached to Activity");
+-        }
+-        return mHost.getContext().getResources();
++        final Context context = getContext();
++        if (context == null) throw new IllegalStateException("Fragment " + this + " not attached");
++        return context.getResources();
+     }
+ 
+@@ -1388,21 +1371,4 @@
+         TypedArray a = context.obtainStyledAttributes(attrs,
+                 com.android.internal.R.styleable.Fragment);
+-        setEnterTransition(loadTransition(context, a, getEnterTransition(), null,
+-                com.android.internal.R.styleable.Fragment_fragmentEnterTransition));
+-        setReturnTransition(loadTransition(context, a, getReturnTransition(),
+-                USE_DEFAULT_TRANSITION,
+-                com.android.internal.R.styleable.Fragment_fragmentReturnTransition));
+-        setExitTransition(loadTransition(context, a, getExitTransition(), null,
+-                com.android.internal.R.styleable.Fragment_fragmentExitTransition));
+-
+-        setReenterTransition(loadTransition(context, a, getReenterTransition(),
+-                USE_DEFAULT_TRANSITION,
+-                com.android.internal.R.styleable.Fragment_fragmentReenterTransition));
+-        setSharedElementEnterTransition(loadTransition(context, a,
+-                getSharedElementEnterTransition(), null,
+-                com.android.internal.R.styleable.Fragment_fragmentSharedElementEnterTransition));
+-        setSharedElementReturnTransition(loadTransition(context, a,
+-                getSharedElementReturnTransition(), USE_DEFAULT_TRANSITION,
+-                com.android.internal.R.styleable.Fragment_fragmentSharedElementReturnTransition));
+         boolean isEnterSet;
+         boolean isReturnSet;
+@@ -1461,5 +1427,6 @@
+     public void onAttach(Context context) {
+         mCalled = true;
+-        final Activity hostActivity = mHost == null ? null : mHost.getActivity();
++        if (mHost == null) mEmbeddedContext = context;
++        final Activity hostActivity = getActivity();
+         if (hostActivity != null) {
+             mCalled = false;
+@@ -1782,5 +1749,5 @@
+         //Log.v("foo", "onDestroy: mCheckedForLoaderManager=" + mCheckedForLoaderManager
+         //        + " mLoaderManager=" + mLoaderManager);
+-        if (!mCheckedForLoaderManager) {
++        if (mHost != null && !mCheckedForLoaderManager) {
+             mCheckedForLoaderManager = true;
+             mLoaderManager = mHost.getLoaderManager(mWho, mLoadersStarted, false);
+@@ -1829,4 +1796,5 @@
+     public void onDetach() {
+         mCalled = true;
++        mEmbeddedContext = null;
+     }
+ 
+@@ -1938,5 +1906,5 @@
+      */
+     public void registerForContextMenu(View view) {
+-        view.setOnCreateContextMenuListener(this);
++        throw new UnsupportedOperationException("The embedded view has no context menu");
+     }
+ 
+@@ -1949,5 +1917,5 @@
+      */
+     public void unregisterForContextMenu(View view) {
+-        view.setOnCreateContextMenuListener(null);
++        // The embedded view has no context-menu listener.
+     }
+ 
+@@ -1981,11 +1949,5 @@
+      */
+     public void setEnterSharedElementCallback(SharedElementCallback callback) {
+-        if (callback == null) {
+-            if (mAnimationInfo == null) {
+-                return; // already a null callback
+-            }
+-            callback = SharedElementCallback.NULL_CALLBACK;
+-        }
+-        ensureAnimationInfo().mEnterTransitionCallback = callback;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1998,11 +1960,5 @@
+      */
+     public void setExitSharedElementCallback(SharedElementCallback callback) {
+-        if (callback == null) {
+-            if (mAnimationInfo == null) {
+-                return; // already a null callback
+-            }
+-            callback = SharedElementCallback.NULL_CALLBACK;
+-        }
+-        ensureAnimationInfo().mExitTransitionCallback = callback;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2079,5 +2035,5 @@
+         }
+         return mAnimationInfo.mReturnTransition == USE_DEFAULT_TRANSITION ? getEnterTransition()
+-                : mAnimationInfo.mReturnTransition;
++                : (Transition) mAnimationInfo.mReturnTransition;
+     }
+ 
+@@ -2158,5 +2114,5 @@
+         }
+         return mAnimationInfo.mReenterTransition == USE_DEFAULT_TRANSITION ? getExitTransition()
+-                : mAnimationInfo.mReenterTransition;
++                : (Transition) mAnimationInfo.mReenterTransition;
+     }
+ 
+@@ -2232,5 +2188,5 @@
+         return mAnimationInfo.mSharedElementReturnTransition == USE_DEFAULT_TRANSITION
+                 ? getSharedElementEnterTransition()
+-                : mAnimationInfo.mSharedElementReturnTransition;
++                : (Transition) mAnimationInfo.mSharedElementReturnTransition;
+     }
+ 
+@@ -2364,5 +2320,5 @@
+      * This is broken out to ensure mAnimationInfo is properly locked when checking.
+      */
+-    private boolean shouldChangeTransition(Transition transition, Transition defaultValue) {
++    private boolean shouldChangeTransition(Transition transition, Object defaultValue) {
+         if (transition == defaultValue) {
+             return mAnimationInfo != null;
+@@ -2815,22 +2771,4 @@
+     }
+ 
+-    private static Transition loadTransition(Context context, TypedArray typedArray,
+-            Transition currentValue, Transition defaultValue, int id) {
+-        if (currentValue != defaultValue) {
+-            return currentValue;
+-        }
+-        int transitionId = typedArray.getResourceId(id, 0);
+-        Transition transition = defaultValue;
+-        if (transitionId != 0 && transitionId != com.android.internal.R.transition.no_transition) {
+-            TransitionInflater inflater = TransitionInflater.from(context);
+-            transition = inflater.inflateTransition(transitionId);
+-            if (transition instanceof TransitionSet &&
+-                    ((TransitionSet)transition).getTransitionCount() == 0) {
+-                transition = null;
+-            }
+-        }
+-        return transition;
+-    }
+-
+     private AnimationInfo ensureAnimationInfo() {
+         if (mAnimationInfo == null) {
+@@ -2878,15 +2816,9 @@
+ 
+     SharedElementCallback getEnterTransitionCallback() {
+-        if (mAnimationInfo == null) {
+-            return SharedElementCallback.NULL_CALLBACK;
+-        }
+-        return mAnimationInfo.mEnterTransitionCallback;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     SharedElementCallback getExitTransitionCallback() {
+-        if (mAnimationInfo == null) {
+-            return SharedElementCallback.NULL_CALLBACK;
+-        }
+-        return mAnimationInfo.mExitTransitionCallback;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2965,14 +2897,12 @@
+ 
+         private Transition mEnterTransition = null;
+-        private Transition mReturnTransition = USE_DEFAULT_TRANSITION;
++        private Object mReturnTransition = USE_DEFAULT_TRANSITION;
+         private Transition mExitTransition = null;
+-        private Transition mReenterTransition = USE_DEFAULT_TRANSITION;
++        private Object mReenterTransition = USE_DEFAULT_TRANSITION;
+         private Transition mSharedElementEnterTransition = null;
+-        private Transition mSharedElementReturnTransition = USE_DEFAULT_TRANSITION;
++        private Object mSharedElementReturnTransition = USE_DEFAULT_TRANSITION;
+         private Boolean mAllowReturnTransitionOverlap;
+         private Boolean mAllowEnterTransitionOverlap;
+ 
+-        SharedElementCallback mEnterTransitionCallback = SharedElementCallback.NULL_CALLBACK;
+-        SharedElementCallback mExitTransitionCallback = SharedElementCallback.NULL_CALLBACK;
+ 
+         // True when postponeEnterTransition has been called and startPostponeEnterTransition
+@@ -2987,3 +2917,4 @@
+         boolean mIsHideReplaced;
+     }
++    private Context mEmbeddedContext;
+ }
+--- a/frameworks/base/core/java/android/app/FragmentManager.java
++++ b/frameworks/base/core/java/android/app/FragmentManager.java
+@@ -39,5 +39,4 @@
+ import android.util.DebugUtils;
+ import android.util.Log;
+-import android.util.LogWriter;
+ import android.util.Pair;
+ import android.util.SparseArray;
+@@ -746,25 +745,5 @@
+ 
+     private void throwException(RuntimeException ex) {
+-        Log.e(TAG, ex.getMessage());
+-        LogWriter logw = new LogWriter(Log.ERROR, TAG);
+-        PrintWriter pw = new FastPrintWriter(logw, false, 1024);
+-        if (mHost != null) {
+-            Log.e(TAG, "Activity state:");
+-            try {
+-                mHost.onDump("  ", null, pw, new String[] { });
+-            } catch (Exception e) {
+-                pw.flush();
+-                Log.e(TAG, "Failed dumping state", e);
+-            }
+-        } else {
+-            Log.e(TAG, "Fragment manager state:");
+-            try {
+-                dump("  ", null, pw, new String[] { });
+-            } catch (Exception e) {
+-                pw.flush();
+-                Log.e(TAG, "Failed dumping state", e);
+-            }
+-        }
+-        pw.flush();
++        Log.e(TAG, ex.getMessage(), ex);
+         throw ex;
+     }
+@@ -979,15 +958,5 @@
+     @Override
+     public String toString() {
+-        StringBuilder sb = new StringBuilder(128);
+-        sb.append("FragmentManager{");
+-        sb.append(Integer.toHexString(System.identityHashCode(this)));
+-        sb.append(" in ");
+-        if (mParent != null) {
+-            DebugUtils.buildShortClassTag(mParent, sb);
+-        } else {
+-            DebugUtils.buildShortClassTag(mHost, sb);
+-        }
+-        sb.append("}}");
+-        return sb.toString();
++        return "FragmentManager{" + Integer.toHexString(System.identityHashCode(this)) + "}";
+     }
+ 
+@@ -1168,5 +1137,5 @@
+         if (DEBUG && false) Log.v(TAG, "moveToState: " + f
+             + " oldState=" + f.mState + " newState=" + newState
+-            + " mRemoving=" + f.mRemoving + " Callers=" + Debug.getCallers(5));
++            + " mRemoving=" + f.mRemoving + " Callers=");
+ 
+         // Fragments that are not currently added will sit in the onCreate() state.
+@@ -2921,8 +2890,4 @@
+                     Log.v(TAG, "restoreAllState: back stack #" + i
+                         + " (index " + bse.mIndex + "): " + bse);
+-                    LogWriter logw = new LogWriter(Log.VERBOSE, TAG);
+-                    PrintWriter pw = new FastPrintWriter(logw, false, 1024);
+-                    bse.dump("  ", pw, false);
+-                    pw.flush();
+                 }
+                 mBackStack.add(bse);
+--- a/frameworks/base/core/java/android/app/FragmentTransition.java
++++ b/frameworks/base/core/java/android/app/FragmentTransition.java
+@@ -27,5 +27,4 @@
+ import android.view.ViewGroup;
+ 
+-import com.android.internal.view.OneShotPreDrawListener;
+ 
+ import java.util.ArrayList;
+@@ -88,38 +87,5 @@
+             ArrayList<BackStackRecord> records, ArrayList<Boolean> isRecordPop,
+             int startIndex, int endIndex, boolean isReordered) {
+-        if (fragmentManager.mCurState < Fragment.CREATED) {
+-            return;
+-        }
+-        SparseArray<FragmentContainerTransition> transitioningFragments =
+-                new SparseArray<>();
+-        for (int i = startIndex; i < endIndex; i++) {
+-            final BackStackRecord record = records.get(i);
+-            final boolean isPop = isRecordPop.get(i);
+-            if (isPop) {
+-                calculatePopFragments(record, transitioningFragments, isReordered);
+-            } else {
+-                calculateFragments(record, transitioningFragments, isReordered);
+-            }
+-        }
+-
+-        if (transitioningFragments.size() != 0) {
+-            final View nonExistentView = new View(fragmentManager.mHost.getContext());
+-            final int numContainers = transitioningFragments.size();
+-            for (int i = 0; i < numContainers; i++) {
+-                int containerId = transitioningFragments.keyAt(i);
+-                ArrayMap<String, String> nameOverrides = calculateNameOverrides(containerId,
+-                        records, isRecordPop, startIndex, endIndex);
+-
+-                FragmentContainerTransition containerTransition = transitioningFragments.valueAt(i);
+-
+-                if (isReordered) {
+-                    configureTransitionsReordered(fragmentManager, containerId,
+-                            containerTransition, nonExistentView, nameOverrides);
+-                } else {
+-                    configureTransitionsOrdered(fragmentManager, containerId,
+-                            containerTransition, nonExistentView, nameOverrides);
+-                }
+-            }
+-        }
++        // Fragment animators run locally. Scene transitions use the platform renderer.
+     }
+ 
+@@ -193,56 +159,5 @@
+             int containerId, FragmentContainerTransition fragments,
+             View nonExistentView, ArrayMap<String, String> nameOverrides) {
+-        ViewGroup sceneRoot = null;
+-        if (fragmentManager.mContainer.onHasView()) {
+-            sceneRoot = fragmentManager.mContainer.onFindViewById(containerId);
+-        }
+-        if (sceneRoot == null) {
+-            return;
+-        }
+-        final Fragment inFragment = fragments.lastIn;
+-        final Fragment outFragment = fragments.firstOut;
+-        final boolean inIsPop = fragments.lastInIsPop;
+-        final boolean outIsPop = fragments.firstOutIsPop;
+-
+-        ArrayList<View> sharedElementsIn = new ArrayList<>();
+-        ArrayList<View> sharedElementsOut = new ArrayList<>();
+-        Transition enterTransition = getEnterTransition(inFragment, inIsPop);
+-        Transition exitTransition = getExitTransition(outFragment, outIsPop);
+-
+-        TransitionSet sharedElementTransition = configureSharedElementsReordered(sceneRoot,
+-                nonExistentView, nameOverrides, fragments, sharedElementsOut, sharedElementsIn,
+-                enterTransition, exitTransition);
+-
+-        if (enterTransition == null && sharedElementTransition == null &&
+-                exitTransition == null) {
+-            return; // no transitions!
+-        }
+-
+-        ArrayList<View> exitingViews = configureEnteringExitingViews(exitTransition,
+-                outFragment, sharedElementsOut, nonExistentView);
+-
+-        ArrayList<View> enteringViews = configureEnteringExitingViews(enterTransition,
+-                inFragment, sharedElementsIn, nonExistentView);
+-
+-        setViewVisibility(enteringViews, View.INVISIBLE);
+-
+-        Transition transition = mergeTransitions(enterTransition, exitTransition,
+-                sharedElementTransition, inFragment, inIsPop);
+-
+-        if (transition != null) {
+-            replaceHide(exitTransition, outFragment, exitingViews);
+-            transition.setNameOverrides(nameOverrides);
+-            scheduleRemoveTargets(transition,
+-                    enterTransition, enteringViews, exitTransition, exitingViews,
+-                    sharedElementTransition, sharedElementsIn);
+-            TransitionManager.beginDelayedTransition(sceneRoot, transition);
+-            setViewVisibility(enteringViews, View.VISIBLE);
+-            // Swap the shared element targets
+-            if (sharedElementTransition != null) {
+-                sharedElementTransition.getTargets().clear();
+-                sharedElementTransition.getTargets().addAll(sharedElementsIn);
+-                replaceTargets(sharedElementTransition, sharedElementsOut, sharedElementsIn);
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -265,58 +180,5 @@
+             int containerId, FragmentContainerTransition fragments,
+             View nonExistentView, ArrayMap<String, String> nameOverrides) {
+-        ViewGroup sceneRoot = null;
+-        if (fragmentManager.mContainer.onHasView()) {
+-            sceneRoot = fragmentManager.mContainer.onFindViewById(containerId);
+-        }
+-        if (sceneRoot == null) {
+-            return;
+-        }
+-        final Fragment inFragment = fragments.lastIn;
+-        final Fragment outFragment = fragments.firstOut;
+-        final boolean inIsPop = fragments.lastInIsPop;
+-        final boolean outIsPop = fragments.firstOutIsPop;
+-
+-        Transition enterTransition = getEnterTransition(inFragment, inIsPop);
+-        Transition exitTransition = getExitTransition(outFragment, outIsPop);
+-
+-        ArrayList<View> sharedElementsOut = new ArrayList<>();
+-        ArrayList<View> sharedElementsIn = new ArrayList<>();
+-
+-        TransitionSet sharedElementTransition = configureSharedElementsOrdered(sceneRoot,
+-                nonExistentView, nameOverrides, fragments, sharedElementsOut, sharedElementsIn,
+-                enterTransition, exitTransition);
+-
+-        if (enterTransition == null && sharedElementTransition == null &&
+-                exitTransition == null) {
+-            return; // no transitions!
+-        }
+-
+-        ArrayList<View> exitingViews = configureEnteringExitingViews(exitTransition,
+-                outFragment, sharedElementsOut, nonExistentView);
+-
+-        if (exitingViews == null || exitingViews.isEmpty()) {
+-            exitTransition = null;
+-        }
+-
+-        if (enterTransition != null) {
+-            // Ensure the entering transition doesn't target anything until the views are made
+-            // visible
+-            enterTransition.addTarget(nonExistentView);
+-        }
+-
+-        Transition transition = mergeTransitions(enterTransition, exitTransition,
+-                sharedElementTransition, inFragment, fragments.lastInIsPop);
+-
+-        if (transition != null) {
+-            transition.setNameOverrides(nameOverrides);
+-            final ArrayList<View> enteringViews = new ArrayList<>();
+-            scheduleRemoveTargets(transition,
+-                    enterTransition, enteringViews, exitTransition, exitingViews,
+-                    sharedElementTransition, sharedElementsIn);
+-            scheduleTargetChange(sceneRoot, inFragment, nonExistentView, sharedElementsIn,
+-                    enterTransition, enteringViews, exitTransition, exitingViews);
+-
+-            TransitionManager.beginDelayedTransition(sceneRoot, transition);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -328,20 +190,5 @@
+     private static void replaceHide(Transition exitTransition, Fragment exitingFragment,
+             final ArrayList<View> exitingViews) {
+-        if (exitingFragment != null && exitTransition != null && exitingFragment.mAdded
+-                && exitingFragment.mHidden && exitingFragment.mHiddenChanged) {
+-            exitingFragment.setHideReplaced(true);
+-            final View fragmentView = exitingFragment.getView();
+-            OneShotPreDrawListener.add(exitingFragment.mContainer, () -> {
+-                setViewVisibility(exitingViews, View.INVISIBLE);
+-            });
+-            exitTransition.addListener(new TransitionListenerAdapter() {
+-                @Override
+-                public void onTransitionEnd(Transition transition) {
+-                    transition.removeListener(this);
+-                    fragmentView.setVisibility(View.GONE);
+-                    setViewVisibility(exitingViews, View.VISIBLE);
+-                }
+-            });
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -368,23 +215,5 @@
+             final Transition enterTransition, final ArrayList<View> enteringViews,
+             final Transition exitTransition, final ArrayList<View> exitingViews) {
+-
+-        OneShotPreDrawListener.add(sceneRoot, () -> {
+-            if (enterTransition != null) {
+-                enterTransition.removeTarget(nonExistentView);
+-                ArrayList<View> views = configureEnteringExitingViews(
+-                        enterTransition, inFragment, sharedElementsIn, nonExistentView);
+-                enteringViews.addAll(views);
+-            }
+-
+-            if (exitingViews != null) {
+-                if (exitTransition != null) {
+-                    ArrayList<View> tempExiting = new ArrayList<>();
+-                    tempExiting.add(nonExistentView);
+-                    replaceTargets(exitTransition, exitingViews, tempExiting);
+-                }
+-                exitingViews.clear();
+-                exitingViews.add(nonExistentView);
+-            }
+-        });
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -482,78 +311,5 @@
+             final ArrayList<View> sharedElementsIn,
+             final Transition enterTransition, final Transition exitTransition) {
+-        final Fragment inFragment = fragments.lastIn;
+-        final Fragment outFragment = fragments.firstOut;
+-        if (inFragment != null) {
+-            inFragment.getView().setVisibility(View.VISIBLE);
+-        }
+-        if (inFragment == null || outFragment == null) {
+-            return null; // no shared element without a fragment
+-        }
+-
+-        final boolean inIsPop = fragments.lastInIsPop;
+-        TransitionSet sharedElementTransition = nameOverrides.isEmpty() ? null
+-                : getSharedElementTransition(inFragment, outFragment, inIsPop);
+-
+-        ArrayMap<String, View> outSharedElements = captureOutSharedElements(nameOverrides,
+-                sharedElementTransition, fragments);
+-
+-        ArrayMap<String, View> inSharedElements = captureInSharedElements(nameOverrides,
+-                sharedElementTransition, fragments);
+-
+-        if (nameOverrides.isEmpty()) {
+-            sharedElementTransition = null;
+-            if (outSharedElements != null) {
+-                outSharedElements.clear();
+-            }
+-            if (inSharedElements != null) {
+-                inSharedElements.clear();
+-            }
+-        } else {
+-            addSharedElementsWithMatchingNames(sharedElementsOut, outSharedElements,
+-                    nameOverrides.keySet());
+-            addSharedElementsWithMatchingNames(sharedElementsIn, inSharedElements,
+-                    nameOverrides.values());
+-        }
+-
+-        if (enterTransition == null && exitTransition == null && sharedElementTransition == null) {
+-            // don't call onSharedElementStart/End since there is no transition
+-            return null;
+-        }
+-
+-        callSharedElementStartEnd(inFragment, outFragment, inIsPop, outSharedElements, true);
+-
+-        final Rect epicenter;
+-        final View epicenterView;
+-        if (sharedElementTransition != null) {
+-            sharedElementsIn.add(nonExistentView);
+-            setSharedElementTargets(sharedElementTransition, nonExistentView, sharedElementsOut);
+-            final boolean outIsPop = fragments.firstOutIsPop;
+-            final BackStackRecord outTransaction = fragments.firstOutTransaction;
+-            setOutEpicenter(sharedElementTransition, exitTransition, outSharedElements, outIsPop,
+-                    outTransaction);
+-            epicenter = new Rect();
+-            epicenterView = getInEpicenterView(inSharedElements, fragments,
+-                    enterTransition, inIsPop);
+-            if (epicenterView != null) {
+-                enterTransition.setEpicenterCallback(new Transition.EpicenterCallback() {
+-                    @Override
+-                    public Rect onGetEpicenter(Transition transition) {
+-                        return epicenter;
+-                    }
+-                });
+-            }
+-        } else {
+-            epicenter = null;
+-            epicenterView = null;
+-        }
+-
+-        OneShotPreDrawListener.add(sceneRoot, () -> {
+-            callSharedElementStartEnd(inFragment, outFragment, inIsPop,
+-                    inSharedElements, false);
+-            if (epicenterView != null) {
+-                epicenterView.getBoundsOnScreen(epicenter);
+-            }
+-        });
+-        return sharedElementTransition;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -611,81 +367,5 @@
+             final ArrayList<View> sharedElementsIn,
+             final Transition enterTransition, final Transition exitTransition) {
+-        final Fragment inFragment = fragments.lastIn;
+-        final Fragment outFragment = fragments.firstOut;
+-
+-        if (inFragment == null || outFragment == null) {
+-            return null; // no transition
+-        }
+-
+-        final boolean inIsPop = fragments.lastInIsPop;
+-        TransitionSet sharedElementTransition = nameOverrides.isEmpty() ? null
+-                : getSharedElementTransition(inFragment, outFragment, inIsPop);
+-
+-        ArrayMap<String, View> outSharedElements = captureOutSharedElements(nameOverrides,
+-                sharedElementTransition, fragments);
+-
+-        if (nameOverrides.isEmpty()) {
+-            sharedElementTransition = null;
+-        } else {
+-            sharedElementsOut.addAll(outSharedElements.values());
+-        }
+-
+-        if (enterTransition == null && exitTransition == null && sharedElementTransition == null) {
+-            // don't call onSharedElementStart/End since there is no transition
+-            return null;
+-        }
+-
+-        callSharedElementStartEnd(inFragment, outFragment, inIsPop, outSharedElements, true);
+-
+-        final Rect inEpicenter;
+-        if (sharedElementTransition != null) {
+-            inEpicenter = new Rect();
+-            setSharedElementTargets(sharedElementTransition, nonExistentView, sharedElementsOut);
+-            final boolean outIsPop = fragments.firstOutIsPop;
+-            final BackStackRecord outTransaction = fragments.firstOutTransaction;
+-            setOutEpicenter(sharedElementTransition, exitTransition, outSharedElements, outIsPop,
+-                    outTransaction);
+-            if (enterTransition != null) {
+-                enterTransition.setEpicenterCallback(new Transition.EpicenterCallback() {
+-                    @Override
+-                    public Rect onGetEpicenter(Transition transition) {
+-                        if (inEpicenter.isEmpty()) {
+-                            return null;
+-                        }
+-                        return inEpicenter;
+-                    }
+-                });
+-            }
+-        } else {
+-            inEpicenter = null;
+-        }
+-
+-        TransitionSet finalSharedElementTransition = sharedElementTransition;
+-
+-        OneShotPreDrawListener.add(sceneRoot, () -> {
+-            ArrayMap<String, View> inSharedElements = captureInSharedElements(
+-                    nameOverrides, finalSharedElementTransition, fragments);
+-
+-            if (inSharedElements != null) {
+-                sharedElementsIn.addAll(inSharedElements.values());
+-                sharedElementsIn.add(nonExistentView);
+-            }
+-
+-            callSharedElementStartEnd(inFragment, outFragment, inIsPop,
+-                    inSharedElements, false);
+-            if (finalSharedElementTransition != null) {
+-                finalSharedElementTransition.getTargets().clear();
+-                finalSharedElementTransition.getTargets().addAll(sharedElementsIn);
+-                replaceTargets(finalSharedElementTransition, sharedElementsOut,
+-                        sharedElementsIn);
+-
+-                final View inEpicenterView = getInEpicenterView(inSharedElements,
+-                        fragments, enterTransition, inIsPop);
+-                if (inEpicenterView != null) {
+-                    inEpicenterView.getBoundsOnScreen(inEpicenter);
+-                }
+-            }
+-        });
+-        return sharedElementTransition;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -707,40 +387,5 @@
+             ArrayMap<String, String> nameOverrides, TransitionSet sharedElementTransition,
+             FragmentContainerTransition fragments) {
+-        if (nameOverrides.isEmpty() || sharedElementTransition == null) {
+-            nameOverrides.clear();
+-            return null;
+-        }
+-        final Fragment outFragment = fragments.firstOut;
+-        final ArrayMap<String, View> outSharedElements = new ArrayMap<>();
+-        outFragment.getView().findNamedViews(outSharedElements);
+-
+-        final SharedElementCallback sharedElementCallback;
+-        final ArrayList<String> names;
+-        final BackStackRecord outTransaction = fragments.firstOutTransaction;
+-        if (fragments.firstOutIsPop) {
+-            sharedElementCallback = outFragment.getEnterTransitionCallback();
+-            names = outTransaction.mSharedElementTargetNames;
+-        } else {
+-            sharedElementCallback = outFragment.getExitTransitionCallback();
+-            names = outTransaction.mSharedElementSourceNames;
+-        }
+-
+-        outSharedElements.retainAll(names);
+-        if (sharedElementCallback != null) {
+-            sharedElementCallback.onMapSharedElements(names, outSharedElements);
+-            for (int i = names.size() - 1; i >= 0; i--) {
+-                String name = names.get(i);
+-                View view = outSharedElements.get(name);
+-                if (view == null) {
+-                    nameOverrides.remove(name);
+-                } else if (!name.equals(view.getTransitionName())) {
+-                    String targetValue = nameOverrides.remove(name);
+-                    nameOverrides.put(view.getTransitionName(), targetValue);
+-                }
+-            }
+-        } else {
+-            nameOverrides.retainAll(outSharedElements.keySet());
+-        }
+-        return outSharedElements;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -762,48 +407,5 @@
+             ArrayMap<String, String> nameOverrides, TransitionSet sharedElementTransition,
+             FragmentContainerTransition fragments) {
+-        Fragment inFragment = fragments.lastIn;
+-        final View fragmentView = inFragment.getView();
+-        if (nameOverrides.isEmpty() || sharedElementTransition == null || fragmentView == null) {
+-            nameOverrides.clear();
+-            return null;
+-        }
+-        final ArrayMap<String, View> inSharedElements = new ArrayMap<>();
+-        fragmentView.findNamedViews(inSharedElements);
+-
+-        final SharedElementCallback sharedElementCallback;
+-        final ArrayList<String> names;
+-        final BackStackRecord inTransaction = fragments.lastInTransaction;
+-        if (fragments.lastInIsPop) {
+-            sharedElementCallback = inFragment.getExitTransitionCallback();
+-            names = inTransaction.mSharedElementSourceNames;
+-        } else {
+-            sharedElementCallback = inFragment.getEnterTransitionCallback();
+-            names = inTransaction.mSharedElementTargetNames;
+-        }
+-
+-        if (names != null) {
+-            inSharedElements.retainAll(names);
+-        }
+-        if (names != null && sharedElementCallback != null) {
+-            sharedElementCallback.onMapSharedElements(names, inSharedElements);
+-            for (int i = names.size() - 1; i >= 0; i--) {
+-                String name = names.get(i);
+-                View view = inSharedElements.get(name);
+-                if (view == null) {
+-                    String key = findKeyForValue(nameOverrides, name);
+-                    if (key != null) {
+-                        nameOverrides.remove(key);
+-                    }
+-                } else if (!name.equals(view.getTransitionName())) {
+-                    String key = findKeyForValue(nameOverrides, name);
+-                    if (key != null) {
+-                        nameOverrides.put(key, view.getTransitionName());
+-                    }
+-                }
+-            }
+-        } else {
+-            retainValues(nameOverrides, inSharedElements);
+-        }
+-        return inSharedElements;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -875,15 +477,5 @@
+      */
+     private static void setEpicenter(Transition transition, View view) {
+-        if (view != null) {
+-            final Rect epicenter = new Rect();
+-            view.getBoundsOnScreen(epicenter);
+-
+-            transition.setEpicenterCallback(new Transition.EpicenterCallback() {
+-                @Override
+-                public Rect onGetEpicenter(Transition transition) {
+-                    return epicenter;
+-                }
+-            });
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1102,20 +694,5 @@
+     private static ArrayList<View> configureEnteringExitingViews(Transition transition,
+             Fragment fragment, ArrayList<View> sharedElements, View nonExistentView) {
+-        ArrayList<View> viewList = null;
+-        if (transition != null) {
+-            viewList = new ArrayList<>();
+-            View root = fragment.getView();
+-            if (root != null) {
+-                root.captureTransitioningViews(viewList);
+-            }
+-            if (sharedElements != null) {
+-                viewList.removeAll(sharedElements);
+-            }
+-            if (!viewList.isEmpty()) {
+-                viewList.add(nonExistentView);
+-                addTargets(transition, viewList);
+-            }
+-        }
+-        return viewList;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1123,5 +700,5 @@
+      * Sets the visibility of all Views in {@code views} to {@code visibility}.
+      */
+-    private static void setViewVisibility(ArrayList<View> views, @View.Visibility int visibility) {
++    private static void setViewVisibility(ArrayList<View> views, int visibility) {
+         if (views == null) {
+             return;
+--- a/frameworks/base/core/java/android/app/BackStackRecord.java
++++ b/frameworks/base/core/java/android/app/BackStackRecord.java
+@@ -22,5 +22,4 @@
+ import android.text.TextUtils;
+ import android.util.Log;
+-import android.util.LogWriter;
+ import android.view.View;
+ 
+@@ -670,22 +669,5 @@
+ 
+     int commitInternal(boolean allowStateLoss) {
+-        if (mCommitted) {
+-            throw new IllegalStateException("commit already called");
+-        }
+-        if (FragmentManagerImpl.DEBUG) {
+-            Log.v(TAG, "Commit: " + this);
+-            LogWriter logw = new LogWriter(Log.VERBOSE, TAG);
+-            PrintWriter pw = new FastPrintWriter(logw, false, 1024);
+-            dump("  ", null, pw, null);
+-            pw.flush();
+-        }
+-        mCommitted = true;
+-        if (mAddToBackStack) {
+-            mIndex = mManager.allocBackStackIndex(this);
+-        } else {
+-            mIndex = -1;
+-        }
+-        mManager.enqueueAction(this, allowStateLoss);
+-        return mIndex;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+--- a/frameworks/base/core/java/android/app/LoaderManager.java
++++ b/frameworks/base/core/java/android/app/LoaderManager.java
+@@ -509,13 +509,5 @@
+         @Override
+         public String toString() {
+-            StringBuilder sb = new StringBuilder(64);
+-            sb.append("LoaderInfo{");
+-            sb.append(Integer.toHexString(System.identityHashCode(this)));
+-            sb.append(" #");
+-            sb.append(mId);
+-            sb.append(" : ");
+-            DebugUtils.buildShortClassTag(mLoader, sb);
+-            sb.append("}}");
+-            return sb.toString();
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -865,11 +857,5 @@
+     @Override
+     public String toString() {
+-        StringBuilder sb = new StringBuilder(128);
+-        sb.append("LoaderManager{");
+-        sb.append(Integer.toHexString(System.identityHashCode(this)));
+-        sb.append(" in ");
+-        DebugUtils.buildShortClassTag(mHost, sb);
+-        sb.append("}}");
+-        return sb.toString();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 

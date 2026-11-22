@@ -1,0 +1,1822 @@
+--- a/frameworks/base/core/java/android/app/WallpaperColors.java
++++ b/frameworks/base/core/java/android/app/WallpaperColors.java
+@@ -36,8 +36,4 @@
+ import com.android.internal.graphics.ColorUtils;
+ import com.android.internal.graphics.cam.Cam;
+-import com.android.internal.graphics.palette.CelebiQuantizer;
+-import com.android.internal.graphics.palette.Palette;
+-import com.android.internal.graphics.palette.VariationalKMeansQuantizer;
+-import com.android.internal.util.ContrastColorUtil;
+ 
+ import java.io.FileOutputStream;
+@@ -102,13 +98,11 @@
+ 
+     // Decides when dark theme is optimal for this wallpaper
++    private static final float MAX_DARK_AREA = 0.05f;
++    private static final float BRIGHT_IMAGE_MEAN_LUMINANCE = 0.70f;
+     private static final float DARK_THEME_MEAN_LUMINANCE = 0.3f;
+     // Minimum mean luminosity that an image needs to have to support dark text
+-    private static final float BRIGHT_IMAGE_MEAN_LUMINANCE = SystemProperties.getInt(
+-            "persist.wallpapercolors.threshold", 70) / 100f;
+     // We also check if the image has dark pixels in it,
+     // to avoid bright images with some dark spots.
+     private static final float DARK_PIXEL_CONTRAST = 5.5f;
+-    private static final float MAX_DARK_AREA = SystemProperties.getInt(
+-            "persist.wallpapercolors.max_dark_area", 5) / 100f;
+ 
+     private final List<Color> mMainColors;
+@@ -209,39 +203,16 @@
+         }
+ 
+-        final Palette palette;
+-        if (ActivityManager.isLowRamDeviceStatic()) {
+-            palette = Palette
+-                    .from(bitmap, new VariationalKMeansQuantizer())
+-                    .maximumColorCount(5)
+-                    .resizeBitmapArea(MAX_WALLPAPER_EXTRACTION_AREA)
+-                    .generate();
+-        } else {
+-            // in any case, always use between 5 and 128 clusters
+-            int minClusters = 5;
+-            int maxClusters = 128;
+-
+-            // if the bitmap is very small, use bitmapArea/16 clusters instead of 128
+-            int minPixelsPerCluster = 16;
+-            int numberOfColors = Math.max(minClusters,
+-                    Math.min(maxClusters, bitmapArea / minPixelsPerCluster));
+-            palette = Palette
+-                    .from(bitmap, new CelebiQuantizer())
+-                    .maximumColorCount(numberOfColors)
+-                    .resizeBitmapArea(MAX_WALLPAPER_EXTRACTION_AREA)
+-                    .generate();
+-        }
+-        // Remove insignificant colors and sort swatches by population
+-        final ArrayList<Palette.Swatch> swatches = new ArrayList<>(palette.getSwatches());
+-        swatches.sort((a, b) -> b.getPopulation() - a.getPopulation());
+-
+-        final int swatchesSize = swatches.size();
+-
++        // The embedded raster uses a bounded 5-bit RGB histogram for color populations.
+         final Map<Integer, Integer> populationByColor = new HashMap<>();
+-        for (int i = 0; i < swatchesSize; i++) {
+-            Palette.Swatch swatch = swatches.get(i);
+-            int colorInt = swatch.getInt();
+-            populationByColor.put(colorInt, swatch.getPopulation());
+-
+-        }
++        final int width = bitmap.getWidth();
++        final int height = bitmap.getHeight();
++        final int[] pixels = new int[width * height];
++        bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
++        for (int pixel : pixels) {
++            if (Color.alpha(pixel) == 0) continue;
++            final int color = 0xff000000 | (pixel & 0x00f8f8f8);
++            populationByColor.merge(color, 1, Integer::sum);
++        }
++        if (populationByColor.isEmpty()) populationByColor.put(Color.BLACK, 1);
+ 
+         int hints = calculateDarkHints(bitmap, dimAmount);
+@@ -551,5 +522,5 @@
+ 
+         Trace.beginSection("WallpaperColors#calculateDarkHints");
+-        dimAmount = MathUtils.saturate(dimAmount);
++        dimAmount = Math.max(0f, Math.min(1f, dimAmount));
+         int[] pixels = new int[source.getWidth() * source.getHeight()];
+         double totalLuminance = 0;
+@@ -581,6 +552,5 @@
+             // Make sure we don't have a dark pixel mass that will
+             // make text illegible.
+-            final boolean satisfiesTextContrast = ContrastColorUtil
+-                    .calculateContrast(pixelColor, Color.BLACK) > DARK_PIXEL_CONTRAST;
++            final boolean satisfiesTextContrast = ColorUtils.calculateContrast(Color.BLACK, pixelColor | 0xff000000) > DARK_PIXEL_CONTRAST;
+             if (!satisfiesTextContrast && alpha != 0) {
+                 darkPixels++;
+--- a/frameworks/base/core/java/android/app/WallpaperManager.java
++++ b/frameworks/base/core/java/android/app/WallpaperManager.java
+@@ -17,15 +17,14 @@
+ package android.app;
+ 
++import android.graphics.Color;
++import java.util.Objects;
++
+ import static android.Manifest.permission.MANAGE_EXTERNAL_STORAGE;
+ import static android.Manifest.permission.READ_WALLPAPER_INTERNAL;
+ import static android.Manifest.permission.SET_WALLPAPER_DIM_AMOUNT;
+-import static android.app.Flags.FLAG_POSTPONE_WALLPAPER_CHANGE_NOTIFICATION_ON_UNLOCK_USER;
+-import static android.app.Flags.optimizeDefaultWallpaper;
+ import static android.content.pm.PackageManager.PERMISSION_GRANTED;
+ import static android.os.ParcelFileDescriptor.MODE_READ_ONLY;
+ import static android.view.Display.INVALID_DISPLAY;
+ 
+-import static com.android.server.backup.Flags.FLAG_ENABLE_CROSS_PLATFORM_TRANSFER;
+-import static com.android.window.flags.Flags.FLAG_MULTI_CROP;
+ 
+ import android.Manifest;
+@@ -37,6 +36,4 @@
+ import android.annotation.RawRes;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SdkConstant;
+-import android.annotation.SdkConstant.SdkConstantType;
+ import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+@@ -44,5 +41,4 @@
+ import android.annotation.TestApi;
+ import android.annotation.UiContext;
+-import android.app.compat.CompatChanges;
+ import android.app.wallpaper.WallpaperDescription;
+ import android.app.wallpaper.WallpaperInstance;
+@@ -98,10 +94,7 @@
+ import android.util.SparseArray;
+ import android.view.Display;
+-import android.view.WindowManagerGlobal;
+ 
+ import com.android.internal.R;
+-import com.android.internal.annotations.Keep;
+-
+-import libcore.io.IoUtils;
++
+ 
+ import java.io.BufferedInputStream;
+@@ -168,7 +161,4 @@
+     private static final String PROP_WALLPAPER_COMPONENT = "ro.config.wallpaper_component";
+     /** @hide */
+-    private static final String VALUE_CMF_COLOR =
+-            android.os.SystemProperties.get("ro.boot.hardware.color");
+-    /** @hide */
+     private static final String WALLPAPER_CMF_PATH = "/wallpaper/image/";
+ 
+@@ -180,5 +170,4 @@
+      * Activities that support this intent should specify a MIME filter of "image/*"
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CROP_AND_SET_WALLPAPER =
+             "android.service.wallpaper.CROP_AND_SET_WALLPAPER";
+@@ -458,6 +447,4 @@
+ 
+     private static final Object sSync = new Object[0];
+-    @UnsupportedAppUsage
+-    private static Globals sGlobals;
+     private final Context mContext;
+     private final boolean mWcgEnabled;
+@@ -570,419 +557,9 @@
+     }
+ 
+-    private static class Globals extends IWallpaperManagerCallback.Stub {
+-        private final IWallpaperManager mService;
+-        private boolean mColorCallbackRegistered;
+-        private final ArrayList<Pair<OnColorsChangedListener, Handler>> mColorListeners =
+-                new ArrayList<>();
+-        private CachedWallpaper mCachedWallpaper;
+-        private Bitmap mDefaultWallpaper;
+-        private Handler mMainLooperHandler;
+-        private ArrayMap<LocalWallpaperColorConsumer, ArraySet<RectF>> mLocalColorCallbackAreas =
+-                        new ArrayMap<>();
+-        private ILocalWallpaperColorConsumer mLocalColorCallback =
+-                new ILocalWallpaperColorConsumer.Stub() {
+-                    @Override
+-                    public void onColorsChanged(RectF area, WallpaperColors colors) {
+-                        for (LocalWallpaperColorConsumer callback :
+-                                mLocalColorCallbackAreas.keySet()) {
+-                            ArraySet<RectF> areas = mLocalColorCallbackAreas.get(callback);
+-                            if (areas != null && areas.contains(area)) {
+-                                callback.onColorsChanged(area, colors);
+-                            }
+-                        }
+-                    }
+-                };
+-
+-        Globals(IWallpaperManager service, Looper looper) {
+-            mService = service;
+-            mMainLooperHandler = new Handler(looper);
+-            forgetLoadedWallpaper();
+-        }
+-
+-        @Override
+-        public void onWallpaperChanged() {
+-            /* The wallpaper has changed but we shouldn't eagerly load the
+-             * wallpaper as that would be inefficient. Reset the cached wallpaper
+-             * to null so if the user requests the wallpaper again then we'll
+-             * fetch it.
+-             */
+-            forgetLoadedWallpaper();
+-        }
+-
+-        /**
+-         * Start listening to wallpaper color events.
+-         * Will be called whenever someone changes their wallpaper or if a live wallpaper
+-         * changes its colors.
+-         * @param callback Listener
+-         * @param handler Thread to call it from. Main thread if null.
+-         * @param userId Owner of the wallpaper or UserHandle.USER_ALL
+-         * @param displayId Caller comes from which display
+-         */
+-        public void addOnColorsChangedListener(@NonNull OnColorsChangedListener callback,
+-                @Nullable Handler handler, int userId, int displayId) {
+-            synchronized (this) {
+-                if (!mColorCallbackRegistered) {
+-                    try {
+-                        mService.registerWallpaperColorsCallback(this, userId, displayId);
+-                        mColorCallbackRegistered = true;
+-                    } catch (RemoteException e) {
+-                        // Failed, service is gone
+-                        Log.w(TAG, "Can't register for color updates", e);
+-                    }
+-                }
+-                mColorListeners.add(new Pair<>(callback, handler));
+-            }
+-        }
+-
+-        public void addOnColorsChangedListener(
+-                @NonNull LocalWallpaperColorConsumer callback,
+-                @NonNull List<RectF> regions, int which, int userId, int displayId) {
+-            synchronized (this) {
+-                for (RectF area : regions) {
+-                    ArraySet<RectF> areas = mLocalColorCallbackAreas.get(callback);
+-                    if (areas == null) {
+-                        areas = new ArraySet<>();
+-                        mLocalColorCallbackAreas.put(callback, areas);
+-                    }
+-                    areas.add(area);
+-                }
+-                try {
+-                    // one way returns immediately
+-                    mService.addOnLocalColorsChangedListener(mLocalColorCallback, regions, which,
+-                            userId, displayId);
+-                } catch (RemoteException e) {
+-                    // Can't get colors, connection lost.
+-                    Log.e(TAG, "Can't register for local color updates", e);
+-                }
+-            }
+-        }
+-
+-        public void removeOnColorsChangedListener(
+-                @NonNull LocalWallpaperColorConsumer callback, int which, int userId,
+-                int displayId) {
+-            synchronized (this) {
+-                final ArraySet<RectF> removeAreas = mLocalColorCallbackAreas.remove(callback);
+-                if (removeAreas == null || removeAreas.size() == 0) {
+-                    return;
+-                }
+-                for (LocalWallpaperColorConsumer cb : mLocalColorCallbackAreas.keySet()) {
+-                    ArraySet<RectF> areas = mLocalColorCallbackAreas.get(cb);
+-                    if (areas != null && cb != callback) removeAreas.removeAll(areas);
+-                }
+-                try {
+-                    if (removeAreas.size() > 0) {
+-                        // one way returns immediately
+-                        mService.removeOnLocalColorsChangedListener(
+-                                mLocalColorCallback, new ArrayList(removeAreas), which, userId,
+-                                displayId);
+-                    }
+-                } catch (RemoteException e) {
+-                    // Can't get colors, connection lost.
+-                    Log.e(TAG, "Can't unregister for local color updates", e);
+-                }
+-            }
+-        }
+-
+-        /**
+-         * Stop listening to wallpaper color events.
+-         *
+-         * @param callback listener
+-         * @param userId Owner of the wallpaper or UserHandle.USER_ALL
+-         * @param displayId Which display is interested
+-         */
+-        public void removeOnColorsChangedListener(@NonNull OnColorsChangedListener callback,
+-                int userId, int displayId) {
+-            synchronized (this) {
+-                mColorListeners.removeIf(pair -> pair.first == callback);
+-
+-                if (mColorListeners.size() == 0 && mColorCallbackRegistered) {
+-                    mColorCallbackRegistered = false;
+-                    try {
+-                        mService.unregisterWallpaperColorsCallback(this, userId, displayId);
+-                    } catch (RemoteException e) {
+-                        // Failed, service is gone
+-                        Log.w(TAG, "Can't unregister color updates", e);
+-                    }
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public void onWallpaperColorsChanged(WallpaperColors colors, int which, int userId) {
+-            synchronized (this) {
+-                for (Pair<OnColorsChangedListener, Handler> listener : mColorListeners) {
+-                    Handler handler = listener.second;
+-                    if (listener.second == null) {
+-                        handler = mMainLooperHandler;
+-                    }
+-                    handler.post(() -> {
+-                        // Dealing with race conditions between posting a callback and
+-                        // removeOnColorsChangedListener being called.
+-                        boolean stillExists;
+-                        synchronized (sGlobals) {
+-                            stillExists = mColorListeners.contains(listener);
+-                        }
+-                        if (stillExists) {
+-                            listener.first.onColorsChanged(colors, which, userId);
+-                        }
+-                    });
+-                }
+-            }
+-        }
+-
+-        WallpaperColors getWallpaperColors(int which, int userId, int displayId) {
+-            checkExactlyOneWallpaperFlagSet(which);
+-
+-            try {
+-                return mService.getWallpaperColors(which, userId, displayId);
+-            } catch (RemoteException e) {
+-                // Can't get colors, connection lost.
+-            }
+-            return null;
+-        }
+-
+-        public Bitmap peekWallpaperBitmap(Context context, boolean returnDefault,
+-                @SetWallpaperFlags int which, ColorManagementProxy cmProxy) {
+-            return peekWallpaperBitmap(context, returnDefault, which, context.getUserId(),
+-                    false /* hardware */, cmProxy);
+-        }
+-
+-        /**
+-         * Retrieves the current wallpaper Bitmap, caching the result. If this fails and
+-         * `returnDefault` is set, returns the Bitmap for the default wallpaper; otherwise returns
+-         * null.
+-         *
+-         * More sophisticated caching might a) store and compare the wallpaper ID so that
+-         * consecutive calls for FLAG_SYSTEM and FLAG_LOCK could return the cached wallpaper if
+-         * no lock screen wallpaper is set, or b) separately cache home and lock screen wallpaper.
+-         */
+-        public Bitmap peekWallpaperBitmap(Context context, boolean returnDefault,
+-                @SetWallpaperFlags int which, int userId, boolean hardware,
+-                ColorManagementProxy cmProxy) {
+-            if (mService != null) {
+-                try {
+-                    Trace.beginSection("WPMS.isWallpaperSupported");
+-                    if (!mService.isWallpaperSupported(context.getOpPackageName())) {
+-                        return null;
+-                    }
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                } finally {
+-                    Trace.endSection();
+-                }
+-            }
+-            synchronized (this) {
+-                if (mCachedWallpaper != null && mCachedWallpaper.isValid(userId, which) && context
+-                        .checkSelfPermission(READ_WALLPAPER_INTERNAL) == PERMISSION_GRANTED) {
+-                    return mCachedWallpaper.mCachedWallpaper;
+-                }
+-                mCachedWallpaper = null;
+-                Bitmap currentWallpaper = null;
+-                try {
+-                    Trace.beginSection("WPMS.getCurrentWallpaperLocked");
+-                    currentWallpaper = getCurrentWallpaperLocked(
+-                            context, which, userId, hardware, cmProxy);
+-                } catch (OutOfMemoryError e) {
+-                    Log.w(TAG, "Out of memory loading the current wallpaper: " + e);
+-                } catch (SecurityException e) {
+-                    /*
+-                     * Apps with target SDK <= S can still access the wallpaper through
+-                     * READ_EXTERNAL_STORAGE. In T however, app that previously had access to the
+-                     * wallpaper via READ_EXTERNAL_STORAGE will get a SecurityException here.
+-                     * Thus, in T specifically, return the default wallpaper instead of crashing.
+-                     */
+-                    if (CompatChanges.isChangeEnabled(RETURN_DEFAULT_ON_SECURITY_EXCEPTION)
+-                            && !CompatChanges.isChangeEnabled(THROW_ON_SECURITY_EXCEPTION)) {
+-                        Log.w(TAG, "No permission to access wallpaper, returning default"
+-                                + " wallpaper to avoid crashing legacy app.");
+-                        return getDefaultWallpaper(context, FLAG_SYSTEM);
+-                    }
+-
+-                    if (context.getApplicationInfo().targetSdkVersion < Build.VERSION_CODES.O_MR1) {
+-                        Log.w(TAG, "No permission to access wallpaper, suppressing"
+-                                + " exception to avoid crashing legacy app.");
+-                    } else {
+-                        // Post-O apps really most sincerely need the permission.
+-                        throw e;
+-                    }
+-                } finally {
+-                    Trace.endSection();
+-                }
+-                if (currentWallpaper != null) {
+-                    mCachedWallpaper = new CachedWallpaper(currentWallpaper, userId, which);
+-                    return currentWallpaper;
+-                }
+-            }
+-            if (returnDefault || (which == FLAG_LOCK && isStaticWallpaper(FLAG_LOCK))) {
+-                return getDefaultWallpaper(context, which);
+-            }
+-            return null;
+-        }
+-
+-        @Nullable
+-        public Rect peekWallpaperDimensions(Context context, boolean returnDefault,
+-                @SetWallpaperFlags int which, int userId) {
+-            if (mService != null) {
+-                try {
+-                    if (!mService.isWallpaperSupported(context.getOpPackageName())) {
+-                        return new Rect();
+-                    }
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-
+-            Rect dimensions = null;
+-            synchronized (this) {
+-                Bundle params = new Bundle();
+-                try (ParcelFileDescriptor pfd = mService.getWallpaperWithFeature(
+-                        context.getOpPackageName(), context.getAttributionTag(), this, which,
+-                        params, userId, /* getCropped = */ true)) {
+-                    // Let's peek user wallpaper first.
+-                    if (pfd != null) {
+-                        BitmapFactory.Options options = new BitmapFactory.Options();
+-                        options.inJustDecodeBounds = true;
+-                        BitmapFactory.decodeFileDescriptor(pfd.getFileDescriptor(), null, options);
+-                        dimensions = new Rect(0, 0, options.outWidth, options.outHeight);
+-                    }
+-                } catch (RemoteException ex) {
+-                    Log.w(TAG, "peek wallpaper dimensions failed", ex);
+-                } catch (IOException ignored) {
+-                    // This is only thrown on close and can be safely ignored.
+-                }
+-            }
+-            // If user wallpaper is unavailable, may be the default one instead.
+-            if ((dimensions == null || dimensions.width() == 0 || dimensions.height() == 0)
+-                    && (returnDefault || (which == FLAG_LOCK && isStaticWallpaper(FLAG_LOCK)))) {
+-                InputStream is = openDefaultWallpaper(context, which);
+-                if (is != null) {
+-                    try {
+-                        BitmapFactory.Options options = new BitmapFactory.Options();
+-                        options.inJustDecodeBounds = true;
+-                        BitmapFactory.decodeStream(is, null, options);
+-                        dimensions = new Rect(0, 0, options.outWidth, options.outHeight);
+-                    } finally {
+-                        IoUtils.closeQuietly(is);
+-                    }
+-                }
+-            }
+-            return dimensions;
+-        }
+-
+-        void forgetLoadedWallpaper() {
+-            synchronized (this) {
+-                mCachedWallpaper = null;
+-                mDefaultWallpaper = null;
+-            }
+-        }
+-
+-        private Bitmap getCurrentWallpaperLocked(Context context, @SetWallpaperFlags int which,
+-                int userId, boolean hardware, ColorManagementProxy cmProxy) {
+-            if (mService == null) {
+-                Log.w(TAG, "WallpaperService not running");
+-                return null;
+-            }
+-
+-            try {
+-                Bundle params = new Bundle();
+-                Trace.beginSection("WPMS.getWallpaperWithFeature_" + which);
+-                ParcelFileDescriptor pfd = mService.getWallpaperWithFeature(
+-                        context.getOpPackageName(), context.getAttributionTag(), this, which,
+-                        params, userId, /* getCropped = */ true);
+-                Trace.endSection();
+-
+-                if (pfd == null) {
+-                    return null;
+-                }
+-                try (InputStream is = new ParcelFileDescriptor.AutoCloseInputStream(pfd)) {
+-                    ImageDecoder.Source src = ImageDecoder.createSource(context.getResources(), is,
+-                        /* density= */ 0);
+-                    return ImageDecoder.decodeBitmap(src, ((decoder, info, source) -> {
+-                        // Mutable and hardware config can't be set at the same time.
+-                        decoder.setMutableRequired(!hardware);
+-                        // Let's do color management
+-                        if (cmProxy != null) {
+-                            cmProxy.doColorManagement(decoder, info);
+-                        }
+-                    }));
+-                } catch (OutOfMemoryError | IOException | ArrayIndexOutOfBoundsException e) {
+-                    Log.w(TAG, "Can't decode file", e);
+-                }
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-            return null;
+-        }
+-
+-        private Bitmap getDefaultWallpaper(Context context, @SetWallpaperFlags int which) {
+-            Trace.beginSection("WPMS.getDefaultWallpaper_" + which);
+-            Bitmap defaultWallpaper = mDefaultWallpaper;
+-            if (defaultWallpaper == null || defaultWallpaper.isRecycled()) {
+-                defaultWallpaper = null;
+-                Trace.beginSection("WPMS.openDefaultWallpaper");
+-                try (InputStream is = openDefaultWallpaper(context, which)) {
+-                    Trace.endSection();
+-                    if (is != null) {
+-                        BitmapFactory.Options options = new BitmapFactory.Options();
+-                        Trace.beginSection("WPMS.decodeStream");
+-                        defaultWallpaper = BitmapFactory.decodeStream(is, null, options);
+-                        Trace.endSection();
+-                    }
+-                } catch (OutOfMemoryError | IOException e) {
+-                    Log.w(TAG, "Can't decode stream", e);
+-                }
+-            }
+-            synchronized (this) {
+-                mDefaultWallpaper = defaultWallpaper;
+-            }
+-            Trace.endSection();
+-            return defaultWallpaper;
+-        }
+-
+-        /**
+-         * Return true if there is a static wallpaper on the specified screen.
+-         * With {@code which=}{@link #FLAG_LOCK}, always return false if the lockscreen doesn't run
+-         * its own wallpaper engine.
+-         */
+-        private boolean isStaticWallpaper(@SetWallpaperFlags int which) {
+-            if (mService == null) {
+-                Log.w(TAG, "WallpaperService not running");
+-                throw new RuntimeException(new DeadSystemException());
+-            }
+-            try {
+-                return mService.isStaticWallpaper(which);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    static void initGlobals(IWallpaperManager service, Looper looper) {
+-        synchronized (sSync) {
+-            if (sGlobals == null) {
+-                sGlobals = new Globals(service, looper);
+-            }
+-        }
+-    }
+-
+-    /*package*/ WallpaperManager(IWallpaperManager service, @UiContext Context context,
+-            Handler handler) {
+-        mContext = context;
+-        if (service != null) {
+-            initGlobals(service, context.getMainLooper());
+-        }
+-        // Check if supports mixed color spaces composition in hardware.
+-        mWcgEnabled = context.getResources().getConfiguration().isScreenWideColorGamut()
+-                && context.getResources().getBoolean(R.bool.config_enableWcgMode);
+-        mCmProxy = new ColorManagementProxy(context);
+-    }
+-
++
++
++    /*package*/
+     // no-op constructor called just by DisabledWallpaperManager
+-    /*package*/ WallpaperManager() {
+-        mContext = null;
+-        mCmProxy = null;
+-        mWcgEnabled = false;
+-    }
+-
++    /*package*/
+     /**
+      * Retrieve a WallpaperManager associated with the given Context.
+@@ -993,9 +570,4 @@
+     }
+ 
+-    /** @hide */
+-    @UnsupportedAppUsage
+-    public IWallpaperManager getIWallpaperManager() {
+-        return sGlobals.mService;
+-    }
+ 
+     /**
+@@ -1091,13 +663,5 @@
+     @RequiresPermission(anyOf = {MANAGE_EXTERNAL_STORAGE, READ_WALLPAPER_INTERNAL})
+     public Drawable getDrawable(@SetWallpaperFlags int which) {
+-        final ColorManagementProxy cmProxy = getColorManagementProxy();
+-        boolean returnDefault = which != FLAG_LOCK;
+-        Bitmap bm = sGlobals.peekWallpaperBitmap(mContext, returnDefault, which, cmProxy);
+-        if (bm != null) {
+-            Drawable dr = new BitmapDrawable(mContext.getResources(), bm);
+-            dr.setDither(false);
+-            return dr;
+-        }
+-        return null;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1159,135 +723,5 @@
+     public Drawable getBuiltInDrawable(int outWidth, int outHeight, boolean scaleToFit,
+             float horizontalAlignment, float verticalAlignment, @SetWallpaperFlags int which) {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-
+-        checkExactlyOneWallpaperFlagSet(which);
+-
+-        Resources resources = mContext.getResources();
+-        horizontalAlignment = Math.max(0, Math.min(1, horizontalAlignment));
+-        verticalAlignment = Math.max(0, Math.min(1, verticalAlignment));
+-
+-        InputStream wpStream = openDefaultWallpaper(mContext, which);
+-        if (wpStream == null) {
+-            if (DEBUG) {
+-                Log.w(TAG, "default wallpaper stream " + which + " is null");
+-            }
+-            return null;
+-        } else {
+-            InputStream is = new BufferedInputStream(wpStream);
+-            if (outWidth <= 0 || outHeight <= 0) {
+-                Bitmap fullSize = BitmapFactory.decodeStream(is, null, null);
+-                return new BitmapDrawable(resources, fullSize);
+-            } else {
+-                int inWidth;
+-                int inHeight;
+-                // Just measure this time through...
+-                {
+-                    BitmapFactory.Options options = new BitmapFactory.Options();
+-                    options.inJustDecodeBounds = true;
+-                    BitmapFactory.decodeStream(is, null, options);
+-                    if (options.outWidth != 0 && options.outHeight != 0) {
+-                        inWidth = options.outWidth;
+-                        inHeight = options.outHeight;
+-                    } else {
+-                        Log.e(TAG, "default wallpaper dimensions are 0");
+-                        return null;
+-                    }
+-                }
+-
+-                // Reopen the stream to do the full decode.  We know at this point
+-                // that openDefaultWallpaper() will return non-null.
+-                is = new BufferedInputStream(openDefaultWallpaper(mContext, which));
+-
+-                RectF cropRectF;
+-
+-                outWidth = Math.min(inWidth, outWidth);
+-                outHeight = Math.min(inHeight, outHeight);
+-                if (scaleToFit) {
+-                    cropRectF = getMaxCropRect(inWidth, inHeight, outWidth, outHeight,
+-                        horizontalAlignment, verticalAlignment);
+-                } else {
+-                    float left = (inWidth - outWidth) * horizontalAlignment;
+-                    float right = left + outWidth;
+-                    float top = (inHeight - outHeight) * verticalAlignment;
+-                    float bottom = top + outHeight;
+-                    cropRectF = new RectF(left, top, right, bottom);
+-                }
+-                Rect roundedTrueCrop = new Rect();
+-                cropRectF.roundOut(roundedTrueCrop);
+-
+-                if (roundedTrueCrop.width() <= 0 || roundedTrueCrop.height() <= 0) {
+-                    Log.w(TAG, "crop has bad values for full size image");
+-                    return null;
+-                }
+-
+-                // See how much we're reducing the size of the image
+-                int scaleDownSampleSize = Math.min(roundedTrueCrop.width() / outWidth,
+-                        roundedTrueCrop.height() / outHeight);
+-
+-                // Attempt to open a region decoder
+-                BitmapRegionDecoder decoder = null;
+-                try {
+-                    decoder = BitmapRegionDecoder.newInstance(is, true);
+-                } catch (IOException e) {
+-                    Log.w(TAG, "cannot open region decoder for default wallpaper");
+-                }
+-
+-                Bitmap crop = null;
+-                if (decoder != null) {
+-                    // Do region decoding to get crop bitmap
+-                    BitmapFactory.Options options = new BitmapFactory.Options();
+-                    if (scaleDownSampleSize > 1) {
+-                        options.inSampleSize = scaleDownSampleSize;
+-                    }
+-                    crop = decoder.decodeRegion(roundedTrueCrop, options);
+-                    decoder.recycle();
+-                }
+-
+-                if (crop == null) {
+-                    // BitmapRegionDecoder has failed, try to crop in-memory. We know at
+-                    // this point that openDefaultWallpaper() will return non-null.
+-                    is = new BufferedInputStream(openDefaultWallpaper(mContext, which));
+-                    Bitmap fullSize = null;
+-                    BitmapFactory.Options options = new BitmapFactory.Options();
+-                    if (scaleDownSampleSize > 1) {
+-                        options.inSampleSize = scaleDownSampleSize;
+-                    }
+-                    fullSize = BitmapFactory.decodeStream(is, null, options);
+-                    if (fullSize != null) {
+-                        crop = Bitmap.createBitmap(fullSize, roundedTrueCrop.left,
+-                                roundedTrueCrop.top, roundedTrueCrop.width(),
+-                                roundedTrueCrop.height());
+-                    }
+-                }
+-
+-                if (crop == null) {
+-                    Log.w(TAG, "cannot decode default wallpaper");
+-                    return null;
+-                }
+-
+-                // Scale down if necessary
+-                if (outWidth > 0 && outHeight > 0 &&
+-                        (crop.getWidth() != outWidth || crop.getHeight() != outHeight)) {
+-                    Matrix m = new Matrix();
+-                    RectF cropRect = new RectF(0, 0, crop.getWidth(), crop.getHeight());
+-                    RectF returnRect = new RectF(0, 0, outWidth, outHeight);
+-                    m.setRectToRect(cropRect, returnRect, Matrix.ScaleToFit.FILL);
+-                    Bitmap tmp = Bitmap.createBitmap((int) returnRect.width(),
+-                            (int) returnRect.height(), Bitmap.Config.ARGB_8888);
+-                    if (tmp != null) {
+-                        Canvas c = new Canvas(tmp);
+-                        Paint p = new Paint();
+-                        p.setFilterBitmap(true);
+-                        c.drawBitmap(crop, m, p);
+-                        crop = tmp;
+-                    }
+-                }
+-
+-                return new BitmapDrawable(resources, crop);
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1420,11 +854,5 @@
+     @RequiresPermission(anyOf = {MANAGE_EXTERNAL_STORAGE, READ_WALLPAPER_INTERNAL})
+     public Drawable getFastDrawable(@SetWallpaperFlags int which) {
+-        final ColorManagementProxy cmProxy = getColorManagementProxy();
+-        boolean returnDefault = which != FLAG_LOCK;
+-        Bitmap bm = sGlobals.peekWallpaperBitmap(mContext, returnDefault, which, cmProxy);
+-        if (bm != null) {
+-            return new FastBitmapDrawable(bm);
+-        }
+-        return null;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1487,12 +915,5 @@
+     @TestApi
+     public boolean wallpaperSupportsWcg(int which) {
+-        if (!shouldEnableWideColorGamut()) {
+-            return false;
+-        }
+-        final ColorManagementProxy cmProxy = getColorManagementProxy();
+-        Bitmap bitmap = sGlobals.peekWallpaperBitmap(mContext, false, which, cmProxy);
+-        return bitmap != null && bitmap.getColorSpace() != null
+-                && bitmap.getColorSpace() != ColorSpace.get(ColorSpace.Named.SRGB)
+-                && cmProxy.isSupportedColorSpace(bitmap.getColorSpace());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1540,6 +961,5 @@
+      */
+     public Bitmap getBitmapAsUser(int userId, boolean hardware) {
+-        final ColorManagementProxy cmProxy = getColorManagementProxy();
+-        return sGlobals.peekWallpaperBitmap(mContext, true, FLAG_SYSTEM, userId, hardware, cmProxy);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1568,7 +988,5 @@
+     public Bitmap getBitmapAsUser(int userId, boolean hardware,
+             @SetWallpaperFlags int which, boolean returnDefault) {
+-        final ColorManagementProxy cmProxy = getColorManagementProxy();
+-        return sGlobals.peekWallpaperBitmap(mContext, returnDefault,
+-                which, userId, hardware, cmProxy);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1635,10 +1053,8 @@
+      */
+     @SuppressWarnings("AndroidFrameworkContextUserId")
+-    @FlaggedApi(FLAG_MULTI_CROP)
+     @Nullable
+     public Rect peekBitmapDimensionsAsUser(@SetWallpaperFlags int which, boolean returnDefault,
+             int userId) {
+-        checkExactlyOneWallpaperFlagSet(which);
+-        return sGlobals.peekWallpaperDimensions(mContext, returnDefault, which, userId);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1658,5 +1074,4 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_MULTI_CROP)
+     @TestApi
+     @RequiresPermission(READ_WALLPAPER_INTERNAL)
+@@ -1664,21 +1079,5 @@
+     public List<Rect> getBitmapCrops(@NonNull List<Point> displaySizes,
+             @SetWallpaperFlags int which, boolean originalBitmap) {
+-        checkExactlyOneWallpaperFlagSet(which);
+-        try {
+-            List<Rect> result = sGlobals.mService.getBitmapCrops(
+-                    displaySizes, which, originalBitmap, mContext.getUserId());
+-            if (result != null) return result;
+-            // mService.getBitmapCrops returns null if the requested wallpaper is an ImageWallpaper,
+-            // but there are no crop hints and the bitmap size is unknown to the service (this
+-            // mostly happens for the default wallpaper). In that case, fetch the bitmap dimensions
+-            // and use the other getBitmapCrops API with no cropHints to figure out the crops.
+-            Rect bitmapDimensions = peekBitmapDimensions(which, true);
+-            if (bitmapDimensions == null) return List.of();
+-            Point bitmapSize = new Point(bitmapDimensions.width(), bitmapDimensions.height());
+-            return getBitmapCrops(bitmapSize, displaySizes, null);
+-
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1713,18 +1112,5 @@
+     @NonNull
+     public SparseArray<Rect> getBitmapCrops(@SetWallpaperFlags int which) {
+-        checkExactlyOneWallpaperFlagSet(which);
+-        try {
+-            Bundle bundle = sGlobals.mService.getCurrentBitmapCrops(which, mContext.getUserId());
+-            SparseArray<Rect> result = new SparseArray<>();
+-            if (bundle == null) return result;
+-            for (String key : bundle.keySet()) {
+-                int intKey = Integer.parseInt(key);
+-                Rect rect = bundle.getParcelable(key, Rect.class);
+-                result.put(intKey, rect);
+-            }
+-            return result;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1740,20 +1126,9 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_MULTI_CROP)
+     @TestApi
+     @NonNull
+     public List<Rect> getBitmapCrops(@NonNull Point bitmapSize, @NonNull List<Point> displaySizes,
+             @Nullable Map<Point, Rect> cropHints) {
+-        try {
+-            if (cropHints == null) cropHints = Map.of();
+-            Set<Map.Entry<Point, Rect>> entries = cropHints.entrySet();
+-            int[] screenOrientations = entries.stream().mapToInt(entry ->
+-                    getOrientation(entry.getKey())).toArray();
+-            List<Rect> crops = entries.stream().map(Map.Entry::getValue).toList();
+-            return sGlobals.mService.getFutureBitmapCrops(bitmapSize, displaySizes,
+-                    screenOrientations, crops);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1767,29 +1142,9 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_MULTI_CROP)
+     @RequiresPermission(SET_WALLPAPER_DIM_AMOUNT)
+     @Nullable
+     public WallpaperColors getWallpaperColors(@NonNull Bitmap bitmap,
+             @Nullable Map<Point, Rect> cropHints) {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            if (cropHints == null) cropHints = Map.of();
+-            Set<Map.Entry<Point, Rect>> entries = cropHints.entrySet();
+-            int[] screenOrientations = entries.stream().mapToInt(entry ->
+-                    getOrientation(entry.getKey())).toArray();
+-            List<Rect> crops = entries.stream().map(Map.Entry::getValue).toList();
+-            Point bitmapSize = new Point(bitmap.getWidth(), bitmap.getHeight());
+-            Rect crop = sGlobals.mService.getBitmapCrop(bitmapSize, screenOrientations, crops);
+-            float dimAmount = getWallpaperDimAmount();
+-            Bitmap croppedBitmap = Bitmap.createBitmap(
+-                    bitmap, crop.left, crop.top, crop.width(), crop.height());
+-            WallpaperColors result = WallpaperColors.fromBitmap(croppedBitmap, dimAmount);
+-            return result;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1842,5 +1197,5 @@
+     public void addOnColorsChangedListener(@NonNull OnColorsChangedListener listener,
+             @NonNull Handler handler) {
+-        addOnColorsChangedListener(listener, handler, mContext.getUserId());
++        Objects.requireNonNull(listener);
+     }
+ 
+@@ -1856,5 +1211,5 @@
+     public void addOnColorsChangedListener(@NonNull OnColorsChangedListener listener,
+             @NonNull Handler handler, int userId) {
+-        sGlobals.addOnColorsChangedListener(listener, handler, userId, mContext.getDisplayId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1864,5 +1219,5 @@
+      */
+     public void removeOnColorsChangedListener(@NonNull OnColorsChangedListener callback) {
+-        removeOnColorsChangedListener(callback, mContext.getUserId());
++
+     }
+ 
+@@ -1875,5 +1230,5 @@
+     public void removeOnColorsChangedListener(@NonNull OnColorsChangedListener callback,
+             int userId) {
+-        sGlobals.removeOnColorsChangedListener(callback, userId, mContext.getDisplayId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1899,5 +1254,6 @@
+      */
+     public @Nullable WallpaperColors getWallpaperColors(int which) {
+-        return getWallpaperColors(which, mContext.getUserId());
++        if (which != FLAG_SYSTEM && which != FLAG_LOCK) throw new IllegalArgumentException();
++        return which == FLAG_SYSTEM ? mHostColors : null;
+     }
+ 
+@@ -1913,6 +1269,5 @@
+     @UnsupportedAppUsage
+     public @Nullable WallpaperColors getWallpaperColors(int which, int userId) {
+-        StrictMode.assertUiContext(mContext, "getWallpaperColors");
+-        return sGlobals.getWallpaperColors(which, userId, mContext.getDisplayId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1922,12 +1277,5 @@
+     public void addOnColorsChangedListener(@NonNull LocalWallpaperColorConsumer callback,
+             List<RectF> regions, int which) throws IllegalArgumentException {
+-        for (RectF region : regions) {
+-            if (!LOCAL_COLOR_BOUNDS.contains(region)) {
+-                throw new IllegalArgumentException("Regions must be within bounds "
+-                        + LOCAL_COLOR_BOUNDS);
+-            }
+-        }
+-        sGlobals.addOnColorsChangedListener(callback, regions, which,
+-                                                 mContext.getUserId(), mContext.getDisplayId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1936,6 +1284,5 @@
+      */
+     public void removeOnColorsChangedListener(@NonNull LocalWallpaperColorConsumer callback) {
+-        sGlobals.removeOnColorsChangedListener(callback, FLAG_SYSTEM, mContext.getUserId(),
+-                mContext.getDisplayId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1977,5 +1324,4 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_ENABLE_CROSS_PLATFORM_TRANSFER)
+     @UnsupportedAppUsage
+     @SystemApi
+@@ -1988,32 +1334,5 @@
+     private ParcelFileDescriptor getWallpaperFile(@SetWallpaperFlags int which, int userId,
+             boolean getCropped) {
+-        checkExactlyOneWallpaperFlagSet(which);
+-
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        } else {
+-            try {
+-                Bundle outParams = new Bundle();
+-                return sGlobals.mService.getWallpaperWithFeature(mContext.getOpPackageName(),
+-                        mContext.getAttributionTag(), null, which, outParams,
+-                        userId, getCropped);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            } catch (SecurityException e) {
+-                if (CompatChanges.isChangeEnabled(RETURN_DEFAULT_ON_SECURITY_EXCEPTION)
+-                        && !CompatChanges.isChangeEnabled(THROW_ON_SECURITY_EXCEPTION)) {
+-                    Log.w(TAG, "No permission to access wallpaper, returning default"
+-                            + " wallpaper file to avoid crashing legacy app.");
+-                    return getDefaultSystemWallpaperFile();
+-                }
+-                if (mContext.getApplicationInfo().targetSdkVersion < Build.VERSION_CODES.O_MR1) {
+-                    Log.w(TAG, "No permission to access wallpaper, suppressing"
+-                            + " exception to avoid crashing legacy app.");
+-                    return null;
+-                }
+-                throw e;
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2025,5 +1344,5 @@
+      */
+     public void forgetLoadedWallpaper() {
+-        sGlobals.forgetLoadedWallpaper();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2047,5 +1366,5 @@
+     @RequiresPermission(value = "QUERY_ALL_PACKAGES", conditional = true)
+     public WallpaperInfo getWallpaperInfo() {
+-        return getWallpaperInfoForUser(mContext.getUserId());
++        return null;
+     }
+ 
+@@ -2101,15 +1420,5 @@
+      */
+     public WallpaperInfo getWallpaperInfo(@SetWallpaperFlags int which, int userId) {
+-        checkExactlyOneWallpaperFlagSet(which);
+-        try {
+-            if (sGlobals.mService == null) {
+-                Log.w(TAG, "WallpaperService not running");
+-                throw new RuntimeException(new DeadSystemException());
+-            } else {
+-                return sGlobals.mService.getWallpaperInfoWithFlags(which, userId);
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2146,52 +1455,5 @@
+     public WallpaperInstance getWallpaperInstance(@SetWallpaperFlags int which,
+             boolean createMissingId) {
+-        checkExactlyOneWallpaperFlagSet(which);
+-        try {
+-            if (sGlobals.mService == null) {
+-                Log.w(TAG, "WallpaperService not running");
+-                throw new RuntimeException(new DeadSystemException());
+-            } else {
+-                WallpaperInstance instance = sGlobals.mService.getWallpaperInstance(which,
+-                        mContext.getUserId());
+-                boolean isStaticWithoutId =
+-                        (instance != null && instance.getInfo() == null && instance.getId().equals(
+-                                WallpaperInstance.DEFAULT_ID));
+-                if (isStaticWithoutId && createMissingId) {
+-                    Bitmap bitmap = null;
+-                    ParcelFileDescriptor fd = getWallpaperFile(which, false);
+-                    if (fd != null) {
+-                        try (FileInputStream fileStream = new FileInputStream(
+-                                fd.getFileDescriptor())) {
+-                            bitmap = BitmapFactory.decodeStream(fileStream);
+-                        } catch (IOException e) {
+-                            Log.e(TAG, "Error closing file stream when calculating hash", e);
+-                        } finally {
+-                            try {
+-                                fd.close();
+-                            } catch (IOException e) {
+-                                Log.e(TAG, "Error closing file description when calculating hash",
+-                                        e);
+-                            }
+-                        }
+-                    } else {
+-                        Drawable drawable = peekDrawable(which);
+-                        if (drawable instanceof BitmapDrawable bd && bd.getBitmap() != null) {
+-                            bitmap = bd.getBitmap();
+-                        }
+-                    }
+-                    if (bitmap != null) {
+-                        String newId = String.valueOf(generateHashCode(bitmap));
+-                        sGlobals.mService.setWallpaperDescriptionId(newId, which,
+-                                mContext.getUserId());
+-                        instance = sGlobals.mService.getWallpaperInstance(which,
+-                                mContext.getUserId());
+-                        bitmap.recycle();
+-                    }
+-                }
+-                return instance;
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2226,14 +1488,5 @@
+     @Nullable
+     public ParcelFileDescriptor getWallpaperInfoFile() {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        } else {
+-            try {
+-                return sGlobals.mService.getWallpaperInfoFile(mContext.getUserId());
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2262,14 +1515,5 @@
+      */
+     public int getWallpaperIdForUser(@SetWallpaperFlags int which, int userId) {
+-        try {
+-            if (sGlobals.mService == null) {
+-                Log.w(TAG, "WallpaperService not running");
+-                throw new RuntimeException(new DeadSystemException());
+-            } else {
+-                return sGlobals.mService.getWallpaperIdForUser(which, userId);
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2367,35 +1611,5 @@
+     public int setResource(@RawRes int resid, @SetWallpaperFlags int which)
+             throws IOException {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        final Bundle result = new Bundle();
+-        final WallpaperSetCompletion completion = new WallpaperSetCompletion();
+-        try {
+-            Resources resources = mContext.getResources();
+-            WallpaperDescription description = new WallpaperDescription.Builder().build();
+-            ParcelFileDescriptor fd = sGlobals.mService.setWallpaper(
+-                    "res:" + resources.getResourceName(resid), mContext.getOpPackageName(),
+-                    description, false, result, which, completion, mContext.getUserId());
+-            if (fd != null) {
+-                FileOutputStream fos = null;
+-                try {
+-                    fos = new ParcelFileDescriptor.AutoCloseOutputStream(fd);
+-                    copyStreamToWallpaperFile(resources.openRawResource(resid), fos);
+-                    // The 'close()' is the trigger for any server-side image manipulation,
+-                    // so we must do that before waiting for completion.
+-                    fos.close();
+-                    completion.waitForCompletion();
+-                } finally {
+-                    // Might be redundant but completion shouldn't wait unless the write
+-                    // succeeded; this is a fallback if it threw past the close+wait.
+-                    IoUtils.closeQuietly(fos);
+-                }
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-        return result.getInt(EXTRA_NEW_WALLPAPER_ID, 0);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2498,9 +1712,5 @@
+             boolean allowBackup, @SetWallpaperFlags int which, int userId)
+             throws IOException {
+-            SparseArray<Rect> cropMap = new SparseArray<>();
+-            if (visibleCropHint != null) cropMap.put(ORIENTATION_UNKNOWN, visibleCropHint);
+-            WallpaperDescription description = new WallpaperDescription.Builder().setCropHints(
+-                    cropMap).build();
+-            return setBitmapWithDescription(fullImage, description, allowBackup, which, userId);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2516,13 +1726,9 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_MULTI_CROP)
+     @TestApi
+     @RequiresPermission(android.Manifest.permission.SET_WALLPAPER)
+     public int setBitmapWithCrops(@Nullable Bitmap fullImage, @NonNull Map<Point, Rect> cropHints,
+             boolean allowBackup, @SetWallpaperFlags int which) throws IOException {
+-        WallpaperDescription description = new WallpaperDescription.Builder().setCropHints(
+-                cropHints).build();
+-        return setBitmapWithDescription(fullImage, description, allowBackup, which,
+-                mContext.getUserId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2539,5 +1745,4 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_ENABLE_CROSS_PLATFORM_TRANSFER)
+     @UnsupportedAppUsage
+     @SystemApi
+@@ -2553,35 +1758,5 @@
+             @NonNull WallpaperDescription description, boolean allowBackup,
+             @SetWallpaperFlags int which, int userId) throws IOException {
+-        if (fullImage == null) {
+-            throw new IllegalArgumentException("Bitmap cannot be null");
+-        }
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        for (int i = 0; i < description.getCropHints().size(); i++) {
+-            validateRect(description.getCropHints().valueAt(i));
+-        }
+-        final Bundle result = new Bundle();
+-        final WallpaperSetCompletion completion = new WallpaperSetCompletion();
+-        try {
+-            ParcelFileDescriptor fd = sGlobals.mService.setWallpaper(null,
+-                    mContext.getOpPackageName(), description, allowBackup,
+-                    result, which, completion, userId);
+-            if (fd != null) {
+-                FileOutputStream fos = null;
+-                try {
+-                    fos = new ParcelFileDescriptor.AutoCloseOutputStream(fd);
+-                    fullImage.compress(Bitmap.CompressFormat.PNG, 90, fos);
+-                    fos.close();
+-                    completion.waitForCompletion();
+-                } finally {
+-                    IoUtils.closeQuietly(fos);
+-                }
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-        return result.getInt(EXTRA_NEW_WALLPAPER_ID, 0);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2698,5 +1873,4 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_MULTI_CROP)
+     @TestApi
+     @RequiresPermission(android.Manifest.permission.SET_WALLPAPER)
+@@ -2704,7 +1878,5 @@
+             @NonNull Map<Point, Rect> cropHints, boolean allowBackup, @SetWallpaperFlags int which)
+             throws IOException {
+-        WallpaperDescription description = new WallpaperDescription.Builder().setCropHints(
+-                cropHints).build();
+-        return setStreamWithDescription(bitmapData, description, allowBackup, which);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2722,5 +1894,4 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_MULTI_CROP)
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.SET_WALLPAPER)
+@@ -2728,7 +1899,5 @@
+             @NonNull SparseArray<Rect> cropHints, boolean allowBackup, @SetWallpaperFlags int which)
+             throws IOException {
+-        WallpaperDescription description = new WallpaperDescription.Builder().setCropHints(
+-                cropHints).build();
+-        return setStreamWithDescription(bitmapData, description, allowBackup, which);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2751,32 +1920,5 @@
+             @NonNull WallpaperDescription description, boolean allowBackup,
+             @SetWallpaperFlags int which) throws IOException {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        for (int i = 0; i < description.getCropHints().size(); i++) {
+-            validateRect(description.getCropHints().valueAt(i));
+-        }
+-        final Bundle result = new Bundle();
+-        final WallpaperSetCompletion completion = new WallpaperSetCompletion();
+-        try {
+-            ParcelFileDescriptor fd = sGlobals.mService.setWallpaper(null,
+-                    mContext.getOpPackageName(), description, allowBackup, result, which,
+-                    completion, mContext.getUserId());
+-            if (fd != null) {
+-                FileOutputStream fos = null;
+-                try {
+-                    fos = new ParcelFileDescriptor.AutoCloseOutputStream(fd);
+-                    copyStreamToWallpaperFile(bitmapData, fos);
+-                    fos.close();
+-                    completion.waitForCompletion();
+-                } finally {
+-                    IoUtils.closeQuietly(fos);
+-                }
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-        return result.getInt(EXTRA_NEW_WALLPAPER_ID, 0);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2787,15 +1929,5 @@
+      */
+     public boolean hasResourceWallpaper(@RawRes int resid) {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            Resources resources = mContext.getResources();
+-            String name = "res:" + resources.getResourceName(resid);
+-            return sGlobals.mService.hasNamedWallpaper(name);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2806,15 +1938,6 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_POSTPONE_WALLPAPER_CHANGE_NOTIFICATION_ON_UNLOCK_USER)
+     public boolean hasSetWallpaper() {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperManagerService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            return sGlobals.mService.hasSetWallpaper();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2837,14 +1960,5 @@
+      */
+     public int getDesiredMinimumWidth() {
+-        StrictMode.assertUiContext(mContext, "getDesiredMinimumWidth");
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            return sGlobals.mService.getWidthHint(mContext.getDisplayId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return mHostWidth;
+     }
+ 
+@@ -2867,14 +1981,5 @@
+      */
+     public int getDesiredMinimumHeight() {
+-        StrictMode.assertUiContext(mContext, "getDesiredMinimumHeight");
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            return sGlobals.mService.getHeightHint(mContext.getDisplayId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return mHostHeight;
+     }
+ 
+@@ -2899,45 +2004,6 @@
+      */
+     public void suggestDesiredDimensions(int minimumWidth, int minimumHeight) {
+-        StrictMode.assertUiContext(mContext, "suggestDesiredDimensions");
+-        try {
+-            /*
+-             * The framework makes no attempt to limit the window size
+-             * to the maximum texture size. Any window larger than this
+-             * cannot be composited.
+-             *
+-             * Read maximum texture size from system property and scale down
+-             * minimumWidth and minimumHeight accordingly.
+-             */
+-            int maximumTextureSize;
+-            try {
+-                maximumTextureSize = SystemProperties.getInt("sys.max_texture_size", 0);
+-            } catch (Exception e) {
+-                maximumTextureSize = 0;
+-            }
+-
+-            if (maximumTextureSize > 0) {
+-                if ((minimumWidth > maximumTextureSize) ||
+-                    (minimumHeight > maximumTextureSize)) {
+-                    float aspect = (float)minimumHeight / (float)minimumWidth;
+-                    if (minimumWidth > minimumHeight) {
+-                        minimumWidth = maximumTextureSize;
+-                        minimumHeight = (int)((minimumWidth * aspect) + 0.5);
+-                    } else {
+-                        minimumHeight = maximumTextureSize;
+-                        minimumWidth = (int)((minimumHeight / aspect) + 0.5);
+-                    }
+-                }
+-            }
+-
+-            if (sGlobals.mService == null) {
+-                Log.w(TAG, "WallpaperService not running");
+-                throw new RuntimeException(new DeadSystemException());
+-            } else {
+-                sGlobals.mService.setDimensionHints(minimumWidth, minimumHeight,
+-                        mContext.getOpPackageName(), mContext.getDisplayId());
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        mHostWidth = minimumWidth;
++        mHostHeight = minimumHeight;
+     }
+ 
+@@ -2956,16 +2022,5 @@
+     @RequiresPermission(android.Manifest.permission.SET_WALLPAPER_HINTS)
+     public void setDisplayPadding(Rect padding) {
+-        StrictMode.assertUiContext(mContext, "setDisplayPadding");
+-        try {
+-            if (sGlobals.mService == null) {
+-                Log.w(TAG, "WallpaperService not running");
+-                throw new RuntimeException(new DeadSystemException());
+-            } else {
+-                sGlobals.mService.setDisplayPadding(padding, mContext.getOpPackageName(),
+-                        mContext.getDisplayId());
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2981,12 +2036,5 @@
+     @SystemApi
+     public void setDisplayOffset(IBinder windowToken, int x, int y) {
+-        try {
+-            //Log.v(TAG, "Sending new wallpaper display offsets from app...");
+-            WindowManagerGlobal.getWindowSession().setWallpaperDisplayOffset(
+-                    windowToken, x, y);
+-            //Log.v(TAG, "...app returning after sending display offset!");
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3024,13 +2072,5 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS_FULL)
+     public void clearWallpaper(@SetWallpaperFlags int which, int userId) {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            sGlobals.mService.clearWallpaper(mContext.getOpPackageName(), which, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3058,14 +2098,5 @@
+     @RequiresPermission(SET_WALLPAPER_DIM_AMOUNT)
+     public void setWallpaperDimAmount(@FloatRange (from = 0f, to = 1f) float dimAmount) {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            sGlobals.mService.setWallpaperDimAmount(MathUtils.saturate(dimAmount), INVALID_DISPLAY,
+-                    false);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3079,13 +2110,5 @@
+     @RequiresPermission(SET_WALLPAPER_DIM_AMOUNT)
+     public @FloatRange (from = 0f, to = 1f) float getWallpaperDimAmount() {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            return sGlobals.mService.getWallpaperDimAmount();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3096,13 +2119,5 @@
+      */
+     public boolean lockScreenWallpaperExists() {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            return sGlobals.mService.lockScreenWallpaperExists();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3164,7 +2179,5 @@
+     public boolean setWallpaperComponentWithFlags(@NonNull ComponentName name,
+             @SetWallpaperFlags int which, int userId) {
+-        WallpaperDescription description = new WallpaperDescription.Builder().setComponent(
+-                name).build();
+-        return setWallpaperComponentWithDescription(description, which, userId);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3212,15 +2225,5 @@
+     public boolean setWallpaperComponentWithDescription(@NonNull WallpaperDescription description,
+             @SetWallpaperFlags int which, int userId) {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperManagerService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            sGlobals.mService.setWallpaperComponentChecked(description, mContext.getOpPackageName(),
+-                    which, userId);
+-            return true;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3239,12 +2242,5 @@
+      */
+     public void setWallpaperOffsets(IBinder windowToken, float xOffset, float yOffset) {
+-        try {
+-            //Log.v(TAG, "Sending new wallpaper offsets from app...");
+-            WindowManagerGlobal.getWindowSession().setWallpaperPosition(
+-                    windowToken, xOffset, yOffset, mWallpaperXStep, mWallpaperYStep);
+-            //Log.v(TAG, "...app returning after sending offsets!");
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++
+     }
+ 
+@@ -3279,12 +2275,5 @@
+     public void sendWallpaperCommand(IBinder windowToken, String action,
+             int x, int y, int z, Bundle extras) {
+-        try {
+-            //Log.v(TAG, "Sending new wallpaper offsets from app...");
+-            WindowManagerGlobal.getWindowSession().sendWallpaperCommand(
+-                    windowToken, action, x, y, z, extras);
+-            //Log.v(TAG, "...app returning after sending offsets!");
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++
+     }
+ 
+@@ -3298,18 +2287,7 @@
+      * @hide
+      */
+-    @Keep
+     @TestApi
+     public void setWallpaperZoomOut(@NonNull IBinder windowToken, float zoom) {
+-        if (zoom < 0 || zoom > 1f) {
+-            throw new IllegalArgumentException("zoom must be between 0 and 1: " + zoom);
+-        }
+-        if (windowToken == null) {
+-            throw new IllegalArgumentException("windowToken must not be null");
+-        }
+-        try {
+-            WindowManagerGlobal.getWindowSession().setWallpaperZoomOut(windowToken, zoom);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3320,14 +2298,5 @@
+      */
+     public boolean isWallpaperSupported() {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        } else {
+-            try {
+-                return sGlobals.mService.isWallpaperSupported(mContext.getOpPackageName());
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        return false;
+     }
+ 
+@@ -3340,14 +2309,5 @@
+      */
+     public boolean isSetWallpaperAllowed() {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        } else {
+-            try {
+-                return sGlobals.mService.isSetWallpaperAllowed(mContext.getOpPackageName());
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        return false;
+     }
+ 
+@@ -3363,10 +2323,5 @@
+      */
+     public void clearWallpaperOffsets(IBinder windowToken) {
+-        try {
+-            WindowManagerGlobal.getWindowSession().setWallpaperPosition(
+-                    windowToken, -1, -1, -1, -1);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3422,20 +2377,5 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public static InputStream openDefaultWallpaper(Context context, @SetWallpaperFlags int which) {
+-        if (optimizeDefaultWallpaper() && context.getResources().getBoolean(
+-                R.bool.config_optimizeDefaultWallpaper)) {
+-            if (sGlobals.mService != null) {
+-                try {
+-                    int displayId = context.getDisplayId();
+-                    ParcelFileDescriptor pfd = sGlobals.mService.getCroppedDefaultWallpaper(
+-                            context.getOpPackageName(), which, displayId);
+-                    if (pfd != null) {
+-                        return new ParcelFileDescriptor.AutoCloseInputStream(pfd);
+-                    }
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-        return openRawDefaultWallpaper(context, which);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3451,28 +2391,5 @@
+     public static InputStream openRawDefaultWallpaper(Context context,
+             @SetWallpaperFlags int which) {
+-        final String whichProp;
+-        final int defaultResId;
+-        /* Factory-default lock wallpapers are not yet supported.
+-        whichProp = which == FLAG_LOCK ? PROP_LOCK_WALLPAPER : PROP_WALLPAPER;
+-        defaultResId = which == FLAG_LOCK ? R.drawable.default_lock_wallpaper :  ....
+-        */
+-        whichProp = PROP_WALLPAPER;
+-        defaultResId = R.drawable.default_wallpaper;
+-        final String path = SystemProperties.get(whichProp);
+-        final InputStream wallpaperInputStream = getWallpaperInputStream(path);
+-        if (wallpaperInputStream != null) {
+-            return wallpaperInputStream;
+-        }
+-        final String cmfPath = getCmfWallpaperPath();
+-        final InputStream cmfWallpaperInputStream = getWallpaperInputStream(cmfPath);
+-        if (cmfWallpaperInputStream != null) {
+-            return cmfWallpaperInputStream;
+-        }
+-        try {
+-            return context.getResources().openRawResource(defaultResId);
+-        } catch (NotFoundException e) {
+-            // no default defined for this device; this is not a failure
+-        }
+-        return null;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3514,10 +2431,9 @@
+      */
+     private static List<String> getDefaultSystemWallpaperPaths() {
+-        return List.of(SystemProperties.get(PROP_WALLPAPER), getCmfWallpaperPath());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private static String getCmfWallpaperPath() {
+-        return Environment.getProductDirectory() + WALLPAPER_CMF_PATH + "default_wallpaper_"
+-                + VALUE_CMF_COLOR;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3529,23 +2445,5 @@
+      */
+     public static ComponentName getDefaultWallpaperComponent(Context context) {
+-        ComponentName cn = null;
+-
+-        String flat = SystemProperties.get(PROP_WALLPAPER_COMPONENT);
+-        if (!TextUtils.isEmpty(flat)) {
+-            cn = ComponentName.unflattenFromString(flat);
+-        }
+-
+-        if (cn == null) {
+-            flat = context.getString(com.android.internal.R.string.default_wallpaper_component);
+-            if (!TextUtils.isEmpty(flat)) {
+-                cn = ComponentName.unflattenFromString(flat);
+-            }
+-        }
+-
+-        if (!isComponentExist(context, cn)) {
+-            cn = null;
+-        }
+-
+-        return cn;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3557,26 +2455,5 @@
+      */
+     public static ComponentName getCmfDefaultWallpaperComponent(Context context) {
+-        ComponentName cn = null;
+-        String[] cmfWallpaperMap = context.getResources().getStringArray(
+-                com.android.internal.R.array.default_wallpaper_component_per_device_color);
+-        if (cmfWallpaperMap != null && cmfWallpaperMap.length > 0) {
+-            for (String entry : cmfWallpaperMap) {
+-                String[] cmfWallpaper;
+-                if (!TextUtils.isEmpty(entry)) {
+-                    cmfWallpaper = entry.split(",");
+-                    if (cmfWallpaper != null && cmfWallpaper.length == 2 && VALUE_CMF_COLOR.equals(
+-                            cmfWallpaper[0]) && !TextUtils.isEmpty(cmfWallpaper[1])) {
+-                        cn = ComponentName.unflattenFromString(cmfWallpaper[1]);
+-                        break;
+-                    }
+-                }
+-            }
+-        }
+-
+-        if (!isComponentExist(context, cn)) {
+-            cn = null;
+-        }
+-
+-        return cn == null ? getDefaultWallpaperComponent(context) : cn;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3602,17 +2479,7 @@
+      */
+     @SystemApi
+-    @FlaggedApi(FLAG_ENABLE_CROSS_PLATFORM_TRANSFER)
+     @RequiresPermission(READ_WALLPAPER_INTERNAL)
+     public boolean isWallpaperBackupEligible(@SetWallpaperFlags int which) {
+-        if (sGlobals.mService == null) {
+-            Log.w(TAG, "WallpaperService not running");
+-            throw new RuntimeException(new DeadSystemException());
+-        }
+-        try {
+-            return sGlobals.mService.isWallpaperBackupEligible(which, mContext.getUserId());
+-        } catch (RemoteException e) {
+-            Log.e(TAG, "Exception querying wallpaper backup eligibility: " + e.getMessage());
+-        }
+-        return false;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3642,9 +2509,5 @@
+ 
+         public ColorManagementProxy(@NonNull Context context) {
+-            // Get a list of supported wide gamut color spaces.
+-            Display display = context.getDisplayNoVerify();
+-            if (display != null) {
+-                mSupportedColorSpaces.addAll(Arrays.asList(display.getSupportedWideColorGamut()));
+-            }
++            mSupportedColorSpaces.add(ColorSpace.get(ColorSpace.Named.SRGB));
+         }
+ 
+@@ -3668,37 +2531,4 @@
+ 
+     // Private completion callback for setWallpaper() synchronization
+-    private class WallpaperSetCompletion extends IWallpaperManagerCallback.Stub {
+-        final CountDownLatch mLatch;
+-
+-        public WallpaperSetCompletion() {
+-            mLatch = new CountDownLatch(1);
+-        }
+-
+-        public void waitForCompletion() {
+-            try {
+-                final boolean completed = mLatch.await(30, TimeUnit.SECONDS);
+-                if (completed) {
+-                    Log.d(TAG, "Wallpaper set completion.");
+-                } else {
+-                    Log.d(TAG, "Timeout waiting for wallpaper set completion!");
+-                }
+-            } catch (InterruptedException e) {
+-                // This might be legit: the crop may take a very long time. Don't sweat
+-                // it in that case; we are okay with display lagging behind in order to
+-                // keep the caller from locking up indeterminately.
+-            }
+-        }
+-
+-        @Override
+-        public void onWallpaperChanged() throws RemoteException {
+-            mLatch.countDown();
+-        }
+-
+-        @Override
+-        public void onWallpaperColorsChanged(WallpaperColors colors, int which, int userId)
+-            throws RemoteException {
+-            sGlobals.onWallpaperColorsChanged(colors, which, userId);
+-        }
+-    }
+ 
+     /**
+@@ -3746,3 +2576,13 @@
+         void onColorsChanged(RectF area, WallpaperColors colors);
+     }
++    private final WallpaperColors mHostColors = new WallpaperColors(
++            Color.valueOf(Color.WHITE), null, null, WallpaperColors.HINT_SUPPORTS_DARK_TEXT);
++    private int mHostWidth;
++    private int mHostHeight;
++
++    WallpaperManager(Context context) {
++        mContext = context;
++        mWcgEnabled = false;
++        mCmProxy = new ColorManagementProxy(context);
++    }
+ }

@@ -1,0 +1,2138 @@
+--- a/frameworks/base/core/java/android/content/ContentInterface.java
++++ b/frameworks/base/core/java/android/content/ContentInterface.java
+@@ -57,5 +57,5 @@
+             @Nullable CancellationSignal cancellationSignal) throws RemoteException;
+ 
+-    public int checkUriPermission(@NonNull Uri uri, int uid, @Intent.AccessUriMode int modeFlags)
++    public int checkUriPermission(@NonNull Uri uri, int uid, int modeFlags)
+             throws RemoteException;
+ 
+--- a/frameworks/base/core/java/android/content/ContentResolver.java
++++ b/frameworks/base/core/java/android/content/ContentResolver.java
+@@ -17,4 +17,6 @@
+ package android.content;
+ 
++import java.util.HashMap;
++
+ import static android.provider.DocumentsContract.EXTRA_ORIENTATION;
+ 
+@@ -24,6 +26,4 @@
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SpecialUsers.CanBeALL;
+-import android.annotation.SpecialUsers.CanBeCURRENT;
+ import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+@@ -31,7 +31,4 @@
+ import android.annotation.UserIdInt;
+ import android.app.ActivityManager;
+-import android.app.ActivityThread;
+-import android.app.AppGlobals;
+-import android.app.UriGrantsManager;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.pm.PackageManager;
+@@ -42,5 +39,4 @@
+ import android.database.CrossProcessCursorWrapper;
+ import android.database.Cursor;
+-import android.database.IContentObserver;
+ import android.graphics.Bitmap;
+ import android.graphics.ImageDecoder;
+@@ -57,19 +53,12 @@
+ import android.os.DeadObjectException;
+ import android.os.IBinder;
+-import android.os.ICancellationSignal;
+ import android.os.OperationCanceledException;
+ import android.os.ParcelFileDescriptor;
+-import android.os.ParcelableException;
+-import android.os.RemoteCallback;
+ import android.os.RemoteException;
+-import android.os.ServiceManager;
+ import android.os.SystemClock;
+ import android.os.UserHandle;
+ import android.ravenwood.annotation.RavenwoodKeep;
+ import android.ravenwood.annotation.RavenwoodKeepPartialClass;
+-import android.ravenwood.annotation.RavenwoodKeepStaticInitializer;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.ravenwood.annotation.RavenwoodSupported;
+-import android.ravenwood.annotation.RavenwoodSupported.SupportType;
+ import android.system.Int64Ref;
+ import android.text.TextUtils;
+@@ -80,7 +69,5 @@
+ 
+ import com.android.internal.annotations.GuardedBy;
+-import com.android.internal.util.MimeIconUtils;
+-
+-import dalvik.system.CloseGuard;
++
+ 
+ import java.io.File;
+@@ -109,16 +96,4 @@
+  * </div>
+  */
+-@RavenwoodKeepPartialClass(bug = 457841012, comment =
+-        """
+-        Methods marked as conditionally supported enable tests to be able to mock ContentResolver
+-        by using either MockContentResolver, TestableContentResolver (via TestableContext),
+-        or wrapping a mock ContentInterface with ContentResolver#wrap.
+-        The default ContentResolver obtained with Context#getContentResolver on Ravenwood
+-        does not have any content provider registered other than a fake SettingsProvider,
+-        so calling any of its methods will normally result in a no-op.
+-        That ContentResolver is only meant to be used by APIs in android.provider.Settings.
+-        """
+-)
+-@RavenwoodKeepStaticInitializer
+ public abstract class ContentResolver implements ContentInterface {
+     /**
+@@ -790,5 +765,4 @@
+     // sampled accordingly.
+     private static final boolean ENABLE_CONTENT_SAMPLE = false;
+-    private static final int SLOW_THRESHOLD_MILLIS = 500 * Build.HW_TIMEOUT_MULTIPLIER;
+     private final Random mRandom = new Random();  // guarded by itself
+ 
+@@ -799,29 +773,11 @@
+     public static final String REMOTE_CALLBACK_ERROR = "error";
+ 
+-    /**
+-     * How long we wait for an attached process to publish its content providers
+-     * before we decide it must be hung.
+-     * @hide
+-     */
+-    public static final int CONTENT_PROVIDER_PUBLISH_TIMEOUT_MILLIS =
+-            10 * 1000 * Build.HW_TIMEOUT_MULTIPLIER;
+-
+-    /**
+-     * How long we wait for an provider to be published. Should be longer than
+-     * {@link #CONTENT_PROVIDER_PUBLISH_TIMEOUT_MILLIS}.
+-     * @hide
+-     */
+-    public static final int CONTENT_PROVIDER_READY_TIMEOUT_MILLIS =
+-            CONTENT_PROVIDER_PUBLISH_TIMEOUT_MILLIS + 10 * 1000 * Build.HW_TIMEOUT_MULTIPLIER;
++
+ 
+     // Timeout given a ContentProvider that has already been started and connected to.
+-    private static final int CONTENT_PROVIDER_TIMEOUT_MILLIS =
+-            3 * 1000 * Build.HW_TIMEOUT_MULTIPLIER;
+ 
+     // Should be >= {@link #CONTENT_PROVIDER_WAIT_TIMEOUT_MILLIS}, because that's how
+     // long ActivityManagerService is giving a content provider to get published if a new process
+     // needs to be started for that.
+-    private static final int REMOTE_CONTENT_PROVIDER_TIMEOUT_MILLIS =
+-            CONTENT_PROVIDER_READY_TIMEOUT_MILLIS + CONTENT_PROVIDER_TIMEOUT_MILLIS;
+ 
+     /**
+@@ -834,40 +790,16 @@
+     }
+ 
+-    /** @hide */
+-    @RavenwoodKeep
+-    public ContentResolver(@Nullable Context context, @Nullable ContentInterface wrapped) {
+-        mContext = context != null ? context : ActivityThread.currentApplication();
+-        mPackageName = mContext.getOpPackageName();
+-        mTargetSdkVersion = mContext.getApplicationInfo().targetSdkVersion;
++    private ContentResolver(Context context, ContentInterface wrapped) {
+         mWrapped = wrapped;
+-    }
++        mContext = context;
++        mPackageName = context == null ? null : context.getOpPackageName();
++        mTargetSdkVersion = context == null ? 0 : context.getApplicationInfo().targetSdkVersion;
++    }
++
+ 
+     /** @hide */
+     @RavenwoodKeep
+     public static @NonNull ContentResolver wrap(@NonNull ContentInterface wrapped) {
+-        Objects.requireNonNull(wrapped);
+-
+-        return new ContentResolver(null, wrapped) {
+-            @Override
+-            public void unstableProviderDied(IContentProvider icp) {
+-                throw new UnsupportedOperationException();
+-            }
+-            @Override
+-            public boolean releaseUnstableProvider(IContentProvider icp) {
+-                throw new UnsupportedOperationException();
+-            }
+-            @Override
+-            public boolean releaseProvider(IContentProvider icp) {
+-                throw new UnsupportedOperationException();
+-            }
+-            @Override
+-            protected IContentProvider acquireUnstableProvider(Context c, String name) {
+-                throw new UnsupportedOperationException();
+-            }
+-            @Override
+-            protected IContentProvider acquireProvider(Context c, String name) {
+-                throw new UnsupportedOperationException();
+-            }
+-        };
++        return new ContentResolver(null, Objects.requireNonNull(wrapped)) {};
+     }
+ 
+@@ -890,49 +822,7 @@
+     }
+ 
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationContentResolver")
+-    protected abstract IContentProvider acquireProvider(Context c, String name);
+-
+-    /**
+-     * Providing a default implementation of this, to avoid having to change a
+-     * lot of other things, but implementations of ContentResolver should
+-     * implement it.
+-     *
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationContentResolver")
+-    protected IContentProvider acquireExistingProvider(Context c, String name) {
+-        return acquireProvider(c, name);
+-    }
+-
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationContentResolver")
+-    public abstract boolean releaseProvider(IContentProvider icp);
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationContentResolver")
+-    protected abstract IContentProvider acquireUnstableProvider(Context c, String name);
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationContentResolver")
+-    public abstract boolean releaseUnstableProvider(IContentProvider icp);
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationContentResolver")
+-    public abstract void unstableProviderDied(IContentProvider icp);
+-
+-    /** @hide */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationContentResolver")
+-    public void appNotRespondingViaProvider(IContentProvider icp) {
+-        throw new UnsupportedOperationException("appNotRespondingViaProvider");
+-    }
++
++
++
+ 
+     /**
+@@ -944,131 +834,17 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable String getType(@NonNull Uri url) {
+-        Objects.requireNonNull(url, "url");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.getType(url);
++            return mWrapped.getType(url);
+         } catch (RemoteException e) {
+-            return null;
+-        }
+-
+-        IContentProvider provider = null;
+-        try {
+-            provider = acquireProvider(url);
+-        } catch (Exception e) {
+-            // if unable to acquire the provider, then it should try to get the type
+-            // using getTypeAnonymous via ActivityManagerService
+-        }
+-        if (provider != null) {
+-            try {
+-                final StringResultListener resultListener = new StringResultListener();
+-                provider.getTypeAsync(mContext.getAttributionSource(),
+-                        url, new RemoteCallback(resultListener));
+-                resultListener.waitForResult(CONTENT_PROVIDER_TIMEOUT_MILLIS);
+-                if (resultListener.exception != null) {
+-                    throw resultListener.exception;
+-                }
+-                return resultListener.result;
+-            } catch (RemoteException e) {
+-                // Arbitrary and not worth documenting, as Activity
+-                // Manager will kill this process shortly anyway.
+-                return null;
+-            } catch (java.lang.Exception e) {
+-                Log.w(TAG, "Failed to get type for: " + url, e);
+-                return null;
+-            } finally {
+-                try {
+-                    releaseProvider(provider);
+-                } catch (java.lang.NullPointerException e) {
+-                    // does nothing, Binder connection already null
+-                }
+-            }
+-        }
+-
+-        if (!SCHEME_CONTENT.equals(url.getScheme())) {
+-            return null;
+-        }
+-
+-        try {
+-            final StringResultListener resultListener = new StringResultListener();
+-            ActivityManager.getService().getMimeTypeFilterAsync(
+-                    ContentProvider.getUriWithoutUserId(url),
+-                    resolveUserId(url),
+-                    new RemoteCallback(resultListener));
+-            resultListener.waitForResult(REMOTE_CONTENT_PROVIDER_TIMEOUT_MILLIS);
+-            if (resultListener.exception != null) {
+-                throw resultListener.exception;
+-            }
+-            return resultListener.result;
+-        } catch (RemoteException e) {
+-            // We just failed to send a oneway request to the System Server. Nothing to do.
+-            return null;
+-        } catch (java.lang.Exception e) {
+-            Log.w(TAG, "Failed to get type for: " + url, e);
+-            return null;
+-        }
+-    }
+-
+-    @RavenwoodKeepWholeClass
+-    private abstract static class ResultListener<T> implements RemoteCallback.OnResultListener {
+-        @GuardedBy("this")
+-        public boolean done;
+-
+-        @GuardedBy("this")
+-        public T result;
+-
+-        @GuardedBy("this")
+-        public RuntimeException exception;
+-
+-        @Override
+-        public void onResult(Bundle result) {
+-            synchronized (this) {
+-                ParcelableException e = result.getParcelable(REMOTE_CALLBACK_ERROR, android.os.ParcelableException.class);
+-                if (e != null) {
+-                    Throwable t = e.getCause();
+-                    if (t instanceof RuntimeException) {
+-                        this.exception = (RuntimeException) t;
+-                    } else {
+-                        this.exception = new RuntimeException(t);
+-                    }
+-                } else {
+-                    this.result = getResultFromBundle(result);
+-                }
+-                done = true;
+-                notifyAll();
+-            }
+-        }
+-
+-        protected abstract T getResultFromBundle(Bundle result);
+-
+-        public void waitForResult(long timeout) {
+-            synchronized (this) {
+-                if (!done) {
+-                    try {
+-                        wait(timeout);
+-                    } catch (InterruptedException e) {
+-                        // Ignore
+-                    }
+-                }
+-            }
+-        }
+-    }
+-
+-    @RavenwoodKeepWholeClass
+-    private static class StringResultListener extends ResultListener<String> {
+-        @Override
+-        protected String getResultFromBundle(Bundle result) {
+-            return result.getString(REMOTE_CALLBACK_RESULT);
+-        }
+-    }
+-
+-    @RavenwoodKeepWholeClass
+-    private static class UriResultListener extends ResultListener<Uri> {
+-        @Override
+-        protected Uri getResultFromBundle(Bundle result) {
+-            return result.getParcelable(REMOTE_CALLBACK_RESULT, android.net.Uri.class);
+-        }
+-    }
++            throw new RuntimeException(e);
++        }
++    }
++
++
++
+ 
+     /**
+@@ -1090,28 +866,12 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public @Nullable String[] getStreamTypes(@NonNull Uri url, @NonNull String mimeTypeFilter) {
+-        Objects.requireNonNull(url, "url");
+-        Objects.requireNonNull(mimeTypeFilter, "mimeTypeFilter");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.getStreamTypes(url, mimeTypeFilter);
++            return mWrapped.getStreamTypes(url, mimeTypeFilter);
+         } catch (RemoteException e) {
+-            return null;
+-        }
+-
+-        IContentProvider provider = acquireProvider(url);
+-        if (provider == null) {
+-            return null;
+-        }
+-
+-        try {
+-            return provider.getStreamTypes(mContext.getAttributionSource(), url, mimeTypeFilter);
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return null;
+-        } finally {
+-            releaseProvider(provider);
++            throw new RuntimeException(e);
+         }
+     }
+@@ -1149,5 +909,4 @@
+      * @see Cursor
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable Cursor query(@RequiresPermission.Read @NonNull Uri uri,
+             @Nullable String[] projection, @Nullable String selection,
+@@ -1192,5 +951,4 @@
+      * @see Cursor
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable Cursor query(@RequiresPermission.Read @NonNull Uri uri,
+             @Nullable String[] projection, @Nullable String selection,
+@@ -1237,86 +995,18 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable Cursor query(final @RequiresPermission.Read @NonNull Uri uri,
+             @Nullable String[] projection, @Nullable Bundle queryArgs,
+             @Nullable CancellationSignal cancellationSignal) {
+-        Objects.requireNonNull(uri, "uri");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) {
+-                return mWrapped.query(uri, projection, queryArgs, cancellationSignal);
+-            }
++            return mWrapped.query(uri, projection, queryArgs, cancellationSignal);
+         } catch (RemoteException e) {
+-            return null;
+-        }
+-
+-        IContentProvider unstableProvider = acquireUnstableProvider(uri);
+-        if (unstableProvider == null) {
+-            return null;
+-        }
+-        IContentProvider stableProvider = null;
+-        Cursor qCursor = null;
+-        try {
+-            long startTime = SystemClock.uptimeMillis();
+-
+-            ICancellationSignal remoteCancellationSignal = null;
+-            if (cancellationSignal != null) {
+-                cancellationSignal.throwIfCanceled();
+-                remoteCancellationSignal = unstableProvider.createCancellationSignal();
+-                cancellationSignal.setRemote(remoteCancellationSignal);
+-            }
+-            try {
+-                qCursor = unstableProvider.query(mContext.getAttributionSource(), uri, projection,
+-                        queryArgs, remoteCancellationSignal);
+-            } catch (DeadObjectException e) {
+-                // The remote process has died...  but we only hold an unstable
+-                // reference though, so we might recover!!!  Let's try!!!!
+-                // This is exciting!!1!!1!!!!1
+-                unstableProviderDied(unstableProvider);
+-                stableProvider = acquireProvider(uri);
+-                if (stableProvider == null) {
+-                    return null;
+-                }
+-                qCursor = stableProvider.query(mContext.getAttributionSource(), uri, projection,
+-                        queryArgs, remoteCancellationSignal);
+-            }
+-            if (qCursor == null) {
+-                return null;
+-            }
+-
+-            // Force query execution.  Might fail and throw a runtime exception here.
+-            qCursor.getCount();
+-            long durationMillis = SystemClock.uptimeMillis() - startTime;
+-            maybeLogQueryToEventLog(durationMillis, uri, projection, queryArgs);
+-
+-            // Wrap the cursor object into CursorWrapperInner object.
+-            final IContentProvider provider = (stableProvider != null) ? stableProvider
+-                    : acquireProvider(uri);
+-            final CursorWrapperInner wrapper = new CursorWrapperInner(qCursor, provider);
+-            stableProvider = null;
+-            qCursor = null;
+-            return wrapper;
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return null;
+-        } finally {
+-            if (qCursor != null) {
+-                qCursor.close();
+-            }
+-            if (cancellationSignal != null) {
+-                cancellationSignal.setRemote(null);
+-            }
+-            if (unstableProvider != null) {
+-                releaseUnstableProvider(unstableProvider);
+-            }
+-            if (stableProvider != null) {
+-                releaseProvider(stableProvider);
+-            }
+-        }
+-    }
+-
+-    /** @hide */
+-    @RavenwoodKeep(conditional = true)
++            throw new RuntimeException(e);
++        }
++    }
++
++    /** @hide */
+     public final @NonNull Uri canonicalizeOrElse(@NonNull Uri uri) {
+         final Uri res = canonicalize(uri);
+@@ -1355,34 +1045,12 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable Uri canonicalize(@NonNull Uri url) {
+-        Objects.requireNonNull(url, "url");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.canonicalize(url);
++            return mWrapped.canonicalize(url);
+         } catch (RemoteException e) {
+-            return null;
+-        }
+-
+-        IContentProvider provider = acquireProvider(url);
+-        if (provider == null) {
+-            return null;
+-        }
+-
+-        try {
+-            final UriResultListener resultListener = new UriResultListener();
+-            provider.canonicalizeAsync(mContext.getAttributionSource(), url,
+-                    new RemoteCallback(resultListener));
+-            resultListener.waitForResult(CONTENT_PROVIDER_TIMEOUT_MILLIS);
+-            if (resultListener.exception != null) {
+-                throw resultListener.exception;
+-            }
+-            return resultListener.result;
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return null;
+-        } finally {
+-            releaseProvider(provider);
++            throw new RuntimeException(e);
+         }
+     }
+@@ -1407,34 +1075,12 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable Uri uncanonicalize(@NonNull Uri url) {
+-        Objects.requireNonNull(url, "url");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.uncanonicalize(url);
++            return mWrapped.uncanonicalize(url);
+         } catch (RemoteException e) {
+-            return null;
+-        }
+-
+-        IContentProvider provider = acquireProvider(url);
+-        if (provider == null) {
+-            return null;
+-        }
+-
+-        try {
+-            final UriResultListener resultListener = new UriResultListener();
+-            provider.uncanonicalizeAsync(mContext.getAttributionSource(), url,
+-                    new RemoteCallback(resultListener));
+-            resultListener.waitForResult(CONTENT_PROVIDER_TIMEOUT_MILLIS);
+-            if (resultListener.exception != null) {
+-                throw resultListener.exception;
+-            }
+-            return resultListener.result;
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return null;
+-        } finally {
+-            releaseProvider(provider);
++            throw new RuntimeException(e);
+         }
+     }
+@@ -1460,35 +1106,13 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final boolean refresh(@NonNull Uri url, @Nullable Bundle extras,
+             @Nullable CancellationSignal cancellationSignal) {
+-        Objects.requireNonNull(url, "url");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.refresh(url, extras, cancellationSignal);
++            return mWrapped.refresh(url, extras, cancellationSignal);
+         } catch (RemoteException e) {
+-            return false;
+-        }
+-
+-        IContentProvider provider = acquireProvider(url);
+-        if (provider == null) {
+-            return false;
+-        }
+-
+-        try {
+-            ICancellationSignal remoteCancellationSignal = null;
+-            if (cancellationSignal != null) {
+-                cancellationSignal.throwIfCanceled();
+-                remoteCancellationSignal = provider.createCancellationSignal();
+-                cancellationSignal.setRemote(remoteCancellationSignal);
+-            }
+-            return provider.refresh(mContext.getAttributionSource(), url, extras,
+-                    remoteCancellationSignal);
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return false;
+-        } finally {
+-            releaseProvider(provider);
++            throw new RuntimeException(e);
+         }
+     }
+@@ -1516,18 +1140,12 @@
+     @Override
+     @SystemApi
+-    @RavenwoodKeep(conditional = true)
+-    public int checkUriPermission(@NonNull Uri uri, int uid, @Intent.AccessUriMode int modeFlags) {
+-        Objects.requireNonNull(uri, "uri");
+-
++    public int checkUriPermission(@NonNull Uri uri, int uid, int modeFlags) {
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.checkUriPermission(uri, uid, modeFlags);
++            return mWrapped.checkUriPermission(uri, uid, modeFlags);
+         } catch (RemoteException e) {
+-            return PackageManager.PERMISSION_DENIED;
+-        }
+-
+-        try (ContentProviderClient client = acquireUnstableContentProviderClient(uri)) {
+-            return client.checkUriPermission(uri, uid, modeFlags);
+-        } catch (RemoteException e) {
+-            return PackageManager.PERMISSION_DENIED;
++            throw new RuntimeException(e);
+         }
+     }
+@@ -1552,5 +1170,4 @@
+      * @see #openAssetFileDescriptor(Uri, String)
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable InputStream openInputStream(@NonNull Uri uri)
+             throws FileNotFoundException {
+@@ -1590,5 +1207,4 @@
+      * @throws FileNotFoundException if the provided URI could not be opened.
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable OutputStream openOutputStream(@NonNull Uri uri)
+             throws FileNotFoundException {
+@@ -1617,5 +1233,4 @@
+      * @see #openAssetFileDescriptor(Uri, String)
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable OutputStream openOutputStream(@NonNull Uri uri, @NonNull String mode)
+             throws FileNotFoundException {
+@@ -1629,5 +1244,4 @@
+ 
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable ParcelFileDescriptor openFile(@NonNull Uri uri, @NonNull String mode,
+             @Nullable CancellationSignal signal) throws FileNotFoundException {
+@@ -1680,5 +1294,4 @@
+      * @see #openAssetFileDescriptor(Uri, String)
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable ParcelFileDescriptor openFileDescriptor(@NonNull Uri uri,
+             @NonNull String mode) throws FileNotFoundException {
+@@ -1728,5 +1341,4 @@
+      * @see #openAssetFileDescriptor(Uri, String)
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable ParcelFileDescriptor openFileDescriptor(@NonNull Uri uri,
+             @NonNull String mode, @Nullable CancellationSignal cancellationSignal)
+@@ -1759,5 +1371,4 @@
+ 
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable AssetFileDescriptor openAssetFile(@NonNull Uri uri, @NonNull String mode,
+             @Nullable CancellationSignal signal) throws FileNotFoundException {
+@@ -1821,5 +1432,4 @@
+      * file exists under the URI or the mode is invalid.
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable AssetFileDescriptor openAssetFileDescriptor(@NonNull Uri uri,
+             @NonNull String mode) throws FileNotFoundException {
+@@ -1880,109 +1490,14 @@
+      * file exists under the URI or the mode is invalid.
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable AssetFileDescriptor openAssetFileDescriptor(@NonNull Uri uri,
+             @NonNull String mode, @Nullable CancellationSignal cancellationSignal)
+                     throws FileNotFoundException {
+-        Objects.requireNonNull(uri, "uri");
+-        Objects.requireNonNull(mode, "mode");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.openAssetFile(uri, mode, cancellationSignal);
++            return mWrapped.openAssetFile(uri, mode, cancellationSignal);
+         } catch (RemoteException e) {
+-            return null;
+-        }
+-
+-        String scheme = uri.getScheme();
+-        if (SCHEME_ANDROID_RESOURCE.equals(scheme)) {
+-            if (!"r".equals(mode)) {
+-                throw new FileNotFoundException("Can't write resources: " + uri);
+-            }
+-            OpenResourceIdResult r = getResourceId(uri);
+-            try {
+-                return r.r.openRawResourceFd(r.id);
+-            } catch (Resources.NotFoundException ex) {
+-                throw new FileNotFoundException("Resource does not exist: " + uri);
+-            }
+-        } else if (SCHEME_FILE.equals(scheme)) {
+-            ParcelFileDescriptor pfd = ParcelFileDescriptor.open(
+-                    new File(uri.getPath()), ParcelFileDescriptor.parseMode(mode));
+-            return new AssetFileDescriptor(pfd, 0, -1);
+-        } else {
+-            if ("r".equals(mode)) {
+-                return openTypedAssetFileDescriptor(uri, "*/*", null, cancellationSignal);
+-            } else {
+-                IContentProvider unstableProvider = acquireUnstableProvider(uri);
+-                if (unstableProvider == null) {
+-                    throw new FileNotFoundException("No content provider: " + uri);
+-                }
+-                IContentProvider stableProvider = null;
+-                AssetFileDescriptor fd = null;
+-
+-                try {
+-                    ICancellationSignal remoteCancellationSignal = null;
+-                    if (cancellationSignal != null) {
+-                        cancellationSignal.throwIfCanceled();
+-                        remoteCancellationSignal = unstableProvider.createCancellationSignal();
+-                        cancellationSignal.setRemote(remoteCancellationSignal);
+-                    }
+-
+-                    try {
+-                        fd = unstableProvider.openAssetFile(
+-                                mContext.getAttributionSource(), uri, mode,
+-                                remoteCancellationSignal);
+-                        if (fd == null) {
+-                            // The provider will be released by the finally{} clause
+-                            return null;
+-                        }
+-                    } catch (DeadObjectException e) {
+-                        // The remote process has died...  but we only hold an unstable
+-                        // reference though, so we might recover!!!  Let's try!!!!
+-                        // This is exciting!!1!!1!!!!1
+-                        unstableProviderDied(unstableProvider);
+-                        stableProvider = acquireProvider(uri);
+-                        if (stableProvider == null) {
+-                            throw new FileNotFoundException("No content provider: " + uri);
+-                        }
+-                        fd = stableProvider.openAssetFile(mContext.getAttributionSource(),
+-                                uri, mode, remoteCancellationSignal);
+-                        if (fd == null) {
+-                            // The provider will be released by the finally{} clause
+-                            return null;
+-                        }
+-                    }
+-
+-                    if (stableProvider == null) {
+-                        stableProvider = acquireProvider(uri);
+-                    }
+-                    releaseUnstableProvider(unstableProvider);
+-                    unstableProvider = null;
+-                    ParcelFileDescriptor pfd = new ParcelFileDescriptorInner(
+-                            fd.getParcelFileDescriptor(), stableProvider);
+-
+-                    // Success!  Don't release the provider when exiting, let
+-                    // ParcelFileDescriptorInner do that when it is closed.
+-                    stableProvider = null;
+-
+-                    return new AssetFileDescriptor(pfd, fd.getStartOffset(),
+-                            fd.getDeclaredLength());
+-
+-                } catch (RemoteException e) {
+-                    // Whatever, whatever, we'll go away.
+-                    throw new FileNotFoundException(
+-                            "Failed opening content provider: " + uri);
+-                } catch (FileNotFoundException e) {
+-                    throw e;
+-                } finally {
+-                    if (cancellationSignal != null) {
+-                        cancellationSignal.setRemote(null);
+-                    }
+-                    if (stableProvider != null) {
+-                        releaseProvider(stableProvider);
+-                    }
+-                    if (unstableProvider != null) {
+-                        releaseUnstableProvider(unstableProvider);
+-                    }
+-                }
+-            }
++            throw new RuntimeException(e);
+         }
+     }
+@@ -2003,5 +1518,4 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable AssetFileDescriptor openTypedAssetFile(@NonNull Uri uri,
+             @NonNull String mimeTypeFilter, @Nullable Bundle opts,
+@@ -2046,5 +1560,4 @@
+      * data of the desired type exists under the URI.
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable AssetFileDescriptor openTypedAssetFileDescriptor(@NonNull Uri uri,
+             @NonNull String mimeType, @Nullable Bundle opts) throws FileNotFoundException {
+@@ -2083,89 +1596,14 @@
+      * data of the desired type exists under the URI.
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable AssetFileDescriptor openTypedAssetFileDescriptor(@NonNull Uri uri,
+             @NonNull String mimeType, @Nullable Bundle opts,
+             @Nullable CancellationSignal cancellationSignal) throws FileNotFoundException {
+-        Objects.requireNonNull(uri, "uri");
+-        Objects.requireNonNull(mimeType, "mimeType");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.openTypedAssetFile(uri, mimeType, opts, cancellationSignal);
++            return mWrapped.openTypedAssetFile(uri, mimeType, opts, cancellationSignal);
+         } catch (RemoteException e) {
+-            return null;
+-        }
+-
+-        IContentProvider unstableProvider = acquireUnstableProvider(uri);
+-        if (unstableProvider == null) {
+-            throw new FileNotFoundException("No content provider: " + uri);
+-        }
+-        IContentProvider stableProvider = null;
+-        AssetFileDescriptor fd = null;
+-
+-        try {
+-            ICancellationSignal remoteCancellationSignal = null;
+-            if (cancellationSignal != null) {
+-                cancellationSignal.throwIfCanceled();
+-                remoteCancellationSignal = unstableProvider.createCancellationSignal();
+-                cancellationSignal.setRemote(remoteCancellationSignal);
+-            }
+-
+-            try {
+-                fd = unstableProvider.openTypedAssetFile(
+-                        mContext.getAttributionSource(), uri, mimeType, opts,
+-                        remoteCancellationSignal);
+-                if (fd == null) {
+-                    // The provider will be released by the finally{} clause
+-                    return null;
+-                }
+-            } catch (DeadObjectException e) {
+-                // The remote process has died...  but we only hold an unstable
+-                // reference though, so we might recover!!!  Let's try!!!!
+-                // This is exciting!!1!!1!!!!1
+-                unstableProviderDied(unstableProvider);
+-                stableProvider = acquireProvider(uri);
+-                if (stableProvider == null) {
+-                    throw new FileNotFoundException("No content provider: " + uri);
+-                }
+-                fd = stableProvider.openTypedAssetFile(
+-                        mContext.getAttributionSource(), uri, mimeType, opts,
+-                        remoteCancellationSignal);
+-                if (fd == null) {
+-                    // The provider will be released by the finally{} clause
+-                    return null;
+-                }
+-            }
+-
+-            if (stableProvider == null) {
+-                stableProvider = acquireProvider(uri);
+-            }
+-            releaseUnstableProvider(unstableProvider);
+-            unstableProvider = null;
+-            ParcelFileDescriptor pfd = new ParcelFileDescriptorInner(
+-                    fd.getParcelFileDescriptor(), stableProvider);
+-
+-            // Success!  Don't release the provider when exiting, let
+-            // ParcelFileDescriptorInner do that when it is closed.
+-            stableProvider = null;
+-
+-            return new AssetFileDescriptor(pfd, fd.getStartOffset(),
+-                    fd.getDeclaredLength(), fd.getExtras());
+-
+-        } catch (RemoteException e) {
+-            // Whatever, whatever, we'll go away.
+-            throw new FileNotFoundException(
+-                    "Failed opening content provider: " + uri);
+-        } catch (FileNotFoundException e) {
+-            throw e;
+-        } finally {
+-            if (cancellationSignal != null) {
+-                cancellationSignal.setRemote(null);
+-            }
+-            if (stableProvider != null) {
+-                releaseProvider(stableProvider);
+-            }
+-            if (unstableProvider != null) {
+-                releaseUnstableProvider(unstableProvider);
+-            }
++            throw new RuntimeException(e);
+         }
+     }
+@@ -2238,5 +1676,4 @@
+      *         content provider returns <code>null</code>, or if it crashes.
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable Uri insert(@RequiresPermission.Write @NonNull Uri url,
+                 @Nullable ContentValues values) {
+@@ -2263,31 +1700,13 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable Uri insert(@RequiresPermission.Write @NonNull Uri url,
+             @Nullable ContentValues values, @Nullable Bundle extras) {
+-        Objects.requireNonNull(url, "url");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.insert(url, values, extras);
++            return mWrapped.insert(url, values, extras);
+         } catch (RemoteException e) {
+-            return null;
+-        }
+-
+-        IContentProvider provider = acquireProvider(url);
+-        if (provider == null) {
+-            throw new IllegalArgumentException("Unknown URL " + url);
+-        }
+-        try {
+-            long startTime = SystemClock.uptimeMillis();
+-            Uri createdRow = provider.insert(mContext.getAttributionSource(), url, values, extras);
+-            long durationMillis = SystemClock.uptimeMillis() - startTime;
+-            maybeLogUpdateToEventLog(durationMillis, url, "insert", null /* where */);
+-            return createdRow;
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return null;
+-        } finally {
+-            releaseProvider(provider);
++            throw new RuntimeException(e);
+         }
+     }
+@@ -2310,5 +1729,4 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public @NonNull ContentProviderResult[] applyBatch(@NonNull String authority,
+             @NonNull ArrayList<ContentProviderOperation> operations)
+@@ -2345,32 +1763,13 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final int bulkInsert(@RequiresPermission.Write @NonNull Uri url,
+                 @NonNull ContentValues[] values) {
+-        Objects.requireNonNull(url, "url");
+-        Objects.requireNonNull(values, "values");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.bulkInsert(url, values);
++            return mWrapped.bulkInsert(url, values);
+         } catch (RemoteException e) {
+-            return 0;
+-        }
+-
+-        IContentProvider provider = acquireProvider(url);
+-        if (provider == null) {
+-            throw new IllegalArgumentException("Unknown URL " + url);
+-        }
+-        try {
+-            long startTime = SystemClock.uptimeMillis();
+-            int rowsCreated = provider.bulkInsert(mContext.getAttributionSource(), url, values);
+-            long durationMillis = SystemClock.uptimeMillis() - startTime;
+-            maybeLogUpdateToEventLog(durationMillis, url, "bulkinsert", null /* where */);
+-            return rowsCreated;
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return 0;
+-        } finally {
+-            releaseProvider(provider);
++            throw new RuntimeException(e);
+         }
+     }
+@@ -2386,5 +1785,4 @@
+      * @return The number of rows deleted.
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final int delete(@RequiresPermission.Write @NonNull Uri url, @Nullable String where,
+             @Nullable String[] selectionArgs) {
+@@ -2408,30 +1806,12 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final int delete(@RequiresPermission.Write @NonNull Uri url, @Nullable Bundle extras) {
+-        Objects.requireNonNull(url, "url");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.delete(url, extras);
++            return mWrapped.delete(url, extras);
+         } catch (RemoteException e) {
+-            return 0;
+-        }
+-
+-        IContentProvider provider = acquireProvider(url);
+-        if (provider == null) {
+-            throw new IllegalArgumentException("Unknown URL " + url);
+-        }
+-        try {
+-            long startTime = SystemClock.uptimeMillis();
+-            int rowsDeleted = provider.delete(mContext.getAttributionSource(), url, extras);
+-            long durationMillis = SystemClock.uptimeMillis() - startTime;
+-            maybeLogUpdateToEventLog(durationMillis, url, "delete", null);
+-            return rowsDeleted;
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return -1;
+-        } finally {
+-            releaseProvider(provider);
++            throw new RuntimeException(e);
+         }
+     }
+@@ -2450,5 +1830,4 @@
+      * @throws NullPointerException if uri or values are null
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final int update(@RequiresPermission.Write @NonNull Uri uri,
+             @Nullable ContentValues values, @Nullable String where,
+@@ -2476,32 +1855,13 @@
+      */
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final int update(@RequiresPermission.Write @NonNull Uri uri,
+             @Nullable ContentValues values, @Nullable Bundle extras) {
+-        Objects.requireNonNull(uri, "uri");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.update(uri, values, extras);
++            return mWrapped.update(uri, values, extras);
+         } catch (RemoteException e) {
+-            return 0;
+-        }
+-
+-        IContentProvider provider = acquireProvider(uri);
+-        if (provider == null) {
+-            throw new IllegalArgumentException("Unknown URI " + uri);
+-        }
+-        try {
+-            long startTime = SystemClock.uptimeMillis();
+-            int rowsUpdated = provider.update(mContext.getAttributionSource(),
+-                    uri, values, extras);
+-            long durationMillis = SystemClock.uptimeMillis() - startTime;
+-            maybeLogUpdateToEventLog(durationMillis, uri, "update", null);
+-            return rowsUpdated;
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return -1;
+-        } finally {
+-            releaseProvider(provider);
++            throw new RuntimeException(e);
+         }
+     }
+@@ -2521,5 +1881,4 @@
+      * @throws IllegalArgumentException if uri is not known
+      */
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable Bundle call(@NonNull Uri uri, @NonNull String method,
+             @Nullable String arg, @Nullable Bundle extras) {
+@@ -2528,117 +1887,20 @@
+ 
+     @Override
+-    @RavenwoodKeep(conditional = true)
+     public final @Nullable Bundle call(@NonNull String authority, @NonNull String method,
+             @Nullable String arg, @Nullable Bundle extras) {
+-        Objects.requireNonNull(authority, "authority");
+-        Objects.requireNonNull(method, "method");
+-
++        if (mWrapped == null) {
++            throw new UnsupportedOperationException("No content provider for this resolver");
++        }
+         try {
+-            if (mWrapped != null) return mWrapped.call(authority, method, arg, extras);
++            return mWrapped.call(authority, method, arg, extras);
+         } catch (RemoteException e) {
+-            return null;
+-        }
+-
+-        IContentProvider provider = acquireProvider(authority);
+-        if (provider == null) {
+-            throw new IllegalArgumentException("Unknown authority " + authority);
+-        }
+-        try {
+-            final Bundle res = provider.call(mContext.getAttributionSource(),
+-                    authority, method, arg, extras);
+-            Bundle.setDefusable(res, true);
+-            return res;
+-        } catch (RemoteException e) {
+-            // Arbitrary and not worth documenting, as Activity
+-            // Manager will kill this process shortly anyway.
+-            return null;
+-        } finally {
+-            releaseProvider(provider);
+-        }
+-    }
+-
+-    /**
+-     * Returns the content provider for the given content URI.
+-     *
+-     * @param uri The URI to a content provider
+-     * @return The ContentProvider for the given URI, or null if no content provider is found.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    @RavenwoodKeep
+-    public final IContentProvider acquireProvider(Uri uri) {
+-        if (!SCHEME_CONTENT.equals(uri.getScheme())) {
+-            return null;
+-        }
+-        final String auth = uri.getAuthority();
+-        if (auth != null) {
+-            return acquireProvider(mContext, auth);
+-        }
+-        return null;
+-    }
+-
+-    /**
+-     * Returns the content provider for the given content URI if the process
+-     * already has a reference on it.
+-     *
+-     * @param uri The URI to a content provider
+-     * @return The ContentProvider for the given URI, or null if no content provider is found.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    @RavenwoodKeep
+-    public final IContentProvider acquireExistingProvider(Uri uri) {
+-        if (!SCHEME_CONTENT.equals(uri.getScheme())) {
+-            return null;
+-        }
+-        final String auth = uri.getAuthority();
+-        if (auth != null) {
+-            return acquireExistingProvider(mContext, auth);
+-        }
+-        return null;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    @RavenwoodKeep
+-    public final IContentProvider acquireProvider(String name) {
+-        if (name == null) {
+-            return null;
+-        }
+-        return acquireProvider(mContext, name);
+-    }
+-
+-    /**
+-     * Returns the content provider for the given content URI.
+-     *
+-     * @param uri The URI to a content provider
+-     * @return The ContentProvider for the given URI, or null if no content provider is found.
+-     * @hide
+-     */
+-    @RavenwoodKeep
+-    public final IContentProvider acquireUnstableProvider(Uri uri) {
+-        if (!SCHEME_CONTENT.equals(uri.getScheme())) {
+-            return null;
+-        }
+-        String auth = uri.getAuthority();
+-        if (auth != null) {
+-            return acquireUnstableProvider(mContext, uri.getAuthority());
+-        }
+-        return null;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    @RavenwoodKeep
+-    public final IContentProvider acquireUnstableProvider(String name) {
+-        if (name == null) {
+-            return null;
+-        }
+-        return acquireUnstableProvider(mContext, name);
+-    }
++            throw new RuntimeException(e);
++        }
++    }
++
++
++
++
++
+ 
+     /**
+@@ -2655,10 +1917,5 @@
+     @RavenwoodKeep
+     public final @Nullable ContentProviderClient acquireContentProviderClient(@NonNull Uri uri) {
+-        Objects.requireNonNull(uri, "uri");
+-        IContentProvider provider = acquireProvider(uri);
+-        if (provider != null) {
+-            return new ContentProviderClient(this, provider, uri.getAuthority(), true);
+-        }
+-        return null;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2677,11 +1934,5 @@
+     public final @Nullable ContentProviderClient acquireContentProviderClient(
+             @NonNull String name) {
+-        Objects.requireNonNull(name, "name");
+-        IContentProvider provider = acquireProvider(name);
+-        if (provider != null) {
+-            return new ContentProviderClient(this, provider, name, true);
+-        }
+-
+-        return null;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2705,11 +1956,5 @@
+     public final @Nullable ContentProviderClient acquireUnstableContentProviderClient(
+             @NonNull Uri uri) {
+-        Objects.requireNonNull(uri, "uri");
+-        IContentProvider provider = acquireUnstableProvider(uri);
+-        if (provider != null) {
+-            return new ContentProviderClient(this, provider, uri.getAuthority(), false);
+-        }
+-
+-        return null;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2733,11 +1978,5 @@
+     public final @Nullable ContentProviderClient acquireUnstableContentProviderClient(
+             @NonNull String name) {
+-        Objects.requireNonNull(name, "name");
+-        IContentProvider provider = acquireUnstableProvider(name);
+-        if (provider != null) {
+-            return new ContentProviderClient(this, provider, name, false);
+-        }
+-
+-        return null;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2762,11 +2001,5 @@
+     public final void registerContentObserver(@NonNull Uri uri, boolean notifyForDescendants,
+             @NonNull ContentObserver observer) {
+-        Objects.requireNonNull(uri, "uri");
+-        Objects.requireNonNull(observer, "observer");
+-        registerContentObserver(
+-                ContentProvider.getUriWithoutUserId(uri),
+-                notifyForDescendants,
+-                observer,
+-                ContentProvider.getUserIdFromUri(uri, mContext.getUserId()));
++        registerContentObserver(uri, notifyForDescendants, observer, getUserId());
+     }
+ 
+@@ -2800,13 +2033,6 @@
+             boolean notifyForDescendants,
+             @NonNull ContentObserver observer,
+-            @NonNull @CanBeALL @CanBeCURRENT UserHandle userHandle) {
+-        Objects.requireNonNull(uri, "uri");
+-        Objects.requireNonNull(observer, "observer");
+-        Objects.requireNonNull(userHandle, "userHandle");
+-        registerContentObserver(
+-                ContentProvider.getUriWithoutUserId(uri),
+-                notifyForDescendants,
+-                observer,
+-                userHandle.getIdentifier());
++            @NonNull UserHandle userHandle) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2814,11 +2040,8 @@
+     @UnsupportedAppUsage
+     public final void registerContentObserver(Uri uri, boolean notifyForDescendants,
+-            ContentObserver observer, @CanBeALL @CanBeCURRENT @UserIdInt int userHandle) {
+-        try {
+-            getContentService().registerContentObserver(uri, notifyForDescendants,
+-                    observer.getContentObserver(), userHandle, mTargetSdkVersion);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            ContentObserver observer, @UserIdInt int userHandle) {
++        Objects.requireNonNull(uri);
++        Objects.requireNonNull(observer);
++        if (userHandle == getUserId()) observers.add(new Registration(uri, notifyForDescendants, observer));
+     }
+ 
+@@ -2829,14 +2052,7 @@
+      * @see #registerContentObserver
+      */
+-    public final void unregisterContentObserver(@NonNull ContentObserver observer) {
+-        Objects.requireNonNull(observer, "observer");
+-        try {
+-            IContentObserver contentObserver = observer.releaseContentObserver();
+-            if (contentObserver != null) {
+-                getContentService().unregisterContentObserver(
+-                        contentObserver);
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
++    public void unregisterContentObserver(ContentObserver observer) {
++        for (int i = observers.size() - 1; i >= 0; i--) {
++            if (observers.get(i).observer == observer) observers.remove(i);
+         }
+     }
+@@ -2924,10 +2140,5 @@
+     public void notifyChange(@NonNull Uri uri, @Nullable ContentObserver observer,
+             @NotifyFlags int flags) {
+-        Objects.requireNonNull(uri, "uri");
+-        notifyChange(
+-                ContentProvider.getUriWithoutUserId(uri),
+-                observer,
+-                flags,
+-                ContentProvider.getUserIdFromUri(uri, mContext.getUserId()));
++        notifyChange(uri, observer, flags, getUserId());
+     }
+ 
+@@ -2967,23 +2178,5 @@
+     public void notifyChange(@NonNull Collection<Uri> uris, @Nullable ContentObserver observer,
+             @NotifyFlags int flags) {
+-        Objects.requireNonNull(uris, "uris");
+-
+-        // Cluster based on user ID
+-        final SparseArray<ArrayList<Uri>> clusteredByUser = new SparseArray<>();
+-        for (Uri uri : uris) {
+-            final int userId = ContentProvider.getUserIdFromUri(uri, mContext.getUserId());
+-            ArrayList<Uri> list = clusteredByUser.get(userId);
+-            if (list == null) {
+-                list = new ArrayList<>();
+-                clusteredByUser.put(userId, list);
+-            }
+-            list.add(ContentProvider.getUriWithoutUserId(uri));
+-        }
+-
+-        for (int i = 0; i < clusteredByUser.size(); i++) {
+-            final int userId = clusteredByUser.keyAt(i);
+-            final ArrayList<Uri> list = clusteredByUser.valueAt(i);
+-            notifyChange(list.toArray(new Uri[list.size()]), observer, flags, userId);
+-        }
++        for (Uri uri : uris) dispatchLocalChange(uri, observer, flags);
+     }
+ 
+@@ -2999,5 +2192,5 @@
+     @Deprecated
+     public void notifyChange(@NonNull Uri uri, ContentObserver observer, boolean syncToNetwork,
+-            @CanBeALL @CanBeCURRENT @UserIdInt int userHandle) {
++            @UserIdInt int userHandle) {
+         notifyChange(uri, observer, syncToNetwork ? NOTIFY_SYNC_TO_NETWORK : 0, userHandle);
+     }
+@@ -3005,5 +2198,5 @@
+     /** @hide */
+     public void notifyChange(@NonNull Uri uri, ContentObserver observer, @NotifyFlags int flags,
+-            @CanBeALL @CanBeCURRENT @UserIdInt int userHandle) {
++            @UserIdInt int userHandle) {
+         notifyChange(new Uri[] { uri }, observer, flags, userHandle);
+     }
+@@ -3015,13 +2208,7 @@
+      */
+     public void notifyChange(@NonNull Uri[] uris, ContentObserver observer, @NotifyFlags int flags,
+-            @CanBeALL @CanBeCURRENT @UserIdInt int userHandle) {
+-        try {
+-            getContentService().notifyChange(
+-                    uris, observer == null ? null : observer.getContentObserver(),
+-                    observer != null && observer.deliverSelfNotifications(), flags,
+-                    userHandle, mTargetSdkVersion, mContext.getPackageName());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            @UserIdInt int userHandle) {
++        if (userHandle != getUserId()) return;
++        for (Uri uri : uris) dispatchLocalChange(uri, observer, flags);
+     }
+ 
+@@ -3037,13 +2224,6 @@
+      */
+     public void takePersistableUriPermission(@NonNull Uri uri,
+-            @Intent.AccessUriMode int modeFlags) {
+-        Objects.requireNonNull(uri, "uri");
+-        try {
+-            UriGrantsManager.getService().takePersistableUriPermission(
+-                    ContentProvider.getUriWithoutUserId(uri), modeFlags, /* toPackage= */ null,
+-                    resolveUserId(uri));
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3053,14 +2233,6 @@
+     @UnsupportedAppUsage
+     public void takePersistableUriPermission(@NonNull String toPackage, @NonNull Uri uri,
+-            @Intent.AccessUriMode int modeFlags) {
+-        Objects.requireNonNull(toPackage, "toPackage");
+-        Objects.requireNonNull(uri, "uri");
+-        try {
+-            UriGrantsManager.getService().takePersistableUriPermission(
+-                    ContentProvider.getUriWithoutUserId(uri), modeFlags, toPackage,
+-                    resolveUserId(uri));
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3074,13 +2246,6 @@
+      */
+     public void releasePersistableUriPermission(@NonNull Uri uri,
+-            @Intent.AccessUriMode int modeFlags) {
+-        Objects.requireNonNull(uri, "uri");
+-        try {
+-            UriGrantsManager.getService().releasePersistableUriPermission(
+-                    ContentProvider.getUriWithoutUserId(uri), modeFlags, /* toPackage= */ null,
+-                    resolveUserId(uri));
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3096,10 +2261,5 @@
+      */
+     public @NonNull List<UriPermission> getPersistedUriPermissions() {
+-        try {
+-            return UriGrantsManager.getService().getUriPermissions(
+-                    mPackageName, true /* incoming */, true /* persistedOnly */).getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3112,20 +2272,10 @@
+      */
+     public @NonNull List<UriPermission> getOutgoingPersistedUriPermissions() {
+-        try {
+-            return UriGrantsManager.getService().getUriPermissions(
+-                    mPackageName, false /* incoming */, true /* persistedOnly */).getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide */
+     public @NonNull List<UriPermission> getOutgoingUriPermissions() {
+-        try {
+-            return UriGrantsManager.getService().getUriPermissions(
+-                    mPackageName, false /* incoming */, false /* persistedOnly */).getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3193,20 +2343,5 @@
+     public static void requestSyncAsUser(Account account, String authority, @UserIdInt int userId,
+             Bundle extras) {
+-        if (extras == null) {
+-            throw new IllegalArgumentException("Must specify extras.");
+-        }
+-        SyncRequest request =
+-            new SyncRequest.Builder()
+-                .setSyncAdapter(account, authority)
+-                .setExtras(extras)
+-                .syncOnce()     // Immediate sync.
+-                .build();
+-        try {
+-            // Note ActivityThread.currentPackageName() may not be accurate in a shared process
+-            // case, but it's only for debugging.
+-            getContentService().syncAsUser(request, userId, ActivityThread.currentPackageName());
+-        } catch(RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3216,11 +2351,5 @@
+      */
+     public static void requestSync(SyncRequest request) {
+-        try {
+-            // Note ActivityThread.currentPackageName() may not be accurate in a shared process
+-            // case, but it's only for debugging.
+-            getContentService().sync(request, ActivityThread.currentPackageName());
+-        } catch(RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3282,9 +2411,5 @@
+      */
+     public static void cancelSync(Account account, String authority) {
+-        try {
+-            getContentService().cancelSync(account, authority, null);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3294,9 +2419,5 @@
+      */
+     public static void cancelSyncAsUser(Account account, String authority, @UserIdInt int userId) {
+-        try {
+-            getContentService().cancelSyncAsUser(account, authority, null, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3306,9 +2427,5 @@
+      */
+     public static SyncAdapterType[] getSyncAdapterTypes() {
+-        try {
+-            return getContentService().getSyncAdapterTypes();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3318,9 +2435,5 @@
+      */
+     public static SyncAdapterType[] getSyncAdapterTypesAsUser(@UserIdInt int userId) {
+-        try {
+-            return getContentService().getSyncAdapterTypesAsUser(userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3332,9 +2445,5 @@
+     public static String[] getSyncAdapterPackagesForAuthorityAsUser(String authority,
+             @UserIdInt int userId) {
+-        try {
+-            return getContentService().getSyncAdapterPackagesForAuthorityAsUser(authority, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3347,9 +2456,5 @@
+     public static String getSyncAdapterPackageAsUser(@NonNull String accountType,
+             @NonNull String authority, @UserIdInt int userId) {
+-        try {
+-            return getContentService().getSyncAdapterPackageAsUser(accountType, authority, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3364,9 +2469,5 @@
+      */
+     public static boolean getSyncAutomatically(Account account, String authority) {
+-        try {
+-            return getContentService().getSyncAutomatically(account, authority);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3377,9 +2478,5 @@
+     public static boolean getSyncAutomaticallyAsUser(Account account, String authority,
+             @UserIdInt int userId) {
+-        try {
+-            return getContentService().getSyncAutomaticallyAsUser(account, authority, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3403,9 +2500,5 @@
+     public static void setSyncAutomaticallyAsUser(Account account, String authority, boolean sync,
+             @UserIdInt int userId) {
+-        try {
+-            getContentService().setSyncAutomaticallyAsUser(account, authority, sync, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3458,13 +2551,5 @@
+     public static void addPeriodicSync(Account account, String authority, Bundle extras,
+             long pollFrequency) {
+-        validateSyncExtrasBundle(extras);
+-        if (invalidPeriodicExtras(extras)) {
+-            throw new IllegalArgumentException("illegal extras were set");
+-        }
+-        try {
+-             getContentService().addPeriodicSync(account, authority, extras, pollFrequency);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3498,10 +2583,5 @@
+      */
+     public static void removePeriodicSync(Account account, String authority, Bundle extras) {
+-        validateSyncExtrasBundle(extras);
+-        try {
+-            getContentService().removePeriodicSync(account, authority, extras);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3520,12 +2600,5 @@
+      */
+     public static void cancelSync(SyncRequest request) {
+-        if (request == null) {
+-            throw new IllegalArgumentException("request cannot be null");
+-        }
+-        try {
+-            getContentService().cancelRequest(request);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3540,9 +2613,5 @@
+      */
+     public static List<PeriodicSync> getPeriodicSyncs(Account account, String authority) {
+-        try {
+-            return getContentService().getPeriodicSyncs(account, authority, null);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3554,9 +2623,5 @@
+      */
+     public static int getIsSyncable(Account account, String authority) {
+-        try {
+-            return getContentService().getIsSyncable(account, authority);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3567,9 +2632,5 @@
+     public static int getIsSyncableAsUser(Account account, String authority,
+             @UserIdInt int userId) {
+-        try {
+-            return getContentService().getIsSyncableAsUser(account, authority, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3581,9 +2642,5 @@
+      */
+     public static void setIsSyncable(Account account, String authority, int syncable) {
+-        try {
+-            getContentService().setIsSyncable(account, authority, syncable);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3594,9 +2651,5 @@
+     public static void setIsSyncableAsUser(Account account, String authority, int syncable,
+             int userId) {
+-        try {
+-            getContentService().setIsSyncableAsUser(account, authority, syncable, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3610,9 +2663,5 @@
+      */
+     public static boolean getMasterSyncAutomatically() {
+-        try {
+-            return getContentService().getMasterSyncAutomatically();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3622,9 +2671,5 @@
+      */
+     public static boolean getMasterSyncAutomaticallyAsUser(@UserIdInt int userId) {
+-        try {
+-            return getContentService().getMasterSyncAutomaticallyAsUser(userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3646,9 +2691,5 @@
+      */
+     public static void setMasterSyncAutomaticallyAsUser(boolean sync, @UserIdInt int userId) {
+-        try {
+-            getContentService().setMasterSyncAutomaticallyAsUser(sync, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3663,16 +2704,5 @@
+      */
+     public static boolean isSyncActive(Account account, String authority) {
+-        if (account == null) {
+-            throw new IllegalArgumentException("account must not be null");
+-        }
+-        if (authority == null) {
+-            throw new IllegalArgumentException("authority must not be null");
+-        }
+-
+-        try {
+-            return getContentService().isSyncActive(account, authority, null);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3692,13 +2722,5 @@
+     @Deprecated
+     public static SyncInfo getCurrentSync() {
+-        try {
+-            final List<SyncInfo> syncs = getContentService().getCurrentSyncs();
+-            if (syncs.isEmpty()) {
+-                return null;
+-            }
+-            return syncs.get(0);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3713,9 +2735,5 @@
+      */
+     public static List<SyncInfo> getCurrentSyncs() {
+-        try {
+-            return getContentService().getCurrentSyncs();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3725,40 +2743,8 @@
+      */
+     public static List<SyncInfo> getCurrentSyncsAsUser(@UserIdInt int userId) {
+-        try {
+-            return getContentService().getCurrentSyncsAsUser(userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns the status that matches the authority.
+-     * @param account the account whose setting we are querying
+-     * @param authority the provider whose behavior is being queried
+-     * @return the SyncStatusInfo for the authority, or null if none exists
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public static SyncStatusInfo getSyncStatus(Account account, String authority) {
+-        try {
+-            return getContentService().getSyncStatus(account, authority, null);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * @see #getSyncStatus(Account, String)
+-     * @hide
+-     */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static SyncStatusInfo getSyncStatusAsUser(Account account, String authority,
+-            @UserIdInt int userId) {
+-        try {
+-            return getContentService().getSyncStatusAsUser(account, authority, null, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
+ 
+     /**
+@@ -3780,9 +2766,5 @@
+     public static boolean isSyncPendingAsUser(Account account, String authority,
+             @UserIdInt int userId) {
+-        try {
+-            return getContentService().isSyncPendingAsUser(account, authority, null, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3802,19 +2784,5 @@
+      */
+     public static Object addStatusChangeListener(int mask, final SyncStatusObserver callback) {
+-        if (callback == null) {
+-            throw new IllegalArgumentException("you passed in a null callback");
+-        }
+-        try {
+-            ISyncStatusObserver.Stub observer = new ISyncStatusObserver.Stub() {
+-                @Override
+-                public void onStatusChanged(int which) throws RemoteException {
+-                    callback.onStatusChanged(which);
+-                }
+-            };
+-            getContentService().addStatusChangeListener(mask, observer);
+-            return observer;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3824,12 +2792,5 @@
+      */
+     public static void removeStatusChangeListener(Object handle) {
+-        if (handle == null) {
+-            throw new IllegalArgumentException("you passed in a null handle");
+-        }
+-        try {
+-            getContentService().removeStatusChangeListener((ISyncStatusObserver.Stub) handle);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3847,10 +2808,5 @@
+     @RequiresPermission(android.Manifest.permission.CACHE_CONTENT)
+     public void putCache(@NonNull Uri key, @Nullable Bundle value) {
+-        try {
+-            getContentService().putCache(mContext.getPackageName(), key, value,
+-                    mContext.getUserId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3867,12 +2823,5 @@
+     @RequiresPermission(android.Manifest.permission.CACHE_CONTENT)
+     public @Nullable Bundle getCache(@NonNull Uri key) {
+-        try {
+-            final Bundle bundle = getContentService().getCache(mContext.getPackageName(), key,
+-                    mContext.getUserId());
+-            if (bundle != null) bundle.setClassLoader(mContext.getClassLoader());
+-            return bundle;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3888,141 +2837,22 @@
+      */
+     private int samplePercentForDuration(long durationMillis) {
+-        if (durationMillis >= SLOW_THRESHOLD_MILLIS) {
+-            return 100;
+-        }
+-        return (int) (100 * durationMillis / SLOW_THRESHOLD_MILLIS) + 1;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private void maybeLogQueryToEventLog(
+             long durationMillis, Uri uri, String[] projection, @Nullable Bundle queryArgs) {
+-        if (!ENABLE_CONTENT_SAMPLE) return;
+-        int samplePercent = samplePercentForDuration(durationMillis);
+-        if (samplePercent < 100) {
+-            synchronized (mRandom) {
+-                if (mRandom.nextInt(100) >= samplePercent) {
+-                    return;
+-                }
+-            }
+-        }
+-
+-        // Ensure a non-null bundle.
+-        queryArgs = (queryArgs != null) ? queryArgs : Bundle.EMPTY;
+-
+-        StringBuilder projectionBuffer = new StringBuilder(100);
+-        if (projection != null) {
+-            for (int i = 0; i < projection.length; ++i) {
+-                // Note: not using a comma delimiter here, as the
+-                // multiple arguments to EventLog.writeEvent later
+-                // stringify with a comma delimiter, which would make
+-                // parsing uglier later.
+-                if (i != 0) projectionBuffer.append('/');
+-                projectionBuffer.append(projection[i]);
+-            }
+-        }
+-
+-        // ActivityThread.currentPackageName() only returns non-null if the
+-        // current thread is an application main thread.  This parameter tells
+-        // us whether an event loop is blocked, and if so, which app it is.
+-        String blockingPackage = AppGlobals.getInitialPackage();
+-
+-        EventLog.writeEvent(
+-            EventLogTags.CONTENT_QUERY_SAMPLE,
+-            uri.toString(),
+-            projectionBuffer.toString(),
+-            queryArgs.getString(QUERY_ARG_SQL_SELECTION, ""),
+-            queryArgs.getString(QUERY_ARG_SQL_SORT_ORDER, ""),
+-            durationMillis,
+-            blockingPackage != null ? blockingPackage : "",
+-            samplePercent);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private void maybeLogUpdateToEventLog(
+         long durationMillis, Uri uri, String operation, String selection) {
+-        if (!ENABLE_CONTENT_SAMPLE) return;
+-        int samplePercent = samplePercentForDuration(durationMillis);
+-        if (samplePercent < 100) {
+-            synchronized (mRandom) {
+-                if (mRandom.nextInt(100) >= samplePercent) {
+-                    return;
+-                }
+-            }
+-        }
+-        String blockingPackage = AppGlobals.getInitialPackage();
+-        EventLog.writeEvent(
+-            EventLogTags.CONTENT_UPDATE_SAMPLE,
+-            uri.toString(),
+-            operation,
+-            selection != null ? selection : "",
+-            durationMillis,
+-            blockingPackage != null ? blockingPackage : "",
+-            samplePercent);
+-    }
+-
+-    private final class CursorWrapperInner extends CrossProcessCursorWrapper {
+-        private final IContentProvider mContentProvider;
+-        private final AtomicBoolean mProviderReleased = new AtomicBoolean();
+-
+-        private final CloseGuard mCloseGuard = CloseGuard.get();
+-
+-        CursorWrapperInner(Cursor cursor, IContentProvider contentProvider) {
+-            super(cursor);
+-            mContentProvider = contentProvider;
+-            mCloseGuard.open("CursorWrapperInner.close");
+-        }
+-
+-        @Override
+-        public void close() {
+-            mCloseGuard.close();
+-            super.close();
+-
+-            if (mProviderReleased.compareAndSet(false, true)) {
+-                ContentResolver.this.releaseProvider(mContentProvider);
+-            }
+-        }
+-
+-        @Override
+-        protected void finalize() throws Throwable {
+-            try {
+-                if (mCloseGuard != null) {
+-                    mCloseGuard.warnIfOpen();
+-                }
+-
+-                close();
+-            } finally {
+-                super.finalize();
+-            }
+-        }
+-    }
+-
+-    private final class ParcelFileDescriptorInner extends ParcelFileDescriptor {
+-        private final IContentProvider mContentProvider;
+-        private final AtomicBoolean mProviderReleased = new AtomicBoolean();
+-
+-        ParcelFileDescriptorInner(ParcelFileDescriptor pfd, IContentProvider icp) {
+-            super(pfd);
+-            mContentProvider = icp;
+-        }
+-
+-        @Override
+-        public void releaseResources() {
+-            if (mProviderReleased.compareAndSet(false, true)) {
+-                ContentResolver.this.releaseProvider(mContentProvider);
+-            }
+-        }
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
+ 
+     /** @hide */
+     public static final String CONTENT_SERVICE_NAME = "content";
+ 
+-    /** @hide */
+-    @UnsupportedAppUsage
+-    public static IContentService getContentService() {
+-        if (sContentService != null) {
+-            return sContentService;
+-        }
+-        IBinder b = ServiceManager.getService(CONTENT_SERVICE_NAME);
+-        sContentService = IContentService.Stub.asInterface(b);
+-        return sContentService;
+-    }
+ 
+     /** @hide */
+@@ -4045,6 +2875,4 @@
+     }
+ 
+-    @UnsupportedAppUsage
+-    private static volatile IContentService sContentService;
+     @UnsupportedAppUsage
+     private final Context mContext;
+@@ -4061,5 +2889,5 @@
+     @RavenwoodKeep
+     public int resolveUserId(Uri uri) {
+-        return ContentProvider.getUserIdFromUri(uri, mContext.getUserId());
++        return getUserId();
+     }
+ 
+@@ -4083,6 +2911,5 @@
+      */
+     public final @NonNull MimeTypeInfo getTypeInfo(@NonNull String mimeType) {
+-        Objects.requireNonNull(mimeType);
+-        return MimeIconUtils.getTypeInfo(mimeType);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4307,9 +3134,5 @@
+     /** @hide */
+     public static void onDbCorruption(String tag, String message, Throwable stacktrace) {
+-        try {
+-            getContentService().onDbCorruption(tag, message, Log.getStackTraceString(stacktrace));
+-        } catch (RemoteException e) {
+-            e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4367,3 +3190,34 @@
+         return DEPRECATE_DATA_PREFIX + uri.getEncodedSchemeSpecificPart().substring(2);
+     }
++    private final HashMap<Uri, String> settings = new HashMap<>();
++    private static final class Registration {
++        final Uri uri;
++        final boolean descendants;
++        final ContentObserver observer;
++        Registration(Uri uri, boolean descendants, ContentObserver observer) {
++            this.uri = uri;
++            this.descendants = descendants;
++            this.observer = observer;
++        }
++    }
++    private final ArrayList<Registration> observers = new ArrayList<>();
++    public String readSetting(Uri uri) { return settings.get(uri); }
++    public void writeSetting(Uri uri, String value) {
++        if (value == null) settings.remove(uri);
++        else settings.put(uri, value);
++        notifyChange(uri, null);
++    }
++
++    private void dispatchLocalChange(Uri uri, ContentObserver sender, int flags) {
++        Objects.requireNonNull(uri);
++        for (Registration entry : new ArrayList<>(observers)) {
++            final boolean self = entry.observer == sender;
++            if (self && !sender.deliverSelfNotifications()) continue;
++            if (entry.uri.equals(uri)
++                    || entry.descendants && (flags & NOTIFY_SKIP_NOTIFY_FOR_DESCENDANTS) == 0
++                    && uri.toString().startsWith(entry.uri.toString() + "/")) {
++                entry.observer.dispatchChange(self, uri);
++            }
++        }
++    }
+ }

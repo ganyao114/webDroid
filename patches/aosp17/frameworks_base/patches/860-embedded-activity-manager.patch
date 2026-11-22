@@ -1,0 +1,2747 @@
+--- a/frameworks/base/core/java/android/app/ActivityManager.java
++++ b/frameworks/base/core/java/android/app/ActivityManager.java
+@@ -17,5 +17,4 @@
+ package android.app;
+ 
+-import static android.app.Instrumentation.DEBUG_FINISH_ACTIVITY;
+ import static android.app.WindowConfiguration.activityTypeToString;
+ import static android.app.WindowConfiguration.windowingModeToString;
+@@ -34,8 +33,4 @@
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SpecialUsers.CanBeALL;
+-import android.annotation.SpecialUsers.CanBeCURRENT;
+-import android.annotation.SpecialUsers.CanBeCURRENT_OR_SELF;
+-import android.annotation.SpecialUsers.CannotBeSpecialUser;
+ import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+@@ -52,8 +47,5 @@
+ import android.content.pm.ApplicationInfo;
+ import android.content.pm.ConfigurationInfo;
+-import android.content.pm.IPackageDataObserver;
+ import android.content.pm.PackageManager;
+-import android.content.pm.ParceledListSlice;
+-import android.content.pm.UserInfo;
+ import android.content.res.Resources;
+ import android.graphics.Bitmap;
+@@ -63,5 +55,4 @@
+ import android.graphics.Point;
+ import android.graphics.drawable.Icon;
+-import android.os.BatteryStats;
+ import android.os.Binder;
+ import android.os.Build;
+@@ -71,14 +62,10 @@
+ import android.os.Handler;
+ import android.os.IBinder;
+-import android.os.IpcDataCache;
+ import android.os.LocaleList;
+ import android.os.OutcomeReceiver;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.os.PowerExemptionManager;
+-import android.os.PowerExemptionManager.ReasonCode;
+ import android.os.Process;
+ import android.os.RemoteException;
+-import android.os.ServiceManager;
+ import android.os.SystemProperties;
+ import android.os.UserHandle;
+@@ -88,5 +75,4 @@
+ import android.ravenwood.annotation.RavenwoodKeep;
+ import android.ravenwood.annotation.RavenwoodKeepPartialClass;
+-import android.ravenwood.annotation.RavenwoodKeepStaticInitializer;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+ import android.ravenwood.annotation.RavenwoodRedirect;
+@@ -96,5 +82,4 @@
+ import android.util.DisplayMetrics;
+ import android.util.Log;
+-import android.util.Singleton;
+ import android.util.Size;
+ import android.view.Display;
+@@ -102,15 +87,8 @@
+ 
+ import com.android.internal.annotations.GuardedBy;
+-import com.android.internal.app.LocalePicker;
+-import com.android.internal.app.procstats.ProcessStats;
+-import com.android.internal.os.RoSystemProperties;
+-import com.android.internal.os.TransferPipe;
+ import com.android.internal.util.FastPrintWriter;
+-import com.android.internal.util.MemInfoReader;
+ import com.android.internal.util.Preconditions;
+-import com.android.internal.util.RateLimitingCache;
+ import com.android.modules.utils.TypedXmlPullParser;
+ import com.android.modules.utils.TypedXmlSerializer;
+-import com.android.server.LocalServices;
+ 
+ import java.io.FileDescriptor;
+@@ -167,5 +145,4 @@
+ @SystemService(Context.ACTIVITY_SERVICE)
+ @RavenwoodKeepPartialClass
+-@RavenwoodKeepStaticInitializer
+ @RavenwoodRedirectionClass("ActivityManager_ravenwood")
+ public class ActivityManager {
+@@ -229,73 +206,17 @@
+     public static final int INSTR_FLAG_RUN_IN_PCC = 1 << 7;
+ 
+-    static final class MyUidObserver extends UidObserver {
+-        final OnUidImportanceListener mListener;
+-        final Context mContext;
+-
+-        MyUidObserver(OnUidImportanceListener listener, Context clientContext) {
+-            mListener = listener;
+-            mContext = clientContext;
+-        }
+-
+-        @Override
+-        public void onUidStateChanged(int uid, @ProcessState int procState,
+-                long procStateSeq, @ProcessCapability int capability) {
+-            mListener.onUidImportance(uid, RunningAppProcessInfo.procStateToImportanceForClient(
+-                    procState, mContext));
+-        }
+-
+-        @Override
+-        public void onUidGone(int uid, boolean disabled) {
+-            mListener.onUidImportance(uid, RunningAppProcessInfo.IMPORTANCE_GONE);
+-        }
+-    }
+-
+-    final ArrayMap<OnUidImportanceListener, MyUidObserver> mImportanceListeners = new ArrayMap<>();
+-
+-    /** Rate-Limiting Cache that allows no more than 400 calls to the service per second. */
+-    private static final RateLimitingCache<List<RunningAppProcessInfo>> mRunningProcessesCache =
+-            new RateLimitingCache<>(10, 4);
+-
+-    /** Rate-Limiting Cache that allows no more than 200 calls to the service per second. */
+-    private static final RateLimitingCache<List<ProcessErrorStateInfo>> mErrorProcessesCache =
+-            new RateLimitingCache<>(10, 2);
+-
+-    /** Rate-Limiting cache that allows no more than 100 calls to the service per second. */
+-    @GuardedBy("mMemoryInfoCache")
+-    private static final RateLimitingCache<MemoryInfo> mMemoryInfoCache =
+-            new RateLimitingCache<>(10);
++
++
++
++
+     /** Used to store cached results for rate-limited calls to getMemoryInfo(). */
+     @GuardedBy("mMemoryInfoCache")
+     private static final MemoryInfo mRateLimitedMemInfo = new MemoryInfo();
+ 
+-    /** Rate-Limiting cache that allows no more than 200 calls to the service per second. */
+-    @GuardedBy("mMyMemoryStateCache")
+-    private static final RateLimitingCache<RunningAppProcessInfo> mMyMemoryStateCache =
+-            new RateLimitingCache<>(10, 2);
+     /** Used to store cached results for rate-limited calls to getMyMemoryState(). */
+     @GuardedBy("mMyMemoryStateCache")
+     private static final RunningAppProcessInfo mRateLimitedMemState = new RunningAppProcessInfo();
+ 
+-    /**
+-     * Query handler for mGetCurrentUserIdCache - returns a cached value of the current foreground
+-     * user id.
+-     */
+-    private static final IpcDataCache.QueryHandler<Void, Integer> mGetCurrentUserIdQuery =
+-            new IpcDataCache.QueryHandler<>() {
+-                @Override
+-                public Integer apply(Void query) {
+-                    try {
+-                        return getService().getCurrentUserId();
+-                    } catch (RemoteException e) {
+-                        throw e.rethrowFromSystemServer();
+-                    }
+-                }
+-            };
+-
+-    /** A cache which maintains the current foreground user id. */
+-    private static final IpcDataCache<Void, Integer> mGetCurrentUserIdCache =
+-            new IpcDataCache<>(1, IpcDataCache.MODULE_SYSTEM,
+-                    /* api= */ "getCurrentUserId", /* cacheName= */ "CurrentUserIdCache",
+-                    mGetCurrentUserIdQuery);
++
+ 
+     /**
+@@ -305,6 +226,5 @@
+      */
+     public static void invalidateGetCurrentUserIdCache() {
+-        IpcDataCache.invalidateCache(
+-                IpcDataCache.MODULE_SYSTEM, /* api= */ "getCurrentUserId");
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -316,16 +236,4 @@
+              new ArrayMap<>();
+ 
+-    private final IUidFrozenStateChangedCallback mFrozenStateChangedCallback =
+-            new IUidFrozenStateChangedCallback.Stub() {
+-            @Override
+-            public void onUidFrozenStateChanged(int[] uids, int[] frozenStates) {
+-                synchronized (mFrozenStateChangedCallbacks) {
+-                    mFrozenStateChangedCallbacks.forEach((callback, executor) -> {
+-                        executor.execute(
+-                                () -> callback.onUidFrozenStateChanged(uids, frozenStates));
+-                    });
+-                }
+-            }
+-        };
+ 
+     /**
+@@ -402,22 +310,5 @@
+             @NonNull Executor executor,
+             @NonNull UidFrozenStateChangedCallback callback) {
+-        Preconditions.checkNotNull(executor, "executor cannot be null");
+-        Preconditions.checkNotNull(callback, "callback cannot be null");
+-        synchronized (mFrozenStateChangedCallbacks) {
+-            if (mFrozenStateChangedCallbacks.containsKey(callback)) {
+-                throw new IllegalStateException("Callback already registered: " + callback);
+-            }
+-            mFrozenStateChangedCallbacks.put(callback, executor);
+-            if (mFrozenStateChangedCallbacks.size() > 1) {
+-                /* There's no need to register more than one binder interface */
+-                return;
+-            }
+-
+-            try {
+-                getService().registerUidFrozenStateChangedCallback(mFrozenStateChangedCallback);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -433,16 +324,5 @@
+     public void unregisterUidFrozenStateChangedCallback(
+             @NonNull UidFrozenStateChangedCallback callback) {
+-        Preconditions.checkNotNull(callback, "callback cannot be null");
+-        synchronized (mFrozenStateChangedCallbacks) {
+-            mFrozenStateChangedCallbacks.remove(callback);
+-            if (mFrozenStateChangedCallbacks.isEmpty()) {
+-                try {
+-                    getService().unregisterUidFrozenStateChangedCallback(
+-                            mFrozenStateChangedCallback);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -464,9 +344,5 @@
+     public @NonNull @UidFrozenStateChangedCallback.UidFrozenState
+             int[] getUidFrozenState(@NonNull int[] uids) {
+-        try {
+-            return getService().getUidFrozenState(uids);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -586,4 +462,6 @@
+      * @hide
+      */
++    public static final int PROCESS_STATE_IMPORTANT_FOREGROUND = 6;
++
+     public static final int START_SUCCESS = FIRST_START_SUCCESS_CODE;
+ 
+@@ -749,28 +627,4 @@
+      */
+     // LINT.IfChange
+-    @IntDef(flag = false, prefix = { "PROCESS_STATE_" }, value = {
+-        PROCESS_STATE_UNKNOWN, // -1
+-        PROCESS_STATE_PERSISTENT, // 0
+-        PROCESS_STATE_PERSISTENT_UI,
+-        PROCESS_STATE_TOP,
+-        PROCESS_STATE_BOUND_TOP,
+-        PROCESS_STATE_FOREGROUND_SERVICE,
+-        PROCESS_STATE_BOUND_FOREGROUND_SERVICE,
+-        PROCESS_STATE_IMPORTANT_FOREGROUND,
+-        PROCESS_STATE_IMPORTANT_BACKGROUND,
+-        PROCESS_STATE_TRANSIENT_BACKGROUND,
+-        PROCESS_STATE_BACKUP,
+-        PROCESS_STATE_SERVICE,
+-        PROCESS_STATE_RECEIVER,
+-        PROCESS_STATE_TOP_SLEEPING,
+-        PROCESS_STATE_HEAVY_WEIGHT,
+-        PROCESS_STATE_HOME,
+-        PROCESS_STATE_LAST_ACTIVITY,
+-        PROCESS_STATE_CACHED_ACTIVITY,
+-        PROCESS_STATE_CACHED_ACTIVITY_CLIENT,
+-        PROCESS_STATE_CACHED_RECENT,
+-        PROCESS_STATE_CACHED_EMPTY,
+-        PROCESS_STATE_NONEXISTENT,
+-    })
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface ProcessState {}
+@@ -785,95 +639,25 @@
+      */
+ 
+-    /** @hide Not a real process state. */
+-    public static final int PROCESS_STATE_UNKNOWN = ProcessStateEnum.UNKNOWN;
+-
+-    /** @hide Process is a persistent system process. */
+-    public static final int PROCESS_STATE_PERSISTENT = ProcessStateEnum.PERSISTENT;
+-
+-    /** @hide Process is a persistent system process and is doing UI. */
+-    public static final int PROCESS_STATE_PERSISTENT_UI = ProcessStateEnum.PERSISTENT_UI;
+-
+-    /** @hide Process is hosting the current top activities.  Note that this covers
+-     * all activities that are visible to the user. */
+-    @UnsupportedAppUsage
+-    @TestApi
+-    public static final int PROCESS_STATE_TOP = ProcessStateEnum.TOP;
+-
+-    /** @hide Process is bound to a TOP app. */
+-    public static final int PROCESS_STATE_BOUND_TOP = ProcessStateEnum.BOUND_TOP;
+-
+-    /** @hide Process is hosting a foreground service. */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    @TestApi
+-    public static final int PROCESS_STATE_FOREGROUND_SERVICE = ProcessStateEnum.FOREGROUND_SERVICE;
+-
+-    /** @hide Process is hosting a foreground service due to a system binding. */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    @SuppressLint("UnflaggedApi") // @TestApi without associated feature.
+-    @TestApi
+-    public static final int PROCESS_STATE_BOUND_FOREGROUND_SERVICE =
+-            ProcessStateEnum.BOUND_FOREGROUND_SERVICE;
+-
+-    /** @hide Process is important to the user, and something they are aware of. */
+-    public static final int PROCESS_STATE_IMPORTANT_FOREGROUND =
+-            ProcessStateEnum.IMPORTANT_FOREGROUND;
+-
+-    /** @hide Process is important to the user, but not something they are aware of. */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int PROCESS_STATE_IMPORTANT_BACKGROUND =
+-            ProcessStateEnum.IMPORTANT_BACKGROUND;
+-
+-    /** @hide Process is in the background transient so we will try to keep running. */
+-    public static final int PROCESS_STATE_TRANSIENT_BACKGROUND =
+-            ProcessStateEnum.TRANSIENT_BACKGROUND;
+-
+-    /** @hide Process is in the background running a backup/restore operation. */
+-    public static final int PROCESS_STATE_BACKUP = ProcessStateEnum.BACKUP;
+-
+-    /** @hide Process is in the background running a service.  Unlike oom_adj, this level
+-     * is used for both the normal running in background state and the executing
+-     * operations state. */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int PROCESS_STATE_SERVICE = ProcessStateEnum.SERVICE;
+-
+-    /** @hide Process is in the background running a receiver.   Note that from the
+-     * perspective of oom_adj, receivers run at a higher foreground level, but for our
+-     * prioritization here that is not necessary and putting them below services means
+-     * many fewer changes in some process states as they receive broadcasts. */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int PROCESS_STATE_RECEIVER = ProcessStateEnum.RECEIVER;
+-
+-    /** @hide Same as {@link #PROCESS_STATE_TOP} but while device is sleeping. */
+-    public static final int PROCESS_STATE_TOP_SLEEPING = ProcessStateEnum.TOP_SLEEPING;
+-
+-    /** @hide Process is in the background, but it can't restore its state so we want
+-     * to try to avoid killing it. */
+-    public static final int PROCESS_STATE_HEAVY_WEIGHT = ProcessStateEnum.HEAVY_WEIGHT;
+-
+-    /** @hide Process is in the background but hosts the home activity. */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int PROCESS_STATE_HOME = ProcessStateEnum.HOME;
+-
+-    /** @hide Process is in the background but hosts the last shown activity. */
+-    public static final int PROCESS_STATE_LAST_ACTIVITY = ProcessStateEnum.LAST_ACTIVITY;
+-
+-    /** @hide Process is being cached for later use and contains activities. */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int PROCESS_STATE_CACHED_ACTIVITY = ProcessStateEnum.CACHED_ACTIVITY;
+-
+-    /** @hide Process is being cached for later use and is a client of another cached
+-     * process that contains activities. */
+-    public static final int PROCESS_STATE_CACHED_ACTIVITY_CLIENT =
+-            ProcessStateEnum.CACHED_ACTIVITY_CLIENT;
+-
+-    /** @hide Process is being cached for later use and has an activity that corresponds
+-     * to an existing recent task. */
+-    public static final int PROCESS_STATE_CACHED_RECENT = ProcessStateEnum.CACHED_RECENT;
+-
+-    /** @hide Process is being cached for later use and is empty. */
+-    public static final int PROCESS_STATE_CACHED_EMPTY = ProcessStateEnum.CACHED_EMPTY;
+-
+-    /** @hide Process does not exist. */
+-    public static final int PROCESS_STATE_NONEXISTENT = ProcessStateEnum.NONEXISTENT;
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
++
+ 
+     /**
+@@ -1158,28 +942,5 @@
+     @RavenwoodKeep
+     public static final int processCapabilityAmToProto(int amInt) {
+-        switch (amInt) {
+-            case PROCESS_CAPABILITY_FOREGROUND_LOCATION:
+-                return AppProtoEnums.PROCESS_CAPABILITY_FOREGROUND_LOCATION;
+-            case PROCESS_CAPABILITY_FOREGROUND_CAMERA:
+-                return AppProtoEnums.PROCESS_CAPABILITY_FOREGROUND_CAMERA;
+-            case PROCESS_CAPABILITY_FOREGROUND_MICROPHONE:
+-                return AppProtoEnums.PROCESS_CAPABILITY_FOREGROUND_MICROPHONE;
+-            case PROCESS_CAPABILITY_POWER_RESTRICTED_NETWORK:
+-                return AppProtoEnums.PROCESS_CAPABILITY_POWER_RESTRICTED_NETWORK;
+-            case PROCESS_CAPABILITY_BFSL:
+-                return AppProtoEnums.PROCESS_CAPABILITY_BFSL;
+-            case PROCESS_CAPABILITY_USER_RESTRICTED_NETWORK:
+-                return AppProtoEnums.PROCESS_CAPABILITY_USER_RESTRICTED_NETWORK;
+-            case PROCESS_CAPABILITY_FOREGROUND_AUDIO_CONTROL:
+-                return AppProtoEnums.PROCESS_CAPABILITY_FOREGROUND_AUDIO_CONTROL;
+-            case PROCESS_CAPABILITY_CPU_TIME:
+-                return AppProtoEnums.PROCESS_CAPABILITY_CPU_TIME;
+-            case PROCESS_CAPABILITY_IMPLICIT_CPU_TIME:
+-                return AppProtoEnums.PROCESS_CAPABILITY_IMPLICIT_CPU_TIME;
+-            default:
+-                // ActivityManager capabilities
+-                // could not be mapped to an AppProtoEnums ProcessCapability capability.
+-                return AppProtoEnums.PROCESS_CAPABILITY_UNKNOWN;
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1199,66 +960,13 @@
+     @RavenwoodKeep
+     public static final int processStateAmToProto(int amInt) {
+-        switch (amInt) {
+-            case PROCESS_STATE_UNKNOWN:
+-                return AppProtoEnums.PROCESS_STATE_UNKNOWN;
+-            case PROCESS_STATE_PERSISTENT:
+-                return AppProtoEnums.PROCESS_STATE_PERSISTENT;
+-            case PROCESS_STATE_PERSISTENT_UI:
+-                return AppProtoEnums.PROCESS_STATE_PERSISTENT_UI;
+-            case PROCESS_STATE_TOP:
+-                return AppProtoEnums.PROCESS_STATE_TOP;
+-            case PROCESS_STATE_BOUND_TOP:
+-                return AppProtoEnums.PROCESS_STATE_BOUND_TOP;
+-            case PROCESS_STATE_FOREGROUND_SERVICE:
+-                return AppProtoEnums.PROCESS_STATE_FOREGROUND_SERVICE;
+-            case PROCESS_STATE_BOUND_FOREGROUND_SERVICE:
+-                return AppProtoEnums.PROCESS_STATE_BOUND_FOREGROUND_SERVICE;
+-            case PROCESS_STATE_IMPORTANT_FOREGROUND:
+-                return AppProtoEnums.PROCESS_STATE_IMPORTANT_FOREGROUND;
+-            case PROCESS_STATE_IMPORTANT_BACKGROUND:
+-                return AppProtoEnums.PROCESS_STATE_IMPORTANT_BACKGROUND;
+-            case PROCESS_STATE_TRANSIENT_BACKGROUND:
+-                return AppProtoEnums.PROCESS_STATE_TRANSIENT_BACKGROUND;
+-            case PROCESS_STATE_BACKUP:
+-                return AppProtoEnums.PROCESS_STATE_BACKUP;
+-            case PROCESS_STATE_SERVICE:
+-                return AppProtoEnums.PROCESS_STATE_SERVICE;
+-            case PROCESS_STATE_RECEIVER:
+-                return AppProtoEnums.PROCESS_STATE_RECEIVER;
+-            case PROCESS_STATE_TOP_SLEEPING:
+-                return AppProtoEnums.PROCESS_STATE_TOP_SLEEPING;
+-            case PROCESS_STATE_HEAVY_WEIGHT:
+-                return AppProtoEnums.PROCESS_STATE_HEAVY_WEIGHT;
+-            case PROCESS_STATE_HOME:
+-                return AppProtoEnums.PROCESS_STATE_HOME;
+-            case PROCESS_STATE_LAST_ACTIVITY:
+-                return AppProtoEnums.PROCESS_STATE_LAST_ACTIVITY;
+-            case PROCESS_STATE_CACHED_ACTIVITY:
+-                return AppProtoEnums.PROCESS_STATE_CACHED_ACTIVITY;
+-            case PROCESS_STATE_CACHED_ACTIVITY_CLIENT:
+-                return AppProtoEnums.PROCESS_STATE_CACHED_ACTIVITY_CLIENT;
+-            case PROCESS_STATE_CACHED_RECENT:
+-                return AppProtoEnums.PROCESS_STATE_CACHED_RECENT;
+-            case PROCESS_STATE_CACHED_EMPTY:
+-                return AppProtoEnums.PROCESS_STATE_CACHED_EMPTY;
+-            case PROCESS_STATE_NONEXISTENT:
+-                return AppProtoEnums.PROCESS_STATE_NONEXISTENT;
+-            default:
+-                // ActivityManager process state (amInt)
+-                // could not be mapped to an AppProtoEnums ProcessState state.
+-                return AppProtoEnums.PROCESS_STATE_UNKNOWN_TO_PROTO;
+-        }
+-    }
+-
+-    /** @hide The lowest process state number */
+-    public static final int MIN_PROCESS_STATE = PROCESS_STATE_PERSISTENT;
+-
+-    /** @hide The highest process state number */
+-    public static final int MAX_PROCESS_STATE = PROCESS_STATE_NONEXISTENT;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
+ 
+     /** @hide Should this process state be considered a background state? */
+     @RavenwoodKeep
+     public static final boolean isProcStateBackground(@ProcessState int procState) {
+-        return procState >= PROCESS_STATE_TRANSIENT_BACKGROUND;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1266,5 +974,5 @@
+     @RavenwoodKeep
+     public static final boolean isProcStateCached(@ProcessState int procState) {
+-        return procState >= PROCESS_STATE_CACHED_ACTIVITY;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1272,17 +980,10 @@
+     @RavenwoodKeep
+     public static boolean isForegroundService(@ProcessState int procState) {
+-        return procState == PROCESS_STATE_FOREGROUND_SERVICE;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide Should this process state be considered jank perceptible? */
+     public static final boolean isProcStateJankPerceptible(@ProcessState int procState) {
+-        if (Flags.jankPerceptibleNarrow() && !Flags.jankPerceptibleNarrowHoldback()) {
+-            return procState == PROCESS_STATE_PERSISTENT_UI
+-                || procState == PROCESS_STATE_TOP
+-                || procState == PROCESS_STATE_IMPORTANT_FOREGROUND
+-                || procState == PROCESS_STATE_TOP_SLEEPING;
+-        } else {
+-            return !isProcStateCached(procState);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1421,6 +1122,4 @@
+     public static final int COMPAT_MODE_TOGGLE = 2;
+ 
+-    private static final boolean DEVELOPMENT_FORCE_LOW_RAM =
+-            SystemProperties.getBoolean("debug.force_low_ram", false);
+ 
+     /**
+@@ -1725,54 +1424,30 @@
+     /** @hide */
+     public int getFrontActivityScreenCompatMode() {
+-        try {
+-            return getTaskService().getFrontActivityScreenCompatMode();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide */
+     public void setFrontActivityScreenCompatMode(int mode) {
+-        try {
+-            getTaskService().setFrontActivityScreenCompatMode(mode);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide */
+     public int getPackageScreenCompatMode(String packageName) {
+-        try {
+-            return getTaskService().getPackageScreenCompatMode(packageName);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide */
+     public void setPackageScreenCompatMode(String packageName, int mode) {
+-        try {
+-            getTaskService().setPackageScreenCompatMode(packageName, mode);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide */
+     public boolean getPackageAskScreenCompat(String packageName) {
+-        try {
+-            return getTaskService().getPackageAskScreenCompat(packageName);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide */
+     public void setPackageAskScreenCompat(String packageName, boolean ask) {
+-        try {
+-            getTaskService().setPackageAskScreenCompat(packageName, ask);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1786,5 +1461,5 @@
+      */
+     public int getMemoryClass() {
+-        return staticGetMemoryClass();
++        return (int) (Runtime.getRuntime().maxMemory() / (1024 * 1024));
+     }
+ 
+@@ -1815,5 +1490,5 @@
+      */
+     public int getLargeMemoryClass() {
+-        return staticGetLargeMemoryClass();
++        return getMemoryClass();
+     }
+ 
+@@ -1841,6 +1516,5 @@
+     @RavenwoodIgnore
+     public static boolean isLowRamDeviceStatic() {
+-        return RoSystemProperties.CONFIG_LOW_RAM ||
+-                (Build.IS_DEBUGGABLE && DEVELOPMENT_FORCE_LOW_RAM);
++        return false;
+     }
+ 
+@@ -1854,5 +1528,5 @@
+      */
+     public static boolean isSmallBatteryDevice() {
+-        return RoSystemProperties.CONFIG_SMALL_BATTERY;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1865,8 +1539,5 @@
+     @TestApi
+     static public boolean isHighEndGfx() {
+-        return !isLowRamDeviceStatic()
+-                && !RoSystemProperties.CONFIG_AVOID_GFX_ACCEL
+-                && !Resources.getSystem()
+-                        .getBoolean(com.android.internal.R.bool.config_avoidGfxAccel);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1877,7 +1548,5 @@
+     @TestApi
+     public long getTotalRam() {
+-        MemInfoReader memreader = new MemInfoReader();
+-        memreader.readMemInfo();
+-        return memreader.getTotalSize();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1890,5 +1559,5 @@
+     @UnsupportedAppUsage
+     static public int getMaxRecentTasksStatic() {
+-        return ActivityTaskManager.getMaxRecentTasksStatic();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1977,11 +1646,5 @@
+             @NonNull
+             public Builder setIcon(@DrawableRes int iconRes) {
+-                if (iconRes == Resources.ID_NULL) {
+-                    this.mIcon = null;
+-                } else {
+-                    this.mIcon =
+-                            Icon.createWithResource(ActivityThread.currentPackageName(), iconRes);
+-                }
+-                return this;
++                throw new UnsupportedOperationException("No platform service in the embedded runtime");
+             }
+ 
+@@ -1991,5 +1654,4 @@
+              * @return The same instance of the builder.
+              */
+-            @FlaggedApi(Flags.FLAG_ENABLE_DYNAMIC_ICONS_AND_BADGING)
+             @NonNull
+             public Builder setIcon(@Nullable Icon icon) {
+@@ -2008,5 +1670,4 @@
+              * @return The same instance of the builder.
+              */
+-            @FlaggedApi(Flags.FLAG_ENABLE_DYNAMIC_ICONS_AND_BADGING)
+             @NonNull
+             public Builder setBadge(@Nullable Icon badge) {
+@@ -2085,10 +1746,7 @@
+         @Deprecated
+         public TaskDescription(String label, @DrawableRes int iconRes, int colorPrimary) {
+-            this(label, Icon.createWithResource(ActivityThread.currentPackageName(), iconRes),
+-                    null, colorPrimary, 0, 0, 0, 0, 0,
+-                    false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
+-            if ((colorPrimary != 0) && (Color.alpha(colorPrimary) != 255)) {
+-                throw new RuntimeException("A TaskDescription's primary color should be opaque");
+-            }
++            this(label);
++            if (iconRes != 0) mIcon = Icon.createWithResource(Application.getProcessName(), iconRes);
++            setPrimaryColor(colorPrimary);
+         }
+ 
+@@ -2104,6 +1762,5 @@
+         @Deprecated
+         public TaskDescription(String label, @DrawableRes int iconRes) {
+-            this(label, Icon.createWithResource(ActivityThread.currentPackageName(), iconRes),
+-                    null, 0, 0, 0, 0, 0, 0, false, false, RESIZE_MODE_RESIZEABLE, -1, -1, 0);
++            this(label, iconRes, 0);
+         }
+ 
+@@ -2468,14 +2125,6 @@
+         @UnsupportedAppUsage
+         public static Bitmap loadTaskDescriptionIcon(String iconFilename,
+-                @CanBeCURRENT @UserIdInt int userId) {
+-            if (iconFilename != null) {
+-                try {
+-                    return getTaskService().getTaskDescriptionIcon(iconFilename,
+-                            userId);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-            return null;
++                @UserIdInt int userId) {
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2485,5 +2134,4 @@
+          */
+         @TestApi
+-        @FlaggedApi(Flags.FLAG_ENABLE_DYNAMIC_ICONS_AND_BADGING)
+         @Nullable
+         public Icon getBadge() {
+@@ -2878,13 +2526,4 @@
+         }
+ 
+-        /**
+-         * @hide
+-         */
+-        public RecentTaskInfo(@NonNull RecentTaskInfo other) {
+-            super(other);
+-            id = other.id;
+-            persistentId = other.persistentId;
+-            // Ignore other fields in RecentTaskInfo as they are deprecated post-Q
+-        }
+ 
+         private RecentTaskInfo(Parcel source) {
+@@ -2898,14 +2537,10 @@
+ 
+         public void readFromParcel(Parcel source) {
+-            id = source.readInt();
+-            persistentId = source.readInt();
+-            super.readTaskFromParcel(source);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+         @Override
+         public void writeToParcel(Parcel dest, int flags) {
+-            dest.writeInt(id);
+-            dest.writeInt(persistentId);
+-            super.writeTaskToParcel(dest, flags);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2924,53 +2559,5 @@
+          */
+         public void dump(PrintWriter pw, String indent) {
+-            pw.println(); pw.print("   ");
+-            pw.print(" id="); pw.print(persistentId);
+-            pw.print(" userId="); pw.print(userId);
+-            pw.print(" hasTask="); pw.print((id != -1));
+-            pw.print(" lastActiveTime="); pw.println(lastActiveTime);
+-            pw.print("   "); pw.print(" baseIntent="); pw.println(baseIntent);
+-            if (baseActivity != null) {
+-                pw.print("   "); pw.print(" baseActivity=");
+-                pw.println(baseActivity.toShortString());
+-            }
+-            if (topActivity != null) {
+-                pw.print("   "); pw.print(" topActivity="); pw.println(topActivity.toShortString());
+-            }
+-            if (origActivity != null) {
+-                pw.print("   "); pw.print(" origActivity=");
+-                pw.println(origActivity.toShortString());
+-            }
+-            if (realActivity != null) {
+-                pw.print("   "); pw.print(" realActivity=");
+-                pw.println(realActivity.toShortString());
+-            }
+-            pw.print("   ");
+-            pw.print(" isExcluded=");
+-            pw.print(((baseIntent.getFlags() & FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS) != 0));
+-            pw.print(" activityType="); pw.print(activityTypeToString(getActivityType()));
+-            pw.print(" windowingMode="); pw.print(windowingModeToString(getWindowingMode()));
+-            pw.print(" supportsMultiWindow=");
+-            pw.println(supportsMultiWindow);
+-            if (taskDescription != null) {
+-                pw.print("   ");
+-                final ActivityManager.TaskDescription td = taskDescription;
+-                pw.print(" taskDescription {");
+-                pw.print(" colorBackground=#");
+-                pw.print(Integer.toHexString(td.getBackgroundColor()));
+-                pw.print(" colorPrimary=#");
+-                pw.print(Integer.toHexString(td.getPrimaryColor()));
+-                pw.print(" iconRes=");
+-                pw.print(td.getIconResourcePackage() + "/" + td.getIconResource());
+-                pw.print(" iconBitmap=");
+-                pw.print(td.getIconFilename() != null || td.getInMemoryIcon() != null);
+-                pw.print(" resizeMode=");
+-                pw.print(ActivityInfo.resizeModeToString(td.getResizeMode()));
+-                pw.print(" minWidth="); pw.print(td.getMinWidth());
+-                pw.print(" minHeight="); pw.print(td.getMinHeight());
+-                pw.print(" colorBackgroundFloating=#");
+-                pw.print(Integer.toHexString(td.getBackgroundColorFloating()));
+-                pw.println(" }");
+-            }
+-            pw.print("   ");
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+     }
+@@ -3022,9 +2609,5 @@
+     @Deprecated
+     public List<RecentTaskInfo> getRecentTasks(int maxNum, int flags) throws SecurityException {
+-        if (maxNum < 0) {
+-            throw new IllegalArgumentException("The requested number of tasks should be >= 0");
+-        }
+-        return ActivityTaskManager.getInstance().getRecentTasks(
+-                maxNum, flags, mContext.getUserId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3075,12 +2658,4 @@
+         }
+ 
+-        /**
+-         * @hide
+-         */
+-        public RunningTaskInfo(@NonNull RunningTaskInfo other) {
+-            super(other);
+-            id = other.id;
+-            // Ignore other fields in RunningTaskInfo as they are deprecated post-Q
+-        }
+ 
+         private RunningTaskInfo(Parcel source) {
+@@ -3094,12 +2669,10 @@
+ 
+         public void readFromParcel(Parcel source) {
+-            id = source.readInt();
+-            super.readTaskFromParcel(source);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+         @Override
+         public void writeToParcel(Parcel dest, int flags) {
+-            dest.writeInt(id);
+-            super.writeTaskToParcel(dest, flags);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -3121,16 +2694,5 @@
+      */
+     public List<ActivityManager.AppTask> getAppTasks() {
+-        ArrayList<AppTask> tasks = new ArrayList<AppTask>();
+-        List<IBinder> appTasks;
+-        try {
+-            appTasks = getTaskService().getAppTasks(mContext.getOpPackageName());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-        int numAppTasks = appTasks.size();
+-        for (int i = 0; i < numAppTasks; i++) {
+-            tasks.add(new AppTask(IAppTask.Stub.asInterface(appTasks.get(i))));
+-        }
+-        return tasks;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3147,11 +2709,5 @@
+ 
+     private void ensureAppTaskThumbnailSizeLocked() {
+-        if (mAppTaskThumbnailSize == null) {
+-            try {
+-                mAppTaskThumbnailSize = getTaskService().getAppTaskThumbnailSize();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3180,43 +2736,5 @@
+     public int addAppTask(@NonNull Activity activity, @NonNull Intent intent,
+             @Nullable TaskDescription description, @NonNull Bitmap thumbnail) {
+-        Point size;
+-        synchronized (this) {
+-            ensureAppTaskThumbnailSizeLocked();
+-            size = mAppTaskThumbnailSize;
+-        }
+-        final int tw = thumbnail.getWidth();
+-        final int th = thumbnail.getHeight();
+-        if (tw != size.x || th != size.y) {
+-            Bitmap bm = Bitmap.createBitmap(size.x, size.y, thumbnail.getConfig());
+-
+-            // Use ScaleType.CENTER_CROP, except we leave the top edge at the top.
+-            float scale;
+-            float dx = 0, dy = 0;
+-            if (tw * size.x > size.y * th) {
+-                scale = (float) size.x / (float) th;
+-                dx = (size.y - tw * scale) * 0.5f;
+-            } else {
+-                scale = (float) size.y / (float) tw;
+-                dy = (size.x - th * scale) * 0.5f;
+-            }
+-            Matrix matrix = new Matrix();
+-            matrix.setScale(scale, scale);
+-            matrix.postTranslate((int) (dx + 0.5f), 0);
+-
+-            Canvas canvas = new Canvas(bm);
+-            canvas.drawBitmap(thumbnail, matrix, null);
+-            canvas.setBitmap(null);
+-
+-            thumbnail = bm;
+-        }
+-        if (description == null) {
+-            description = new TaskDescription();
+-        }
+-        try {
+-            return getTaskService().addAppTask(activity.getActivityToken(),
+-                    intent, description, thumbnail);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3256,5 +2774,5 @@
+     public List<RunningTaskInfo> getRunningTasks(int maxNum)
+             throws SecurityException {
+-        return ActivityTaskManager.getInstance().getTasks(maxNum);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3308,12 +2826,5 @@
+     @RequiresPermission(android.Manifest.permission.REORDER_TASKS)
+     public void moveTaskToFront(int taskId, @MoveTaskFlags int flags, Bundle options) {
+-        try {
+-            ActivityThread thread = ActivityThread.currentActivityThread();
+-            IApplicationThread appThread = thread.getApplicationThread();
+-            String packageName = mContext.getOpPackageName();
+-            getTaskService().moveTaskToFront(appThread, packageName, taskId, flags, options);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3336,11 +2847,5 @@
+     public boolean isActivityStartAllowedOnDisplay(@NonNull Context context, int displayId,
+             @NonNull Intent intent) {
+-        try {
+-            return getTaskService().isActivityStartAllowedOnDisplay(displayId, intent,
+-                    intent.resolveTypeIfNeeded(context.getContentResolver()), context.getUserId());
+-        } catch (RemoteException e) {
+-            e.rethrowFromSystemServer();
+-        }
+-        return false;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3528,10 +3033,5 @@
+     public List<RunningServiceInfo> getRunningServices(int maxNum)
+             throws SecurityException {
+-        try {
+-            return getService()
+-                    .getServices(maxNum, 0);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3636,10 +3136,5 @@
+     public PendingIntent getRunningServiceControlPanel(ComponentName service)
+             throws SecurityException {
+-        try {
+-            return getService()
+-                    .getRunningServiceControlPanel(service);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3656,10 +3151,5 @@
+     public @NonNull List<ConnectionInfo> getRunningServiceConnections(
+             @NonNull ComponentName service) {
+-        Objects.requireNonNull(service);
+-        try {
+-            return getService().getRunningServiceConnections(service);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3692,5 +3182,4 @@
+          * not accounting for reclaimable memory.
+          */
+-        @FlaggedApi(Flags.FLAG_GET_FREE_MEMORY_V2)
+         @SuppressLint("MutableBareField")
+         public long freeMem;
+@@ -3802,50 +3291,12 @@
+      */
+     public void getMemoryInfo(MemoryInfo outInfo) {
+-        synchronized (mMemoryInfoCache) {
+-            mMemoryInfoCache.get(() -> {
+-                getMemoryInfoInternal(mRateLimitedMemInfo);
+-                return mRateLimitedMemInfo;
+-            });
+-            mRateLimitedMemInfo.copyTo(outInfo);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private void getMemoryInfoInternal(MemoryInfo outInfo) {
+-        try {
+-            getService().getMemoryInfo(outInfo);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @RequiresPermission(anyOf={Manifest.permission.CLEAR_APP_USER_DATA,
+-            Manifest.permission.ACCESS_INSTANT_APPS})
+-    @UnsupportedAppUsage
+-    public boolean clearApplicationUserData(String packageName, IPackageDataObserver observer) {
+-        return clearApplicationUserData(packageName, observer, true);
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @RequiresPermission(anyOf = {Manifest.permission.CLEAR_APP_USER_DATA,
+-            Manifest.permission.ACCESS_INSTANT_APPS})
+-    private boolean clearApplicationUserData(String packageName, IPackageDataObserver observer,
+-            boolean restorePregrantedPermissions) {
+-        try {
+-            if (restorePregrantedPermissions) {
+-                return getService().clearApplicationUserData(packageName, false,
+-                        observer, mContext.getUserId());
+-            } else {
+-                return getService().clearApplicationUserDataWithoutPermissionReset(packageName,
+-                        false, observer, mContext.getUserId());
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
+ 
+     /**
+@@ -3861,26 +3312,7 @@
+      */
+     public boolean clearApplicationUserData() {
+-        return clearApplicationUserData(mContext.getPackageName(), null, false);
+-    }
+-
+-    /**
+-     * Permits an application to get the persistent URI permissions granted to another.
+-     *
+-     * <p>Typically called by Settings or DocumentsUI, requires
+-     * {@code GET_APP_GRANTED_URI_PERMISSIONS}.
+-     *
+-     * @param packageName application to look for the granted permissions, or {@code null} to get
+-     * granted permissions for all applications
+-     * @return list of granted URI permissions
+-     *
+-     * @hide
+-     * @deprecated use {@link UriGrantsManager#getGrantedUriPermissions(String)} instead.
+-     */
+-    @Deprecated
+-    public ParceledListSlice<GrantedUriPermission> getGrantedUriPermissions(
+-            @Nullable String packageName) {
+-        return ((UriGrantsManager) mContext.getSystemService(Context.URI_GRANTS_SERVICE))
+-                .getGrantedUriPermissions(packageName);
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+ 
+     /**
+@@ -3896,6 +3328,5 @@
+     @Deprecated
+     public void clearGrantedUriPermissions(String packageName) {
+-        ((UriGrantsManager) mContext.getSystemService(Context.URI_GRANTS_SERVICE))
+-                .clearGrantedUriPermissions(packageName);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4019,11 +3450,5 @@
+      */
+     public List<ProcessErrorStateInfo> getProcessesInErrorState() {
+-        return mErrorProcessesCache.get(() -> {
+-            try {
+-                return getService().getProcessesInErrorState();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        });
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4225,23 +3650,5 @@
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+         public static @Importance int procStateToImportance(@ProcessState int procState) {
+-            if (procState == PROCESS_STATE_NONEXISTENT) {
+-                return IMPORTANCE_GONE;
+-            } else if (procState >= PROCESS_STATE_HOME) {
+-                return IMPORTANCE_CACHED;
+-            } else if (procState == PROCESS_STATE_HEAVY_WEIGHT) {
+-                return IMPORTANCE_CANT_SAVE_STATE;
+-            } else if (procState >= PROCESS_STATE_TOP_SLEEPING) {
+-                return IMPORTANCE_TOP_SLEEPING;
+-            } else if (procState >= PROCESS_STATE_SERVICE) {
+-                return IMPORTANCE_SERVICE;
+-            } else if (procState >= PROCESS_STATE_TRANSIENT_BACKGROUND) {
+-                return IMPORTANCE_PERCEPTIBLE;
+-            } else if (procState >= PROCESS_STATE_IMPORTANT_FOREGROUND) {
+-                return IMPORTANCE_VISIBLE;
+-            } else if (procState >= PROCESS_STATE_FOREGROUND_SERVICE) {
+-                return IMPORTANCE_FOREGROUND_SERVICE;
+-            } else {
+-                return IMPORTANCE_FOREGROUND;
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -4283,26 +3690,5 @@
+         /** @hide */
+         public static @ProcessState int importanceToProcState(@Importance int importance) {
+-            if (importance == IMPORTANCE_GONE) {
+-                return PROCESS_STATE_NONEXISTENT;
+-            } else if (importance >= IMPORTANCE_CACHED) {
+-                return PROCESS_STATE_HOME;
+-            } else if (importance >= IMPORTANCE_CANT_SAVE_STATE) {
+-                return PROCESS_STATE_HEAVY_WEIGHT;
+-            } else if (importance >= IMPORTANCE_TOP_SLEEPING) {
+-                return PROCESS_STATE_TOP_SLEEPING;
+-            } else if (importance >= IMPORTANCE_SERVICE) {
+-                return PROCESS_STATE_SERVICE;
+-            } else if (importance >= IMPORTANCE_PERCEPTIBLE) {
+-                return PROCESS_STATE_TRANSIENT_BACKGROUND;
+-            } else if (importance >= IMPORTANCE_VISIBLE) {
+-                return PROCESS_STATE_IMPORTANT_FOREGROUND;
+-            } else if (importance >= IMPORTANCE_TOP_SLEEPING_PRE_28) {
+-                return PROCESS_STATE_IMPORTANT_FOREGROUND;
+-            } else if (importance >= IMPORTANCE_FOREGROUND_SERVICE) {
+-                return PROCESS_STATE_FOREGROUND_SERVICE;
+-                // TODO: Asymmetrical mapping for LOCATION service type. Ok?
+-            } else {
+-                return PROCESS_STATE_TOP;
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -4416,30 +3802,9 @@
+ 
+         public void writeToParcel(Parcel dest, int flags) {
+-            final android.app.RunningAppProcessInfo info = new android.app.RunningAppProcessInfo();
+-            copyTo(info);
+-            info.writeToParcel(dest, flags);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+         public void readFromParcel(Parcel source) {
+-            final android.app.RunningAppProcessInfo info = new android.app.RunningAppProcessInfo();
+-            info.readFromParcel(source);
+-            processName = info.processName;
+-            pid = info.pid;
+-            uid = info.uid;
+-            pkgList = info.pkgList;
+-            pkgDeps = info.pkgDeps;
+-            flags = info.flags;
+-            lastTrimLevel = info.lastTrimLevel;
+-            importance = info.importance;
+-            lru = info.lru;
+-            importanceReasonCode = info.importanceReasonCode;
+-            importanceReasonPid = info.importanceReasonPid;
+-            importanceReasonComponent = info.importanceReasonComponent != null
+-                    ? ComponentName.unflattenFromString(info.importanceReasonComponent)
+-                    : null;
+-            importanceReasonImportance = info.importanceReasonImportance;
+-            processState = info.processState;
+-            isFocused = info.isFocused;
+-            lastActivityTime = info.lastActivityTime;
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -4461,25 +3826,4 @@
+         }
+ 
+-        /** @hide */
+-        public void copyTo(android.app.RunningAppProcessInfo info) {
+-            info.processName = TextUtils.emptyIfNull(processName);
+-            info.pid = pid;
+-            info.uid = uid;
+-            info.pkgList = pkgList;
+-            info.pkgDeps = pkgDeps;
+-            info.flags = this.flags;
+-            info.lastTrimLevel = lastTrimLevel;
+-            info.importance = importance;
+-            info.lru = lru;
+-            info.importanceReasonCode = importanceReasonCode;
+-            info.importanceReasonPid = importanceReasonPid;
+-            info.importanceReasonComponent = importanceReasonComponent != null
+-                    ? importanceReasonComponent.flattenToString()
+-                    : null;
+-            info.importanceReasonImportance = importanceReasonImportance;
+-            info.processState = processState;
+-            info.isFocused = isFocused;
+-            info.lastActivityTime = lastActivityTime;
+-        }
+ 
+         public static final @android.annotation.NonNull Creator<RunningAppProcessInfo> CREATOR =
+@@ -4510,9 +3854,5 @@
+      */
+     public List<ApplicationInfo> getRunningExternalApplications() {
+-        try {
+-            return getService().getRunningExternalApplications();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4532,9 +3872,5 @@
+      */
+     public boolean isBackgroundRestricted() {
+-        try {
+-            return getService().isBackgroundRestricted(mContext.getOpPackageName());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4548,11 +3884,6 @@
+      */
+     public boolean setProcessMemoryTrimLevel(
+-            String process, @CanBeALL @CanBeCURRENT @UserIdInt int userId, int level) {
+-        try {
+-            return getService().setProcessMemoryTrimLevel(process, userId,
+-                    level);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            String process, @UserIdInt int userId, int level) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4568,11 +3899,5 @@
+      */
+     public List<RunningAppProcessInfo> getRunningAppProcesses() {
+-        return mRunningProcessesCache.get(() -> {
+-            try {
+-                return getService().getRunningAppProcesses();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        });
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4598,11 +3923,5 @@
+     public List<ApplicationStartInfo> getHistoricalProcessStartReasons(
+             @IntRange(from = 0) int maxNum) {
+-        try {
+-            ParceledListSlice<ApplicationStartInfo> startInfos = getService()
+-                    .getHistoricalProcessStartReasons(null, maxNum, mContext.getUserId());
+-            return startInfos == null ? Collections.emptyList() : startInfos.getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4632,17 +3951,9 @@
+     public List<ApplicationStartInfo> getExternalHistoricalProcessStartReasons(
+             @NonNull String packageName, @IntRange(from = 0) int maxNum) {
+-        try {
+-            ParceledListSlice<ApplicationStartInfo> startInfos = getService()
+-                    .getHistoricalProcessStartReasons(packageName, maxNum, mContext.getUserId());
+-            return startInfos == null ? Collections.emptyList() : startInfos.getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private final ArrayList<AppStartInfoCallbackWrapper> mAppStartInfoCallbacks =
+             new ArrayList<>();
+-    @Nullable
+-    private IApplicationStartInfoCompleteListener mAppStartInfoCompleteListener = null;
+ 
+     private static final class AppStartInfoCallbackWrapper {
+@@ -4683,47 +3994,5 @@
+     public void addApplicationStartInfoCompletionListener(@NonNull final Executor executor,
+             @NonNull final Consumer<ApplicationStartInfo> listener) {
+-        Preconditions.checkNotNull(executor, "executor cannot be null");
+-        Preconditions.checkNotNull(listener, "listener cannot be null");
+-        synchronized (mAppStartInfoCallbacks) {
+-            for (int i = 0; i < mAppStartInfoCallbacks.size(); i++) {
+-                if (listener.equals(mAppStartInfoCallbacks.get(i).mListener)) {
+-                    return;
+-                }
+-            }
+-            if (mAppStartInfoCompleteListener == null) {
+-                mAppStartInfoCompleteListener = new IApplicationStartInfoCompleteListener.Stub() {
+-                    @Override
+-                    public void onApplicationStartInfoComplete(
+-                            ApplicationStartInfo applicationStartInfo) {
+-                        synchronized (mAppStartInfoCallbacks) {
+-                            for (int i = 0; i < mAppStartInfoCallbacks.size(); i++) {
+-                                final AppStartInfoCallbackWrapper callback =
+-                                        mAppStartInfoCallbacks.get(i);
+-                                callback.mExecutor.execute(() -> callback.mListener.accept(
+-                                        applicationStartInfo));
+-                            }
+-                            mAppStartInfoCallbacks.clear();
+-                            mAppStartInfoCompleteListener = null;
+-                        }
+-                    }
+-                };
+-                boolean succeeded = false;
+-                try {
+-                    getService().addApplicationStartInfoCompleteListener(
+-                            mAppStartInfoCompleteListener, mContext.getUserId());
+-                    succeeded = true;
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-                if (succeeded) {
+-                    mAppStartInfoCallbacks.add(new AppStartInfoCallbackWrapper(executor, listener));
+-                } else {
+-                    mAppStartInfoCompleteListener = null;
+-                    mAppStartInfoCallbacks.clear();
+-                }
+-            } else {
+-                mAppStartInfoCallbacks.add(new AppStartInfoCallbackWrapper(executor, listener));
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4733,23 +4002,5 @@
+     public void removeApplicationStartInfoCompletionListener(
+             @NonNull final Consumer<ApplicationStartInfo> listener) {
+-        Preconditions.checkNotNull(listener, "listener cannot be null");
+-        synchronized (mAppStartInfoCallbacks) {
+-            for (int i = 0; i < mAppStartInfoCallbacks.size(); i++) {
+-                final AppStartInfoCallbackWrapper callback = mAppStartInfoCallbacks.get(i);
+-                if (listener.equals(callback.mListener)) {
+-                    mAppStartInfoCallbacks.remove(i);
+-                    break;
+-                }
+-            }
+-            if (mAppStartInfoCompleteListener != null && mAppStartInfoCallbacks.isEmpty()) {
+-                try {
+-                    getService().removeApplicationStartInfoCompleteListener(
+-                            mAppStartInfoCompleteListener, mContext.getUserId());
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-                mAppStartInfoCompleteListener = null;
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4774,13 +4025,5 @@
+             to = ApplicationStartInfo.START_TIMESTAMP_RESERVED_RANGE_DEVELOPER) int key,
+             long timestampNs) {
+-        if (key <= ApplicationStartInfo.START_TIMESTAMP_RESERVED_RANGE_SYSTEM
+-                || key > ApplicationStartInfo.START_TIMESTAMP_RESERVED_RANGE_DEVELOPER) {
+-            throw new IllegalArgumentException("Key not in allowed range.");
+-        }
+-        try {
+-            getService().addStartInfoTimestamp(key, timestampNs, mContext.getUserId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4810,11 +4053,5 @@
+     public List<ApplicationExitInfo> getHistoricalProcessExitReasons(@Nullable String packageName,
+             @IntRange(from = 0) int pid, @IntRange(from = 0) int maxNum) {
+-        try {
+-            ParceledListSlice<ApplicationExitInfo> r = getService().getHistoricalProcessExitReasons(
+-                    packageName, pid, maxNum, mContext.getUserId());
+-            return r == null ? Collections.emptyList() : r.getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4843,9 +4080,5 @@
+      */
+     public void setProcessStateSummary(@Nullable byte[] state) {
+-        try {
+-            getService().setProcessStateSummary(state);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4857,5 +4090,5 @@
+      */
+     public static boolean isLowMemoryKillReportSupported() {
+-        return SystemProperties.getBoolean("persist.sys.lmk.reportkills", false);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4874,9 +4107,5 @@
+     }, conditional = true)
+     public int getUidProcessState(int uid) {
+-        try {
+-            return getService().getUidProcessState(uid, mContext.getOpPackageName());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4896,9 +4125,5 @@
+     }, conditional = true)
+     public @ProcessCapability int getUidProcessCapabilities(int uid) {
+-        try {
+-            return getService().getUidProcessCapabilities(uid, mContext.getOpPackageName());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4914,11 +4139,5 @@
+     @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
+     public @RunningAppProcessInfo.Importance int getPackageImportance(String packageName) {
+-        try {
+-            int procState = getService().getPackageProcessState(packageName,
+-                    mContext.getOpPackageName());
+-            return RunningAppProcessInfo.procStateToImportanceForClient(procState, mContext);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4934,11 +4153,5 @@
+     @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
+     public @RunningAppProcessInfo.Importance int getUidImportance(int uid) {
+-        try {
+-            @ProcessState int procState = getService().getUidProcessState(uid,
+-                    mContext.getOpPackageName());
+-            return RunningAppProcessInfo.procStateToImportanceForClient(procState, mContext);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4957,15 +4170,8 @@
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_GET_BINDING_UID_IMPORTANCE)
+     @SystemApi
+     @RequiresPermission(Manifest.permission.GET_BINDING_UID_IMPORTANCE)
+     public @RunningAppProcessInfo.Importance int getBindingUidImportance(int uid) {
+-        try {
+-            @ProcessState int procState = getService().getBindingUidProcessState(uid,
+-                    mContext.getOpPackageName());
+-            return RunningAppProcessInfo.procStateToImportanceForClient(procState, mContext);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5049,20 +4255,5 @@
+     private void addOnUidImportanceListenerInternal(@NonNull OnUidImportanceListener listener,
+             @RunningAppProcessInfo.Importance int importanceCutpoint, @Nullable int[] uids) {
+-        synchronized (mImportanceListeners) {
+-            if (mImportanceListeners.containsKey(listener)) {
+-                throw new IllegalArgumentException("Listener already registered: " + listener);
+-            }
+-            // TODO: implement the cut point in the system process to avoid IPCs.
+-            MyUidObserver observer = new MyUidObserver(listener, mContext);
+-            try {
+-                getService().registerUidObserverForUids(observer,
+-                        UID_OBSERVER_PROCSTATE | UID_OBSERVER_GONE,
+-                        RunningAppProcessInfo.importanceToProcState(importanceCutpoint),
+-                        mContext.getOpPackageName(), uids);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-            mImportanceListeners.put(listener, observer);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5077,15 +4268,5 @@
+     @RequiresPermission(Manifest.permission.PACKAGE_USAGE_STATS)
+     public void removeOnUidImportanceListener(OnUidImportanceListener listener) {
+-        synchronized (mImportanceListeners) {
+-            MyUidObserver observer = mImportanceListeners.remove(listener);
+-            if (observer == null) {
+-                throw new IllegalArgumentException("Listener not registered: " + listener);
+-            }
+-            try {
+-                getService().unregisterUidObserver(observer);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5102,19 +4283,9 @@
+      */
+     public static void getMyMemoryState(RunningAppProcessInfo outState) {
+-        synchronized (mMyMemoryStateCache) {
+-            mMyMemoryStateCache.get(() -> {
+-                getMyMemoryStateInternal(mRateLimitedMemState);
+-                return mRateLimitedMemState;
+-            });
+-            mRateLimitedMemState.copyTo(outState);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private static void getMyMemoryStateInternal(RunningAppProcessInfo outState) {
+-        try {
+-            getService().getMyMemoryState(outState);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5138,9 +4309,5 @@
+      */
+     public Debug.MemoryInfo[] getProcessMemoryInfo(int[] pids) {
+-        try {
+-            return getService().getProcessMemoryInfo(pids);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5172,10 +4339,5 @@
+     @RequiresPermission(Manifest.permission.KILL_BACKGROUND_PROCESSES)
+     public void killBackgroundProcesses(String packageName) {
+-        try {
+-            getService().killBackgroundProcesses(packageName,
+-                    mContext.getUserId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5190,10 +4352,5 @@
+     @RequiresPermission(Manifest.permission.KILL_UID)
+     public void killUid(int uid, String reason) {
+-        try {
+-            getService().killUid(UserHandle.getAppId(uid),
+-                    UserHandle.getUserId(uid), reason);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5219,10 +4376,6 @@
+     @UnsupportedAppUsage
+     public void forceStopPackageAsUser(String packageName,
+-            @CanBeALL @CanBeCURRENT @UserIdInt int userId) {
+-        try {
+-            getService().forceStopPackage(packageName, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5245,10 +4398,6 @@
+     @RequiresPermission(Manifest.permission.FORCE_STOP_PACKAGES)
+     public void forceStopPackageAsUserEvenWhenStopping(String packageName,
+-            @CanBeALL @CanBeCURRENT @UserIdInt int userId) {
+-        try {
+-            getService().forceStopPackageEvenWhenStopping(packageName, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5265,9 +4414,5 @@
+      */
+     public void stopPackageForUser(String packageName) {
+-        try {
+-            getService().stopAppForUser(packageName, mContext.getUserId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5281,5 +4426,5 @@
+     @SystemApi
+     public void setDeviceLocales(@NonNull LocaleList locales) {
+-        LocalePicker.updateLocales(locales);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5294,9 +4439,5 @@
+     @SystemApi
+     public @NonNull Collection<Locale> getSupportedLocales() {
+-        ArrayList<Locale> locales = new ArrayList<>();
+-        for (String localeTag : LocalePicker.getSupportedLocales(mContext)) {
+-            locales.add(Locale.forLanguageTag(localeTag));
+-        }
+-        return locales;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5305,9 +4446,5 @@
+      */
+     public ConfigurationInfo getDeviceConfigurationInfo() {
+-        try {
+-            return getTaskService().getDeviceConfigurationInfo();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5396,9 +4533,5 @@
+     @RavenwoodRedirect
+     public static boolean isUserAMonkey() {
+-        try {
+-            return getService().isUserAMonkey();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+@@ -5411,5 +4544,5 @@
+     @Deprecated
+     public static boolean isRunningInTestHarness() {
+-        return SystemProperties.getBoolean("ro.test_harness", false);
++        return false;
+     }
+ 
+@@ -5427,5 +4560,5 @@
+      */
+     public static boolean isRunningInUserTestHarness() {
+-        return SystemProperties.getBoolean("persist.sys.test_harness", false);
++        return false;
+     }
+ 
+@@ -5441,9 +4574,5 @@
+     @TestApi
+     public void alwaysShowUnsupportedCompileSdkWarning(ComponentName activity) {
+-        try {
+-            getTaskService().alwaysShowUnsupportedCompileSdkWarning(activity);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5500,74 +4629,10 @@
+     public static int checkComponentPermission(String permission, int uid, int deviceId,
+             int owningUid, boolean exported) {
+-        // Root, system server get to do everything.
+-        if (canAccessUnexportedComponents(uid)) {
+-            return PackageManager.PERMISSION_GRANTED;
+-        }
+-        // Isolated processes don't get any permissions.
+-        if (UserHandle.isIsolated(uid)) {
+-            return PackageManager.PERMISSION_DENIED;
+-        }
+-
+-        // If there is a uid that owns whatever is being accessed, it has
+-        // blanket access to it regardless of the permissions it requires.
+-        if (owningUid >= 0 && UserHandle.isSameApp(uid, owningUid)) {
+-            return PackageManager.PERMISSION_GRANTED;
+-        }
+-
+-        if (owningUid >= 0 && enablePccFrameworkSupport()) {
+-            boolean isCallerPcc = Process.isPrivateComputeCoreUid(uid);
+-            boolean isOwnerPcc = Process.isPrivateComputeCoreUid(owningUid);
+-
+-            // If a PCC process and a non-PCC process from the same app are trying to communicate,
+-            // convert the PCC UID back to an app UID to check if they are the same app.
+-            // This allows accessing non-exported PCC components.
+-            if (isCallerPcc != isOwnerPcc) {
+-                int callerAppUid = uid;
+-                int ownerAppUid = owningUid;
+-                try {
+-                    if (isCallerPcc) {
+-                        callerAppUid = AppGlobals.getPackageManager()
+-                                .getAppUidForPrivateComputeCoreUid(uid);
+-                    } else {
+-                        ownerAppUid = AppGlobals.getPackageManager()
+-                                .getAppUidForPrivateComputeCoreUid(owningUid);
+-                    }
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-
+-                if (UserHandle.isSameApp(callerAppUid, ownerAppUid)) {
+-                    return PackageManager.PERMISSION_GRANTED;
+-                }
+-            }
+-        }
+-
+-        // If the target is not exported, then nobody else can get to it.
+-        if (!exported) {
+-            /*
+-            RuntimeException here = new RuntimeException("here");
+-            Slog.w(TAG, "Permission denied: checkComponentPermission() owningUid=" + owningUid,
+-                    here);
+-            */
+-            return PackageManager.PERMISSION_DENIED;
+-        }
+-        if (permission == null) {
+-            return PackageManager.PERMISSION_GRANTED;
+-        }
+-        try {
+-            return AppGlobals.getPermissionManager().checkUidPermission(uid, permission, deviceId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide */
+     public static int checkUidPermission(String permission, int uid) {
+-        try {
+-            return AppGlobals.getPermissionManager().checkUidPermission(
+-                    uid, permission, Context.DEVICE_ID_DEFAULT);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5596,16 +4661,8 @@
+      * USER_ALL.
+      */
+-    public static @CanBeALL @UserIdInt int handleIncomingUser(int callingPid, int callingUid,
+-            @CanBeALL @CanBeCURRENT @CanBeCURRENT_OR_SELF @UserIdInt int userId,
++    public static @UserIdInt int handleIncomingUser(int callingPid, int callingUid,
++            @UserIdInt int userId,
+             boolean allowAll, boolean requireFull, String name, String callerPackage) {
+-        if (UserHandle.getUserId(callingUid) == userId) {
+-            return userId;
+-        }
+-        try {
+-            return getService().handleIncomingUser(callingPid,
+-                    callingUid, userId, allowAll, requireFull, name, callerPackage);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5621,5 +4678,5 @@
+     @RavenwoodRedirect
+     public static int getCurrentUser() {
+-        return mGetCurrentUserIdCache.query(null);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5630,9 +4687,5 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public boolean switchUser(int userid) {
+-        try {
+-            return getService().switchUser(userid);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5676,9 +4729,5 @@
+     // TODO(b/397755402): It shouldn't need to suppress warning, since this API is hidden.
+     public boolean logoutUser(@UserIdInt int userId) {
+-        try {
+-            return getService().logoutUser(userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5713,14 +4762,5 @@
+             android.Manifest.permission.INTERACT_ACROSS_USERS})
+     public boolean startUserInBackgroundVisibleOnDisplay(@UserIdInt int userId, int displayId) {
+-        if (!UserManager.isVisibleBackgroundUsersEnabled()) {
+-            throw new UnsupportedOperationException(
+-                    "device does not support users on secondary displays");
+-        }
+-        try {
+-            return getService().startUserInBackgroundVisibleOnDisplay(userId, displayId,
+-                    /* unlockProgressListener= */ null);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5736,9 +4776,5 @@
+             android.Manifest.permission.INTERACT_ACROSS_USERS})
+     public int[] getDisplayIdsForStartingVisibleBackgroundUsers() {
+-        try {
+-            return getService().getDisplayIdsForStartingVisibleBackgroundUsers();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5750,10 +4786,6 @@
+     @Nullable
+     @RequiresPermission(Manifest.permission.MANAGE_USERS)
+-    public String getSwitchingFromUserMessage(@CannotBeSpecialUser @UserIdInt int userId) {
+-        try {
+-            return getService().getSwitchingFromUserMessage(userId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++    public String getSwitchingFromUserMessage(@UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5765,10 +4797,6 @@
+     @Nullable
+     @RequiresPermission(Manifest.permission.MANAGE_USERS)
+-    public String getSwitchingToUserMessage(@CannotBeSpecialUser @UserIdInt int userId) {
+-        try {
+-            return getService().getSwitchingToUserMessage(userId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++    public String getSwitchingToUserMessage(@UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5818,9 +4846,5 @@
+             android.Manifest.permission.INTERACT_ACROSS_USERS})
+     public void setStopUserOnSwitch(@StopUserOnSwitch int value) {
+-        try {
+-            getService().setStopUserOnSwitch(value);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5841,9 +4865,5 @@
+             android.Manifest.permission.INTERACT_ACROSS_USERS_FULL})
+     public boolean startProfile(@NonNull UserHandle userHandle) {
+-        try {
+-            return getService().startProfile(userHandle.getIdentifier());
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5864,9 +4884,5 @@
+             android.Manifest.permission.INTERACT_ACROSS_USERS_FULL})
+     public boolean stopProfile(@NonNull UserHandle userHandle) {
+-        try {
+-            return getService().stopProfile(userHandle.getIdentifier());
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5886,12 +4902,5 @@
+     @RequiresPermission(android.Manifest.permission.CHANGE_CONFIGURATION)
+     public boolean updateMccMncConfiguration(@NonNull String mcc, @NonNull String mnc) {
+-        if (mcc == null || mnc == null) {
+-            throw new IllegalArgumentException("mcc or mnc cannot be null.");
+-        }
+-        try {
+-            return getService().updateMccMncConfiguration(mcc, mnc);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5909,13 +4918,5 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS_FULL)
+     public boolean stopUser(@UserIdInt int userId) {
+-        if (userId == UserHandle.USER_SYSTEM) {
+-            return false;
+-        }
+-        try {
+-            return USER_OP_SUCCESS == getService().stopUserWithCallback(
+-                    userId, /* callback= */ null);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5940,18 +4941,10 @@
+     @UnsupportedAppUsage
+     public boolean isUserRunning(int userId) {
+-        try {
+-            return getService().isUserRunning(userId, 0);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide */
+     public boolean isVrModePackageEnabled(ComponentName component) {
+-        try {
+-            return getService().isVrModePackageEnabled(component);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5975,19 +4968,5 @@
+      */
+     public static void dumpPackageStateStatic(FileDescriptor fd, String packageName) {
+-        FileOutputStream fout = new FileOutputStream(fd);
+-        PrintWriter pw = new FastPrintWriter(fout);
+-        dumpService(pw, fd, "package", new String[] { packageName });
+-        pw.println();
+-        dumpService(pw, fd, Context.ACTIVITY_SERVICE, new String[] {
+-                "-a", "package", packageName });
+-        pw.println();
+-        dumpService(pw, fd, "meminfo", new String[] { "--local", "--package", packageName });
+-        pw.println();
+-        dumpService(pw, fd, ProcessStats.SERVICE_NAME, new String[] { packageName });
+-        pw.println();
+-        dumpService(pw, fd, "usagestats", new String[] { packageName });
+-        pw.println();
+-        dumpService(pw, fd, BatteryStats.SERVICE_NAME, new String[] { packageName });
+-        pw.flush();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5997,15 +4976,5 @@
+     @RavenwoodRedirect
+     public static boolean isSystemReady() {
+-        if (!sSystemReady) {
+-            if (ActivityThread.isSystem()) {
+-                sSystemReady =
+-                        LocalServices.getService(ActivityManagerInternal.class).isSystemReady();
+-            } else {
+-                // Since this is being called from outside system server, system should be
+-                // ready by now.
+-                sSystemReady = true;
+-            }
+-        }
+-        return sSystemReady;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6014,6 +4983,6 @@
+      */
+     public static void broadcastStickyIntent(Intent intent,
+-            @CanBeALL @CanBeCURRENT @UserIdInt int userId) {
+-        broadcastStickyIntent(intent, AppOpsManager.OP_NONE, null, userId);
++            @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6024,5 +4993,5 @@
+      */
+     public static void broadcastStickyIntent(Intent intent, int appOp,
+-            @CanBeALL @CanBeCURRENT @UserIdInt  int userId) {
++            @UserIdInt  int userId) {
+         broadcastStickyIntent(intent, appOp, null, userId);
+     }
+@@ -6034,5 +5003,5 @@
+      */
+     public static void broadcastStickyIntent(Intent intent, int appOp, Bundle options,
+-            @CanBeALL @CanBeCURRENT @UserIdInt  int userId) {
++            @UserIdInt  int userId) {
+         broadcastStickyIntent(intent, null, appOp, options, userId);
+     }
+@@ -6044,12 +5013,6 @@
+      */
+     public static void broadcastStickyIntent(Intent intent, String[] excludedPackages,
+-            int appOp, Bundle options, @CanBeALL @CanBeCURRENT @UserIdInt  int userId) {
+-        try {
+-            getService().broadcastIntentWithFeature(
+-                    null, null, intent, null, null, Activity.RESULT_OK, null, null,
+-                    null /*requiredPermissions*/, null /*excludedPermissions*/,
+-                    excludedPackages, appOp, options, false, true, userId);
+-        } catch (RemoteException ex) {
+-        }
++            int appOp, Bundle options, @UserIdInt  int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6059,5 +5022,5 @@
+     @TestApi
+     public static void resumeAppSwitches() throws RemoteException {
+-        getService().resumeAppSwitches();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6067,9 +5030,5 @@
+     public static void noteWakeupAlarm(PendingIntent ps, WorkSource workSource, int sourceUid,
+             String sourcePkg, String tag) {
+-        try {
+-            getService().noteWakeupAlarm((ps != null) ? ps.getTarget() : null, workSource,
+-                    sourceUid, sourcePkg, tag);
+-        } catch (RemoteException ex) {
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6079,9 +5038,5 @@
+     public static void noteAlarmStart(PendingIntent ps, WorkSource workSource, int sourceUid,
+             String tag) {
+-        try {
+-            getService().noteAlarmStart((ps != null) ? ps.getTarget() : null, workSource,
+-                    sourceUid, tag);
+-        } catch (RemoteException ex) {
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6092,70 +5047,12 @@
+     public static void noteAlarmFinish(PendingIntent ps, WorkSource workSource, int sourceUid,
+             String tag) {
+-        try {
+-            getService().noteAlarmFinish((ps != null) ? ps.getTarget() : null, workSource,
+-                    sourceUid, tag);
+-        } catch (RemoteException ex) {
+-        }
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public static IActivityManager getService() {
+-        return IActivityManagerSingleton.get();
+-    }
+-
+-    private static IActivityTaskManager getTaskService() {
+-        return ActivityTaskManager.getService();
+-    }
+-
+-    @UnsupportedAppUsage
+-    private static final Singleton<IActivityManager> IActivityManagerSingleton =
+-            new Singleton<IActivityManager>() {
+-                @Override
+-                protected IActivityManager create() {
+-                    final IBinder b = ServiceManager.getService(Context.ACTIVITY_SERVICE);
+-                    final IActivityManager am = IActivityManager.Stub.asInterface(b);
+-                    return am;
+-                }
+-            };
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
++
+ 
+     private static void dumpService(PrintWriter pw, FileDescriptor fd, String name, String[] args) {
+-        pw.print("DUMP OF SERVICE "); pw.print(name); pw.println(":");
+-        IBinder service = ServiceManager.checkService(name);
+-        if (service == null) {
+-            pw.println("  (Service not found)");
+-            pw.flush();
+-            return;
+-        }
+-        pw.flush();
+-        if (service instanceof Binder) {
+-            // If this is a local object, it doesn't make sense to do an async dump with it,
+-            // just directly dump.
+-            try {
+-                service.dump(fd, args);
+-            } catch (Throwable e) {
+-                pw.println("Failure dumping service:");
+-                e.printStackTrace(pw);
+-                pw.flush();
+-            }
+-        } else {
+-            // Otherwise, it is remote, do the dump asynchronously to avoid blocking.
+-            TransferPipe tp = null;
+-            try {
+-                pw.flush();
+-                tp = new TransferPipe();
+-                tp.setBufferPrefix("  ");
+-                service.dumpAsync(tp.getWriteFd().getFileDescriptor(), args);
+-                tp.go(fd, 10000);
+-            } catch (Throwable e) {
+-                if (tp != null) {
+-                    tp.kill();
+-                }
+-                pw.println("Failure dumping service:");
+-                e.printStackTrace(pw);
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6178,10 +5075,5 @@
+      */
+     public void setWatchHeapLimit(long pssSize) {
+-        try {
+-            getService().setDumpHeapDebugLimit(null, 0, pssSize,
+-                    mContext.getPackageName());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6198,9 +5090,5 @@
+      */
+     public void clearWatchHeapLimit() {
+-        try {
+-            getService().setDumpHeapDebugLimit(null, 0, 0, null);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6226,9 +5114,5 @@
+      */
+     public int getLockTaskModeState() {
+-        try {
+-            return getTaskService().getLockTaskModeState();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6248,9 +5132,5 @@
+      */
+     public static void setVrThread(int tid) {
+-        try {
+-            getTaskService().setVrThread(tid);
+-        } catch (RemoteException e) {
+-            // pass
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6273,9 +5153,5 @@
+     @RequiresPermission(Manifest.permission.RESTRICTED_VR_ACCESS)
+     public static void setPersistentVrThread(int tid) {
+-        try {
+-            getService().setPersistentVrThread(tid);
+-        } catch (RemoteException e) {
+-            // pass
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6286,9 +5162,5 @@
+     @RequiresPermission(Manifest.permission.CHANGE_CONFIGURATION)
+     public void scheduleApplicationInfoChanged(List<String> packages, int userId) {
+-        try {
+-            getService().scheduleApplicationInfoChanged(packages, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6305,14 +5177,6 @@
+             android.Manifest.permission.CREATE_USERS
+     })
+-    public boolean isProfileForeground(@NonNull @CannotBeSpecialUser UserHandle userHandle) {
+-        UserManager userManager = mContext.getSystemService(UserManager.class);
+-        if (userManager != null) {
+-            for (UserInfo userInfo : userManager.getProfiles(getCurrentUser())) {
+-                if (userInfo.id == userHandle.getIdentifier()) {
+-                    return true;
+-                }
+-            }
+-        }
+-        return false;
++    public boolean isProfileForeground(@NonNull UserHandle userHandle) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6334,9 +5198,5 @@
+     @RequiresPermission(Manifest.permission.FORCE_STOP_PACKAGES)
+     public void killProcessesWhenImperceptible(@NonNull int[] pids, @NonNull String reason) {
+-        try {
+-            getService().killProcessesWhenImperceptible(pids, reason);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6344,5 +5204,5 @@
+     @RavenwoodKeep
+     public static boolean isProcStateConsideredInteraction(@ProcessState int procState) {
+-        return (procState <= PROCESS_STATE_TOP || procState == PROCESS_STATE_BOUND_TOP);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6350,74 +5210,5 @@
+     @RavenwoodKeep
+     public static String procStateToString(@ProcessState int procState) {
+-        final String procStateStr;
+-        switch (procState) {
+-            case ActivityManager.PROCESS_STATE_PERSISTENT:
+-                procStateStr = "PER ";
+-                break;
+-            case ActivityManager.PROCESS_STATE_PERSISTENT_UI:
+-                procStateStr = "PERU";
+-                break;
+-            case ActivityManager.PROCESS_STATE_TOP:
+-                procStateStr = "TOP ";
+-                break;
+-            case ActivityManager.PROCESS_STATE_BOUND_TOP:
+-                procStateStr = "BTOP";
+-                break;
+-            case ActivityManager.PROCESS_STATE_FOREGROUND_SERVICE:
+-                procStateStr = "FGS ";
+-                break;
+-            case ActivityManager.PROCESS_STATE_BOUND_FOREGROUND_SERVICE:
+-                procStateStr = "BFGS";
+-                break;
+-            case ActivityManager.PROCESS_STATE_IMPORTANT_FOREGROUND:
+-                procStateStr = "IMPF";
+-                break;
+-            case ActivityManager.PROCESS_STATE_IMPORTANT_BACKGROUND:
+-                procStateStr = "IMPB";
+-                break;
+-            case ActivityManager.PROCESS_STATE_TRANSIENT_BACKGROUND:
+-                procStateStr = "TRNB";
+-                break;
+-            case ActivityManager.PROCESS_STATE_BACKUP:
+-                procStateStr = "BKUP";
+-                break;
+-            case ActivityManager.PROCESS_STATE_SERVICE:
+-                procStateStr = "SVC ";
+-                break;
+-            case ActivityManager.PROCESS_STATE_RECEIVER:
+-                procStateStr = "RCVR";
+-                break;
+-            case ActivityManager.PROCESS_STATE_TOP_SLEEPING:
+-                procStateStr = "TPSL";
+-                break;
+-            case ActivityManager.PROCESS_STATE_HEAVY_WEIGHT:
+-                procStateStr = "HVY ";
+-                break;
+-            case ActivityManager.PROCESS_STATE_HOME:
+-                procStateStr = "HOME";
+-                break;
+-            case ActivityManager.PROCESS_STATE_LAST_ACTIVITY:
+-                procStateStr = "LAST";
+-                break;
+-            case ActivityManager.PROCESS_STATE_CACHED_ACTIVITY:
+-                procStateStr = "CAC ";
+-                break;
+-            case ActivityManager.PROCESS_STATE_CACHED_ACTIVITY_CLIENT:
+-                procStateStr = "CACC";
+-                break;
+-            case ActivityManager.PROCESS_STATE_CACHED_RECENT:
+-                procStateStr = "CRE ";
+-                break;
+-            case ActivityManager.PROCESS_STATE_CACHED_EMPTY:
+-                procStateStr = "CEM ";
+-                break;
+-            case ActivityManager.PROCESS_STATE_NONEXISTENT:
+-                procStateStr = "NONE";
+-                break;
+-            default:
+-                procStateStr = "??";
+-                break;
+-        }
+-        return procStateStr;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6532,10 +5323,5 @@
+         }
+ 
+-        private IAppTask mAppTaskImpl;
+-
+-        /** @hide */
+-        public AppTask(IAppTask task) {
+-            mAppTaskImpl = task;
+-        }
++
+ 
+         /**
+@@ -6543,13 +5329,5 @@
+          */
+         public void finishAndRemoveTask() {
+-            if (DEBUG_FINISH_ACTIVITY) {
+-                Log.d(Instrumentation.TAG, "AppTask#finishAndRemoveTask: task="
+-                        + getTaskInfo(), new Throwable());
+-            }
+-            try {
+-                mAppTaskImpl.finishAndRemoveTask();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -6561,9 +5339,5 @@
+         @Nullable
+         public RecentTaskInfo getTaskInfo() {
+-            try {
+-                return mAppTaskImpl.getTaskInfo();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -6575,68 +5349,7 @@
+          */
+         public void moveToFront() {
+-            try {
+-                ActivityThread thread = ActivityThread.currentActivityThread();
+-                IApplicationThread appThread = thread.getApplicationThread();
+-                String packageName = ActivityThread.currentPackageName();
+-                mAppTaskImpl.moveToFront(appThread, packageName);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-
+-        /**
+-         * Repositions the task to the specified {@link TaskLocation}.
+-         * <p>
+-         * If the {@link TaskLocation}'s bounds are invalid (i.e. too small or not fully inside the
+-         * target display), the request will be rejected.
+-         * <p>
+-         * When the repositioning request is approved or rejected, the {@code callback} will be
+-         * invoked. If the request is approved, the callback will receive a {@link TaskLocation}
+-         * containing the new display ID and bounds of the task. The final display ID and bounds may
+-         * be adjusted to the closest acceptable states from the requested ones at the system's
+-         * discretion.
+-         * <p>
+-         * If the request is rejected, the callback will receive an exception with a descriptive
+-         * message accessible via {@link Exception#getMessage()}. This exception will be one of
+-         * the following:
+-         * <ul>
+-         * <li>{@link SecurityException} if the requester doesn't hold the permission required to
+-         * use this method;</li>
+-         * <li>{@link SecurityException} if this task cannot be placed as requested due to violation
+-         * of the Background Activity Launch (BAL) policy;</li>
+-         * <li>{@link IllegalStateException} if the task is not in a state that allows it to
+-         * change its {@link TaskLocation} programmatically at runtime of the request;</li>
+-         * <li>{@link SecurityException} if this task cannot be placed on the target display
+-         * requested. This can happen when the display is not trusted and not owned by the calling
+-         * app;</li>
+-         * <li>{@link IllegalArgumentException} if the {@link TaskLocation} provided does not
+-         * include a valid display ID or the bounds provided are not fully contained inside the
+-         * given display or the bounds provided are smaller than the minimum size defined in the <a
+-         * href="https://source.android.com/docs/compatibility/16/android-16-cdd#3814_multi-windows">
+-         * CDD</a> in either direction.</li>
+-         * </ul>
+-         * <p>
+-         * It is allowed to move a task to a display with which the call of
+-         * {@link ActivityManager#isTaskMoveAllowedOnDisplay()} returns {@code false}, but the task
+-         * won't be allowed to be programmatically moved again until users take actions to make the
+-         * same task movable again.
+-         * <p>
+-         * If the task stays on its original display, its z-order will not be affected. Otherwise,
+-         * if the task moves to a different display, it will become focused.
+-         *
+-         * @param location {@link TaskLocation} with the target display or {@link
+-         * Display#INVALID_DISPLAY} if the target display is the current display,
+-         * and the new desired bounds
+-         * @param executor an Executor used to invoke the callback
+-         * @param callback a callback to receive the result of the request
+-         */
+-        @FlaggedApi(com.android.window.flags.Flags.FLAG_ENABLE_WINDOW_REPOSITIONING_API)
+-        @RequiresPermission(Manifest.permission.REPOSITION_SELF_WINDOWS)
+-        public void moveTaskTo(
+-                @NonNull TaskLocation location,
+-                @NonNull @CallbackExecutor Executor executor,
+-                @NonNull OutcomeReceiver<TaskLocation, Exception> callback) {
+-            TaskMoveRequestHandler.moveTaskTo(location, executor, callback, mAppTaskImpl);
+-        }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        }
++
+ 
+         /**
+@@ -6662,7 +5375,5 @@
+          */
+         public void startActivity(Context context, Intent intent, Bundle options) {
+-            ActivityThread thread = ActivityThread.currentActivityThread();
+-            thread.getInstrumentation().execStartActivityFromAppTask(context,
+-                    thread.getApplicationThread(), mAppTaskImpl, intent, options);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -6675,9 +5386,5 @@
+          */
+         public void setExcludeFromRecents(boolean exclude) {
+-            try {
+-                mAppTaskImpl.setExcludeFromRecents(exclude);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -6719,9 +5426,5 @@
+                 @NonNull @CallbackExecutor Executor executor,
+                 @NonNull OutcomeReceiver<Integer, Exception> callback) {
+-            Objects.requireNonNull(executor, "executor cannot be null");
+-            Objects.requireNonNull(callback, "callback cannot be null");
+-            TaskWindowingLayerRequestHandler.requestWindowingLayer(
+-                    layer, executor, callback, mAppTaskImpl
+-            );
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+     }
+@@ -6734,9 +5437,5 @@
+      */
+     public List<String> getBugreportWhitelistedPackages() {
+-        try {
+-            return getService().getBugreportWhitelistedPackages();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6747,158 +5446,17 @@
+      */
+     public void appNotResponding(@NonNull final String reason) {
+-        try {
+-            getService().appNotResponding(reason);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     // Map of App listener to executor.
+-    private final Map<Consumer<AnrWarningResult>, Executor> mAnrWarningAppListeners =
+-            new ArrayMap<>();
+ 
+     // Binder callback for receiving imminent ANR warnings from the system.
+     // This is registered with the Activity Manager Service when the first ANR warning listener is
+     // added to this process.
+-    @GuardedBy("mAnrWarningAppListeners")
+-    @Nullable
+-    private IAnrWarningCallback mAnrWarningCallback = null;
+-
+-    private void dispatchAnrWarning(AnrWarningResult anrWarningResult) {
+-        synchronized (mAnrWarningAppListeners) {
+-            mAnrWarningAppListeners.forEach(
+-                    (listener, executor) ->
+-                            executor.execute(() -> listener.accept(anrWarningResult)));
+-        }
+-    }
+-
+-    /**
+-     * Registers a listener that is called when the app is close to the ANR timeout.
+-     *
+-     * <p>This is intended to give the app a chance to collect and store any additional information
+-     * they may want to gather at this time, or take any pre-ANR actions. Note that these listeners
+-     * are called at best-effort, and may not be successfully called (or be provided time to
+-     * execute) before the ANR occurs and the app is killed.
+-     *
+-     * <p>If the app registers multiple distinct listeners, all registered listeners will be
+-     * notified on the potential ANR condition. The order in which listeners are notified is not
+-     * guaranteed.
+-     *
+-     * <p>The app can unregister the listener using {@link #unregisterAnrWarningListener}.
+-     *
+-     * @param executor The executor on which listener will be invoked. This should not be the
+-     *     application's main thread.
+-     * @param listener The listener to be triggered on the ANR warning condition.
+-     */
+-    @FlaggedApi(android.app.Flags.FLAG_ENABLE_ANR_WARNING_CALLBACK)
+-    public void registerAnrWarningListener(
+-            @NonNull Executor executor, @NonNull Consumer<AnrWarningResult> listener) {
+-        Objects.requireNonNull(listener, "listener should not be null");
+-        Objects.requireNonNull(executor, "executor should not be null");
+-
+-        synchronized (mAnrWarningAppListeners) {
+-            if (mAnrWarningAppListeners.containsKey(listener)) {
+-                return;
+-            }
+-
+-            mAnrWarningAppListeners.put(listener, executor);
+-
+-            // Only register the first listener with the Activity Manager service to avoid redundant
+-            // IPC calls. Subsequent listeners will be notified when the first one receives the
+-            // event.
+-            if (mAnrWarningAppListeners.size() == 1) {
+-                if (mAnrWarningCallback == null) {
+-                    mAnrWarningCallback =
+-                            new IAnrWarningCallback.Stub() {
+-                                @Override
+-                                public void onAnrImminent(AnrWarningResult anrWarningResult) {
+-                                    dispatchAnrWarning(anrWarningResult);
+-                                }
+-                            };
+-                }
+-
+-                try {
+-                    getService().registerAnrWarningListener(mAnrWarningCallback);
+-                } catch (RemoteException e) {
+-                    Log.e(TAG, "Unable to register ANR callback with ActivityManagerService", e);
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Unregisters a previously registered ANR warning listener.
+-     *
+-     * @param listener The listener to unregister. This must be the same object that was previously
+-     *     passed to {@link #registerAnrWarningListener}.
+-     */
+-    @FlaggedApi(android.app.Flags.FLAG_ENABLE_ANR_WARNING_CALLBACK)
+-    public void unregisterAnrWarningListener(@NonNull Consumer<AnrWarningResult> listener) {
+-        Objects.requireNonNull(listener, "listener should not be null");
+-
+-        synchronized (mAnrWarningAppListeners) {
+-            if (!mAnrWarningAppListeners.containsKey(listener)) {
+-                return;
+-            }
+-            mAnrWarningAppListeners.remove(listener);
+-
+-            // When app unregisters all the ANR warning listeners, also unregister the binder
+-            // callback for ANR warning from the ActivityManagerService.
+-            if (mAnrWarningAppListeners.isEmpty()) {
+-                try {
+-                    getService().unregisterAnrWarningListener(mAnrWarningCallback);
+-                } catch (RemoteException e) {
+-                    Log.e(TAG, "Unable to unregister ANR callback with ActivityManagerService", e);
+-                    throw e.rethrowFromSystemServer();
+-                } finally {
+-                    mAnrWarningCallback = null;
+-                }
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Register to be notified when the visibility of the home screen changes.
+-     *
+-     * @param executor The executor on which the listener should be called.
+-     * @param listener The listener that is called when home visibility changes.
+-     * @hide
+-     */
+-    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-    @TestApi
+-    @RequiresPermission(android.Manifest.permission.SET_ACTIVITY_WATCHER)
+-    public void addHomeVisibilityListener(@NonNull Executor executor,
+-            @NonNull HomeVisibilityListener listener) {
+-        Preconditions.checkNotNull(listener);
+-        Preconditions.checkNotNull(executor);
+-        try {
+-            listener.init(mContext, executor);
+-            getService().registerProcessObserver(listener.mObserver);
+-            // Notify upon first registration.
+-            executor.execute(() ->
+-                    listener.onHomeVisibilityChanged(listener.mIsHomeActivityVisible));
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Removes a listener that was previously added with {@link #addHomeVisibilityListener}.
+-     *
+-     * @param listener The listener that was previously added.
+-     * @hide
+-     */
+-    @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-    @TestApi
+-    @RequiresPermission(android.Manifest.permission.SET_ACTIVITY_WATCHER)
+-    public void removeHomeVisibilityListener(@NonNull HomeVisibilityListener listener) {
+-        Preconditions.checkNotNull(listener);
+-        try {
+-            getService().unregisterProcessObserver(listener.mObserver);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++
++
++
++
++
+ 
+     /**
+@@ -6913,10 +5471,6 @@
+      */
+     @RequiresPermission(Manifest.permission.SET_THEME_OVERLAY_CONTROLLER_READY)
+-    public void setThemeOverlayReady(@CannotBeSpecialUser @UserIdInt int userId) {
+-        try {
+-            getService().setThemeOverlayReady(userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++    public void setThemeOverlayReady(@UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6929,9 +5483,5 @@
+     @RequiresPermission(Manifest.permission.RESET_APP_ERRORS)
+     public void resetAppErrors() {
+-        try {
+-            getService().resetAppErrors();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6945,9 +5495,5 @@
+     @TestApi
+     public void holdLock(IBinder token, int durationMs) {
+-        try {
+-            getService().holdLock(token, durationMs);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6960,9 +5506,5 @@
+     @RequiresPermission(android.Manifest.permission.DUMP)
+     public void waitForBroadcastIdle() {
+-        try {
+-            getService().waitForBroadcastIdle();
+-        } catch (RemoteException e) {
+-            e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6981,9 +5523,5 @@
+     public void forceDelayBroadcastDelivery(@NonNull String targetPackage,
+             @IntRange(from = 0) long delayedDurationMs) {
+-        try {
+-            getService().forceDelayBroadcastDelivery(targetPackage, delayedDurationMs);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6995,9 +5533,5 @@
+     @RequiresPermission(android.Manifest.permission.DUMP)
+     public boolean isProcessFrozen(int pid) {
+-        try {
+-            return getService().isProcessFrozen(pid);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7014,9 +5548,5 @@
+     public void noteForegroundResourceUseBegin(@ForegroundServiceApiType int apiType,
+             int uid, int pid) throws SecurityException {
+-        try {
+-            getService().logFgsApiBegin(apiType, uid, pid);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7033,9 +5563,5 @@
+     public void noteForegroundResourceUseEnd(@ForegroundServiceApiType int apiType,
+             int uid, int pid) throws SecurityException {
+-        try {
+-            getService().logFgsApiEnd(apiType, uid, pid);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7051,12 +5577,6 @@
+      */
+     @RequiresPermission(android.Manifest.permission.DEVICE_POWER)
+-    @ReasonCode
+     public int getBackgroundRestrictionExemptionReason(int uid) {
+-        try {
+-            return getService().getBackgroundRestrictionExemptionReason(uid);
+-        } catch (RemoteException e) {
+-            e.rethrowFromSystemServer();
+-        }
+-        return PowerExemptionManager.REASON_DENIED;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7124,10 +5644,5 @@
+             @RestrictionReason int reason,
+             @Nullable String subReason, @RestrictionSource int source, long threshold) {
+-        try {
+-            getService().noteAppRestrictionEnabled(packageName, uid, restrictionLevel, enabled,
+-                    reason, subReason, source, threshold);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7142,17 +5657,5 @@
+     @TestApi
+     public void notifySystemPropertiesChanged() {
+-        // Note: this cannot use {@link ServiceManager#listServices()} to notify all the services,
+-        // as that is not available from tests.
+-        final var binder = ActivityManager.getService().asBinder();
+-        if (binder != null) {
+-            var data = Parcel.obtain();
+-            try {
+-                binder.transact(IBinder.SYSPROPS_TRANSACTION, data, null /* reply */,
+-                        0 /* flags */);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-            data.recycle();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
