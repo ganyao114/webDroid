@@ -22,6 +22,7 @@ const mime = {
   '.wasm': 'application/wasm',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.ttf': 'font/ttf',
 };
 
 function respond(response, code, message) {

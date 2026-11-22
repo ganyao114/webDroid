@@ -186,6 +186,7 @@ struct Layer {
     std::vector<Bitmap> bitmaps;
     std::vector<Rounded> rounds;
     bool gesture_handle = false;
+    bool sheet_outline = false;
 };
 
 struct Frame {
@@ -257,6 +258,9 @@ std::array<Layer, 2> Inspect(wa_sf_t* scene, uint32_t width = 960, uint32_t heig
                 break;
             case WA_CANVAS_DRAW_PATH: {
                 const auto path = ReadRecord<wa_canvas_path_t>(payload, length);
+                const auto alpha = path.paint.argb >> 24;
+                details.sheet_outline |= path.paint.style == WA_PAINT_STROKE && path.paint.stroke_width == 1 &&
+                    alpha > 0 && alpha <= 0x99 && path.verb_count >= 6;
                 const auto verb = ReadRecord<uint32_t>(payload + sizeof(path), length - sizeof(path));
                 const auto start = ReadRecord<Position>(payload + sizeof(path) + sizeof(verb),
                     length - sizeof(path) - sizeof(verb));
@@ -396,9 +400,15 @@ HomeGeometry CheckHome(const Layer& window, int width, int height, int page, int
     });
     Require(qsb != window.rounds.end() && SameBounds(qsb->bounds, Intersect(qsb->bounds, qsb->clip)),
         "Entire Hotseat Search pill is visible above SystemUI");
-    Require(std::ranges::any_of(window.labels, [](const Text& text) {
+    Require(std::ranges::any_of(window.rounds, [&](const Rounded& shape) {
+        return shape.style == WA_PAINT_STROKE && SameBounds(shape.bounds, qsb->bounds);
+    }), "Hotseat Search pill has a matching outline");
+    const auto label = std::ranges::find_if(window.labels, [](const Text& text) {
         return text.label == "Search" || text.label == "搜索";
-    }), "Visible QSB label");
+    });
+    Require(label != window.labels.end(), "Visible QSB label");
+    Require(std::abs((label->line.t + label->line.b) - (qsb->bounds.t + qsb->bounds.b)) <= 2.f,
+        "Hotseat Search label is vertically centered");
 
     float bottom = 0;
     for (const auto& icon : window.bitmaps) bottom = std::max(bottom, icon.bounds.b);
@@ -447,6 +457,7 @@ uint32_t IconFingerprint(wa_sf_t* scene, uint32_t id) {
 }
 
 void CheckDrawer(wa_sf_t* scene, const Layer& window, wa_rect_t search, std::span<const std::string_view> expected) {
+    Require(window.sheet_outline, "All Apps sheet has a subtle outline");
     const Rounded* fill = nullptr;
     const Rounded* stroke = nullptr;
     for (const auto& shape : window.rounds) {

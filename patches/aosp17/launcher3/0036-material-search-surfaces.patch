@@ -1,0 +1,67 @@
+diff --git a/packages/apps/Launcher3/res/layout/ose_default_bubbletext_layout.xml b/packages/apps/Launcher3/res/layout/ose_default_bubbletext_layout.xml
+--- a/packages/apps/Launcher3/res/layout/ose_default_bubbletext_layout.xml
++++ b/packages/apps/Launcher3/res/layout/ose_default_bubbletext_layout.xml
+@@ -22,14 +22,13 @@
+     android:paddingStart="16dp"
+     android:paddingEnd="16dp"
+     android:drawablePadding="@dimen/qsb_search_icon_padding_end"
+-    android:gravity="center_vertical"
++    android:gravity="start|center_vertical"
++    android:includeFontPadding="false"
+     android:singleLine="true"
+-    app:centerVertically="true"
+     app:layoutHorizontal="true"
+     android:text="@string/abandoned_search"
+     style="@style/QsbWidgetText"
+     android:contentDescription="@string/abandoned_search"
+     app:iconDisplay="search_result_small"
+     android:clickable="true"
+-    android:background="@drawable/bg_ose_default"
+-    android:backgroundTint="@color/materialColorSurfaceContainerLow" />
+\ No newline at end of file
++    android:background="@drawable/bg_ose_default" />
+\ No newline at end of file
+diff --git a/packages/apps/Launcher3/res/drawable/bg_ose_default.xml b/packages/apps/Launcher3/res/drawable/bg_ose_default.xml
+--- a/packages/apps/Launcher3/res/drawable/bg_ose_default.xml
++++ b/packages/apps/Launcher3/res/drawable/bg_ose_default.xml
+@@ -26,7 +26,8 @@
+     <item>
+         <shape android:shape="rectangle">
+             <corners android:radius="@dimen/qsb_default_widget_height" />
+-            <solid android:color="#FFFFFFFF" />
++            <solid android:color="@color/materialColorSurfaceContainerLow" />
++            <stroke android:width="1dp" android:color="@color/materialColorOutlineVariant" />
+         </shape>
+     </item>
+ </ripple>
+\ No newline at end of file
+diff --git a/packages/apps/Launcher3/src/com/android/launcher3/allapps/ActivityAllAppsContainerView.java b/packages/apps/Launcher3/src/com/android/launcher3/allapps/ActivityAllAppsContainerView.java
+--- a/packages/apps/Launcher3/src/com/android/launcher3/allapps/ActivityAllAppsContainerView.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/allapps/ActivityAllAppsContainerView.java
+@@ -141,6 +141,7 @@
+     // Used to animate Search results out and A-Z apps in, or vice-versa.
+     private final SearchTransitionController mSearchTransitionController;
+     private final Paint mHeaderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
++    private final Paint mSheetOutlinePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+     private final Rect mInsets = new Rect();
+     private final AllAppsStore mAllAppsStore;
+     private final RecyclerView.OnScrollListener mScrollListener =
+@@ -319,6 +320,9 @@
+         mBottomSheetBackgroundColorBlurFallback = getContext().getColor(
+                 Utilities.isDarkTheme(getContext()) ? android.R.color.system_accent2_800
+                         : android.R.color.system_accent2_200);
++        mSheetOutlinePaint.setColor(getContext().getColor(R.color.materialColorOutlineVariant));
++        mSheetOutlinePaint.setStyle(Paint.Style.STROKE);
++        mSheetOutlinePaint.setStrokeWidth(getResources().getDisplayMetrics().density);
+ 
+         mSearchUiManager.initializeSearch(this);
+         if (useModelRepositoryBinding()) {
+@@ -1455,6 +1459,8 @@
+         mTmpPath.reset();
+         mTmpPath.addRoundRect(mTmpRectF, mBottomSheetCornerRadii, Direction.CW);
+         canvas.drawPath(mTmpPath, mHeaderPaint);
++        mSheetOutlinePaint.setAlpha(Math.round(0x99 * backgroundAlpha));
++        canvas.drawPath(mTmpPath, mSheetOutlinePaint);
+ 
+         // TODO (b/414671116): Apply header protection whenever search bar is focused.
+         // applyHeaderProtection(canvas, scale, backgroundAlpha, topNoScale, topWithScale,

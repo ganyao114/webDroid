@@ -11,6 +11,7 @@ import { cubeName, fallbackDexName, frameworkDexName, launcherName, loadAndroidS
   systemAppNames, systemUiName } from '../../web/launcher/assets.mjs';
 import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
 import { mountLauncherPlayground } from '../../web/shell/launcher_playground.mjs';
+import { canvasFont, loadAospRoboto } from '../../web/surfaceflinger/atlas_cache.mjs';
 import { createMilestones, runLauncher3E2E } from './launcher3_e2e.mjs';
 import { documentFrom, fire, installBrowser, pointer } from './mock_browser.mjs';
 import { launchers, mockLauncherWasm } from './mock_launcher_wasm.mjs';
@@ -35,7 +36,7 @@ function node(args, options = {}) {
 }
 
 test('all owned JavaScript and HTML modules parse, and Chrome help exits without a browser', async () => {
-  for (const folder of ['web/launcher', 'web/shell', 'tests/m9_launcher3_chrome_e2e']) {
+  for (const folder of ['web/launcher', 'web/shell', 'web/surfaceflinger', 'tests/m9_launcher3_chrome_e2e']) {
     for (const name of await readdir(join(root, folder), { recursive: true })) {
       if (name.endsWith('.mjs')) node(['--check', join(root, folder, name)]);
     }
@@ -50,6 +51,9 @@ test('all owned JavaScript and HTML modules parse, and Chrome help exits without
     'screenshot-allapps', 'screenshot-app', 'screenshot-settings', 'timeout']) assert(help.includes(`--${flag}`));
   assert(shellHtml.includes("params.get('mode') === 'apk'"));
   assert(shellHtml.includes("await import('./runtime.mjs')"));
+  assert.equal(await loadAospRoboto(), false);
+  assert.equal(canvasFont(16, 400, 0), '400 16px "AOSP Roboto", Roboto, sans-serif');
+  assert.equal(canvasFont(16, 400, 1), canvasFont(16, 400, 0));
 });
 
 test('stages actual browser module paths and resolves APK/DEX artifacts from the host build', async () => {
@@ -82,6 +86,10 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
     await assert.rejects(stageM9Browser(staged, { wasmBuild, hostBuild }), /Settings-upstream\.apk/);
     await put(hostBuild, `${systemRoot}/upstream-settings/${settingsName}`, Uint8Array.of(4, 252));
     await stageM9Browser(staged, { wasmBuild, hostBuild });
+    const robotoRoot = join(root, 'third_party/aosp17/external/roboto-fonts');
+    assert.deepEqual(await readFile(join(staged, 'build/fonts/Roboto-Regular.ttf')),
+      await readFile(join(robotoRoot, 'font/3.005/Roboto-Regular.ttf')));
+    assert.deepEqual(await readFile(join(staged, 'build/fonts/NOTICE')), await readFile(join(robotoRoot, 'NOTICE')));
     const files = await readdir(staged, { recursive: true });
     for (const name of files.filter(path => path.endsWith('.mjs'))) {
       const path = join(staged, name);
@@ -167,6 +175,28 @@ test('only the matching CDP ID releases a screenshot milestone', async () => {
 test('runs the complete browser journey at 60 Hz using the real compositor, DOM input and WorkerClient', async () => {
   const document = documentFrom(e2eHtml), browser = installBrowser(document, { search: '?backend=auto' });
   const fake = mockLauncherWasm();
+  let fontLoads = 0;
+  const fonts = document.fonts = new Set();
+  fonts.check = spec => spec === '16px "AOSP Roboto"' && [...fonts].some(face => face.status === 'loaded');
+  document.defaultView.FontFace = class {
+    constructor(family, source, { weight }) {
+      this.family = family;
+      assert.equal(family, 'AOSP Roboto');
+      assert.match(source, /\/build\/fonts\/Roboto-Regular\.ttf"\) format\("truetype"\)/);
+      assert.equal(weight, '100 900');
+    }
+    async load() {
+      ++fontLoads;
+      await Promise.resolve();
+      this.status = 'loaded';
+      return this;
+    }
+  };
+  const readFontMetrics = fake.module._wa_sf_font_metrics;
+  fake.module._wa_sf_font_metrics = scene => {
+    assert(fonts.check('16px "AOSP Roboto"'), 'Roboto must load before SurfaceFlinger calibrates');
+    return readFontMetrics(scene);
+  };
   const screenshots = [], steps = [];
   try {
     await browser.ready();
@@ -229,6 +259,8 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert(globalThis.__waM9LauncherResult, 'Page did not publish its final result');
     const report = await journey;
     assert.equal(report.ok, true, report.error);
+    assert.equal(report.roboto_font_loaded, true);
+    assert.equal(fontLoads, 1, 'Launcher and foreground scenes share the loaded face');
     assert.deepEqual(steps, ['screenshot-home', 'swipe-workspace', 'open-allapps', 'systemui-back', 'open-allapps',
       'systemui-home', 'systemui-recents', 'launch-settings', 'screenshot-settings',
       'open-settings-page', 'systemui-back', 'open-settings-page', 'systemui-back', 'scroll-settings',
@@ -260,6 +292,8 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.equal(report.cube.audio_frames, 140);
     assert.equal(report.return_home.frames, 30);
     assert.deepEqual(report.page_errors, []);
+    assert.deepEqual(fake.calls.filter(([call]) => ['resources', 'framework', 'fallback-framework'].includes(call)),
+      [['resources'], ['framework'], ['fallback-framework']]);
     assert.deepEqual(fake.events.filter(event => event.kind === 3).map(event => event.text), ['', 'Cu', 'Cube']);
     assert(fake.events.some(event => event.action === 2 && event.dx < 0 && event.vx < -100));
     assert.deepEqual(fake.calls.filter(([call]) => call === 'install').map(([, name]) => name),

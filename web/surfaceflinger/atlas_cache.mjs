@@ -2,11 +2,12 @@ import { verbCoordinates } from './abi.mjs';
 
 const ATLAS_SIZE = 2048;
 const PAGE_LIMIT = 2;
-const families = [
-  'system-ui, "Noto Sans CJK SC", "Apple Color Emoji", sans-serif',
-  'Roboto, "Noto Sans", "Noto Sans CJK SC", system-ui, "Apple Color Emoji", sans-serif',
-  'ui-monospace, "Noto Sans Mono CJK SC", monospace',
-];
+export const aospRobotoFamily = 'AOSP Roboto';
+export const aospRobotoFile = 'Roboto-Regular.ttf';
+const aospRobotoURL = new URL(`../../build/fonts/${aospRobotoFile}`, import.meta.url);
+const aospRobotoLoads = new WeakMap();
+const sansSerif = `"${aospRobotoFamily}", Roboto, sans-serif`;
+const families = [sansSerif, sansSerif, 'ui-monospace, "Noto Sans Mono CJK SC", monospace'];
 const latinSample = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const wideSample = '桌面搜索应用浏览设置相册立方体';
 const ascii = Array.from({ length: 95 }, (_, i) => String.fromCharCode(i + 32));
@@ -14,12 +15,28 @@ const weightsPerFace = 9;
 const advanceWords = 1 + ascii.length + 5;
 const argbCSS = value => '#' + ((value << 8 | value >>> 24) >>> 0).toString(16).padStart(8, '0');
 
+export async function loadAospRoboto(document) {
+  const fonts = document?.fonts;
+  const FontFace = document?.defaultView?.FontFace;
+  if (!fonts || typeof FontFace !== 'function') return false;
+  if (!aospRobotoLoads.has(fonts)) {
+    const load = async () => {
+      const face = new FontFace(aospRobotoFamily, `url("${aospRobotoURL.href}") format("truetype")`,
+        { weight: '100 900' });
+      fonts.add(await face.load());
+      return true;
+    };
+    aospRobotoLoads.set(fonts, load().catch(() => false));
+  }
+  return aospRobotoLoads.get(fonts);
+}
+
 export function canvas2D(width, height) {
   if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(width, height);
   return Object.assign(document.createElement('canvas'), { width, height });
 }
 
-function font(px, weight, face) {
+export function canvasFont(px, weight, face) {
   return `${weight || 400} ${px}px ${families[face] ?? families[0]}`;
 }
 
@@ -101,7 +118,7 @@ export class AtlasCache {
     const bucket = Math.max(1, Math.min(9, Math.round((weight || 400) / 100)));
     const id = face * weightsPerFace + bucket - 1;
     if (!this.metricsPointer || this.calibrated.has(id)) return;
-    this.measure.font = font(64, bucket * 100, face);
+    this.measure.font = canvasFont(64, bucket * 100, face);
     const latin = this.measure.measureText(latinSample);
     const wide = this.measure.measureText(wideSample);
     const { words } = memory;
@@ -126,7 +143,7 @@ export class AtlasCache {
     // System UI fonts can select different optical sizes for labels and titles.
     // Measure both ranges and leave room for positive pair kerning.
     for (const size of [13, 20, 32, 64]) {
-      this.measure.font = font(size, weight, face);
+      this.measure.font = canvasFont(size, weight, face);
       const scale = 65536 / size;
       const extent = char => {
         const metrics = this.measure.measureText(char);
@@ -254,7 +271,7 @@ export class AtlasCache {
     const hit = this.lookup(m, p, end, 1, color, weight, face, size, scale);
     if (hit) return hit;
     const str = m.utf8(p, len);
-    const spec = font(size, weight, face);
+    const spec = canvasFont(size, weight, face);
     this.measure.font = spec;
     this.measure.textAlign = 'left';
     this.measure.textBaseline = 'alphabetic';

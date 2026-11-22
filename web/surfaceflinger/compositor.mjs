@@ -1,4 +1,5 @@
 import { Memory, writeVsync } from './abi.mjs';
+import { loadAospRoboto } from './atlas_cache.mjs';
 import { DisplayListRenderer } from './display_list.mjs';
 import { AndroidInputWriter } from './input_ime.mjs';
 import { MediaCodecBridge } from './mediacodec_bridge.mjs';
@@ -22,6 +23,7 @@ export async function createSurfaceFlingerCompositor({
   module, scene, canvas, webviewHost, webviewMethods, onVsync, onError = console.error,
   onCanvasChanged, viewport, preferredBackend = 'auto', maxPixelRatio = 2,
 }) {
+  await loadAospRoboto(canvas.ownerDocument ?? globalThis.document);
   let backend, fallbackReason, canvasClaimed;
   const inputCanvas = canvas;
   if (preferredBackend !== 'webgl2') {

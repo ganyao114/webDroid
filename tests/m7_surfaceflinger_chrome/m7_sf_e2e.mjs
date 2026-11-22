@@ -1,4 +1,5 @@
 import createDemo from '/build/m7_sf_demo.mjs';
+import { canvasFont } from '../../web/surfaceflinger/atlas_cache.mjs';
 import { createSurfaceFlingerCompositor } from '../../web/surfaceflinger/compositor.mjs';
 import { attachAndroidInput } from '../../web/surfaceflinger/input_ime.mjs';
 import { demoState } from './demo_runtime.mjs';
@@ -33,14 +34,10 @@ try {
   });
   const measure = new OffscreenCanvas(1, 1).getContext('2d');
   const titles = ['Apps', 'Modes', 'Communal', 'WasmAndroid 3D Cube', '系统设置'];
-  const fonts = [
-    'system-ui, "Noto Sans CJK SC", "Apple Color Emoji", sans-serif',
-    'Roboto, "Noto Sans", "Noto Sans CJK SC", system-ui, "Apple Color Emoji", sans-serif',
-  ];
-  for (const [face, family] of fonts.entries()) {
+  for (const face of [0, 1]) {
     for (const weight of [400, 500, 700]) {
       for (const size of [13, 16, 20, 24, 32]) {
-        measure.font = `${weight} ${size}px ${family}`;
+        measure.font = canvasFont(size, weight, face);
         titles.forEach((title, index) => {
           const metrics = measure.measureText(title);
           const actual = Math.max(metrics.width, metrics.actualBoundingBoxRight);

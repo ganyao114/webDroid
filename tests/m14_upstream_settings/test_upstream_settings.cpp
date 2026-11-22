@@ -156,6 +156,9 @@ void CheckResources(const char* path) {
 struct Frame {
     size_t paths = 0;
     size_t dark_paths = 0;
+    bool material_page = false;
+    bool search_fill = false;
+    bool search_outline = false;
     std::vector<std::string> texts;
 
     bool Has(std::string_view text) const {
@@ -194,6 +197,23 @@ Frame ReadFrame(wa_sf_t* sf) {
             std::memcpy(&path, command + sizeof(record), sizeof(path));
             ++frame.paths;
             frame.dark_paths += ContrastOnWhite(path.paint.argb) >= 4.5;
+        }
+        if (record.opcode == WA_CANVAS_DRAW_RECT) {
+            wa_canvas_rect_draw_t rectangle{};
+            Require(record.byte_size >= sizeof(record) + sizeof(rectangle), "Complete rectangle command");
+            std::memcpy(&rectangle, command + sizeof(record), sizeof(rectangle));
+            frame.material_page |= rectangle.paint.argb == 0xfff3f5fau &&
+                rectangle.paint.style == WA_PAINT_FILL && rectangle.rect.b - rectangle.rect.t > 72;
+        }
+        if (record.opcode == WA_CANVAS_DRAW_ROUND_RECT) {
+            wa_canvas_round_draw_t round{};
+            Require(record.byte_size >= sizeof(record) + sizeof(round), "Complete rounded rectangle command");
+            std::memcpy(&round, command + sizeof(record), sizeof(round));
+            if (round.shape.ry >= 32 && round.shape.rect.r - round.shape.rect.l > 200) {
+                frame.search_fill |= round.paint.argb == 0xffffffffu && round.paint.style == WA_PAINT_FILL;
+                frame.search_outline |= round.paint.argb >> 24 && round.paint.style == WA_PAINT_STROKE &&
+                    round.paint.stroke_width == 1;
+            }
         }
         if (record.opcode != WA_CANVAS_DRAW_TEXT) continue;
         wa_canvas_text_t text{};
@@ -371,6 +391,8 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
         for (int i = 0; i < 3; ++i) draw();
         const auto home = ReadFrame(sf.get());
         home.RequireText("Search Settings");
+        Require(home.material_page && home.search_fill && home.search_outline,
+                "Settings draws a white Search card and hairline on its Material page");
         home.RequireText("Network & internet");
         home.RequireText("Apps");
         Require(home.paths >= 4, "Upstream homepage vector paths rendered");

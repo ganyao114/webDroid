@@ -1,6 +1,7 @@
 import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
 import { cubeName, settingsName } from '../../web/launcher/assets.mjs';
 import { matchesDrawnLabel } from '../../web/launcher/scene_labels.mjs';
+import { aospRobotoFamily } from '../../web/surfaceflinger/atlas_cache.mjs';
 
 const launcherPackage = 'com.android.launcher3';
 const launcherActivity = `${launcherPackage}.Launcher`;
@@ -60,7 +61,7 @@ export async function runLauncher3E2E(options = {}) {
   const listeners = new AbortController();
   const { signal } = listeners;
   const milestones = createMilestones();
-  const result = { ok: false, page_errors: pageErrors };
+  const result = { ok: false, roboto_font_loaded: false, page_errors: pageErrors };
   let host, error, recents = 0;
 
   function fail(failure) {
@@ -198,6 +199,9 @@ export async function runLauncher3E2E(options = {}) {
     back.addEventListener('click', () => host.navigate('back'), { signal });
     allApps.addEventListener('click', () => host.openAllApps(), { signal });
     await host.start();
+    result.roboto_font_loaded = Boolean(document.fonts?.check(`16px "${aospRobotoFamily}"`) &&
+      [...document.fonts].some(face => face.family === aospRobotoFamily && face.status === 'loaded'));
+    requireMatch(result.roboto_font_loaded, 'The staged AOSP Roboto font did not load');
     await waitFrames(24);
     const initial = host.state();
     Object.assign(result, { booted: initial.booted, package: initial.package, activity: initial.activity,
