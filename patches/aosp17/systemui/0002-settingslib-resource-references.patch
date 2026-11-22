@@ -1,0 +1,42 @@
+diff --git a/frameworks/base/packages/SystemUI/res/drawable/stat_sys_roaming.xml b/frameworks/base/packages/SystemUI/res/drawable/stat_sys_roaming.xml
+--- a/frameworks/base/packages/SystemUI/res/drawable/stat_sys_roaming.xml
++++ b/frameworks/base/packages/SystemUI/res/drawable/stat_sys_roaming.xml
+@@ -14,8 +14,8 @@
+      limitations under the License.
+ -->
+ <vector xmlns:android="http://schemas.android.com/apk/res/android"
+-        android:width="@dimen/signal_icon_size_roaming"
+-        android:height="@dimen/signal_icon_size_roaming"
++        android:width="@dimen/status_bar_mobile_roam_size"
++        android:height="@dimen/status_bar_mobile_roam_size"
+         android:viewportWidth="8"
+         android:viewportHeight="8">
+ 
+diff --git a/frameworks/base/packages/SystemUI/res/values/styles.xml b/frameworks/base/packages/SystemUI/res/values/styles.xml
+--- a/frameworks/base/packages/SystemUI/res/values/styles.xml
++++ b/frameworks/base/packages/SystemUI/res/values/styles.xml
+@@ -674,13 +674,13 @@
+     <style name="DualToneLightTheme">
+         <item name="iconBackgroundColor">@color/light_mode_icon_color_dual_tone_background</item>
+         <item name="fillColor">@color/light_mode_icon_color_dual_tone_fill</item>
+-        <item name="singleToneColor">@color/light_mode_icon_color_single_tone</item>
++        <item name="singleToneColor">@android:color/white</item>
+         <item name="homeHandleColor">@color/navigation_bar_home_handle_light_color</item>
+     </style>
+     <style name="DualToneDarkTheme">
+         <item name="iconBackgroundColor">@color/dark_mode_icon_color_dual_tone_background</item>
+         <item name="fillColor">@color/dark_mode_icon_color_dual_tone_fill</item>
+-        <item name="singleToneColor">@color/dark_mode_icon_color_single_tone</item>
++        <item name="singleToneColor">@android:color/black</item>
+         <item name="homeHandleColor">@color/navigation_bar_home_handle_dark_color</item>
+     </style>
+     <style name="QSHeaderDarkTheme">
+@@ -705,7 +705,7 @@
+         <item name="singleToneColor">@color/materialColorOnSurface</item>
+     </style>
+     <style name="ScreenPinningRequestTheme" parent="@*android:style/ThemeOverlay.DeviceDefault.Accent">
+-        <item name="singleToneColor">@color/light_mode_icon_color_single_tone</item>
++        <item name="singleToneColor">@android:color/white</item>
+     </style>
+ 
+     <style name="TextAppearance.Volume">

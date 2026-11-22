@@ -1,0 +1,12 @@
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/NearestTouchFrame.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/NearestTouchFrame.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/NearestTouchFrame.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/NearestTouchFrame.java
+@@ -108,7 +108,7 @@
+         mClickableChildren.sort(mChildRegionComparator);
+         mClickableChildren.stream()
+                 .filter(View::isAttachedToWindow)
+-                .forEachOrdered(mAttachedChildren::add);
++                .forEach(mAttachedChildren::add);
+ 
+         // Cache bounds of children
+         // Mark coordinates where the actual child layout resides in this frame's window

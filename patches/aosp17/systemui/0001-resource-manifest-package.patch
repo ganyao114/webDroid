@@ -1,0 +1,11 @@
+diff --git a/frameworks/base/packages/SystemUI/AndroidManifest-res.xml b/frameworks/base/packages/SystemUI/AndroidManifest-res.xml
+--- a/frameworks/base/packages/SystemUI/AndroidManifest-res.xml
++++ b/frameworks/base/packages/SystemUI/AndroidManifest-res.xml
+@@ -15,5 +15,5 @@
+  * limitations under the License.
+  -->
+-<manifest package= "com.android.systemui.res">
++<manifest package= "com.android.systemui">
+     <application/>
+ </manifest>
+\ No newline at end of file
