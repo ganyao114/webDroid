@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { LauncherAbi, frameTimeNs } from '../../web/launcher/abi_helpers.mjs';
-import { loadAndroidSystem, loadLauncherAssets, systemUiName } from '../../web/launcher/assets.mjs';
+import { fallbackDexName, launcherName, loadAndroidSystem, loadLauncherAssets, systemUiName } from '../../web/launcher/assets.mjs';
 import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
 import { mountLauncherPlayground } from '../../web/shell/launcher_playground.mjs';
 import { createMilestones, runLauncher3E2E } from './launcher3_e2e.mjs';
@@ -64,12 +64,19 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
     await put(wasmBuild, wasmFile, Uint8Array.of(0, 97, 115, 109));
     await put(wasmBuild, 'android_system.mjs', 'export default async ({ locateFile } = {}) => ({ locateFile });\n');
     await put(hostBuild, 'runtime/android_system/aosp17-ui/aosp17_framework_core.dex', Uint8Array.of(1, 255));
-    await put(hostBuild, 'android.jar', Uint8Array.of(2, 254));
+    const systemRoot = 'runtime/android_system';
+    await put(hostBuild, `${systemRoot}/upstream-framework/framework-res-upstream.apk`, Uint8Array.of(2, 254));
+    await put(hostBuild, `${systemRoot}/upstream-framework/${fallbackDexName}`, Uint8Array.of(8, 248));
     await put(hostBuild, 'tests/m6_apk_chrome_e2e/wa_cube_app.apk', Uint8Array.of(3, 253));
     await put(hostBuild, 'tests/m8_aosp17_launcher3_apk/apk/Launcher3.apk', Uint8Array.of(6, 250));
+    await put(hostBuild, `${systemRoot}/launcher/${systemUiName}`, Uint8Array.of(7, 249));
     for (const name of fixtureNames) await put(hostBuild, `tests/m9_aosp17_launcher3_boot/apps/${name}`, Uint8Array.of(4, 252));
-    await assert.rejects(stageM9Browser(staged, { wasmBuild, hostBuild }), /SystemUI-upstream\.apk/);
-    await put(hostBuild, `tests/m9_aosp17_launcher3_boot/apk/${systemUiName}`, Uint8Array.of(7, 249));
+    await assert.rejects(stageM9Browser(staged, { wasmBuild, hostBuild }), /Launcher3-upstream\.apk/);
+    await put(hostBuild, `${systemRoot}/launcher/${launcherName}`, Uint8Array.of(6, 250));
+    await put(hostBuild, `${systemRoot}/launcher/upstream_provenance.json`, JSON.stringify({
+      tag: 'android-17.0.0_r1',
+      launcher_source_counts: { java: { verbatim: 385, patched: 17 }, kt: { verbatim: 452, patched: 25 } },
+    }));
     await stageM9Browser(staged, { wasmBuild, hostBuild });
     const files = await readdir(staged, { recursive: true });
     for (const name of files.filter(path => path.endsWith('.mjs'))) {
@@ -103,7 +110,9 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
       const assets = await loadLauncherAssets({ base });
       assert.deepEqual(assets.apks.map(({ name }) => name), ['wa_cube_app.apk', ...fixtureNames]);
       assert.deepEqual(assets.resources, Uint8Array.of(2, 254));
+      assert.deepEqual(assets.fallbackDex, Uint8Array.of(8, 248));
       assert.deepEqual(assets.systemUi, Uint8Array.of(7, 249));
+      assert.equal(assets.launcherSources, 879);
       await rm(new URL(systemUiName, base));
       await assert.rejects(loadLauncherAssets({ base }), /Could not fetch SystemUI-upstream\.apk \(HTTP 404\)/);
     } finally {
@@ -186,7 +195,7 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
           pointer(canvas, 'pointerup', to, browser.time());
           break;
         case 'open-allapps': document.querySelector('[data-nav="all-apps"]').click(); break;
-        case 'focus-search': case 'launch-cube':
+        case 'focus-search': case 'launch-cube': case 'return-home':
         case 'systemui-back': case 'systemui-home': case 'systemui-recents':
           pointer(canvas, 'pointerdown', point, browser.time());
           await browser.step();
@@ -202,7 +211,6 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
           fire(editor, 'input', { data: text, inputType: 'insertCompositionText', timeStamp: browser.time() });
           break;
         }
-        case 'return-home': document.querySelector('[data-nav="home"]').click(); break;
         default: assert.fail(step);
       }
       assert(control.acknowledge(id));
@@ -222,6 +230,10 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.equal(report.backend, 'webgl2');
     assert.match(report.fallback_reason, /WebGPU is unavailable/);
     assert.equal(report.search_query, 'Cube');
+    assert.equal(report.launcher_upstream, true);
+    assert.equal(report.launcher_dex_count, 4);
+    assert.equal(report.launcher_class_count, 37050);
+    assert.equal(report.launcher_sources, 879);
     assert.equal(report.system_ui_mounted, true);
     assert.equal(report.system_ui_class, 'com.android.systemui.statusbar.phone.PhoneStatusBarView');
     assert.equal(report.system_ui_navigation, true);
@@ -232,8 +244,8 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.deepEqual(report.page_errors, []);
     assert.deepEqual(fake.events.filter(event => event.kind === 3).map(event => event.text), ['', 'Cu', 'Cube']);
     assert(fake.events.some(event => event.action === 2 && event.dx < 0 && event.vx < -100));
-    assert.deepEqual(fake.calls.slice(0, 7).map(([call]) => call),
-      ['create', 'framework', 'resources', 'install', 'install', 'systemui', 'boot']);
+    assert.deepEqual(fake.calls.slice(0, 8).map(([call]) => call),
+      ['create', 'framework', 'fallback-framework', 'resources', 'install', 'install', 'systemui', 'boot']);
     assert(browser.workers[0].didShutdown && browser.workers[0].terminated);
   } finally {
     await globalThis.__waM9Launcher?.close();
@@ -309,12 +321,13 @@ test('shell controls install, compose CJK, switch locale and recover from a fore
     await browser.ready();
     await ready;
     await browser.step();
-    assert.equal(root.querySelector('[data-stat="system"]').textContent, 'SystemUI + Launcher3');
+    assert.equal(root.querySelector('[data-stat="system"]').textContent,
+      'Launcher3 (879 upstream sources) + upstream SystemUI');
     root.querySelector('#launcher-form').click();
     assert.equal(device.dataset.form, 'phone');
-    canvas.rect = { left: 0, top: 0, width: 390, height: 660 };
+    canvas.rect = { left: 0, top: 0, width: 448, height: 896 };
     await browser.step();
-    assert.deepEqual(fake.calls.at(-1), ['resize', 390, 660, 160]);
+    assert.deepEqual(fake.calls.at(-1), ['resize', 448, 896, 160]);
     const dataTransfer = { types: ['Files'], files: [{ name: '新应用.apk', arrayBuffer: async () => Uint8Array.of(5, 251).buffer }] };
     assert(fire(device, 'dragover', { dataTransfer }).defaultPrevented);
     assert.equal(device.dataset.dragging, 'true');

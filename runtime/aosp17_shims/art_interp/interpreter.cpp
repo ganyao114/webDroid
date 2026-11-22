@@ -68,8 +68,10 @@ class ShadowFrame {
     Reg(i + 1) = Value::Bits(value.bits() >> 32);
   }
 
-  Value Read(size_t i, char type) { return IsWide(type) ? Wide(i) : Normalize(Reg(i), type); }
-  void Write(size_t i, Value value, char type) {
+  [[gnu::always_inline]] Value Read(size_t i, char type) {
+    return IsWide(type) ? Wide(i) : Normalize(Reg(i), type);
+  }
+  [[gnu::always_inline]] void Write(size_t i, Value value, char type) {
     if (IsWide(type)) SetWide(i, value);
     else Reg(i) = Normalize(value, type);
   }
@@ -413,7 +415,8 @@ void FieldInstruction(Runtime& runtime, ShadowFrame& f, const art::DexFile& dex,
     if (field.owner->init_state != InitState::Initialized) runtime.linker.Initialize(*field.owner);
   } else {
     Object& object = runtime.NonNull(f.Reg(insn.VRegB_22c()).ref());
-    if (field.owner != object.type && (!cache || cache->receiver != object.type)) {
+    if (field.owner != object.type && field.owner != object.type->super &&
+        (!cache || cache->receiver != object.type)) {
       if (!runtime.linker.IsAssignable(*field.owner, *object.type)) {
         runtime.Fail("Ljava/lang/IncompatibleClassChangeError;", field.name);
       }
@@ -718,7 +721,22 @@ Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value
             break;
           }
           case I::NEG_INT ... I::INT_TO_SHORT: Unary(f, insn); break;
-          case I::ADD_INT ... I::USHR_INT_LIT8: Arithmetic(*this, f, insn); break;
+          case I::ADD_INT:
+            f.Reg(insn.VRegA_23x()) = Value::Int(SafeAdd(f.Reg(insn.VRegB_23x()).i(), f.Reg(insn.VRegC_23x()).i()));
+            break;
+          case I::ADD_INT_2ADDR:
+            f.Reg(insn.VRegA_12x()) = Value::Int(SafeAdd(f.Reg(insn.VRegA_12x()).i(), f.Reg(insn.VRegB_12x()).i()));
+            break;
+          case I::ADD_INT_LIT8:
+            f.Reg(insn.VRegA_22b()) = Value::Int(SafeAdd(f.Reg(insn.VRegB_22b()).i(), insn.VRegC_22b()));
+            break;
+          case I::MUL_INT_LIT8:
+            f.Reg(insn.VRegA_22b()) = Value::Int(SafeMul(f.Reg(insn.VRegB_22b()).i(), insn.VRegC_22b()));
+            break;
+          case I::SUB_INT ... I::REM_DOUBLE:
+          case I::SUB_INT_2ADDR ... I::XOR_INT_LIT16:
+          case I::RSUB_INT_LIT8:
+          case I::DIV_INT_LIT8 ... I::USHR_INT_LIT8: Arithmetic(*this, f, insn); break;
           default: Fail("Ljava/lang/VerifyError;", std::string("Unsupported instruction ") + insn.Name());
         }
         pc = next;

@@ -1,0 +1,67 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/keyboard/ItemFocusIndicatorHelper.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/keyboard/ItemFocusIndicatorHelper.java
+@@ -17,8 +17,8 @@
+ 
+ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
++import android.animation.AnimatorSet;
+ import android.animation.ObjectAnimator;
+-import android.animation.PropertyValuesHolder;
+ import android.animation.RectEvaluator;
+ import android.animation.ValueAnimator;
+ import android.animation.ValueAnimator.AnimatorUpdateListener;
+@@ -91,7 +91,7 @@
+      */
+     private float mShift;
+ 
+-    private ObjectAnimator mCurrentAnimation;
++    private Animator mCurrentAnimation;
+     private float mAlpha;
+     private float mRadius;
+     private float mInnerRadius;
+@@ -209,15 +209,14 @@
+             if (mAlpha > MIN_VISIBLE_ALPHA) {
+                 mTargetItem = item;
+ 
+-                mCurrentAnimation = ObjectAnimator.ofPropertyValuesHolder(this,
+-                        PropertyValuesHolder.ofFloat(ALPHA, 1),
+-                        PropertyValuesHolder.ofFloat(SHIFT, 1));
++                AnimatorSet transition = new AnimatorSet();
++                transition.playTogether(ObjectAnimator.ofFloat(this, SHIFT, 1), animateAlpha(1));
++                mCurrentAnimation = transition;
+                 mCurrentAnimation.addListener(new ViewSetListener(item, true));
+             } else {
+                 setCurrentItem(item);
+ 
+-                mCurrentAnimation = ObjectAnimator.ofPropertyValuesHolder(this,
+-                        PropertyValuesHolder.ofFloat(ALPHA, 1));
++                mCurrentAnimation = animateAlpha(1);
+             }
+ 
+             mLastFocusedItem = item;
+@@ -225,8 +224,7 @@
+             if (mLastFocusedItem == item) {
+                 mLastFocusedItem = null;
+                 endCurrentAnimation();
+-                mCurrentAnimation = ObjectAnimator.ofPropertyValuesHolder(this,
+-                        PropertyValuesHolder.ofFloat(ALPHA, 0));
++                mCurrentAnimation = animateAlpha(0);
+                 mCurrentAnimation.addListener(new ViewSetListener(null, false));
+             }
+         }
+@@ -236,9 +234,14 @@
+ 
+         mLastFocusedItem = hasFocus ? item : null;
+         if (mCurrentAnimation != null) {
+-            mCurrentAnimation.addUpdateListener(this);
+             mCurrentAnimation.setDuration(ANIM_DURATION).start();
+         }
++    }
++
++    private ObjectAnimator animateAlpha(float alpha) {
++        ObjectAnimator animation = ObjectAnimator.ofFloat(this, ALPHA, alpha);
++        animation.addUpdateListener(this);
++        return animation;
+     }
+ 
+     protected void endCurrentAnimation() {

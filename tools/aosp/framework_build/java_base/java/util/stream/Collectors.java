@@ -1,6 +1,7 @@
 package java.util.stream;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -13,6 +14,10 @@ import java.util.function.Supplier;
 
 public final class Collectors {
     private Collectors() {}
+
+    public static <T, C extends Collection<T>> Collector<T, ?, C> toCollection(Supplier<C> factory) {
+        return new Accumulating<>(Objects.requireNonNull(factory), Collection::add);
+    }
 
     public static <T> Collector<T, ?, List<T>> toList() {
         return new Accumulating<>(ArrayList::new, List::add);

@@ -1,0 +1,12 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/Launcher.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/Launcher.java
+@@ -1422,7 +1422,8 @@
+                 != Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT);
+ 
+         // Check this condition before handling isActionMain, as this will get reset.
+-        boolean shouldMoveToDefaultScreen = alreadyOnHome && isInState(NORMAL)
++        boolean shouldMoveToDefaultScreen = alreadyOnHome
++                && (isInState(NORMAL) || intent.hasCategory(Intent.CATEGORY_HOME))
+                 && AbstractFloatingView.getTopOpenView(this) == null;
+         boolean isActionMain = Intent.ACTION_MAIN.equals(intent.getAction());
+         boolean internalStateHandled = ACTIVITY_TRACKER.handleNewIntent(this);

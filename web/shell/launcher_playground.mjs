@@ -1,5 +1,10 @@
 import { LauncherHost } from '../launcher/launcher_host.mjs';
 
+const displays = {
+  desktop: { width: 960, height: 660 },
+  phone: { width: 448, height: 896 },
+};
+
 export function mountLauncherPlayground(root, options = {}) {
   const view = root.querySelector('.wa-device');
   const launcher = root.querySelector('.wa-launcher-surface');
@@ -26,9 +31,15 @@ export function mountLauncherPlayground(root, options = {}) {
     const { phase } = host;
     view.dataset.phase = phase;
     appSurface.inert = phase !== 'app';
-    launcher.inert = phase !== 'launcher';
+    launcher.inert = !['launcher', 'app'].includes(phase);
     const available = ['launcher', 'opening-app', 'app'].includes(phase);
-    stats.system.textContent = available && host.state()?.systemUiMounted ? 'SystemUI + Launcher3' : 'Android 17';
+    const state = host.state();
+    if (available && state?.launcherUpstream && state.systemUiMounted) {
+      const launcher = host.launcherSources ? `Launcher3 (${host.launcherSources} upstream sources)` : 'Upstream Launcher3';
+      stats.system.textContent = `${launcher} + upstream SystemUI`;
+    } else {
+      stats.system.textContent = 'Android 17';
+    }
     for (const button of nav) button.disabled = !available;
     allApps.disabled = locale.disabled = phase !== 'launcher';
     install.disabled = !available;
@@ -38,7 +49,8 @@ export function mountLauncherPlayground(root, options = {}) {
     if (phase === 'launcher' || phase === 'app') show('');
   }
 
-  const host = new LauncherHost({ ...options, canvas: launcher.querySelector('canvas'), appSurface,
+  const host = new LauncherHost({ viewport: () => displays[view.dataset.form], ...options,
+    canvas: launcher.querySelector('canvas'), appSurface,
     surfaceHost: launcher, onChange: updateDevice, onRecents: toggleRecents,
     onError: error => show(error.message.split('\n')[0], true) });
 

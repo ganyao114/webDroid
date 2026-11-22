@@ -3,6 +3,8 @@ frameworks/base/core/java/android/animation/TimeInterpolator.java
 frameworks/base/core/java/android/animation/TypeEvaluator.java
 frameworks/base/core/java/android/animation/PointFEvaluator.java
 frameworks/base/core/java/android/animation/RectEvaluator.java
+frameworks/base/core/java/android/animation/ArgbEvaluator.java
+@patch 0021-srgb-argb-evaluator.patch
 frameworks/base/core/java/android/content/res/ApkAssets.java
 frameworks/base/core/java/android/content/res/XmlBlock.java
 frameworks/base/core/java/android/content/res/XmlResourceParser.java

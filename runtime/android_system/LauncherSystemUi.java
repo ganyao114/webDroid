@@ -1,10 +1,13 @@
 package org.wasmandroid.launcher;
 
 import android.app.Activity;
+import android.app.UiRuntime;
 import android.content.res.AssetManager;
 import android.content.res.Resources;
+import android.graphics.Rect;
 import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.widget.FrameLayout;
@@ -24,10 +27,13 @@ public final class LauncherSystemUi extends ContextThemeWrapper implements Consu
     private int lastKeyCode;
     private int lastKeyFlags;
     private boolean recentsPending;
+    private boolean dispatchingForegroundTouch;
+    private int foregroundKey;
+    private long navigationDownTime;
 
-    public static LauncherSystemUi create(Activity activity, String frameworkApk, String systemUiApk,
+    public static LauncherSystemUi create(Activity activity, String systemUiApk,
             String locale, int width, int height, int density) throws IOException {
-        Resources resources = Resources.forApk(new String[] {frameworkApk, systemUiApk}, locale, density);
+        Resources resources = activity.getResources().forApkWithFramework(systemUiApk, locale, density);
         try {
             resources.updateDisplay(width, height, density);
             Resources.Theme theme = resources.newTheme();
@@ -89,11 +95,28 @@ public final class LauncherSystemUi extends ContextThemeWrapper implements Consu
         keyEvents++;
         lastKeyCode = event.getKeyCode();
         lastKeyFlags = event.getFlags();
+        if (dispatchingForegroundTouch) {
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) foregroundKey = lastKeyCode;
+            return;
+        }
         if (lastKeyCode == KEYCODE_APP_SWITCH) {
             if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) recentsPending = true;
-        } else if (lastKeyCode == KeyEvent.KEYCODE_BACK ||
-                (lastKeyCode == KeyEvent.KEYCODE_HOME && !event.isCanceled())) {
-            activity.dispatchKeyEvent(event);
+        } else if (lastKeyCode == KeyEvent.KEYCODE_BACK || lastKeyCode == KeyEvent.KEYCODE_HOME) {
+            UiRuntime.dispatchSystemKey(event);
+        }
+    }
+
+    /** Dispatches a system navigation gesture while Launcher is paused behind an app. */
+    public int dispatchNavigationTouch(long time, int action, float x, float y) {
+        if (action == MotionEvent.ACTION_DOWN) navigationDownTime = time;
+        MotionEvent event = MotionEvent.obtain(navigationDownTime, time, action, x, y, 0);
+        foregroundKey = 0;
+        dispatchingForegroundTouch = true;
+        try {
+            overlay.dispatchTouchEvent(event);
+            return foregroundKey;
+        } finally {
+            dispatchingForegroundTouch = false;
         }
     }
 
@@ -108,13 +131,17 @@ public final class LauncherSystemUi extends ContextThemeWrapper implements Consu
     public int lastKeyFlags() { return lastKeyFlags; }
 
     public static long buttonCenter(View button) {
-        if (button == null || !button.isShown() || button.getWidth() <= 0 || button.getHeight() <= 0)
-            return 0;
+        Rect bounds = viewBounds(button);
+        if (bounds == null) return 0;
+        return ((long) bounds.centerY() << 32) | (bounds.centerX() & 0xffffffffL);
+    }
+
+    public static Rect viewBounds(View view) {
+        if (view == null || !view.isShown() || view.getWidth() <= 0 || view.getHeight() <= 0)
+            return null;
         int[] location = new int[2];
-        button.getLocationInWindow(location);
-        int x = location[0] + button.getWidth() / 2;
-        int y = location[1] + button.getHeight() / 2;
-        return ((long) y << 32) | (x & 0xffffffffL);
+        view.getLocationInWindow(location);
+        return new Rect(location[0], location[1], location[0] + view.getWidth(), location[1] + view.getHeight());
     }
 
     public void close() {

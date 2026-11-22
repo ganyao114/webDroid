@@ -1,4 +1,5 @@
 import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
+import { matchesDrawnLabel } from '../../web/launcher/scene_labels.mjs';
 
 const launcherPackage = 'com.android.launcher3';
 const launcherActivity = `${launcherPackage}.Launcher`;
@@ -109,7 +110,7 @@ export async function runLauncher3E2E(options = {}) {
   }
 
   function labelPoint(text) {
-    const label = host.labels().findLast(label => label.text === text);
+    const label = host.labels().findLast(label => matchesDrawnLabel(label.text, text));
     requireMatch(label, `Launcher3 did not draw “${text}”`);
     return canvasPoint(label.x, label.y);
   }
@@ -139,7 +140,7 @@ export async function runLauncher3E2E(options = {}) {
       surfaceHost: launcherSurface, backend: params.get('backend') ?? 'auto',
       onChange: ({ phase }) => {
         device.dataset.phase = phase;
-        launcherSurface.inert = phase !== 'launcher';
+        launcherSurface.inert = !['launcher', 'app'].includes(phase);
         appSurface.inert = phase !== 'app';
       }, onRecents: () => { ++recents; }, onError: fail });
     home.addEventListener('click', () => host.navigate('home'), { signal });
@@ -149,10 +150,14 @@ export async function runLauncher3E2E(options = {}) {
     await waitFrames(24);
     const initial = host.state();
     Object.assign(result, { booted: initial.booted, package: initial.package, activity: initial.activity,
+      launcher_upstream: initial.launcherUpstream, launcher_dex_count: initial.launcherDexCount,
+      launcher_class_count: initial.launcherClassCount, launcher_sources: host.launcherSources,
       system_ui_mounted: initial.systemUiMounted, system_ui_class: initial.systemUiClass,
       installed_apps: initial.installedApps, page_count: initial.pageCount, isolated: crossOriginIsolated,
       boot_ms: host.bootMs, native_boot_ms: initial.bootMs });
-    requireMatch(initial.booted && initial.activity === launcherActivity && initial.package === launcherPackage,
+    requireMatch(initial.booted && initial.activity === launcherActivity && initial.package === launcherPackage &&
+      initial.launcherUpstream === true && initial.launcherDexCount === 4 && initial.launcherClassCount === 37050 &&
+      host.launcherSources === 879,
       'AOSP 17 Launcher3 did not boot');
     requireMatch(initial.systemUiMounted === true && initial.systemUiClass === systemUiClass,
       'AOSP 17 SystemUI phone bars did not mount');
@@ -216,7 +221,11 @@ export async function runLauncher3E2E(options = {}) {
     const opened = await openDrawer();
     result.allapps_opened = true;
     result.allapps_unfiltered = opened.searchResults;
-    await checkpoint('focus-search', { point: labelPoint('Search apps') });
+    const search = opened.searchBounds;
+    requireMatch(search, 'All Apps did not lay out its search field');
+    await checkpoint('focus-search', {
+      point: canvasPoint((search.left + search.right) / 2, (search.top + search.bottom) / 2),
+    });
     await waitFor('DOM IME input focus', () => document.activeElement === host.editor);
     await waitFrames(2);
     await checkpoint('type-search', { text: 'Cube' });
@@ -257,7 +266,10 @@ export async function runLauncher3E2E(options = {}) {
     await waitFor('the foreground surface to finish fading in', () => performance.now() >= reveal);
     await checkpoint('screenshot-app');
 
-    await checkpoint('return-home', { point: center(home) });
+    const beforeReturn = host.state();
+    const homeButton = beforeReturn.systemUiButtons.home;
+    requireMatch(homeButton, 'SystemUI Home was unavailable above the foreground app');
+    await checkpoint('return-home', { point: canvasPoint(homeButton.x, homeButton.y) });
     const resumed = await waitFor('the restored home workspace', () => {
       if (host.phase !== 'launcher') return false;
       const state = host.state();
@@ -265,7 +277,9 @@ export async function runLauncher3E2E(options = {}) {
     });
     const resumedAt = host.frames;
     await waitFrames(30, resumedAt);
-    result.returned_home = resumed.activity === launcherActivity && !host.activeLaunch;
+    result.returned_home = resumed.activity === launcherActivity && !host.activeLaunch &&
+      resumed.systemUiKeyEvents === beforeReturn.systemUiKeyEvents + 2 &&
+      resumed.systemUiLastKeyCode === 3 && resumed.systemUiLastKeyFlags === 0x48;
     result.return_home = host.stats(resumedAt);
     result.final_state = host.state();
     requireMatch(result.returned_home && result.return_home.avg_fps >= 50, 'Launcher3 did not resume at 60 Hz');

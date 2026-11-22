@@ -101,10 +101,12 @@ class Vm {
   void LoadDexFile(std::string location, std::vector<uint8_t> bytes);
   // Fills holes in the existing class path without replacing earlier definitions.
   void LoadFallbackDexFile(const std::string& path);
+  void LoadFallbackDexFile(std::string location, std::vector<uint8_t> bytes);
   // Adds the numbered DEX entries atomically, in DEX order. DEX files loaded
   // via LoadDexFile or LoadFallbackDexFile form the parent class path.
   // Keep the APK immutable while it is in use because entries can be file-backed.
-  void LoadApkDexFiles(const std::string& apk_path);
+  // A companion APK may reuse dependencies already indexed from the primary APK.
+  void LoadApkDexFiles(const std::string& apk_path, bool fallback = false);
   DexStats GetDexStats() const;
   std::string DexLocation(std::string_view descriptor) const;
   void RegisterResourceNatives();
@@ -117,6 +119,7 @@ class Vm {
   Value CallVirtual(Object* receiver, std::string_view name, std::string_view signature,
                     std::span<const Value> args = {});
   Value ReadField(Object* receiver, std::string_view name, std::string_view descriptor);
+  Value ReadStaticField(std::string_view owner, std::string_view name, std::string_view descriptor);
   Object* NewObject(std::string_view type, std::string_view constructor = "()V",
                     std::span<const Value> args = {});
   Object* NewString(std::string_view modified_utf8);
@@ -132,6 +135,7 @@ class Vm {
                              std::string_view signature);
   MethodStats GetInstanceMethodStats(std::string_view owner, std::string_view name,
                                      std::string_view signature);
+  size_t InterpretedMethodCount(std::string_view descriptor) const;
   size_t ExecutedOpcodeCount() const;
   static size_t SupportedOpcodeCount();
   uint64_t NativeCalls(std::string_view owner) const;

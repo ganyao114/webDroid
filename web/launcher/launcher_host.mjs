@@ -10,6 +10,7 @@ const frameInterval = 1000 / 60;
 const historySize = 600;
 const androidHome = 3;
 const androidBack = 4;
+const androidRecents = 187;
 const moveHome = 122;
 
 function mean(samples) {
@@ -66,6 +67,7 @@ export class LauncherHost {
   }
 
   get phase() { return this.#phase; }
+  get launcherSources() { return this.#assets?.launcherSources; }
   get frames() { return this.#frames; }
   get editor() { return this.#session?.input?.editor; }
   get activeLaunch() { return this.#active?.launch; }
@@ -110,6 +112,7 @@ export class LauncherHost {
     try {
       abi.create(session.size, this.locale);
       abi.loadFrameworkDex(this.#assets.frameworkDex);
+      abi.loadFallbackDex(this.#assets.fallbackDex);
       abi.setFrameworkResources(this.#assets.resources);
       for (const [name, bytes] of this.#apks) abi.installApk(name, bytes);
       abi.loadSystemUiApk(systemUiName, this.#assets.systemUi);
@@ -148,24 +151,36 @@ export class LauncherHost {
     const { input } = session.compositor;
     const active = () => this.#phase === 'launcher';
     const writer = {
-      write: (kind, action, time, pointer, key, ...rest) => {
+      write: (kind, action, time, pointer, key, meta, x, y, ...rest) => {
+        if (this.#phase === 'app' && kind === Input.MOTION && action <= Action.CANCEL) {
+          try {
+            const nav = session.abi.touchNavigation(action, time, x, y);
+            if (nav === androidHome) this.navigate('home');
+            if (nav === androidBack) this.navigate('back');
+            if (nav === androidRecents) this.navigate('recents');
+            return true;
+          } catch (error) {
+            this.#fail(error);
+            return false;
+          }
+        }
         if (!active()) return false;
         let code = key;
         if (kind === Input.KEY) {
           if (key === moveHome) code = androidHome;
           if (action === Action.UP && (code === androidBack || code === androidHome)) session.input.blurIME();
         }
-        return input.write(kind, action, time, pointer, code, ...rest);
+        return input.write(kind, action, time, pointer, code, meta, x, y, ...rest);
       },
       ime: (...args) => active() && input.ime(...args),
     };
     session.input = attachAndroidInput(this.canvas, writer, {
-      viewport: () => this.size(),
+      viewport: () => this.#active ? session.size : this.size(),
       onPointerUp: (x, y, distance) => {
         if (!active() || distance > 12) return;
-        const state = this.state();
-        const header = (state?.drawerOpen && y < 150 * this.size().densityDpi / 160);
-        if (header) session.input.focusIME(x, y);
+        const search = this.state()?.searchBounds;
+        if (search && x >= search.left && x < search.right && y >= search.top && y < search.bottom)
+          session.input.focusIME(x, y);
         else session.input.blurIME();
       },
     });
@@ -278,17 +293,11 @@ export class LauncherHost {
 
   openAllApps() {
     if (this.#phase !== 'launcher' || this.state()?.drawerOpen) return;
-    // The same upward motion that DragLayer receives from a finger on the workspace.
-    const { width, height } = this.size();
-    const writer = this.#session.compositor.input;
-    const x = width * 0.54, y = height * 0.80, dy = -height * 0.09;
-    const start = Math.max(0, performance.now() - 72);
-    writer.write(Input.MOTION, Action.DOWN, start, 0, 0, 0, x, y);
-    for (let step = 1; step <= 4; ++step) {
-      writer.write(Input.MOTION, Action.MOVE, start + step * 16, 0, 0, 0,
-        x, y + step * dy, 0, dy, 0, dy / 0.016);
+    try {
+      this.#session.abi.openAllApps();
+    } catch (error) {
+      this.#fail(error);
     }
-    writer.write(Input.MOTION, Action.UP, start + 72, 0, 0, 0, x, y + 4 * dy, 0, 0, 0, dy / 0.016);
   }
 
   navigate(action) {
@@ -320,6 +329,9 @@ export class LauncherHost {
     try {
       const bytes = this.#apks.get(launch.apkName);
       if (!bytes) throw new Error(`The APK for ${launch.package} is unavailable (${launch.apkName})`);
+      const { top, bottom } = abi.state().systemUiInsets;
+      const height = this.#session.size.height;
+      this.appSurface.style.inset = `${100 * top / height}% 0 ${100 * bottom / height}%`;
       abi.pause();
       this.#stopLoop();
       input.blurIME();

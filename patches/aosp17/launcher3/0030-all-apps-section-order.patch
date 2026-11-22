@@ -1,0 +1,36 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/allapps/AlphabeticalAppsList.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/allapps/AlphabeticalAppsList.java
+@@ -46,11 +46,11 @@
+ 
+ import java.io.PrintWriter;
+ import java.util.ArrayList;
++import java.util.Comparator;
+ import java.util.List;
+ import java.util.Locale;
+ import java.util.Map;
+ import java.util.Objects;
+-import java.util.TreeMap;
+ import java.util.function.Predicate;
+ import java.util.stream.Collectors;
+ import java.util.stream.Stream;
+@@ -264,15 +264,13 @@
+         Locale curLocale = mActivityContext.asContext().getResources().getConfiguration().locale;
+         boolean localeRequiresSectionSorting = curLocale.equals(Locale.SIMPLIFIED_CHINESE);
+         if (localeRequiresSectionSorting) {
+-            // Compute the section headers. We use a TreeMap with the section name comparator to
+-            // ensure that the sections are ordered when we iterate over it later
++            // Group apps by section and sort the section headers in the current locale.
+             appSteam = appSteam.collect(Collectors.groupingBy(
+-                    info -> info.sectionName,
+-                    () -> new TreeMap<>(new LabelComparator()),
+-                    Collectors.toCollection(ArrayList::new)))
+-                    .values()
++                    info -> info.sectionName, Collectors.toCollection(ArrayList::new)))
++                    .entrySet()
+                     .stream()
+-                    .flatMap(ArrayList::stream);
++                    .sorted(Comparator.comparing(Map.Entry::getKey, new LabelComparator()))
++                    .flatMap(section -> section.getValue().stream());
+         }
+ 
+         appSteam.forEachOrdered(mApps::add);

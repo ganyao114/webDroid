@@ -7,6 +7,7 @@ if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/Aosp17UiFramework.cmake")
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(WA_AAPT2_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/aapt2" CACHE FILEPATH "SDK 36 aapt2")
 set(WA_ZIPALIGN_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/zipalign" CACHE FILEPATH "SDK 36 zipalign")

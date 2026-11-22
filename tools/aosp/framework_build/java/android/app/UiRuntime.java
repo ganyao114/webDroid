@@ -356,6 +356,10 @@ public final class UiRuntime {
                 .addCategory(Intent.CATEGORY_HOME));
     }
     public static void sendBack() { if (current != null) current.performBackPressed(); }
+    public static void sendAllApps() {
+        if (current != null) current.onNewIntent(new Intent(Intent.ACTION_ALL_APPS)
+                .setComponent(current.getComponentName()));
+    }
     public static void packageChanged(String name, boolean replaced) {
         if (context != null && context.launcher != null) context.launcher.dispatchPackageChanged(name, replaced);
     }
@@ -449,9 +453,17 @@ public final class UiRuntime {
     }
 
     public static boolean dispatchKey(long time, int action, int code, int meta) {
-        if (current == null || !current.isResumed()) return false;
         if (action == KeyEvent.ACTION_DOWN) keyDownTime = time;
-        boolean handled = current.dispatchKeyEvent(new KeyEvent(keyDownTime, time, action, code, 0, meta));
+        return dispatchSystemKey(new KeyEvent(keyDownTime, time, action, code, 0, meta));
+    }
+
+    public static boolean dispatchSystemKey(KeyEvent event) {
+        if (current == null || !current.isResumed()) return false;
+        if (event.getKeyCode() == KeyEvent.KEYCODE_HOME) {
+            if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) sendHome();
+            return true;
+        }
+        boolean handled = current.dispatchKeyEvent(event);
         finishIfRequested();
         return handled;
     }

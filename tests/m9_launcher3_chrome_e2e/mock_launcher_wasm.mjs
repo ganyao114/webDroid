@@ -17,7 +17,8 @@ export function mockLauncherWasm() {
   const view = new DataView(wasmMemory.buffer), words = new Uint32Array(wasmMemory.buffer);
   const allocations = new Map(), calls = [], events = [], apps = new Map();
   let heap = 0x600000, lastError, state, acquired, pending, locale, size, sequence, touch;
-  let timeNs, vsyncFrame, paused, loadedFramework, loadedResources, loadedSystemUi, recentsPending;
+  let timeNs, vsyncFrame, paused, loadedFramework, loadedFallback, loadedResources, loadedSystemUi, recentsPending;
+  let foregroundKey;
   const u16 = (at, n) => view.setUint16(at, n, true);
   const u32 = (at, n) => view.setUint32(at, n, true);
   const float = (at, n) => view.setFloat32(at, n, true);
@@ -175,12 +176,14 @@ export function mockLauncherWasm() {
       assert(['en-US', 'zh-CN'].includes(locale));
       size = { width, height, density };
       state = { booted: false, package: 'com.android.launcher3', activity: 'com.android.launcher3.Launcher',
+        launcherUpstream: false, launcherDexCount: 0, launcherClassCount: 0,
         systemUiMounted: false, systemUiClass: '', systemUiGestural: false,
         systemUiKeyEvents: 0, systemUiLastKeyCode: 0, systemUiLastKeyFlags: 0,
         frames: 0, workspacePage: 0, workspaceScrollX: 0, pageCount: 2, drawerOpen: false, drawerProgress: 0,
         searchQuery: '', gcLive: 412, gcCollections: 3, inputEventsProcessed: 0, launchCount: 0, bootMs: 13.25 };
       sequence = timeNs = vsyncFrame = 0;
-      acquired = paused = loadedFramework = loadedResources = loadedSystemUi = recentsPending = false;
+      acquired = paused = loadedFramework = loadedFallback = loadedResources = loadedSystemUi = recentsPending = false;
+      foregroundKey = 0;
       touch = undefined;
       HEAPU8.fill(0, vsync, vsync + 32);
       HEAPU8.fill(0, input, input + 16 + 128 * 320);
@@ -198,6 +201,13 @@ export function mockLauncherWasm() {
       assert.deepEqual(HEAPU8.slice(ptr, ptr + size), Uint8Array.of(1, 255));
       loadedFramework = true;
       calls.push(['framework']);
+      return 0;
+    },
+    _wa_system_launcher_load_framework_fallback_dex(ptr, size) {
+      assert(loadedFramework);
+      assert.deepEqual(HEAPU8.slice(ptr, ptr + size), Uint8Array.of(8, 248));
+      loadedFallback = true;
+      calls.push(['fallback-framework']);
       return 0;
     },
     _wa_system_launcher_set_framework_res_apk(ptr, size) {
@@ -223,11 +233,14 @@ export function mockLauncherWasm() {
       return 0;
     },
     _wa_system_launcher_boot_apk(ptr, bytes, length) {
-      assert(loadedFramework && loadedResources && loadedSystemUi);
-      assert.equal(string(ptr), 'Launcher3.apk');
+      assert(loadedFramework && loadedFallback && loadedResources && loadedSystemUi);
+      assert.equal(string(ptr), 'Launcher3-upstream.apk');
       assert.deepEqual(HEAPU8.slice(bytes, bytes + length), Uint8Array.of(6, 250));
       calls.push(['boot']);
       state.booted = true;
+      state.launcherUpstream = true;
+      state.launcherDexCount = 4;
+      state.launcherClassCount = 37050;
       state.systemUiMounted = true;
       state.systemUiClass = 'com.android.systemui.statusbar.phone.PhoneStatusBarView';
       draw();
@@ -256,6 +269,27 @@ export function mockLauncherWasm() {
     _wa_system_launcher_resume() { assert(paused); paused = false; calls.push(['resume']); return 0; },
     _wa_system_launcher_send_home() { calls.push(['home']); home(); return 0; },
     _wa_system_launcher_send_back() { calls.push(['back']); home(); return 0; },
+    _wa_system_launcher_open_all_apps() {
+      state.drawerOpen = true;
+      state.drawerProgress = 1;
+      return 0;
+    },
+    _wa_system_launcher_touch_navigation(time, action, x, y) {
+      assert(paused && typeof time === 'bigint');
+      const key = systemUiKeyAt(x, y);
+      if (action === 0) {
+        foregroundKey = key;
+        if (key) recordSystemUiKey(key);
+      } else if (action === 1 || action === 3) {
+        const selected = foregroundKey;
+        foregroundKey = 0;
+        if (action === 1 && key && key === selected) {
+          recordSystemUiKey(key);
+          return key;
+        }
+      }
+      return 0;
+    },
     _wa_system_launcher_set_gesture_navigation(enabled) {
       assert(state.systemUiMounted && (enabled === 0 || enabled === 1));
       state.systemUiGestural = enabled === 1;
@@ -269,6 +303,8 @@ export function mockLauncherWasm() {
     },
     _wa_system_launcher_state_json(ptr, capacity) {
       return text(ptr, capacity, JSON.stringify({ ...state, systemUiButtons: systemUiButtons(),
+        systemUiInsets: { top: 24, bottom: 48 },
+        searchBounds: state.drawerOpen ? { left: 24, right: size.width - 24, top: 64, bottom: 124 } : null,
         installedApps: apps.size, searchResults: matching().length }));
     },
     _wa_system_launcher_consume_launch(ptr, capacity) {
@@ -300,7 +336,8 @@ export function mockLauncherWasm() {
     _wa_bitmap_acquire: () => 0,
     _wa_bitmap_release: () => assert.fail('No acquired bitmap'),
   };
-  const assets = { frameworkDex: Uint8Array.of(1, 255), resources: Uint8Array.of(2, 254),
+  const assets = { frameworkDex: Uint8Array.of(1, 255), fallbackDex: Uint8Array.of(8, 248),
+    resources: Uint8Array.of(2, 254), launcherSources: 879,
     launcher: Uint8Array.of(6, 250), systemUi: Uint8Array.of(7, 249), apks: [
       { name: 'wa_cube_app.apk', bytes: Uint8Array.of(3, 253) },
       { name: 'settings.apk', bytes: Uint8Array.of(4, 252) },

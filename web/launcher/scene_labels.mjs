@@ -1,5 +1,13 @@
 import { checkedRecordSize, Flag, FramePacket, Memory, Op, Surface } from '../surfaceflinger/abi.mjs';
 
+// Launcher3 may wrap or shorten an app's label to fit its cell.
+export function matchesDrawnLabel(drawn, title) {
+  if (drawn === title) return true;
+  const prefix = drawn.trimEnd();
+  return prefix.length > 0 && (title.startsWith(prefix + ' ') ||
+    (prefix.length > 1 && prefix.endsWith('…') && title.startsWith(prefix.slice(0, -1))));
+}
+
 // Read the native text draw operations when a browser needs a tap target in the scene.
 export function sceneLabels(module, scene) {
   const pointer = module._wa_sf_frame_acquire(scene);

@@ -37,7 +37,9 @@ constexpr std::array kAbis{"armeabi-v7a", "arm64-v8a", "x86", "x86_64", "riscv64
 constexpr auto kRunnableAbis = std::span(kAbis).first<2>();
 
 struct Archive {
-    explicit Archive(std::span<const uint8_t> input) : bytes(input.begin(), input.end()) {}
+    Archive(std::span<const uint8_t> input, bool copy_input)
+        : backing(copy_input ? std::vector<uint8_t>(input.begin(), input.end()) : std::vector<uint8_t>()),
+          bytes(copy_input ? std::span<const uint8_t>(backing) : input) {}
 
     std::span<const uint8_t> Stored(const ZipEntry64& entry) const {
         if (entry.method != kCompressStored || entry.compressed_length != entry.uncompressed_length ||
@@ -47,7 +49,7 @@ struct Archive {
         const auto length = static_cast<size_t>(entry.uncompressed_length);
         if (offset > bytes.size() || length > bytes.size() - offset)
             return {};
-        return std::span(bytes).subspan(offset, length);
+        return bytes.subspan(offset, length);
     }
 
     std::unique_ptr<uint8_t[]> Extract(const ZipEntry64& entry) const {
@@ -60,7 +62,8 @@ struct Archive {
         return output;
     }
 
-    const std::vector<uint8_t> bytes;
+    const std::vector<uint8_t> backing;
+    const std::span<const uint8_t> bytes;
     std::unique_ptr<ZipArchive, decltype(&CloseArchive)> zip{nullptr, CloseArchive};
 };
 
@@ -164,8 +167,8 @@ class MemoryApkProvider final : public android::AssetsProvider {
 };
 
 android::ApkAssetsPtr OpenAssets(std::span<const uint8_t> bytes,
-                                std::shared_ptr<Archive>& archive) {
-    archive = std::make_shared<Archive>(bytes);
+                                std::shared_ptr<Archive>& archive, bool copy_input = true) {
+    archive = std::make_shared<Archive>(bytes, copy_input);
     ZipArchiveHandle zip = nullptr;
     const auto status =
         OpenArchiveFromMemory(archive->bytes.data(), archive->bytes.size(), kArchiveName, &zip);
@@ -482,12 +485,12 @@ int32_t wa::system::ReadApkManifest(std::span<const uint8_t> bytes, ApkManifest&
 }
 
 int32_t wa::system::ReadLauncherPackage(std::span<const uint8_t> bytes, const char* locale,
-                                        int density, LauncherPackage& out,
-                                        std::vector<uint8_t>* dex) {
+                                        int density, LauncherPackage& out) {
     if (bytes.empty() || !std::in_range<ptrdiff_t>(bytes.size()))
         return WA_ERR_INVALID;
     std::shared_ptr<Archive> archive;
-    const auto assets = OpenAssets(bytes, archive);
+    // This method copies metadata out of the resource table before returning.
+    const auto assets = OpenAssets(bytes, archive, /*copy_input=*/false);
     AssetManager2 manager;
     if (!assets || !manager.SetApkAssets({assets}))
         return WA_ERR_INVALID;
@@ -501,15 +504,6 @@ int32_t wa::system::ReadLauncherPackage(std::span<const uint8_t> bytes, const ch
     LauncherPackage indexed;
     if (!ParseManifest(manager, manifest, &indexed))
         return WA_ERR_INVALID;
-    if (dex) {
-        const auto asset = manager.OpenNonAsset("classes.dex", Asset::ACCESS_BUFFER);
-        if (!asset || !asset->getLength())
-            return WA_ERR_INVALID;
-        const auto* data = static_cast<const uint8_t*>(asset->getBuffer(true));
-        if (!data)
-            return WA_ERR_INVALID;
-        dex->assign(data, data + asset->getLength());
-    }
     out = std::move(indexed);
     return WA_OK;
 }

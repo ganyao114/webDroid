@@ -241,10 +241,16 @@ void Vm::LoadDexFile(std::string location, std::vector<uint8_t> bytes) {
 }
 
 void Vm::LoadFallbackDexFile(const std::string& path) {
-  runtime_->linker.LoadDexFile(path, ReadDexFile(path), true);
+  LoadFallbackDexFile(path, ReadDexFile(path));
 }
 
-void Vm::LoadApkDexFiles(const std::string& apk_path) { runtime_->linker.LoadApkDexFiles(apk_path); }
+void Vm::LoadFallbackDexFile(std::string location, std::vector<uint8_t> bytes) {
+  runtime_->linker.LoadDexFile(std::move(location), std::move(bytes), true);
+}
+
+void Vm::LoadApkDexFiles(const std::string& apk_path, bool fallback) {
+  runtime_->linker.LoadApkDexFiles(apk_path, fallback);
+}
 DexStats Vm::GetDexStats() const { return runtime_->linker.GetDexStats(); }
 std::string Vm::DexLocation(std::string_view descriptor) const {
   return runtime_->linker.DexLocation(descriptor);
@@ -277,6 +283,13 @@ Value Vm::ReadField(Object* receiver, std::string_view name, std::string_view de
   return object.fields[field.slot];
 }
 
+Value Vm::ReadStaticField(std::string_view owner, std::string_view name, std::string_view descriptor) {
+  auto& linker = runtime_->linker;
+  const auto& field = linker.FindField(linker.Resolve(owner), name, descriptor, true);
+  linker.Initialize(*field.owner);
+  return field.value;
+}
+
 Object* Vm::NewObject(std::string_view type, std::string_view constructor,
                       std::span<const Value> args) {
   Class& cls = runtime_->linker.Resolve(type);
@@ -306,6 +319,12 @@ MethodStats Vm::GetMethodStats(std::string_view owner, std::string_view name, st
 MethodStats Vm::GetInstanceMethodStats(std::string_view owner, std::string_view name,
                                        std::string_view signature) {
   return runtime_->linker.FindMethod(runtime_->linker.Resolve(owner), name, signature, false).stats;
+}
+size_t Vm::InterpretedMethodCount(std::string_view descriptor) const {
+  const auto* cls = runtime_->linker.FindLinkedClass(descriptor);
+  return cls ? std::ranges::count_if(cls->methods, [](const auto& entry) {
+    return entry.second.stats.interpreted != 0;
+  }) : 0;
 }
 size_t Vm::ExecutedOpcodeCount() const { return std::ranges::count(runtime_->executed_opcodes, 1); }
 uint64_t Vm::NativeCalls(std::string_view owner) const { return runtime_->jni->Calls(owner); }

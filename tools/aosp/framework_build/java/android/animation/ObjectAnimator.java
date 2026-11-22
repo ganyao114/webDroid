@@ -7,6 +7,7 @@ public class ObjectAnimator extends ValueAnimator {
     private Runnable readStart;
     private Object target;
     private Method floatSetter;
+    private boolean preparedForSeek;
 
     static ObjectAnimator forFloatKeyframes(String property, float[] fractions, float[] values,
                                             TimeInterpolator[] interpolators) {
@@ -62,7 +63,38 @@ public class ObjectAnimator extends ValueAnimator {
         return animation;
     }
 
-    @Override public void start() { if (readStart != null) readStart.run(); super.start(); }
-    @Override public void end() { if (!isStarted() && readStart != null) readStart.run(); super.end(); }
+    @SafeVarargs
+    @SuppressWarnings("unchecked")
+    public static <T, V> ObjectAnimator ofObject(T target, Property<T, V> property,
+            TypeEvaluator<V> evaluator, V... values) {
+        ObjectAnimator animation = new ObjectAnimator();
+        Object[] keyframes = values.clone();
+        animation.readStart = () -> animation.setObjectValues(evaluator, keyframes.length == 1
+                ? new Object[] {property.get(target), keyframes[0]} : keyframes);
+        animation.addUpdateListener(animator -> property.set(target, (V) animator.getAnimatedValue()));
+        return animation;
+    }
+
+    private void readStartValues() {
+        if (!preparedForSeek && readStart != null) readStart.run();
+    }
+
+    @Override public void setCurrentPlayTime(long playTime) {
+        if (!isStarted()) {
+            readStartValues();
+            preparedForSeek = true;
+        }
+        super.setCurrentPlayTime(playTime);
+    }
+    @Override public void start() {
+        readStartValues();
+        preparedForSeek = false;
+        super.start();
+    }
+    @Override public void end() {
+        if (!isStarted()) readStartValues();
+        preparedForSeek = false;
+        super.end();
+    }
     @Override public ObjectAnimator setDuration(long duration) { super.setDuration(duration); return this; }
 }

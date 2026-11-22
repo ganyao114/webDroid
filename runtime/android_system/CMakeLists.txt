@@ -7,6 +7,8 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
     include(../../cmake/Aosp17ArtHGraph.cmake)
     include(../../cmake/Aosp17UiFramework.cmake)
     include(BinderRuntime.cmake)
+    include(UpstreamLauncher.cmake)
+    option(WA_VERIFY_LAUNCHER_DEX "Verify the system APK DEX files during Launcher boot" ON)
     # Compile AOSP translation units independently of SwiftVM's fmt.
     add_library(wa_android_system_apk OBJECT apk_loader.cpp apk_dex.cpp)
     target_include_directories(wa_android_system_apk PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
@@ -52,7 +54,7 @@ if(EMSCRIPTEN)
         --no-entry -O3 -flto=thin
         -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node
         -sUSE_WEBGL2=1 -sFULL_ES3=1 -sOFFSCREENCANVAS_SUPPORT=1 -sSHARED_MEMORY=1
-        -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=134217728 -sSTACK_SIZE=1048576
+        -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=1048576
         -sABORTING_MALLOC=0
         -sEXPORTED_RUNTIME_METHODS=HEAPU8,wasmMemory
     )
@@ -70,9 +72,11 @@ if(EMSCRIPTEN)
     )
     if(TARGET wa_android_system_apk)
         target_link_libraries(android_system PRIVATE wa_android_system_apk wa_android_system_binder)
+        add_dependencies(android_system wa_upstream_launcher_assets)
         target_sources(android_system PRIVATE ${wa_launcher_runtime_sources})
         target_include_directories(android_system PRIVATE "${wa_systemui_host}")
         target_link_libraries(android_system PRIVATE aosp17_ui_jni aosp17_libandroidfw)
+        target_compile_definitions(android_system PRIVATE WA_VERIFY_LAUNCHER_DEX=$<BOOL:${WA_VERIFY_LAUNCHER_DEX}>)
         target_compile_options(android_system PRIVATE -ffunction-sections -fdata-sections)
         target_compile_options(aosp17_art_interp PRIVATE -ffunction-sections -fdata-sections)
         # Accept caller-owned vproc memory through the Emscripten loader.
@@ -100,12 +104,15 @@ if(EMSCRIPTEN)
             _wa_system_art_last_error _wa_system_art_stats_json _wa_system_art_gc_collect
             _wa_system_art_set_gc_paused _wa_system_art_set_inline_caches_enabled
             _wa_system_launcher_create _wa_system_launcher_destroy _wa_system_launcher_sf_ctx
-            _wa_system_launcher_load_framework_dex _wa_system_launcher_set_framework_res_apk
+            _wa_system_launcher_load_framework_dex _wa_system_launcher_load_framework_fallback_dex
+            _wa_system_launcher_set_framework_res_apk
             _wa_system_launcher_install_apk _wa_system_launcher_load_systemui_apk
             _wa_system_launcher_boot_apk _wa_system_launcher_tick
             _wa_system_launcher_resize _wa_system_launcher_pause _wa_system_launcher_resume
             _wa_system_launcher_set_gesture_navigation _wa_system_launcher_consume_recents
+            _wa_system_launcher_touch_navigation
             _wa_system_launcher_send_home _wa_system_launcher_send_back _wa_system_launcher_state_json
+            _wa_system_launcher_open_all_apps
             _wa_system_launcher_consume_launch _wa_system_launcher_last_error
             _wa_system_sf_init _wa_system_sf_ctx _wa_system_sf_destroy
             _wa_sf_create _wa_sf_destroy _wa_sf_begin _wa_sf_set_layer _wa_sf_remove_layer
@@ -130,6 +137,7 @@ else()
         target_link_libraries(wa_android_system PRIVATE wa_android_system_apk wa_android_system_binder)
         target_sources(wa_android_system PRIVATE ${wa_launcher_runtime_sources})
         target_include_directories(wa_android_system PRIVATE "${wa_systemui_host}")
+        target_compile_definitions(wa_android_system PRIVATE WA_VERIFY_LAUNCHER_DEX=$<BOOL:${WA_VERIFY_LAUNCHER_DEX}>)
         target_link_libraries(wa_android_system PRIVATE aosp17_ui_jni aosp17_libandroidfw
             PUBLIC wa_hal_surfaceflinger)
     endif()

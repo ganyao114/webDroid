@@ -1,0 +1,99 @@
+--- a/packages/apps/Launcher3/res/xml/default_workspace_4x4.xml
++++ b/packages/apps/Launcher3/res/xml/default_workspace_4x4.xml
+@@ -26,6 +26,8 @@
+         <favorite launcher:uri="#Intent;action=android.intent.action.DIAL;end" />
+         <favorite launcher:uri="tel:123" />
+         <favorite launcher:uri="#Intent;action=android.intent.action.CALL_BUTTON;end" />
++        <favorite launcher:packageName="org.wasmandroid.cube"
++            launcher:className="org.wasmandroid.cube.CubeActivity" />
+     </resolve>
+ 
+     <resolve
+@@ -38,6 +40,8 @@
+         <favorite launcher:uri="smsto:" />
+         <favorite launcher:uri="mms:" />
+         <favorite launcher:uri="mmsto:" />
++        <favorite launcher:packageName="org.wasmandroid.fixtures.calculator"
++            launcher:className="org.wasmandroid.fixtures.DemoActivity" />
+     </resolve>
+ 
+     <resolve
+@@ -84,4 +88,12 @@
+         <favorite launcher:uri="market://details?id=com.android.launcher" />
+     </resolve>
+ 
++    <!-- Additional standalone demo apps. -->
++    <favorite launcher:packageName="org.wasmandroid.fixtures.clock"
++        launcher:className="org.wasmandroid.fixtures.DemoActivity"
++        launcher:screen="0" launcher:x="2" launcher:y="1" />
++    <favorite launcher:packageName="org.wasmandroid.fixtures.settings"
++        launcher:className="org.wasmandroid.fixtures.DemoActivity"
++        launcher:screen="1" launcher:x="1" launcher:y="1" />
++
+ </favorites>
+--- a/packages/apps/Launcher3/res/xml/default_workspace_5x5.xml
++++ b/packages/apps/Launcher3/res/xml/default_workspace_5x5.xml
+@@ -26,6 +26,8 @@
+         <favorite launcher:uri="#Intent;action=android.intent.action.DIAL;end" />
+         <favorite launcher:uri="tel:123" />
+         <favorite launcher:uri="#Intent;action=android.intent.action.CALL_BUTTON;end" />
++        <favorite launcher:packageName="org.wasmandroid.cube"
++            launcher:className="org.wasmandroid.cube.CubeActivity" />
+     </resolve>
+ 
+     <resolve
+@@ -38,6 +40,8 @@
+         <favorite launcher:uri="smsto:" />
+         <favorite launcher:uri="mms:" />
+         <favorite launcher:uri="mmsto:" />
++        <favorite launcher:packageName="org.wasmandroid.fixtures.calculator"
++            launcher:className="org.wasmandroid.fixtures.DemoActivity" />
+     </resolve>
+ 
+     <resolve
+@@ -95,4 +99,12 @@
+         <favorite launcher:uri="market://details?id=com.android.launcher" />
+     </resolve>
+ 
++    <!-- Additional standalone demo apps. -->
++    <favorite launcher:packageName="org.wasmandroid.fixtures.clock"
++        launcher:className="org.wasmandroid.fixtures.DemoActivity"
++        launcher:screen="0" launcher:x="2" launcher:y="1" />
++    <favorite launcher:packageName="org.wasmandroid.fixtures.settings"
++        launcher:className="org.wasmandroid.fixtures.DemoActivity"
++        launcher:screen="1" launcher:x="1" launcher:y="1" />
++
+ </favorites>
+--- a/packages/apps/Launcher3/res/xml/default_workspace_6x5.xml
++++ b/packages/apps/Launcher3/res/xml/default_workspace_6x5.xml
+@@ -25,6 +25,8 @@
+         launcher:y="0" >
+         <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_EMAIL;end" />
+         <favorite launcher:uri="mailto:" />
++        <favorite launcher:packageName="org.wasmandroid.cube"
++            launcher:className="org.wasmandroid.cube.CubeActivity" />
+     </resolve>
+ 
+     <resolve
+@@ -33,6 +35,8 @@
+         launcher:x="1"
+         launcher:y="0" >
+         <favorite launcher:uri="#Intent;action=android.intent.action.MAIN;category=android.intent.category.APP_CALENDAR;end" />
++        <favorite launcher:packageName="org.wasmandroid.fixtures.calculator"
++            launcher:className="org.wasmandroid.fixtures.DemoActivity" />
+     </resolve>
+ 
+     <resolve
+@@ -73,4 +77,12 @@
+         <favorite launcher:uri="#Intent;action=android.intent.action.CAMERA_BUTTON;end" />
+     </resolve>
+ 
++    <!-- Additional standalone demo apps. -->
++    <favorite launcher:packageName="org.wasmandroid.fixtures.clock"
++        launcher:className="org.wasmandroid.fixtures.DemoActivity"
++        launcher:screen="0" launcher:x="2" launcher:y="1" />
++    <favorite launcher:packageName="org.wasmandroid.fixtures.settings"
++        launcher:className="org.wasmandroid.fixtures.DemoActivity"
++        launcher:screen="1" launcher:x="1" launcher:y="1" />
++
+ </favorites>

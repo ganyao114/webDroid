@@ -31,7 +31,7 @@
   overflow: hidden;
 }
 
-.wa-device[data-form="phone"] { --shell-width: 390px; --shell-ratio: 390 / 660; }
+.wa-device[data-form="phone"] { --shell-width: 448px; --shell-ratio: 448 / 896; }
 .wa-device[data-dragging="true"] { outline: 2px solid #73e8c0; outline-offset: 4px; }
 
 .wa-viewport {
@@ -80,7 +80,6 @@
   touch-action: none;
 }
 
-.wa-device[data-phase="app"] .wa-launcher-surface { opacity: 0; pointer-events: none; }
 .wa-device[data-phase="app"] .wa-app-surface { opacity: 1; pointer-events: auto; }
 .wa-device[data-phase="opening-app"] .wa-launcher-surface { pointer-events: none; }
 

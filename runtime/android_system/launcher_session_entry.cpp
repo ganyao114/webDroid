@@ -17,6 +17,11 @@
 #include <stdexcept>
 #include <utility>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/heap.h>
+#include <unistd.h>
+#endif
+
 namespace {
 
 using wa::interp::Object;
@@ -32,6 +37,12 @@ using wa::ui_jni::PackageActivity;
 using Clock = std::chrono::steady_clock;
 constexpr char kPackage[] = "com.android.launcher3";
 constexpr char kActivity[] = "com.android.launcher3.Launcher";
+constexpr char kLauncher[] = "Lcom/android/launcher3/Launcher;";
+constexpr char kLauncherApplication[] = "Lcom/android/launcher3/LauncherApplication;";
+constexpr char kDagger[] = "Lcom/android/launcher3/dagger/DaggerLauncherAppComponent;";
+constexpr char kWorkspace[] = "Lcom/android/launcher3/Workspace;";
+constexpr char kLauncherState[] = "Lcom/android/launcher3/LauncherState;";
+constexpr char kAppsView[] = "Lcom/android/launcher3/allapps/ActivityAllAppsContainerView;";
 constexpr char kUiRuntime[] = "Landroid/app/UiRuntime;";
 constexpr char kSystemUiPackage[] = "com.android.systemui";
 constexpr char kStatusBar[] = "Lcom/android/systemui/statusbar/phone/PhoneStatusBarView;";
@@ -45,6 +56,15 @@ constexpr int kMatchDefaultOnly = 0x10000;
 constexpr int kMatchDisabled = 0x200;
 
 #include "systemui_host_dex.inc"
+
+std::string GuestError(Vm& vm) {
+    auto message = vm.ExceptionSummary();
+    for (const auto& frame : vm.ExceptionStackTrace()) {
+        if (message.size() + frame.size() > 3500) break;
+        message += "\n" + frame;
+    }
+    return message;
+}
 
 double ElapsedMs(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
@@ -181,16 +201,16 @@ class SystemUi {
   public:
     explicit SystemUi(Vm& vm) : vm_(vm), roots_(vm) {}
 
-    void Mount(Object* activity, const char* platform, const char* apk, const char* locale,
+    void Mount(Object* activity, const char* apk, const char* locale,
                const wa_sf_vsync_state_t& display) {
         wa::interp::ScopedHandleScope local(vm_);
         const std::array args{
-            local.Hold(Value::Ref(activity)), local.Hold(Value::Ref(vm_.NewString(platform))),
+            local.Hold(Value::Ref(activity)),
             local.Hold(Value::Ref(vm_.NewString(apk))), local.Hold(Value::Ref(vm_.NewString(locale))),
             Value::Int(display.viewport_w), Value::Int(display.viewport_h), Value::Int(display.density_dpi),
         };
         context_ = roots_.Hold(vm_.CallStatic(kSystemUiHost, "create",
-            "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;III)"
+            "(Landroid/app/Activity;Ljava/lang/String;Ljava/lang/String;III)"
             "Lorg/wasmandroid/launcher/LauncherSystemUi;", args).ref());
         auto* overlay = local.Hold(vm_.CallVirtual(context_, "attachOverlay",
             "()Landroid/widget/FrameLayout;").ref());
@@ -265,12 +285,19 @@ class SystemUi {
 
     int32_t ConsumeRecents() { return vm_.CallVirtual(context_, "consumeRecents", "()Z").i(); }
 
+    int32_t TouchNavigation(int64_t time, int32_t action, float x, float y) {
+        const std::array args{Value::Long(time), Value::Int(action), Value::Float(x), Value::Float(y)};
+        return vm_.CallVirtual(context_, "dispatchNavigationTouch", "(JIFF)I", args).i();
+    }
+
     std::string Describe() {
         return std::string(",\"systemUiMounted\":true,\"systemUiClass\":") + Quote(class_name_) +
             ",\"systemUiGestural\":" + (gestural_ ? "true" : "false") +
             ",\"systemUiKeyEvents\":" + std::to_string(vm_.CallVirtual(context_, "keyEvents", "()I").i()) +
             ",\"systemUiLastKeyCode\":" + std::to_string(vm_.CallVirtual(context_, "lastKeyCode", "()I").i()) +
             ",\"systemUiLastKeyFlags\":" + std::to_string(vm_.CallVirtual(context_, "lastKeyFlags", "()I").i()) +
+            ",\"systemUiInsets\":{\"top\":" + std::to_string(vm_.CallVirtual(status_, "getHeight", "()I").i()) +
+            ",\"bottom\":" + std::to_string(vm_.CallVirtual(navigation_, "getHeight", "()I").i()) + "}" +
             ",\"systemUiButtons\":{\"back\":" + ButtonCenter("getBackButton") +
             ",\"home\":" + ButtonCenter("getHomeButton") +
             ",\"recents\":" + ButtonCenter("getRecentsButton") + "}";
@@ -326,7 +353,8 @@ struct InstalledApp {
 };
 
 struct LauncherRuntime {
-    Vm vm{wa::interp::Options{.gc_interval = kGcInterval}};
+    Vm vm{wa::interp::Options{.gc_interval = kGcInterval, .verify_dex = WA_VERIFY_LAUNCHER_DEX,
+                              .capture_exception_stack = true}};
     wa::ui_jni::UiBridge ui;
     SystemUi system_ui{vm};
 
@@ -436,11 +464,39 @@ struct Session {
         return runtime->vm.CallStatic(kUiRuntime, "getActivity", "()Landroid/app/Activity;").ref();
     }
 
+    std::string MethodCounts() const {
+        const auto& vm = runtime->vm;
+        const std::pair<const char*, const char*> classes[] = {
+            {"LauncherApplication", kLauncherApplication},
+            {"Launcher", kLauncher},
+            {"LauncherModel", "Lcom/android/launcher3/LauncherModel;"},
+            {"Workspace", kWorkspace},
+            {"CellLayout", "Lcom/android/launcher3/CellLayout;"},
+            {"Hotseat", "Lcom/android/launcher3/Hotseat;"},
+            {"BubbleTextView", "Lcom/android/launcher3/BubbleTextView;"},
+            {"DeviceProfile", "Lcom/android/launcher3/DeviceProfile;"},
+            {"InvariantDeviceProfile", "Lcom/android/launcher3/InvariantDeviceProfile;"},
+            {"ActivityAllAppsContainerView", kAppsView},
+            {"DaggerLauncherAppComponent", kDagger},
+            {"PhoneStatusBarView", kStatusBar},
+            {"NavigationBarView", "Lcom/android/systemui/navigationbar/views/NavigationBarView;"},
+            {"KeyButtonView", "Lcom/android/systemui/navigationbar/views/buttons/KeyButtonView;"},
+            {"Clock", "Lcom/android/systemui/statusbar/policy/Clock;"},
+            {"BatteryMeterView", "Lcom/android/systemui/battery/BatteryMeterView;"},
+        };
+        std::string json = ",\"interpretedMethods\":{";
+        for (const auto& [name, descriptor] : classes) {
+            if (json.back() != '{') json += ',';
+            json += Quote(name) + ':' + std::to_string(vm.InterpretedMethodCount(descriptor));
+        }
+        return json + "}";
+    }
+
     std::string Describe() {
         int page = 0, pages = 0, scroll_x = 0, search_results = 0;
         float progress = 0;
         bool drawer_open = false;
-        std::string query;
+        std::string query, search_bounds = "null";
         wa::interp::GcStats gc{};
         if (booted) {
             auto& vm = runtime->vm;
@@ -451,16 +507,39 @@ struct Session {
             page = vm.CallVirtual(workspace, "getNextPage", "()I").i();
             pages = vm.CallVirtual(workspace, "getChildCount", "()I").i();
             scroll_x = vm.CallVirtual(workspace, "getScrollX", "()I").i();
-            progress = vm.ReadField(activity, "drawerProgress", "F").f();
-            drawer_open = vm.CallVirtual(activity, "isDrawerOpen", "()Z").i();
-            auto* drawer = roots.Hold(vm.ReadField(activity, "drawer",
-                "Lcom/android/launcher3/allapps/ActivityAllAppsContainerView;").ref());
-            auto* search = roots.Hold(vm.ReadField(drawer, "search",
-                "Lcom/android/launcher3/allapps/search/AppsSearchContainerLayout;").ref());
-            auto* text = roots.Hold(vm.CallVirtual(search, "getText", "()Landroid/text/Editable;").ref());
-            query = vm.StringUtf8(vm.CallVirtual(text, "toString", "()Ljava/lang/String;").ref());
-            auto* matches = roots.Hold(vm.ReadField(drawer, "matches", "Lcom/android/launcher3/util/IntArray;").ref());
-            search_results = vm.CallVirtual(matches, "size", "()I").i();
+            auto* states = roots.Hold(vm.CallVirtual(activity, "getStateManager",
+                "()Lcom/android/launcher3/statemanager/StateManager;").ref());
+            auto* state = roots.Hold(vm.CallVirtual(states, "getState",
+                "()Lcom/android/launcher3/statemanager/BaseState;").ref());
+            drawer_open = state == vm.ReadStaticField(kLauncherState, "ALL_APPS", kLauncherState).ref();
+            auto* transition = roots.Hold(vm.CallVirtual(activity, "getAllAppsController",
+                "()Lcom/android/launcher3/allapps/AllAppsTransitionController;").ref());
+            // The upstream controller's progress runs from 1 at HOME to 0 in All Apps.
+            progress = std::clamp(1.f - vm.CallVirtual(transition, "getProgress", "()F").f(), 0.f, 1.f);
+            auto* apps_view = roots.Hold(vm.CallVirtual(activity, "getAppsView",
+                "()Lcom/android/launcher3/allapps/ActivityAllAppsContainerView;").ref());
+            auto* manager = roots.Hold(vm.CallVirtual(apps_view, "getSearchUiManager",
+                "()Lcom/android/launcher3/allapps/SearchUiManager;").ref());
+            auto* search = roots.Hold(vm.CallVirtual(manager, "getEditText",
+                "()Lcom/android/launcher3/ExtendedEditText;").ref());
+            if (search) {
+                auto* content = roots.Hold(vm.CallVirtual(search, "getText", "()Landroid/text/Editable;").ref());
+                query = vm.StringUtf8(vm.CallVirtual(content, "toString", "()Ljava/lang/String;").ref());
+                if (drawer_open) {
+                    const std::array args{Value::Ref(search)};
+                    auto* bounds = roots.Hold(vm.CallStatic(kSystemUiHost, "viewBounds",
+                        "(Landroid/view/View;)Landroid/graphics/Rect;", args).ref());
+                    if (bounds) {
+                        search_bounds = "{\"left\":" + std::to_string(vm.ReadField(bounds, "left", "I").i()) +
+                            ",\"top\":" + std::to_string(vm.ReadField(bounds, "top", "I").i()) +
+                            ",\"right\":" + std::to_string(vm.ReadField(bounds, "right", "I").i()) +
+                            ",\"bottom\":" + std::to_string(vm.ReadField(bounds, "bottom", "I").i()) + "}";
+                    }
+                }
+            }
+            auto* results = roots.Hold(vm.CallVirtual(apps_view, query.empty() ? "getPersonalAppList" :
+                "getSearchResultList", "()Lcom/android/launcher3/allapps/AlphabeticalAppsList;").ref());
+            search_results = vm.CallVirtual(results, "getNumFilteredApps", "()I").i();
             gc = vm.HeapStats();
         }
         const auto samples = std::min<size_t>(frames, frame_ms.size());
@@ -483,11 +562,21 @@ struct Session {
             frames, boot_ms, frames ? frame_ms[(frames - 1) % frame_ms.size()] : 0., average, p95,
             apps.size(), page, pages, scroll_x, drawer_open ? "true" : "false", progress, search_results,
             commands, app_commands, gc.live, gc.collections, gc.reclaimed, input_events, launch_count);
-        return std::string("{\"booted\":") + (booted ? "true" : "false")
+        auto json = std::string("{\"booted\":") + (booted ? "true" : "false")
             + ",\"package\":" + Quote(booted ? kPackage : "")
             + ",\"activity\":" + Quote(booted ? kActivity : "") + numbers
+            + ",\"launcherUpstream\":" + (booted ? "true" : "false")
+            + ",\"launcherDexCount\":" + std::to_string(launcher_dex_files)
+            + ",\"launcherClassCount\":" + std::to_string(launcher_class_definitions)
+            + ",\"launcherDexLoadMs\":" + std::to_string(launcher_dex_load_ms)
             + (booted ? runtime->system_ui.Describe() : ",\"systemUiMounted\":false,\"systemUiClass\":\"\"")
-            + ",\"searchQuery\":" + Quote(query) + "}";
+            + ",\"searchQuery\":" + Quote(query) + ",\"searchBounds\":" + search_bounds;
+        if (booted) json += MethodCounts();
+#ifdef __EMSCRIPTEN__
+        json += ",\"wasmLinearBytes\":" + std::to_string(emscripten_get_heap_size()) +
+            ",\"wasmHeapEndBytes\":" + std::to_string(reinterpret_cast<uintptr_t>(sbrk(0)));
+#endif
+        return json + "}";
     }
 
     wa_sf_vsync_state_t display;
@@ -496,13 +585,14 @@ struct Session {
     LauncherDecor decor;
     std::map<std::string, InstalledApp, std::less<>> apps;
     std::unique_ptr<MountedApk> framework_resource, launcher_apk, systemui_apk;
-    std::vector<uint8_t> framework_dex;
+    std::vector<uint8_t> framework_dex, fallback_dex;
     std::unique_ptr<LauncherRuntime> runtime;
     bool booted = false, paused = false, frame_pending = false;
     uint64_t last_frame_time = 0, pending_time = 0;
     uint32_t frames = 0;
     size_t commands = 0, app_commands = 0, input_events = 0, launch_count = 0;
-    double boot_ms = 0;
+    size_t launcher_dex_files = 0, launcher_class_definitions = 0;
+    double boot_ms = 0, launcher_dex_load_ms = 0;
     std::array<double, 120> frame_ms{};
     std::string pending;
 };
@@ -520,7 +610,7 @@ int32_t Api(const char* operation, Call call) {
         return result;
     } catch (const wa::interp::ManagedException&) {
         auto& vm = session->runtime->vm;
-        last_error = std::string(operation) + ": " + vm.ExceptionSummary();
+        last_error = std::string(operation) + ": " + GuestError(vm);
         vm.ClearException();
         return WA_ERR_INVALID;
     } catch (const std::bad_alloc&) {
@@ -590,6 +680,17 @@ int32_t wa_system_launcher_load_framework_dex(const uint8_t* bytes, size_t lengt
     });
 }
 
+int32_t wa_system_launcher_load_framework_fallback_dex(const uint8_t* bytes, size_t length) {
+    return Active("Load upstream framework DEX", [&](Session& s) -> int32_t {
+        if (!bytes || !length || !s.runtime) return WA_ERR_INVALID;
+        if (s.booted || !s.fallback_dex.empty()) return WA_ERR_BUSY;
+        std::vector<uint8_t> dex(bytes, bytes + length);
+        s.runtime->vm.LoadFallbackDexFile("aosp17_upstream_framework.dex", dex);
+        s.fallback_dex = std::move(dex);
+        return WA_OK;
+    });
+}
+
 int32_t wa_system_launcher_set_framework_res_apk(const uint8_t* bytes, size_t length) {
     return Active("Mount framework resources", [&](Session& s) -> int32_t {
         if (!bytes || !length) return WA_ERR_INVALID;
@@ -639,14 +740,15 @@ int32_t wa_system_launcher_load_systemui_apk(const char* name, const uint8_t* by
 int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size_t length) {
     return Active("Boot Launcher3", [&](Session& s) -> int32_t {
         if (s.booted) return WA_ERR_BUSY;
-        if (!name || !*name || !bytes || !length || s.framework_dex.empty()) return WA_ERR_INVALID;
+        if (!name || !*name || !bytes || !length) return WA_ERR_INVALID;
+        if (s.framework_dex.empty() || s.fallback_dex.empty())
+            throw std::invalid_argument("Load the core and upstream framework DEX files first");
         if (!s.framework_resource || !s.systemui_apk)
             throw std::invalid_argument("Load framework resources and SystemUI-upstream.apk first");
         const auto start = Clock::now();
         LauncherPackage package;
-        std::vector<uint8_t> dex;
         auto status = wa::system::ReadLauncherPackage({bytes, length}, s.locale.c_str(),
-                                                     s.display.density_dpi, package, &dex);
+                                                     s.display.density_dpi, package);
         if (status != WA_OK) return status;
         if (package.package != kPackage || !std::ranges::any_of(package.activities, [](const auto& activity) {
                 return activity.name == kActivity && activity.enabled && activity.exported &&
@@ -656,15 +758,31 @@ int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size
             })) return WA_ERR_INVALID;
         auto apk = std::make_unique<MountedApk>(std::span(bytes, length));
         if (!s.runtime) {
-            s.runtime = std::make_unique<LauncherRuntime>();
-            s.runtime->vm.LoadDexFile("aosp17_framework_core.dex", s.framework_dex);
+            auto next = std::make_unique<LauncherRuntime>();
+            next->vm.LoadDexFile("aosp17_framework_core.dex", s.framework_dex);
+            next->vm.LoadFallbackDexFile("aosp17_upstream_framework.dex", s.fallback_dex);
+            s.runtime = std::move(next);
         }
         auto& [vm, ui, system_ui] = *s.runtime;
+        size_t dex_count = 0, class_count = 0;
+        double dex_load_ms;
         try {
-            vm.LoadDexFile(std::string(name) + "!classes.dex", std::move(dex));
             vm.LoadDexFile("LauncherSystemUi.dex", {std::begin(kLauncherSystemUiDex), std::end(kLauncherSystemUiDex)});
+            const auto dex_start = Clock::now();
+            vm.LoadApkDexFiles(apk->path());
+            dex_load_ms = ElapsedMs(dex_start);
+            const auto launcher_prefix = std::string(apk->path()) + '!';
+            for (const auto& dex : vm.GetDexStats().files) {
+                if (!dex.location.starts_with(launcher_prefix)) continue;
+                ++dex_count;
+                class_count += dex.class_definitions;
+            }
+            if (!std::ranges::all_of(std::array{kLauncher, kLauncherApplication, kDagger},
+                    [&](auto descriptor) { return vm.DexLocation(descriptor).starts_with(launcher_prefix); })) {
+                throw std::runtime_error("Expected an upstream Launcher3 APK with LauncherApplication and Dagger");
+            }
             const std::string systemui_path = s.systemui_apk->path();
-            vm.LoadApkDexFiles(systemui_path);
+            vm.LoadApkDexFiles(systemui_path, /*fallback=*/true);
             if (!vm.DexLocation(kStatusBar).starts_with(systemui_path + '!'))
                 throw std::runtime_error("PhoneStatusBarView was not loaded from the SystemUI APK");
             ui.RegisterNatives(vm);
@@ -686,24 +804,27 @@ int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size
                 .density_dpi = static_cast<int>(s.display.density_dpi),
                 .width = static_cast<int>(s.display.viewport_w), .height = static_cast<int>(s.display.viewport_h),
                 .framework_resource_apk = s.framework_resource->path()});
-            system_ui.Mount(s.Activity(), s.framework_resource->path(), s.systemui_apk->path(),
-                            s.locale.c_str(), s.display);
-            status = s.Draw(0, false);
-            if (status != WA_OK || !s.app_commands)
-                throw std::runtime_error("Launcher3 did not present its initial draw tree (" +
-                                         std::to_string(status) + ")");
+            system_ui.Mount(s.Activity(), s.systemui_apk->path(), s.locale.c_str(), s.display);
             wa::interp::ScopedHandleScope roots(vm);
             auto* activity = roots.Hold(s.Activity());
             auto* workspace = roots.Hold(vm.CallVirtual(activity, "getWorkspace",
                 "()Lcom/android/launcher3/Workspace;").ref());
-            if (vm.CallVirtual(workspace, "getChildCount", "()I").i() == 0) {
-                auto* loading = roots.Hold(vm.ReadField(activity, "loading", "Ljava/util/concurrent/Future;").ref());
-                if (loading && vm.CallVirtual(loading, "isDone", "()Z").i())
-                    vm.CallVirtual(loading, "get", "()Ljava/lang/Object;");
-                throw std::runtime_error("Launcher3 did not bind its workspace");
+            auto* model = roots.Hold(vm.CallVirtual(activity, "getModel",
+                "()Lcom/android/launcher3/LauncherModel;").ref());
+            // Drain ready model callbacks before reporting HOME as booted.
+            bool loaded = false;
+            for (int attempt = 0; attempt < 8 && !loaded; ++attempt) {
+                status = s.Draw(0, false);
+                if (status != WA_OK)
+                    throw std::runtime_error("Launcher3 initial frame failed (" + std::to_string(status) + ")");
+                loaded = vm.CallVirtual(model, "isModelLoaded", "()Z").i() &&
+                         !vm.CallVirtual(activity, "isWorkspaceLoading", "()Z").i();
             }
+            if (!loaded || !s.app_commands || vm.CallVirtual(workspace, "getChildCount", "()I").i() == 0)
+                throw std::runtime_error("Launcher3 did not bind its workspace");
+            vm.Collect();
         } catch (const wa::interp::ManagedException&) {
-            const auto error = vm.ExceptionSummary();
+            const auto error = GuestError(vm);
             vm.ClearException();
             try { s.runtime->Close(); } catch (...) {}
             s.runtime.reset();
@@ -716,10 +837,13 @@ int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size
             throw;
         }
         s.launcher_apk = std::move(apk);
-        vm.Collect();
+        s.launcher_dex_files = dex_count;
+        s.launcher_class_definitions = class_count;
+        s.launcher_dex_load_ms = dex_load_ms;
         s.boot_ms = ElapsedMs(start);
         s.booted = true;
         std::vector<uint8_t>().swap(s.framework_dex);
+        std::vector<uint8_t>().swap(s.fallback_dex);
         return WA_OK;
     });
 }
@@ -767,6 +891,7 @@ int32_t wa_system_launcher_resume() {
 
 int32_t wa_system_launcher_send_home() { return Navigate("Send Home", "sendHome"); }
 int32_t wa_system_launcher_send_back() { return Navigate("Send Back", "sendBack"); }
+int32_t wa_system_launcher_open_all_apps() { return Navigate("Open All Apps", "sendAllApps"); }
 
 int32_t wa_system_launcher_set_gesture_navigation(int32_t enabled) {
     return Active("Set SystemUI navigation mode", [&](Session& s) -> int32_t {
@@ -779,6 +904,14 @@ int32_t wa_system_launcher_set_gesture_navigation(int32_t enabled) {
 int32_t wa_system_launcher_consume_recents() {
     return Active("Consume SystemUI Recents", [](Session& s) {
         return s.runtime->system_ui.ConsumeRecents();
+    }, true);
+}
+
+int32_t wa_system_launcher_touch_navigation(int64_t time_ms, int32_t action, float x, float y) {
+    return Active("Dispatch SystemUI navigation touch", [&](Session& s) {
+        if (!s.paused || time_ms < 0 || action < WA_ACTION_DOWN || action > WA_ACTION_CANCEL ||
+            !std::isfinite(x) || !std::isfinite(y)) return static_cast<int32_t>(WA_ERR_INVALID);
+        return s.runtime->system_ui.TouchNavigation(time_ms, action, x, y);
     }, true);
 }
 

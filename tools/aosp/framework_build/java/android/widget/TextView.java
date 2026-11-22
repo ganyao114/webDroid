@@ -206,13 +206,15 @@ public class TextView extends View implements TextViewPaintAccess {
     }
     private void wrap(String source, float width) {
         lines.clear();
-        int count = source.length(), start = 0;
-        while (count > 0 && start <= count && lines.size() < getMaxLines()) {
+        int count = source.length(), start = 0, limit = getMaxLines();
+        while (count > 0 && start <= count && lines.size() < limit) {
             int lineEnd = start;
             while (lineEnd < count && source.charAt(lineEnd) != '\n') lineEnd++;
-            if (singleLine || start == lineEnd || paint.measureText(source, start, lineEnd) <= width) {
+            boolean fits = start == lineEnd || paint.measureText(source, start, lineEnd) <= width;
+            boolean truncate = ellipsize == TextUtils.TruncateAt.END && (singleLine || lines.size() + 1 == limit);
+            if (singleLine || fits || truncate) {
                 String value = source.substring(start, lineEnd);
-                if (ellipsize == TextUtils.TruncateAt.END && singleLine && paint.measureText(value) > width) {
+                if (truncate && !fits) {
                     value = TextUtils.ellipsize(value, paint, width, ellipsize).toString();
                     if (value.isEmpty()) value = "…";
                 }

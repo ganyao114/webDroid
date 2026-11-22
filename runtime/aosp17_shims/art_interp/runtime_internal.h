@@ -28,6 +28,7 @@ std::string Shorty(std::string_view signature);
 std::u16string DecodeUtf8(std::string_view text);
 std::string EncodeUtf8(std::u16string_view text, bool modified = true);
 inline Value Normalize(Value value, char type) {
+  if (type == 'I' || type == 'F') return Value::Int(value.i());
   switch (type) {
     case 'L': case '[': return Value::Ref(value.ref());
     case 'J': case 'D': return Value::Bits(value.bits());
@@ -185,7 +186,7 @@ class ClassLinker {
  public:
   explicit ClassLinker(Runtime& runtime) : runtime_(runtime) {}
   void LoadDexFile(std::string location, std::vector<uint8_t> bytes, bool fallback = false);
-  void LoadApkDexFiles(const std::string& path);
+  void LoadApkDexFiles(const std::string& path, bool fallback);
   DexStats GetDexStats() const;
   std::string DexLocation(std::string_view descriptor) const;
   Class& Define(std::string_view name, std::string_view super, uint32_t flags = 0,
@@ -210,7 +211,7 @@ class ClassLinker {
     uint16_t definition;
     bool from_apk;
   };
-  enum class DexSource { File, Fallback, Apk };
+  enum class DexSource { File, Fallback, Apk, FallbackApk };
   struct DescriptorHash {
     using is_transparent = void;
     size_t operator()(std::string_view name) const noexcept {
@@ -269,7 +270,7 @@ struct Runtime {
   explicit Runtime(Options options);
   ~Runtime();
   void InstallBootClasses();
-  Value Invoke(Method& method, Object* receiver, std::span<const Value> args) {
+  [[gnu::always_inline]] Value Invoke(Method& method, Object* receiver, std::span<const Value> args) {
     if (args.size() + 1 != method.shorty.size())
       Fail("Ljava/lang/VerifyError;", "Wrong argument count for " + method.QualifiedName());
     if (call_depth >= 384) Fail("Ljava/lang/StackOverflowError;");
