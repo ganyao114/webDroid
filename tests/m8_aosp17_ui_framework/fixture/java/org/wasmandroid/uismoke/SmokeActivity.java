@@ -17,11 +17,18 @@ import android.graphics.drawable.VectorDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Parcel;
 import android.os.UserHandle;
 import android.view.View;
+import android.view.WindowManager;
+import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeInfo;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.window.BackEvent;
+import android.window.BackMotionEvent;
 import com.android.launcher3.fixture.TileView;
 import java.io.IOException;
 import java.util.List;
@@ -66,6 +73,7 @@ public final class SmokeActivity extends Activity {
         handler.sendEmptyMessageDelayed(7, 5);
         resourceCheck = inspectResources();
         packageCheck = inspectPackages();
+        inspectInputAndWindow();
     }
     @Override protected void onStart() { record(2); }
     @Override protected void onResume() { record(3); }
@@ -116,6 +124,37 @@ public final class SmokeActivity extends Activity {
 
     private static void verify(boolean success, String description) {
         if (!success) throw new IllegalStateException(description);
+    }
+
+    private void inspectInputAndWindow() {
+        EditText editor = new EditText(this);
+        editor.setText("ab");
+        editor.setSelection(1);
+        verify(editor.onImeText("n", true) && editor.onImeText("ni", true)
+                && editor.onImeText("你", false) && "a你b".contentEquals(editor.getText()),
+                "IME replaces the composing range");
+
+        BackEvent back = BackEvent.fromBackMotionEvent(
+                new BackMotionEvent(12f, 40f, 120L, .5f, true, BackEvent.EDGE_LEFT));
+        verify(back.getTouchX() == 12f && back.getProgress() == .5f
+                && back.getFrameTimeMillis() == 120L, "Predictive back preserves motion data");
+
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams();
+        params.x = 12;
+        params.setTitle("Embedded window");
+        Parcel parcel = Parcel.obtain();
+        params.writeToParcel(parcel, 0);
+        parcel.setDataPosition(0);
+        WindowManager.LayoutParams restored = WindowManager.LayoutParams.CREATOR.createFromParcel(parcel);
+        verify(restored.x == 12 && "Embedded window".contentEquals(restored.getTitle()),
+                "Window layout parameters survive a parcel round trip");
+        parcel.recycle();
+
+        AccessibilityEvent event = new AccessibilityEvent(AccessibilityEvent.TYPE_VIEW_FOCUSED);
+        event.setSource(tile);
+        event.setSealed(true);
+        AccessibilityNodeInfo source = event.getSource();
+        verify(source != null && source.isClickable(), "Accessibility event resolves its local node");
     }
 
     private static Intent launcherIntent() {

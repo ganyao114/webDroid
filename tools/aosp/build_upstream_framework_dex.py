@@ -64,10 +64,12 @@ HIDDEN_METHODS = {
         ("hasReadWriteHelper", "()Z", False),
         ("pushAllowFds", "(Z)Z", False),
         ("readString8", "()Ljava/lang/String;", False),
+        ("readCharSequence", "()Ljava/lang/CharSequence;", False),
         ("readArrayMap", "(Landroid/util/ArrayMap;Ljava/lang/ClassLoader;)V", False),
         ("restoreAllowFds", "(Z)V", False),
         ("writeArrayMap", "(Landroid/util/ArrayMap;)V", False),
         ("writeArrayMapInternal", "(Landroid/util/ArrayMap;)V", False),
+        ("writeCharSequence", "(Ljava/lang/CharSequence;)V", False),
         ("writeString8", "(Ljava/lang/String;)V", False),
     )),
     "android/os/ParcelFileDescriptor": ("frameworks/base/core/java/android/os/ParcelFileDescriptor.java", (
@@ -140,6 +142,11 @@ HIDDEN_METHODS = {
     )),
     "android/text/TextUtils": ("frameworks/base/core/java/android/text/TextUtils.java", (
         ("nullIfEmpty", "(Ljava/lang/String;)Ljava/lang/String;", True),
+    )),
+    "android/view/View": ("frameworks/base/core/java/android/view/View.java", (
+        ("getAccessibilityViewId", "()I", False),
+        ("getAccessibilityWindowId", "()I", False),
+        ("includeForAccessibility", "()Z", False),
     )),
     "android/view/ViewGroup": ("frameworks/base/core/java/android/view/ViewGroup.java", (
         ("generateLayoutParams", "(Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;", False),

@@ -1,0 +1,277 @@
+--- a/frameworks/base/core/java/android/view/ViewParent.java
++++ b/frameworks/base/core/java/android/view/ViewParent.java
+@@ -58,3 +58,6 @@
+      */
+-    public void requestTransparentRegion(View child);
++    default void requestTransparentRegion(View child) {
++        ViewParent parent = getParent();
++        if (parent != null) parent.requestTransparentRegion(child);
++    }
+ 
+@@ -90,3 +93,5 @@
+     @Deprecated
+-    public void invalidateChild(View child, Rect r);
++    default void invalidateChild(View child, Rect r) {
++        onDescendantInvalidated(child, child);
++    }
+ 
+@@ -115,3 +120,5 @@
+     @Deprecated
+-    public ViewParent invalidateChildInParent(int[] location, Rect r);
++    default ViewParent invalidateChildInParent(int[] location, Rect r) {
++        return null;
++    }
+ 
+@@ -141,3 +148,6 @@
+      */
+-    public void recomputeViewAttributes(View child);
++    default void recomputeViewAttributes(View child) {
++        ViewParent parent = getParent();
++        if (parent != null) parent.recomputeViewAttributes(child);
++    }
+     
+@@ -178,3 +188,6 @@
+      */
+-    public View focusSearch(View v, int direction);
++    default View focusSearch(View v, int direction) {
++        ViewParent parent = getParent();
++        return parent != null ? parent.focusSearch(v, direction) : null;
++    }
+ 
+@@ -191,3 +204,7 @@
+      */
+-    View keyboardNavigationClusterSearch(View currentCluster, int direction);
++    default View keyboardNavigationClusterSearch(View currentCluster, int direction) {
++        ViewParent parent = getParent();
++        return parent == null ? null : parent.keyboardNavigationClusterSearch(
++                currentCluster, direction);
++    }
+ 
+@@ -213,3 +230,6 @@
+      */
+-    public void focusableViewAvailable(View v);
++    default void focusableViewAvailable(View v) {
++        ViewParent parent = getParent();
++        if (parent != null) parent.focusableViewAvailable(v);
++    }
+ 
+@@ -229,3 +249,6 @@
+      */
+-    public boolean showContextMenuForChild(View originalView);
++    default boolean showContextMenuForChild(View originalView) {
++        ViewParent parent = getParent();
++        return parent != null ? parent.showContextMenuForChild(originalView) : false;
++    }
+ 
+@@ -254,3 +277,5 @@
+      */
+-    boolean showContextMenuForChild(View originalView, float x, float y);
++    default boolean showContextMenuForChild(View originalView, float x, float y) {
++        return showContextMenuForChild(originalView);
++    }
+ 
+@@ -262,3 +287,6 @@
+      */
+-    public void createContextMenu(ContextMenu menu);
++    default void createContextMenu(ContextMenu menu) {
++        ViewParent parent = getParent();
++        if (parent != null) parent.createContextMenu(menu);
++    }
+ 
+@@ -279,3 +307,6 @@
+      */
+-    public ActionMode startActionModeForChild(View originalView, ActionMode.Callback callback);
++    default ActionMode startActionModeForChild(View originalView, ActionMode.Callback callback) {
++        ViewParent parent = getParent();
++        return parent != null ? parent.startActionModeForChild(originalView, callback) : null;
++    }
+ 
+@@ -294,4 +325,7 @@
+      */
+-    public ActionMode startActionModeForChild(
+-            View originalView, ActionMode.Callback callback, int type);
++    default ActionMode startActionModeForChild(
++            View originalView, ActionMode.Callback callback, int type) {
++        ViewParent parent = getParent();
++        return parent != null ? parent.startActionModeForChild(originalView, callback, type) : null;
++    }
+ 
+@@ -303,3 +337,6 @@
+      */
+-    public void childDrawableStateChanged(@NonNull View child);
++    default void childDrawableStateChanged(@NonNull View child) {
++        ViewParent parent = getParent();
++        if (parent != null) parent.childDrawableStateChanged(child);
++    }
+ 
+@@ -348,4 +385,6 @@
+      */
+-    public boolean requestChildRectangleOnScreen(@NonNull View child, Rect rectangle,
+-            boolean immediate);
++    default boolean requestChildRectangleOnScreen(@NonNull View child, Rect rectangle,
++            boolean immediate) {
++        return false;
++    }
+ 
+@@ -376,3 +415,3 @@
+     default boolean requestChildRectangleOnScreen(@NonNull View child, @NonNull Rect rectangle,
+-            boolean immediate, @View.RectangleOnScreenRequestSource int source) {
++            boolean immediate, int source) {
+         return requestChildRectangleOnScreen(child, rectangle, immediate);
+@@ -396,3 +435,6 @@
+      */
+-    public boolean requestSendAccessibilityEvent(@NonNull View child, AccessibilityEvent event);
++    default boolean requestSendAccessibilityEvent(@NonNull View child, AccessibilityEvent event) {
++        ViewParent parent = getParent();
++        return parent != null ? parent.requestSendAccessibilityEvent(child, event) : false;
++    }
+ 
+@@ -421,3 +463,6 @@
+      */
+-    public void childHasTransientStateChanged(@NonNull View child, boolean hasTransientState);
++    default void childHasTransientStateChanged(@NonNull View child, boolean hasTransientState) {
++        ViewParent parent = getParent();
++        if (parent != null) parent.childHasTransientStateChanged(child, hasTransientState);
++    }
+ 
+@@ -427,3 +472,6 @@
+      */
+-    public void requestFitSystemWindows();
++    default void requestFitSystemWindows() {
++        ViewParent parent = getParent();
++        if (parent != null) parent.requestFitSystemWindows();
++    }
+ 
+@@ -436,3 +484,5 @@
+      */
+-    public ViewParent getParentForAccessibility();
++    default ViewParent getParentForAccessibility() {
++        return getParent();
++    }
+ 
+@@ -457,4 +507,7 @@
+      */
+-    public void notifySubtreeAccessibilityStateChanged(
+-            @NonNull View child, @NonNull View source, int changeType);
++    default void notifySubtreeAccessibilityStateChanged(
++            @NonNull View child, @NonNull View source, int changeType) {
++        ViewParent parent = getParent();
++        if (parent != null) parent.notifySubtreeAccessibilityStateChanged(child, source, changeType);
++    }
+ 
+@@ -466,3 +519,5 @@
+      */
+-    public boolean canResolveLayoutDirection();
++    default boolean canResolveLayoutDirection() {
++        return true;
++    }
+ 
+@@ -474,3 +529,5 @@
+      */
+-    public boolean isLayoutDirectionResolved();
++    default boolean isLayoutDirectionResolved() {
++        return true;
++    }
+ 
+@@ -490,3 +547,5 @@
+      */
+-    public boolean canResolveTextDirection();
++    default boolean canResolveTextDirection() {
++        return true;
++    }
+ 
+@@ -498,3 +557,5 @@
+      */
+-    public boolean isTextDirectionResolved();
++    default boolean isTextDirectionResolved() {
++        return true;
++    }
+ 
+@@ -511,3 +572,6 @@
+      */
+-    public int getTextDirection();
++    default int getTextDirection() {
++        ViewParent parent = getParent();
++        return parent != null ? parent.getTextDirection() : View.TEXT_DIRECTION_FIRST_STRONG;
++    }
+ 
+@@ -519,3 +583,5 @@
+      */
+-    public boolean canResolveTextAlignment();
++    default boolean canResolveTextAlignment() {
++        return true;
++    }
+ 
+@@ -527,3 +593,5 @@
+      */
+-    public boolean isTextAlignmentResolved();
++    default boolean isTextAlignmentResolved() {
++        return true;
++    }
+ 
+@@ -541,3 +609,6 @@
+      */
+-    public int getTextAlignment();
++    default int getTextAlignment() {
++        ViewParent parent = getParent();
++        return parent != null ? parent.getTextAlignment() : View.TEXT_ALIGNMENT_GRAVITY;
++    }
+ 
+@@ -565,4 +636,6 @@
+      */
+-    public boolean onStartNestedScroll(@NonNull View child, @NonNull View target,
+-            int nestedScrollAxes);
++    default boolean onStartNestedScroll(@NonNull View child, @NonNull View target,
++            int nestedScrollAxes) {
++        return false;
++    }
+ 
+@@ -584,4 +657,4 @@
+      */
+-    public void onNestedScrollAccepted(@NonNull View child, @NonNull View target,
+-            int nestedScrollAxes);
++    default void onNestedScrollAccepted(@NonNull View child, @NonNull View target,
++            int nestedScrollAxes) {}
+ 
+@@ -598,3 +671,3 @@
+      */
+-    public void onStopNestedScroll(@NonNull View target);
++    default void onStopNestedScroll(@NonNull View target) {}
+ 
+@@ -621,4 +694,4 @@
+      */
+-    public void onNestedScroll(@NonNull View target, int dxConsumed, int dyConsumed,
+-            int dxUnconsumed, int dyUnconsumed);
++    default void onNestedScroll(@NonNull View target, int dxConsumed, int dyConsumed,
++            int dxUnconsumed, int dyUnconsumed) {}
+ 
+@@ -644,3 +717,3 @@
+      */
+-    public void onNestedPreScroll(@NonNull View target, int dx, int dy, @NonNull int[] consumed);
++    default void onNestedPreScroll(@NonNull View target, int dx, int dy, @NonNull int[] consumed) {}
+ 
+@@ -665,4 +738,6 @@
+      */
+-    public boolean onNestedFling(@NonNull View target, float velocityX, float velocityY,
+-            boolean consumed);
++    default boolean onNestedFling(@NonNull View target, float velocityX, float velocityY,
++            boolean consumed) {
++        return false;
++    }
+ 
+@@ -688,3 +763,5 @@
+      */
+-    public boolean onNestedPreFling(@NonNull View target, float velocityX, float velocityY);
++    default boolean onNestedPreFling(@NonNull View target, float velocityX, float velocityY) {
++        return false;
++    }
+ 
+@@ -707,4 +784,6 @@
+      */
+-    public boolean onNestedPrePerformAccessibilityAction(@NonNull View target, int action,
+-            @Nullable Bundle arguments);
++    default boolean onNestedPrePerformAccessibilityAction(@NonNull View target, int action,
++            @Nullable Bundle arguments) {
++        return false;
++    }
+ 

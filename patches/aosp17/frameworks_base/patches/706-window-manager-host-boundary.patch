@@ -1,0 +1,570 @@
+--- a/frameworks/base/core/java/android/view/WindowManager.java
++++ b/frameworks/base/core/java/android/view/WindowManager.java
+@@ -19,12 +19,2 @@
+ import static android.content.pm.ActivityInfo.COLOR_MODE_DEFAULT;
+-import static android.view.View.STATUS_BAR_DISABLE_BACK;
+-import static android.view.View.STATUS_BAR_DISABLE_CLOCK;
+-import static android.view.View.STATUS_BAR_DISABLE_EXPAND;
+-import static android.view.View.STATUS_BAR_DISABLE_HOME;
+-import static android.view.View.STATUS_BAR_DISABLE_NOTIFICATION_ALERTS;
+-import static android.view.View.STATUS_BAR_DISABLE_NOTIFICATION_ICONS;
+-import static android.view.View.STATUS_BAR_DISABLE_NOTIFICATION_TICKER;
+-import static android.view.View.STATUS_BAR_DISABLE_RECENT;
+-import static android.view.View.STATUS_BAR_DISABLE_SEARCH;
+-import static android.view.View.STATUS_BAR_DISABLE_SYSTEM_INFO;
+ import static android.view.View.SYSTEM_UI_FLAG_FULLSCREEN;
+@@ -40,37 +30,3 @@
+ import static android.view.View.SYSTEM_UI_FLAG_VISIBLE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.ALPHA;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.APPEARANCE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.BEHAVIOR;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.BUTTON_BRIGHTNESS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.COLOR_MODE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.FIT_IGNORE_VISIBILITY;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.FIT_INSETS_SIDES;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.FIT_INSETS_TYPES;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.FLAGS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.FORCIBLY_SHOWN_TYPES;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.FORMAT;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.GRAVITY;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.HAS_SYSTEM_UI_LISTENERS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.HEIGHT;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.HORIZONTAL_MARGIN;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.INPUT_FEATURE_FLAGS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.PARAMS_FOR_ROTATION;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.PREFERRED_REFRESH_RATE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.PRIVATE_FLAGS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.PROVIDED_INSETS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.RENDERING_HINTS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.ROTATION_ANIMATION;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.SCREEN_BRIGHTNESS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.SOFT_INPUT_MODE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.SUBTREE_SYSTEM_UI_VISIBILITY_FLAGS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.SYSTEM_UI_VISIBILITY_FLAGS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.TYPE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.USER_ACTIVITY_TIMEOUT;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.VERTICAL_MARGIN;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.WIDTH;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.WINDOW_ANIMATIONS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.X;
+-import static android.internal.perfetto.protos.Windowlayoutparams.WindowLayoutParamsProto.Y;
+-
+-import static com.android.server.display.feature.flags.Flags.FLAG_ENABLE_DISPLAY_CONTENT_MODE_MANAGEMENT;
++
+ 
+@@ -78,2 +34,3 @@
+ import android.annotation.CallbackExecutor;
++import android.annotation.ColorLong;
+ import android.annotation.FlaggedApi;
+@@ -89,4 +46,2 @@
+ import android.annotation.TestApi;
+-import android.app.ActivityTaskManager;
+-import android.app.ActivityThread;
+ import android.app.KeyguardManager;
+@@ -115,6 +70,4 @@
+ import android.os.Parcelable;
+-import android.os.SystemProperties;
+ import android.text.TextUtils;
+ import android.util.Log;
+-import android.util.proto.ProtoOutputStream;
+ import android.view.Gravity.GravityFlags;
+@@ -130,6 +83,4 @@
+ 
+-import androidx.annotation.ColorLong;
+ 
+ import com.android.internal.R;
+-import com.android.window.flags.Flags;
+ 
+@@ -729,3 +680,5 @@
+      */
+-    public void removeViewImmediate(View view);
++    default void removeViewImmediate(View view) {
++        removeView(view);
++    }
+ 
+@@ -939,3 +892,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_APP_COMPAT_PROPERTIES_API)
+     String PROPERTY_COMPAT_ALLOW_IGNORING_ORIENTATION_REQUEST_WHEN_LOOP_DETECTED =
+@@ -1000,3 +952,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_EXCLUDE_CAPTION_INSETS_OPT_OUT_API)
+     String PROPERTY_COMPAT_ALLOW_EXCLUDE_CAPTION_INSETS =
+@@ -1308,3 +1259,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_APP_COMPAT_PROPERTIES_API)
+     String PROPERTY_COMPAT_ALLOW_MIN_ASPECT_RATIO_OVERRIDE =
+@@ -1338,3 +1288,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_APP_COMPAT_PROPERTIES_API)
+     String PROPERTY_COMPAT_ALLOW_RESIZEABLE_ACTIVITY_OVERRIDES =
+@@ -1361,3 +1310,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_VIRTUAL_GAMEPAD_DEVELOPER_OPT_OUT)
+     String PROPERTY_COMPAT_ALLOW_VIRTUAL_GAMEPAD_OVERRIDE =
+@@ -1410,3 +1358,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_APP_COMPAT_PROPERTIES_API)
+     String PROPERTY_COMPAT_ALLOW_USER_ASPECT_RATIO_OVERRIDE =
+@@ -1451,3 +1398,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_APP_COMPAT_PROPERTIES_API)
+     String PROPERTY_COMPAT_ALLOW_USER_ASPECT_RATIO_FULLSCREEN_OVERRIDE =
+@@ -1557,3 +1503,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_SAFE_REGION_LETTERBOXING_V1)
+     String PROPERTY_COMPAT_ALLOW_SAFE_REGION_LETTERBOXING =
+@@ -1580,3 +1525,2 @@
+     @SystemApi
+-    @FlaggedApi(Flags.FLAG_ENABLE_FULLSCREEN_IN_NEW_TASK_PREFERENCE)
+     @RequiresPermission(android.Manifest.permission.PREFER_FULLSCREEN_IN_NEW_TASK)
+@@ -1613,3 +1557,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_HOME_ACTIVITY_ALWAYS_PRESENT)
+     String ALLOW_HOME_ACTIVITY_ALWAYS_PRESENT = "android.window.ALLOW_HOME_ACTIVITY_ALWAYS_PRESENT";
+@@ -1647,4 +1590,3 @@
+      */
+-    boolean ACTIVITY_EMBEDDING_GUARD_WITH_ANDROID_15 = SystemProperties.getBoolean(
+-            "persist.wm.extensions.activity_embedding_guard_with_android_15", true);
++    boolean ACTIVITY_EMBEDDING_GUARD_WITH_ANDROID_15 = true;
+ 
+@@ -1672,4 +1614,3 @@
+      */
+-    boolean HAS_WINDOW_EXTENSIONS_ON_DEVICE =
+-            SystemProperties.getBoolean("persist.wm.extensions.enabled", false);
++    boolean HAS_WINDOW_EXTENSIONS_ON_DEVICE = false;
+ 
+@@ -1683,19 +1624,3 @@
+     static boolean hasWindowExtensionsEnabled() {
+-        if (!HAS_WINDOW_EXTENSIONS_ON_DEVICE) {
+-            return false;
+-        }
+-
+-        try {
+-            final Context context = ActivityThread.currentApplication();
+-            if (context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WATCH)) {
+-                // Watch supports multi-window to present essential system UI, but it doesn't need
+-                // WM Extensions.
+-                return false;
+-            }
+-            return ActivityTaskManager.supportsMultiWindow(context);
+-        } catch (Exception e) {
+-            // In case the PackageManager is not set up correctly in test.
+-            Log.e("WindowManager", "Unable to read if the device supports multi window", e);
+-            return false;
+-        }
++        return HAS_WINDOW_EXTENSIONS_ON_DEVICE;
+     }
+@@ -1831,3 +1756,2 @@
+      */
+-    @FlaggedApi(Flags.FLAG_COVER_DISPLAY_OPT_IN)
+     String PROPERTY_COMPAT_ALLOW_SMALL_COVER_SCREEN =
+@@ -1843,3 +1767,2 @@
+     @CompatSmallScreenPolicy
+-    @FlaggedApi(Flags.FLAG_COVER_DISPLAY_OPT_IN)
+     int COMPAT_SMALL_COVER_SCREEN_OPT_IN = 1;
+@@ -1866,3 +1789,5 @@
+      */
+-    public void requestAppKeyboardShortcuts(final KeyboardShortcutsReceiver receiver, int deviceId);
++    default void requestAppKeyboardShortcuts(KeyboardShortcutsReceiver receiver, int deviceId) {
++        receiver.onKeyboardShortcutsReceived(java.util.Collections.emptyList());
++    }
+ 
+@@ -1875,3 +1800,5 @@
+      */
+-    KeyboardShortcutGroup getApplicationLaunchKeyboardShortcuts(int deviceId);
++    default KeyboardShortcutGroup getApplicationLaunchKeyboardShortcuts(int deviceId) {
++        return null;
++    }
+ 
+@@ -1898,3 +1825,5 @@
+     @RequiresPermission(android.Manifest.permission.RESTRICTED_VR_ACCESS)
+-    public Region getCurrentImeTouchRegion();
++    default Region getCurrentImeTouchRegion() {
++        return new Region();
++    }
+ 
+@@ -1936,3 +1865,2 @@
+      */
+-    @FlaggedApi(FLAG_ENABLE_DISPLAY_CONTENT_MODE_MANAGEMENT)
+     default boolean isEligibleForDesktopMode(int displayId) {
+@@ -4228,3 +4156,2 @@
+         @ColorLong
+-        @FlaggedApi(com.android.window.flags.Flags.FLAG_SUPPORT_CUSTOM_DIM_COLOR)
+         public long dimColor = Color.pack(Color.BLACK);
+@@ -4348,3 +4275,2 @@
+          */
+-        @ActivityInfo.ScreenOrientation
+         public int screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
+@@ -4447,12 +4373,2 @@
+             SYSTEM_UI_FLAG_LIGHT_STATUS_BAR,
+-            STATUS_BAR_DISABLE_EXPAND,
+-            STATUS_BAR_DISABLE_NOTIFICATION_ICONS,
+-            STATUS_BAR_DISABLE_NOTIFICATION_ALERTS,
+-            STATUS_BAR_DISABLE_NOTIFICATION_TICKER,
+-            STATUS_BAR_DISABLE_SYSTEM_INFO,
+-            STATUS_BAR_DISABLE_HOME,
+-            STATUS_BAR_DISABLE_BACK,
+-            STATUS_BAR_DISABLE_CLOCK,
+-            STATUS_BAR_DISABLE_RECENT,
+-            STATUS_BAR_DISABLE_SEARCH,
+         })
+@@ -4889,3 +4805,2 @@
+          */
+-        @ActivityInfo.ColorMode
+         private int mColorMode = COLOR_MODE_DEFAULT;
+@@ -5275,3 +5190,3 @@
+          */
+-        public void setColorMode(@ActivityInfo.ColorMode int colorMode) {
++        public void setColorMode(int colorMode) {
+             mColorMode = colorMode;
+@@ -5285,3 +5200,2 @@
+          */
+-        @ActivityInfo.ColorMode
+         public int getColorMode() {
+@@ -5549,2 +5463,3 @@
+         public LayoutParams(Parcel in) {
++            super(0, 0);
+             width = in.readInt();
+@@ -5990,11 +5905,4 @@
+ 
+-        @Override
+         public String debug(String output) {
+-            output += "Contents of " + this + ":";
+-            Log.d("Debug", output);
+-            output = super.debug("");
+-            Log.d("Debug", output);
+-            Log.d("Debug", "");
+-            Log.d("Debug", "WindowManager.LayoutParams={title=" + mTitle + "}");
+-            return "";
++            return output + this;
+         }
+@@ -6052,3 +5960,3 @@
+             sb.append(" ty=");
+-            sb.append(ViewDebug.intToString(LayoutParams.class, "type", type));
++            sb.append(type);
+             if (format != PixelFormat.OPAQUE) {
+@@ -6063,3 +5971,3 @@
+                 sb.append(" or=");
+-                sb.append(ActivityInfo.screenOrientationToString(screenOrientation));
++                sb.append(screenOrientation);
+             }
+@@ -6126,3 +6034,3 @@
+             if (mColorMode != COLOR_MODE_DEFAULT) {
+-                sb.append(" colorMode=").append(ActivityInfo.colorModeToString(mColorMode));
++                sb.append(" colorMode=").append(mColorMode);
+             }
+@@ -6141,7 +6049,6 @@
+             sb.append(prefix).append("  fl=").append(
+-                    ViewDebug.flagsToString(LayoutParams.class, "flags", flags));
++                    "0x" + Integer.toHexString(flags));
+             if (privateFlags != 0) {
+                 sb.append(System.lineSeparator());
+-                sb.append(prefix).append("  pfl=").append(ViewDebug.flagsToString(
+-                        LayoutParams.class, "privateFlags", privateFlags));
++                sb.append(prefix).append("  pfl=").append("0x" + Integer.toHexString(privateFlags));
+             }
+@@ -6150,4 +6057,3 @@
+                 sb.append(System.lineSeparator());
+-                sb.append(prefix).append("  rh=").append(ViewDebug.flagsToString(
+-                        LayoutParams.class, "renderingHint", renderingHints));
++                sb.append(prefix).append("  rh=").append("0x" + Integer.toHexString(renderingHints));
+             }
+@@ -6156,4 +6062,3 @@
+                 sb.append(System.lineSeparator());
+-                sb.append(prefix).append("  sysui=").append(ViewDebug.flagsToString(
+-                        View.class, "mSystemUiVisibility", systemUiVisibility));
++                sb.append(prefix).append("  sysui=").append("0x" + Integer.toHexString(systemUiVisibility));
+             }
+@@ -6161,4 +6066,3 @@
+                 sb.append(System.lineSeparator());
+-                sb.append(prefix).append("  vsysui=").append(ViewDebug.flagsToString(
+-                        View.class, "mSystemUiVisibility", subtreeSystemUiVisibility));
++                sb.append(prefix).append("  vsysui=").append("0x" + Integer.toHexString(subtreeSystemUiVisibility));
+             }
+@@ -6166,4 +6070,3 @@
+                 sb.append(System.lineSeparator());
+-                sb.append(prefix).append("  apr=").append(ViewDebug.flagsToString(
+-                        InsetsFlags.class, "appearance", insetsFlags.appearance));
++                sb.append(prefix).append("  apr=").append("0x" + Integer.toHexString(insetsFlags.appearance));
+             }
+@@ -6171,4 +6074,3 @@
+                 sb.append(System.lineSeparator());
+-                sb.append(prefix).append("  bhv=").append(ViewDebug.flagsToString(
+-                        InsetsFlags.class, "behavior", insetsFlags.behavior));
++                sb.append(prefix).append("  bhv=").append("0x" + Integer.toHexString(insetsFlags.behavior));
+             }
+@@ -6217,3 +6119,3 @@
+                     sb.append(System.lineSeparator()).append(prefix).append("    ");
+-                    sb.append(Surface.rotationToString(i)).append("=");
++                    sb.append(i).append("=");
+                     sb.append(paramsForRotation[i].toString(prefix + "    "));
+@@ -6229,50 +6131,2 @@
+          */
+-        public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-            final long token = proto.start(fieldId);
+-            proto.write(TYPE, type);
+-            proto.write(X, x);
+-            proto.write(Y, y);
+-            proto.write(WIDTH, width);
+-            proto.write(HEIGHT, height);
+-            proto.write(HORIZONTAL_MARGIN, horizontalMargin);
+-            proto.write(VERTICAL_MARGIN, verticalMargin);
+-            proto.write(GRAVITY, gravity);
+-            proto.write(SOFT_INPUT_MODE, softInputMode);
+-            proto.write(FORMAT, format);
+-            proto.write(WINDOW_ANIMATIONS, windowAnimations);
+-            proto.write(ALPHA, alpha);
+-            proto.write(SCREEN_BRIGHTNESS, screenBrightness);
+-            proto.write(BUTTON_BRIGHTNESS, buttonBrightness);
+-            proto.write(ROTATION_ANIMATION, rotationAnimation);
+-            proto.write(PREFERRED_REFRESH_RATE, preferredRefreshRate);
+-            proto.write(WindowLayoutParamsProto.PREFERRED_DISPLAY_MODE_ID, preferredDisplayModeId);
+-            proto.write(HAS_SYSTEM_UI_LISTENERS, hasSystemUiListeners);
+-            proto.write(INPUT_FEATURE_FLAGS, inputFeatures);
+-            proto.write(USER_ACTIVITY_TIMEOUT, userActivityTimeout);
+-            proto.write(COLOR_MODE, mColorMode);
+-            proto.write(FLAGS, flags);
+-            proto.write(PRIVATE_FLAGS, privateFlags);
+-            proto.write(SYSTEM_UI_VISIBILITY_FLAGS, systemUiVisibility);
+-            proto.write(SUBTREE_SYSTEM_UI_VISIBILITY_FLAGS, subtreeSystemUiVisibility);
+-            proto.write(APPEARANCE, insetsFlags.appearance);
+-            proto.write(BEHAVIOR, insetsFlags.behavior);
+-            proto.write(FIT_INSETS_TYPES, mFitInsetsTypes);
+-            proto.write(FIT_INSETS_SIDES, mFitInsetsSides);
+-            proto.write(FIT_IGNORE_VISIBILITY, mFitInsetsIgnoringVisibility);
+-            proto.write(FORCIBLY_SHOWN_TYPES, forciblyShownTypes);
+-            if (providedInsets != null) {
+-                for (InsetsFrameProvider provider : providedInsets) {
+-                    provider.dumpDebug(proto, PROVIDED_INSETS);
+-                }
+-            }
+-            if (paramsForRotation != null) {
+-                for (LayoutParams params : paramsForRotation) {
+-                    if (params != null) {
+-                        params.dumpDebug(proto, PARAMS_FOR_ROTATION);
+-                    }
+-                }
+-            }
+-            proto.write(RENDERING_HINTS, renderingHints);
+-            proto.end(token);
+-        }
+ 
+@@ -6326,15 +6180,2 @@
+         private CharSequence mTitle = null;
+-
+-        /** @hide */
+-        @Override
+-        protected void encodeProperties(@NonNull ViewHierarchyEncoder encoder) {
+-            super.encodeProperties(encoder);
+-
+-            encoder.addProperty("x", x);
+-            encoder.addProperty("y", y);
+-            encoder.addProperty("horizontalWeight", horizontalWeight);
+-            encoder.addProperty("verticalWeight", verticalWeight);
+-            encoder.addProperty("type", type);
+-            encoder.addProperty("flags", flags);
+-        }
+ 
+@@ -6908,3 +6749,2 @@
+     /** Indicates the app that registered the callback is not visible in screen recording. */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_SCREEN_RECORDING_CALLBACKS)
+     int SCREEN_RECORDING_STATE_NOT_VISIBLE = 0;
+@@ -6912,3 +6752,2 @@
+     /** Indicates the app that registered the callback is visible in screen recording. */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_SCREEN_RECORDING_CALLBACKS)
+     int SCREEN_RECORDING_STATE_VISIBLE = 1;
+@@ -6939,3 +6778,2 @@
+     @RequiresPermission(permission.DETECT_SCREEN_RECORDING)
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_SCREEN_RECORDING_CALLBACKS)
+     default @ScreenRecordingState int addScreenRecordingCallback(
+@@ -6954,3 +6792,2 @@
+     @RequiresPermission(permission.DETECT_SCREEN_RECORDING)
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_SCREEN_RECORDING_CALLBACKS)
+     default void removeScreenRecordingCallback(
+@@ -6969,3 +6806,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_DEVICE_ENGAGEMENT_MODE)
+     @SystemApi
+@@ -6983,3 +6819,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_DEVICE_ENGAGEMENT_MODE)
+     @SystemApi
+@@ -7004,3 +6839,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_DEVICE_ENGAGEMENT_MODE)
+     @SystemApi
+@@ -7037,3 +6871,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_DEVICE_ENGAGEMENT_MODE)
+     @SystemApi
+@@ -7057,3 +6890,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_DEVICE_ENGAGEMENT_MODE)
+     @SystemApi
+@@ -7075,3 +6907,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_DEVICE_ENGAGEMENT_MODE)
+     @SystemApi
+@@ -7090,3 +6921,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_DEVICE_ENGAGEMENT_MODE)
+     @SystemApi
+@@ -7112,3 +6942,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_ENGAGEMENT_CONTROL_API)
+     int ENGAGEMENT_CONTROL_FLAG_SUSTAIN_VISUALS = 1 << 0;
+@@ -7128,3 +6957,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_ENGAGEMENT_CONTROL_API)
+     default void requestEngagementControlState(
+@@ -7142,3 +6970,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_ENGAGEMENT_CONTROL_API)
+     @SystemApi
+@@ -7189,3 +7016,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_ENGAGEMENT_CONTROL_API)
+     @SystemApi
+@@ -7208,3 +7034,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_ENGAGEMENT_CONTROL_API)
+     @SystemApi
+@@ -7246,3 +7071,3 @@
+     static boolean useClientSurface() {
+-        return com.android.window.flags.Flags.useClientSurface();
++        return false;
+     }
+--- a/frameworks/base/core/java/android/view/InsetsFrameProvider.java
++++ b/frameworks/base/core/java/android/view/InsetsFrameProvider.java
+@@ -18,11 +18,2 @@
+ 
+-import static android.internal.perfetto.protos.Windowlayoutparams.InsetsFrameProviderProto.ID;
+-import static android.internal.perfetto.protos.Windowlayoutparams.InsetsFrameProviderProto.TYPE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.InsetsFrameProviderProto.SOURCE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.InsetsFrameProviderProto.ARBITRARY_RECTANGLE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.InsetsFrameProviderProto.FLAGS;
+-import static android.internal.perfetto.protos.Windowlayoutparams.InsetsFrameProviderProto.INSETS_SIZE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.InsetsFrameProviderProto.INSETS_SIZE_OVERRIDE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.InsetsFrameProviderProto.MINIMAL_INSETS_SIZE_IN_DISPLAY_CUTOUT_SAFE;
+-import static android.internal.perfetto.protos.Windowlayoutparams.InsetsFrameProviderProto.BOUNDING_RECTS;
+ 
+@@ -35,3 +26,2 @@
+ import android.os.Parcelable;
+-import android.util.proto.ProtoOutputStream;
+ import android.view.InsetsSource.Flags;
+@@ -346,30 +336,2 @@
+      */
+-    public void dumpDebug(@NonNull ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-        proto.write(ID, mId);
+-        proto.write(TYPE, getType());
+-        proto.write(SOURCE, mSource);
+-        if (mArbitraryRectangle != null) {
+-            mArbitraryRectangle.dumpDebug(proto, ARBITRARY_RECTANGLE);
+-        }
+-        proto.write(FLAGS, mFlags);
+-        if (mInsetsSize != null) {
+-            mInsetsSize.dumpDebug(proto, INSETS_SIZE);
+-        }
+-        if (mInsetsSizeOverrides != null) {
+-            for (InsetsSizeOverride override : mInsetsSizeOverrides) {
+-                override.dumpDebug(proto, INSETS_SIZE_OVERRIDE);
+-            }
+-        }
+-        if (mMinimalInsetsSizeInDisplayCutoutSafe != null) {
+-            mMinimalInsetsSizeInDisplayCutoutSafe.dumpDebug(proto,
+-                    MINIMAL_INSETS_SIZE_IN_DISPLAY_CUTOUT_SAFE);
+-        }
+-        if (mBoundingRects != null) {
+-            for (Rect boundingRect : mBoundingRects) {
+-                boundingRect.dumpDebug(proto, BOUNDING_RECTS);
+-            }
+-        }
+-        proto.end(token);
+-    }
+ 
+@@ -523,4 +485,3 @@
+             return "TypedInsetsSize: {"
+-                    + "windowType=" + ViewDebug.intToString(WindowManager.LayoutParams.class,
+-                        "type", mWindowType)
++                    + "windowType=" + mWindowType
+                     + ", insetsSize=" + mInsetsSize
+@@ -536,10 +497,2 @@
+          */
+-        public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-            final long token = proto.start(fieldId);
+-            proto.write(InsetsSizeOverrideProto.WINDOW_TYPE, mWindowType);
+-            if (mInsetsSize != null) {
+-                mInsetsSize.dumpDebug(proto, InsetsSizeOverrideProto.INSETS_SIZE);
+-            }
+-            proto.end(token);
+-        }
+ 
+--- a/frameworks/base/core/java/android/view/InsetsSource.java
++++ b/frameworks/base/core/java/android/view/InsetsSource.java
+@@ -18,8 +18,2 @@
+ 
+-import static android.internal.perfetto.protos.Insetssource.InsetsSourceProto.ATTACHED_INSETS;
+-import static android.internal.perfetto.protos.Insetssource.InsetsSourceProto.FRAME;
+-import static android.internal.perfetto.protos.Insetssource.InsetsSourceProto.TYPE;
+-import static android.internal.perfetto.protos.Insetssource.InsetsSourceProto.TYPE_NUMBER;
+-import static android.internal.perfetto.protos.Insetssource.InsetsSourceProto.VISIBLE;
+-import static android.internal.perfetto.protos.Insetssource.InsetsSourceProto.VISIBLE_FRAME;
+ import static android.view.WindowInsets.Type.captionBar;
+@@ -35,3 +29,2 @@
+ import android.os.Parcelable;
+-import android.util.proto.ProtoOutputStream;
+ import android.view.WindowInsets.Type.InsetsType;
+@@ -803,25 +796,2 @@
+ 
+-    /**
+-     * Export the state of {@link InsetsSource} into a protocol buffer output stream.
+-     *
+-     * @param proto   Stream to write the state to
+-     * @param fieldId FieldId of InsetsSource as defined in the parent message
+-     */
+-    public void dumpDebug(@NonNull ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-        if (!android.os.Flags.androidOsBuildVanillaIceCream()) {
+-            // Deprecated since V.
+-            proto.write(TYPE, WindowInsets.Type.toString(mType));
+-        }
+-        mFrame.dumpDebug(proto, FRAME);
+-        if (mVisibleFrame != null) {
+-            mVisibleFrame.dumpDebug(proto, VISIBLE_FRAME);
+-        }
+-        proto.write(VISIBLE, mVisible);
+-        proto.write(TYPE_NUMBER, mType);
+-        if (mAttachedInsets != null) {
+-            mAttachedInsets.dumpDebug(proto, ATTACHED_INSETS);
+-        }
+-        proto.end(token);
+-    }
+ 
+--- a/frameworks/base/core/java/android/window/TaskFpsCallback.java
++++ b/frameworks/base/core/java/android/window/TaskFpsCallback.java
+@@ -18,6 +18,3 @@
+ 
+-import android.annotation.BinderThread;
+-import android.annotation.NonNull;
+ import android.annotation.SystemApi;
+-import android.os.RemoteException;
+ 
+@@ -44,16 +41,2 @@
+ 
+-    /**
+-     * Dispatch the collected sample.
+-     *
+-     * Called from native code on a binder thread.
+-     */
+-    @BinderThread
+-    private static void dispatchOnFpsReported(
+-            @NonNull ITaskFpsCallback listener, float fps) {
+-        try {
+-            listener.onFpsReported(fps);
+-        } catch (RemoteException e) {
+-            /* ignore */
+-        }
+-    }
+ }

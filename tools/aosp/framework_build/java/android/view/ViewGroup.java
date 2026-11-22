@@ -3,6 +3,7 @@ package android.view;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Canvas;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.util.AttributeSet;
 import java.util.ArrayList;
@@ -228,9 +229,12 @@ public abstract class ViewGroup extends View implements ViewParent {
     }
     public void onViewAdded(View child) {}
     public void onViewRemoved(View child) {}
-    public void bringChildToFront(View child) {
+    @Override public void bringChildToFront(View child) {
         int index = indexOfChild(child);
         if (index >= 0) { children.remove(index); children.add(child); requestLayout(); invalidate(); }
+    }
+    @Override public boolean getChildVisibleRect(View child, Rect bounds, Point offset) {
+        return child.getParent() == this && child.mapVisibleRectToWindow(bounds, offset);
     }
     public void setClipChildren(boolean value) { clipChildren = value; invalidate(); }
     public boolean getClipChildren() { return clipChildren; }

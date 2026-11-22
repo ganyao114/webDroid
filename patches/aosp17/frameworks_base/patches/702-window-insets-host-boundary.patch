@@ -1,0 +1,14 @@
+--- a/frameworks/base/core/java/android/view/WindowInsetsController.java
++++ b/frameworks/base/core/java/android/view/WindowInsetsController.java
+@@ -24 +23,0 @@
+-import android.inputmethodservice.InputMethodService;
+@@ -323,6 +321,0 @@
+-     * @hide
+-     */
+-    @NonNull
+-    InsetsState getState();
+-
+-    /**
+@@ -364 +357 @@
+-     * {@link #controlWindowInsetsAnimation} may still fail in case the {@link InputMethodService}
++     * {@link #controlWindowInsetsAnimation} may still fail in case the the input method service

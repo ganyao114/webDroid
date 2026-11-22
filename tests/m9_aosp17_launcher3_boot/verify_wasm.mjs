@@ -168,8 +168,12 @@ function inspectFrame() {
           if (x >= 0 && x < frame.width && y >= 0 && y < frame.height && memory.u32(at + 36) >>> 24) {
             const size = arg(5), weight = memory.u32(at + 28), face = memory.u32(at + 40);
             const [ascent, descent] = fontExtents(size, weight, face);
-            const line = mapRect(arg(2), arg(3) - ascent, arg(2), arg(3) + descent);
-            info.texts.push({ text, x, y, top: line[1], bottom: line[3], clip });
+            const advance = calibratedAdvance(text, size, weight, face);
+            const limit = arg(4);
+            const lineWidth = limit > 0 ? Math.min(advance, limit) : advance;
+            const left = arg(2) - lineWidth * memory.u32(at + 32) / 2;
+            const line = mapRect(left, arg(3) - ascent, left + lineWidth, arg(3) + descent);
+            info.texts.push({ text, x, y, top: line[1], bottom: line[3], right: line[2], clip });
           }
         }
         if (op === Op.BITMAP && arg(11) > 0) {
@@ -209,21 +213,48 @@ function inspectFrame() {
   }
 }
 
-function fontExtents(size, weight, face) {
+function fontRow(weight, face) {
   const bucket = Math.max(1, Math.min(9, Math.round((weight || 400) / 100)));
-  const font = module._wa_sf_font_metrics(scene) + (face * 9 + bucket - 1) * 20;
+  return face * 9 + bucket - 1;
+}
+
+function fontExtents(size, weight, face) {
+  const font = module._wa_sf_font_metrics(scene) + fontRow(weight, face) * 20;
   const sequence = memory.u32(font);
   if (!sequence || sequence & 1) return [size * 0.8, size * 0.2];
   return [size * memory.u32(font + 12) / 65536, size * memory.u32(font + 16) / 65536];
 }
 
+function calibratedAdvance(text, size, weight, face) {
+  const row = module._wa_sf_font_advances(scene) + fontRow(weight, face) * 404;
+  if (memory.u32(row) !== 2) return 0;
+  let advance = 0;
+  for (const char of text) {
+    const code = char.codePointAt(0);
+    const slot = code >= 32 && code <= 126 ? code - 31 : code >= 0x2e80 ? 100 : 99;
+    advance += memory.u32(row + slot * 4);
+  }
+  return size * advance / 65536;
+}
+
 function publishBrowserFontMetrics() {
   const fonts = module._wa_sf_font_metrics(scene);
+  const advances = module._wa_sf_font_advances(scene);
+  assert(advances, 'Browser font advance table is exported');
   for (let i = 0; i < 27; i++) {
     const font = fonts + i * 20;
     // A browser can publish a taller font box after the first frame has been laid out.
     [2, 35389, 65536, 60416, 15360].forEach((value, field) =>
       memory.view.setUint32(font + field * 4, value, true));
+    const row = advances + i * 404;
+    for (let code = 32; code <= 126; code++) {
+      const char = String.fromCharCode(code);
+      const em = ' ilI.,'.includes(char) ? .32 : 'MWmw'.includes(char) ? .93 : .62;
+      memory.view.setUint32(row + (code - 31) * 4, Math.ceil(em * 65536), true);
+    }
+    [.75, .62, .62, .65, 1].forEach((em, index) =>
+      memory.view.setUint32(row + (96 + index) * 4, Math.ceil(em * 65536), true));
+    memory.view.setUint32(row, 2, true);
   }
 }
 
@@ -234,7 +265,8 @@ function checkIconLabel(window, icon) {
   assert(labels.length, `No visible label below icon ${JSON.stringify(icon.bounds)}`);
   for (const label of labels) {
     assert(label.top >= icon.bounds[3] - 0.02 &&
-      label.top >= label.clip[1] - 0.02 && label.bottom <= label.clip[3] + 0.02,
+      label.top >= label.clip[1] - 0.02 && label.bottom <= label.clip[3] + 0.02 &&
+      label.right <= label.clip[2] + 0.02,
       `Clipped or misplaced app label ${JSON.stringify(label)}`);
   }
   return labels.map(label => label.text);

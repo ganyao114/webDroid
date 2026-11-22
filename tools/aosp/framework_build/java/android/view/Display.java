@@ -6,6 +6,7 @@ import android.util.DisplayMetrics;
 
 /** The host surface's current display. */
 public final class Display {
+    public static final int INVALID_DISPLAY = -1;
     public static final int DEFAULT_DISPLAY = 0;
     private final Resources resources;
     private int navigationBarInset = -1;

@@ -66,7 +66,6 @@ libcore/ojluni/src/main/java/java/util/PrimitiveIterator.java
 libcore/ojluni/src/main/java/java/util/Spliterator.java
 libcore/ojluni/src/main/java/java/util/Spliterators.java
 frameworks/base/core/java/android/content/pm/InstallSourceInfo.java
-frameworks/base/core/java/android/view/WindowInsetsAnimation.java
 libcore/ojluni/src/main/java/java/util/function/ToIntFunction.java
 frameworks/base/core/java/android/content/ContentValues.java
 frameworks/base/core/java/android/database/AbstractCursor.java

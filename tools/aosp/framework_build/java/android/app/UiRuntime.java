@@ -24,13 +24,13 @@ import android.os.UserHandle;
 import android.os.UserManager;
 import android.view.Choreographer;
 import android.view.Display;
+import android.view.EmbeddedWindow;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import com.android.internal.policy.PhoneLayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.Window;
 import android.view.WindowManager;
 import android.view.WindowMetrics;
 import java.io.IOException;
@@ -91,7 +91,7 @@ public final class UiRuntime {
             displays = new DisplayManager(new Display(resources));
             windows = new WindowManager() {
                 @Override public Display getDefaultDisplay() { return getDisplay(); }
-                @Override public WindowMetrics getCurrentWindowMetrics() { return Window.displayMetrics(AppContext.this); }
+                @Override public WindowMetrics getCurrentWindowMetrics() { return EmbeddedWindow.displayMetrics(AppContext.this); }
                 @Override public WindowMetrics getMaximumWindowMetrics() { return getCurrentWindowMetrics(); }
                 @Override public void addView(View view, ViewGroup.LayoutParams params) {
                     throw new IllegalStateException("Window is required to add a view");

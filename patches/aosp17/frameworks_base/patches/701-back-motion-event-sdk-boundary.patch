@@ -1,0 +1,15 @@
+--- a/frameworks/base/core/java/android/window/BackMotionEvent.java
++++ b/frameworks/base/core/java/android/window/BackMotionEvent.java
+@@ -20,11 +20,9 @@
+ import android.annotation.NonNull;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.view.RemoteAnimationTarget;
+ 
+ /**
+- * Object used to report back gesture progress. Holds information about a {@link BackEvent} plus
+- * any {@link RemoteAnimationTarget} the gesture manipulates.
++ * Object used to report back gesture progress and whether the gesture will commit.
+  *
+  * @see BackEvent
+  * @hide

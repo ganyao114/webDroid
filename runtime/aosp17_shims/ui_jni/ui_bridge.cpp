@@ -543,7 +543,7 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     Register(vm, "android/app/UiRuntime",
              Method<detail::CreateActivity>(vm, "nativeCreateActivity",
                                             "(Ljava/lang/String;)Landroid/app/Activity;"));
-    Register(vm, "android/view/Window",
+    Register(vm, "android/view/EmbeddedWindow",
              Method<detail::SetSystemBars>(vm, "nativeSetSystemBars", "(III)V"));
     Register(vm, "android/view/ViewRootImpl", Method<detail::BeginDraw>(vm, "nativeBeginDraw", "()V"));
     Register(

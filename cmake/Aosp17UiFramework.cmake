@@ -59,8 +59,10 @@ add_custom_command(OUTPUT "${AOSP17_FRAMEWORK_DEX}" "${AOSP17_FRAMEWORK_CLASSES}
         --aosp-root "${AOSP17_SOURCE_DIR}" --out-dir "${_wa_ui_output}"
         --javac "${WA_JAVAC_EXECUTABLE}" --d8 "${WA_D8_EXECUTABLE}"
         --android-jar "${WA_ANDROID_JAR}" --upstream-classes "${_wa_upstream_classes}"
+        --upstream-dex "${_wa_upstream_dex}"
         --depfile "${_wa_ui_output}/framework.d"
-    DEPENDS "${_wa_ui_script}" "${_wa_ui_sources}/upstream.txt" "${_wa_upstream_classes}" ${_wa_ui_java}
+    DEPENDS "${_wa_ui_script}" "${_wa_ui_sources}/upstream.txt" "${_wa_upstream_classes}"
+        "${_wa_upstream_dex}" ${_wa_ui_java}
         "${WA_JAVAC_EXECUTABLE}" "${WA_D8_EXECUTABLE}" "${WA_ANDROID_JAR}"
     DEPFILE "${_wa_ui_output}/framework.d" VERBATIM)
 add_custom_target(aosp17_framework_core ALL DEPENDS "${AOSP17_FRAMEWORK_DEX}" "${AOSP17_FRAMEWORK_CLASSES}")

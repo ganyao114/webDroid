@@ -9,13 +9,22 @@ import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.text.Editable;
+import android.text.Selection;
+import android.text.Spannable;
+import android.text.SpannableString;
+import android.text.SpannableStringBuilder;
 import android.text.TextPaint;
 import android.text.TextUtils;
+import android.text.TextWatcher;
+import android.text.method.MovementMethod;
 import android.util.AttributeSet;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.inputmethod.InputMethodManager;
 import java.util.ArrayList;
 
 // Keep the Paint-returning bridge for embedded clients compiled against the older framework DEX.
@@ -35,6 +44,11 @@ public class TextView extends View implements TextViewPaintAccess {
     private final Paint.FontMetrics fontMetrics = new Paint.FontMetrics();
     private final ArrayList<String> lines = new ArrayList<>();
     private CharSequence text = "", hint;
+    private BufferType bufferType = BufferType.NORMAL;
+    private ArrayList<TextWatcher> textWatchers;
+    private OnEditorActionListener editorActionListener;
+    private int composingStart = -1, composingEnd = -1;
+    private boolean useLocalePreferredLineHeight;
     private ColorStateList colors = ColorStateList.valueOf(Color.BLACK);
     private ColorStateList hintColors = ColorStateList.valueOf(Color.GRAY);
     private int gravity = Gravity.START | Gravity.TOP, maxLines = Integer.MAX_VALUE, minLines;
@@ -65,6 +79,11 @@ public class TextView extends View implements TextViewPaintAccess {
             lineSpacingExtra = a.getDimension(13, 0);
             lineSpacingMultiplier = a.getFloat(14, 1);
         }
+        if (getDefaultEditable()) {
+            setText(text, BufferType.EDITABLE);
+            setFocusableInTouchMode(true);
+            setClickable(true);
+        }
     }
     private void applyTextAppearance(TypedArray a) {
         if (a.hasValue(1)) setTextSize(TypedValue.COMPLEX_UNIT_PX, a.getDimension(1, paint.getTextSize()));
@@ -78,14 +97,132 @@ public class TextView extends View implements TextViewPaintAccess {
     }
     public void setTextAppearance(Context context, int id) { setTextAppearance(id); }
     public CharSequence getText() { return text; }
-    public void setText(CharSequence value) { setText(value, BufferType.NORMAL); }
-    public void setText(CharSequence value, BufferType type) { applyText(value); }
+    public Editable getEditableText() { return text instanceof Editable ? (Editable) text : null; }
+    public void setText(CharSequence value) { setText(value, bufferType); }
+    public void setText(CharSequence value, BufferType type) {
+        bufferType = type;
+        if (type == BufferType.EDITABLE) {
+            if (text instanceof EditingBuffer buffer) {
+                if (buffer != value) buffer.replace(0, buffer.length(), value == null ? "" : value);
+                return;
+            }
+            EditingBuffer buffer = new EditingBuffer(value == null ? "" : value);
+            Selection.setSelection(buffer, buffer.length());
+            applyText(buffer);
+        } else if (type == BufferType.SPANNABLE && !(value instanceof Spannable)) {
+            applyText(new SpannableString(value == null ? "" : value));
+        } else {
+            applyText(value);
+        }
+    }
     private void applyText(CharSequence value) {
         text = value == null ? "" : value;
         requestLayout();
         invalidate();
     }
     public final void setText(int id) { setText(getResources().getText(id)); }
+    protected boolean getDefaultEditable() { return false; }
+    protected MovementMethod getDefaultMovementMethod() { return null; }
+    protected boolean supportsAutoSizeText() { return true; }
+    public boolean getFreezesText() { return false; }
+    public boolean isLocalePreferredLineHeightForMinimumUsed() { return useLocalePreferredLineHeight; }
+    public void setLocalePreferredLineHeightForMinimumUsed(boolean use) {
+        if (useLocalePreferredLineHeight == use) return;
+        useLocalePreferredLineHeight = use;
+        requestLayout();
+    }
+    public int getSelectionStart() { return Selection.getSelectionStart(text); }
+    public int getSelectionEnd() { return Selection.getSelectionEnd(text); }
+    public boolean hasSelection() {
+        int start = getSelectionStart(), end = getSelectionEnd();
+        return start >= 0 && end >= 0 && start != end;
+    }
+    public void addTextChangedListener(TextWatcher watcher) {
+        if (watcher == null) return;
+        if (textWatchers == null) textWatchers = new ArrayList<>();
+        textWatchers.add(watcher);
+    }
+    public void removeTextChangedListener(TextWatcher watcher) {
+        if (textWatchers != null) textWatchers.remove(watcher);
+    }
+    public void setOnEditorActionListener(OnEditorActionListener listener) { editorActionListener = listener; }
+    public boolean onKeyShortcut(int keyCode, KeyEvent event) { return false; }
+    public boolean onTextContextMenuItem(int id) {
+        if (id != android.R.id.selectAll || !(text instanceof Spannable)) return false;
+        Selection.selectAll((Spannable) text);
+        return true;
+    }
+
+    @Override public boolean onImeText(CharSequence value, boolean composing) {
+        Editable editable = getEditableText();
+        if (editable == null || !isEnabled()) return false;
+        int start = Math.max(0, Math.min(getSelectionStart(), getSelectionEnd()));
+        int end = Math.max(start, Math.max(getSelectionStart(), getSelectionEnd()));
+        if (composingStart >= 0 && start == composingEnd && end == composingEnd) start = composingStart;
+        editable.replace(start, end, value);
+        if (composing) {
+            composingStart = start;
+            composingEnd = getSelectionEnd();
+        }
+        return true;
+    }
+
+    @Override public boolean onTouchEvent(MotionEvent event) {
+        if (event.getActionMasked() == MotionEvent.ACTION_DOWN && getEditableText() != null
+                && isEnabled() && requestFocus()) {
+            var keyboard = getContext().getSystemService(InputMethodManager.class);
+            if (keyboard != null) keyboard.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT);
+        }
+        return super.onTouchEvent(event);
+    }
+
+    @Override public boolean onKeyDown(int code, KeyEvent event) {
+        Editable editable = getEditableText();
+        if (editable == null || code != KeyEvent.KEYCODE_DEL) return super.onKeyDown(code, event);
+        int start = Math.max(0, Math.min(getSelectionStart(), getSelectionEnd()));
+        int end = Math.max(start, Math.max(getSelectionStart(), getSelectionEnd()));
+        if (start == end && start > 0) {
+            --start;
+            if (start > 0 && Character.isLowSurrogate(editable.charAt(start))
+                    && Character.isHighSurrogate(editable.charAt(start - 1))) --start;
+        }
+        if (start != end) editable.delete(start, end);
+        return true;
+    }
+
+    @Override public boolean onKeyUp(int code, KeyEvent event) {
+        if (code == KeyEvent.KEYCODE_ENTER && editorActionListener != null
+                && editorActionListener.onEditorAction(this, 0, event)) return true;
+        return super.onKeyUp(code, event);
+    }
+
+    private final class EditingBuffer extends SpannableStringBuilder {
+        EditingBuffer(CharSequence initial) { super(initial); }
+
+        @Override public SpannableStringBuilder replace(
+                int start, int end, CharSequence value, int from, int to) {
+            if (start < 0 || end < start || end > length()) throw new IndexOutOfBoundsException();
+            int previousLength = length();
+            TextWatcher[] listeners = textWatchers == null ? null : textWatchers.toArray(new TextWatcher[0]);
+            if (listeners != null) {
+                for (TextWatcher watcher : listeners) {
+                    watcher.beforeTextChanged(this, start, end - start, to - from);
+                }
+            }
+            super.replace(start, end, value, from, to);
+            int inserted = length() - previousLength + end - start;
+            composingStart = composingEnd = -1;
+            Selection.setSelection(this, start + inserted);
+            requestLayout();
+            invalidate();
+            if (listeners != null) {
+                for (TextWatcher watcher : listeners) watcher.onTextChanged(this, start, end - start, inserted);
+                for (TextWatcher watcher : listeners) watcher.afterTextChanged(this);
+            }
+            return this;
+        }
+    }
+
     public int length() { return text.length(); }
     public void setHint(CharSequence hint) { this.hint = hint; requestLayout(); invalidate(); }
     public void setHint(int id) { setHint(getResources().getText(id)); }

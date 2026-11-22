@@ -67,6 +67,8 @@ def build(args, stage):
               HERE / "build_upstream_framework_dex.py", manifest, *compile_only_annotations, *patches,
               SOURCES / "generate_unicode.py",
               args.upstream_classes, args.javac, args.d8, args.android_jar, *sources, *java_base, *libcore}
+    if args.upstream_dex:
+        inputs.add(args.upstream_dex)
     d8_jar = args.d8.parent / "lib/d8.jar"
     if d8_jar.is_file():
         inputs.add(d8_jar)
@@ -141,9 +143,18 @@ def build(args, stage):
     compatibility = stage / "compatibility-classes.jar"
     write_jar(compatibility, {name: data for name, data in entries.items() if name not in primary})
     dex_from_jar(args, stage, compatibility, Path(DEX).stem, [args.upstream_classes])
-    primary_types = {"L" + name.removesuffix(".class") + ";" for name in primary}
-    for dex in dex_entries(stage / DEX):
-        dex_profile(dex, set(), primary_types)
+    if args.upstream_dex:
+        # D8 can emit synthetic classes absent from the javac JAR.
+        defined = set()
+        artifacts = (args.upstream_dex, stage / DEX)
+    else:
+        defined = {"L" + name.removesuffix(".class") + ";" for name in primary}
+        artifacts = (stage / DEX,)
+    for artifact in artifacts:
+        for dex in dex_entries(artifact):
+            profile = dex_profile(dex, set(), defined)
+            defined.update(line.split(maxsplit=1)[0] for line in profile.splitlines()
+                           if line.startswith("L"))
     write_jar(stage / JAR, entries | primary)
     return inputs, len(upstream)
 
@@ -159,6 +170,7 @@ def main():
     parser.add_argument("--android-jar", type=Path)
     parser.add_argument("--upstream-classes", type=Path, required=True,
                         help="Javac classpath built by build_upstream_framework_dex.py")
+    parser.add_argument("--upstream-dex", type=Path, help="validate class definitions in the primary DEX")
     parser.add_argument("--d8", type=Path)
     parser.add_argument("--depfile", type=Path)
     parser.add_argument("--check", action="store_true", help="rebuild and compare the DEX and JAR")
