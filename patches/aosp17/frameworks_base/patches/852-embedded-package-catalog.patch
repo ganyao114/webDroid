@@ -1,0 +1,4021 @@
+--- a/frameworks/base/core/java/android/content/pm/PackageManager.java
++++ b/frameworks/base/core/java/android/content/pm/PackageManager.java
+@@ -17,9 +17,11 @@
+ package android.content.pm;
+ 
+-import static android.app.PropertyInvalidatedCache.MODULE_SYSTEM;
+-import static android.content.pm.SigningInfo.AppSigningSchemeVersion;
+-import static android.media.audio.Flags.FLAG_FEATURE_SPATIAL_AUDIO_HEADTRACKING_LOW_LATENCY;
+-
+-import static com.android.internal.pm.pkg.parsing.ParsingPackageUtils.PARSE_COLLECT_CERTIFICATES;
++import android.content.ActivityNotFoundException;
++import android.graphics.drawable.ColorDrawable;
++import java.util.ArrayList;
++import java.util.Arrays;
++import java.util.HashMap;
++
++
+ 
+ import android.Manifest;
+@@ -34,6 +36,4 @@
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SdkConstant;
+-import android.annotation.SdkConstant.SdkConstantType;
+ import android.annotation.StringRes;
+ import android.annotation.SuppressLint;
+@@ -45,10 +45,5 @@
+ import android.app.Activity;
+ import android.app.ActivityManager;
+-import android.app.ActivityThread;
+-import android.app.AppDetailsActivity;
+-import android.app.PackageDeleteObserver;
+-import android.app.PackageInstallObserver;
+ import android.app.PendingIntent;
+-import android.app.PropertyInvalidatedCache;
+ import android.app.admin.DevicePolicyManager;
+ import android.app.usage.StorageStatsManager;
+@@ -63,8 +58,4 @@
+ import android.content.IntentSender;
+ import android.content.pm.PackageInstaller.SessionParams;
+-import android.content.pm.dex.ArtManager;
+-import android.content.pm.parsing.result.ParseResult;
+-import android.content.pm.parsing.result.ParseTypeImpl;
+-import android.content.pm.verify.developer.DeveloperVerifierService;
+ import android.content.pm.verify.domain.DomainVerificationManager;
+ import android.content.res.Configuration;
+@@ -81,5 +72,4 @@
+ import android.os.Handler;
+ import android.os.IBinder;
+-import android.os.IRemoteCallback;
+ import android.os.Parcel;
+ import android.os.ParcelFileDescriptor;
+@@ -89,30 +79,16 @@
+ import android.os.UserHandle;
+ import android.os.UserManager;
+-import android.os.incremental.IncrementalManager;
+ import android.os.storage.StorageManager;
+-import android.os.storage.VolumeInfo;
+-import android.permission.PermissionManager;
+ import android.ravenwood.annotation.RavenwoodKeep;
+ import android.ravenwood.annotation.RavenwoodKeepPartialClass;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.ravenwood.annotation.RavenwoodSupported;
+-import android.ravenwood.annotation.RavenwoodSupported.SupportType;
+-import android.service.personalcontext.PersonalContextManager;
+ import android.telephony.TelephonyManager;
+ import android.telephony.UiccCardInfo;
+-import android.telephony.gba.GbaService;
+-import android.telephony.ims.ImsService;
+ import android.telephony.ims.ProvisioningManager;
+ import android.telephony.ims.RcsUceAdapter;
+-import android.telephony.ims.SipDelegateManager;
+ import android.util.AndroidException;
+ import android.util.Log;
+-import android.util.apk.ApkSignatureVerifier;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.pm.parsing.PackageInfoCommonUtils;
+-import com.android.internal.pm.parsing.PackageParser2;
+-import com.android.internal.pm.parsing.PackageParserException;
+-import com.android.internal.pm.parsing.pkg.ParsedPackage;
+ import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.DataClass;
+@@ -239,5 +215,4 @@
+      * restricted mode completely.
+      */
+-    @FlaggedApi(com.android.server.backup.Flags.FLAG_ENABLE_RESTRICTED_MODE_CHANGES)
+     public static final String PROPERTY_USE_RESTRICTED_BACKUP_MODE =
+             "android.app.backup.PROPERTY_USE_RESTRICTED_BACKUP_MODE";
+@@ -826,9 +801,5 @@
+             this.mComponentName = componentName;
+             this.mEnabledState = enabledState;
+-            com.android.internal.util.AnnotationValidations.validate(
+-                    EnabledState.class, null, mEnabledState);
+             this.mEnabledFlags = enabledFlags;
+-            com.android.internal.util.AnnotationValidations.validate(
+-                    EnabledFlags.class, null, mEnabledFlags);
+ 
+             // onConstructed(); // You can define this method to get a callback
+@@ -886,11 +857,6 @@
+          * @see VirtualDeviceManager#PERSISTENT_DEVICE_ID_DEFAULT
+          */
+-        @FlaggedApi(android.permission.flags.Flags.FLAG_DEVICE_AWARE_PERMISSION_APIS_ENABLED)
+         default void onPermissionsChanged(int uid, @NonNull String persistentDeviceId) {
+-            Objects.requireNonNull(persistentDeviceId);
+-            if (Objects.equals(persistentDeviceId,
+-                    VirtualDeviceManager.PERSISTENT_DEVICE_ID_DEFAULT)) {
+-                onPermissionsChanged(uid);
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+     }
+@@ -3273,5 +3239,4 @@
+      * lag in sound input or output.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_AUDIO_LOW_LATENCY = "android.hardware.audio.low_latency";
+ 
+@@ -3282,5 +3247,4 @@
+      * <a href="https://source.android.com/compatibility/android-cdd#7_8_audio">section 7.8 Audio</a>.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_AUDIO_OUTPUT = "android.hardware.audio.output";
+ 
+@@ -3289,5 +3253,4 @@
+      * The device has professional audio level of functionality and performance.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_AUDIO_PRO = "android.hardware.audio.pro";
+ 
+@@ -3298,6 +3261,4 @@
+      *
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+-    @FlaggedApi(FLAG_FEATURE_SPATIAL_AUDIO_HEADTRACKING_LOW_LATENCY)
+     public static final String FEATURE_AUDIO_SPATIAL_HEADTRACKING_LOW_LATENCY =
+             "android.hardware.audio.spatial.headtracking.low_latency";
+@@ -3308,5 +3269,4 @@
+      * other devices via Bluetooth.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_BLUETOOTH = "android.hardware.bluetooth";
+ 
+@@ -3316,5 +3276,4 @@
+      * other devices via Bluetooth Low Energy radio.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_BLUETOOTH_LE = "android.hardware.bluetooth_le";
+ 
+@@ -3324,6 +3283,4 @@
+      * other devices using channel sounding via Bluetooth Low Energy radio.
+      */
+-    @FlaggedApi(com.android.ranging.flags.Flags.FLAG_RANGING_CS_ENABLED)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_BLUETOOTH_LE_CHANNEL_SOUNDING =
+              "android.hardware.bluetooth_le.channel_sounding";
+@@ -3334,5 +3291,4 @@
+      * from the screen.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA = "android.hardware.camera";
+ 
+@@ -3341,5 +3297,4 @@
+      * {@link #hasSystemFeature}: The device's camera supports auto-focus.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_AUTOFOCUS = "android.hardware.camera.autofocus";
+ 
+@@ -3349,5 +3304,4 @@
+      * some direction, or can support an external camera being connected to it.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_ANY = "android.hardware.camera.any";
+ 
+@@ -3357,5 +3311,4 @@
+      * The external camera may not always be connected or available to applications to use.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_EXTERNAL = "android.hardware.camera.external";
+ 
+@@ -3364,5 +3317,4 @@
+      * {@link #hasSystemFeature}: The device's camera supports flash.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_FLASH = "android.hardware.camera.flash";
+ 
+@@ -3371,5 +3323,4 @@
+      * {@link #hasSystemFeature}: The device has a front facing camera.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_FRONT = "android.hardware.camera.front";
+ 
+@@ -3380,5 +3331,4 @@
+      * capability level.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_LEVEL_FULL = "android.hardware.camera.level.full";
+ 
+@@ -3389,5 +3339,4 @@
+      * capability level.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_CAPABILITY_MANUAL_SENSOR =
+             "android.hardware.camera.capability.manual_sensor";
+@@ -3399,5 +3348,4 @@
+      * capability level.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_CAPABILITY_MANUAL_POST_PROCESSING =
+             "android.hardware.camera.capability.manual_post_processing";
+@@ -3409,5 +3357,4 @@
+      * capability level.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_CAPABILITY_RAW =
+             "android.hardware.camera.capability.raw";
+@@ -3419,5 +3366,4 @@
+      * MOTION_TRACKING} capability level.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_AR =
+             "android.hardware.camera.ar";
+@@ -3437,5 +3383,4 @@
+      * </p>
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAMERA_CONCURRENT = "android.hardware.camera.concurrent";
+ 
+@@ -3445,5 +3390,4 @@
+      * consumer IR devices.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CONSUMER_IR = "android.hardware.consumerir";
+ 
+@@ -3456,9 +3400,7 @@
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CONTEXT_HUB = "android.hardware.context_hub";
+ 
+     /** @hide */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CTS = "android.software.cts";
+ 
+@@ -3469,5 +3411,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAR_TEMPLATES_HOST =
+             "android.software.car.templates_host";
+@@ -3479,5 +3420,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAR_TEMPLATES_HOST_MEDIA =
+             "android.software.car.templates_host.media";
+@@ -3493,5 +3433,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAR_SPLITSCREEN_MULTITASKING =
+             "android.software.car.splitscreen_multitasking";
+@@ -3503,5 +3442,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CAR_DISPLAY_COMPATIBILITY =
+             "android.software.car.display_compatibility";
+@@ -3523,5 +3461,4 @@
+      * </ul>
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_IDENTITY_CREDENTIAL_HARDWARE =
+             "android.hardware.identity_credential";
+@@ -3534,5 +3471,4 @@
+      * See {@link #FEATURE_IDENTITY_CREDENTIAL_HARDWARE} for known feature versions.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_IDENTITY_CREDENTIAL_HARDWARE_DIRECT_ACCESS =
+             "android.hardware.identity_credential_direct_access";
+@@ -3543,5 +3479,4 @@
+      * reporting current location.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_LOCATION = "android.hardware.location";
+ 
+@@ -3551,5 +3486,4 @@
+      * receiver and can report precise location.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_LOCATION_GPS = "android.hardware.location.gps";
+ 
+@@ -3559,5 +3493,4 @@
+      * accuracy using a network-based geolocation system.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_LOCATION_NETWORK = "android.hardware.location.network";
+ 
+@@ -3569,5 +3502,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_FELICA = "android.hardware.felica";
+ 
+@@ -3578,5 +3510,4 @@
+      * true.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_RAM_LOW = "android.hardware.ram.low";
+ 
+@@ -3587,5 +3518,4 @@
+      * false.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_RAM_NORMAL = "android.hardware.ram.normal";
+ 
+@@ -3595,5 +3525,4 @@
+      * microphone.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_MICROPHONE = "android.hardware.microphone";
+ 
+@@ -3603,5 +3532,4 @@
+      * Communications (NFC), acting as a reader.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_NFC = "android.hardware.nfc";
+ 
+@@ -3616,5 +3544,4 @@
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_NFC_HCE = "android.hardware.nfc.hce";
+ 
+@@ -3624,5 +3551,4 @@
+      * based NFC card emulation.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_NFC_HOST_CARD_EMULATION = "android.hardware.nfc.hce";
+ 
+@@ -3632,5 +3558,4 @@
+      * based NFC-F card emulation.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_NFC_HOST_CARD_EMULATION_NFCF = "android.hardware.nfc.hcef";
+ 
+@@ -3640,5 +3565,4 @@
+      * based NFC card emulation.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_NFC_OFF_HOST_CARD_EMULATION_UICC =
+                                                                        "android.hardware.nfc.uicc";
+@@ -3649,5 +3573,4 @@
+      * based NFC card emulation.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_NFC_OFF_HOST_CARD_EMULATION_ESE = "android.hardware.nfc.ese";
+ 
+@@ -3656,6 +3579,4 @@
+      * {@link #hasSystemFeature}: The device supports NFC charging.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+-    @FlaggedApi(android.nfc.Flags.FLAG_ENABLE_NFC_CHARGING)
+     public static final String FEATURE_NFC_CHARGING = "android.hardware.nfc.charging";
+ 
+@@ -3664,5 +3585,4 @@
+      * {@link #hasSystemFeature}: The Beam API is enabled on the device.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_NFC_BEAM = "android.sofware.nfc.beam";
+ 
+@@ -3675,5 +3595,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_NFC_ANY = "android.hardware.nfc.any";
+ 
+@@ -3685,5 +3604,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SDK_SANDBOX_WORK_PROFILE_INSTALL =
+             "android.software.sdksandbox.sdk_install_work_profile";
+@@ -3694,5 +3612,4 @@
+      * elements.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SE_OMAPI_UICC = "android.hardware.se.omapi.uicc";
+ 
+@@ -3702,5 +3619,4 @@
+      * elements.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SE_OMAPI_ESE = "android.hardware.se.omapi.ese";
+ 
+@@ -3710,5 +3626,4 @@
+      * elements.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SE_OMAPI_SD = "android.hardware.se.omapi.sd";
+ 
+@@ -3721,5 +3636,4 @@
+      * details.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SECURITY_MODEL_COMPATIBLE =
+             "android.hardware.security.model.compatible";
+@@ -3731,5 +3645,4 @@
+      * Android Extension Pack</a>.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_OPENGLES_EXTENSION_PACK = "android.hardware.opengles.aep";
+ 
+@@ -3742,5 +3655,4 @@
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VIRTUALIZATION_FRAMEWORK =
+             "android.software.virtualization_framework";
+@@ -3771,5 +3683,4 @@
+      * </ul>
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VULKAN_HARDWARE_LEVEL = "android.hardware.vulkan.level";
+ 
+@@ -3789,5 +3700,4 @@
+      * </ul>
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VULKAN_HARDWARE_COMPUTE = "android.hardware.vulkan.compute";
+ 
+@@ -3816,5 +3726,4 @@
+      * <a href="{@docRoot}ndk/guides/graphics/design-notes">Vulkan Design Guidelines</a>.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VULKAN_HARDWARE_VERSION = "android.hardware.vulkan.version";
+ 
+@@ -3833,5 +3742,4 @@
+      * Vulkan dEQP test suite version that was current on 2019-03-01.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VULKAN_DEQP_LEVEL = "android.software.vulkan.deqp.level";
+ 
+@@ -3850,5 +3758,4 @@
+      * OpenGL ES dEQP test suite version that was current on 2021-03-01.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_OPENGLES_DEQP_LEVEL = "android.software.opengles.deqp.level";
+ 
+@@ -3859,5 +3766,4 @@
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_BROADCAST_RADIO = "android.hardware.broadcastradio";
+ 
+@@ -3867,5 +3773,4 @@
+      * device supports PIN, pattern and password as defined in Android CDD
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SECURE_LOCK_SCREEN = "android.software.secure_lock_screen";
+ 
+@@ -3874,5 +3779,4 @@
+      * {@link #hasSystemFeature}: The device includes an accelerometer.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_ACCELEROMETER = "android.hardware.sensor.accelerometer";
+ 
+@@ -3882,5 +3786,4 @@
+      * pressure sensor.)
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_BAROMETER = "android.hardware.sensor.barometer";
+ 
+@@ -3889,5 +3792,4 @@
+      * {@link #hasSystemFeature}: The device includes a magnetometer (compass).
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_COMPASS = "android.hardware.sensor.compass";
+ 
+@@ -3896,5 +3798,4 @@
+      * {@link #hasSystemFeature}: The device includes a gyroscope.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_GYROSCOPE = "android.hardware.sensor.gyroscope";
+ 
+@@ -3903,5 +3804,4 @@
+      * {@link #hasSystemFeature}: The device includes a limited axes accelerometer.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_ACCELEROMETER_LIMITED_AXES =
+                 "android.hardware.sensor.accelerometer_limited_axes";
+@@ -3911,5 +3811,4 @@
+      * {@link #hasSystemFeature}: The device includes a limited axes gyroscope.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_GYROSCOPE_LIMITED_AXES =
+                 "android.hardware.sensor.gyroscope_limited_axes";
+@@ -3919,5 +3818,4 @@
+      * {@link #hasSystemFeature}: The device includes an uncalibrated limited axes accelerometer.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_ACCELEROMETER_LIMITED_AXES_UNCALIBRATED =
+                 "android.hardware.sensor.accelerometer_limited_axes_uncalibrated";
+@@ -3927,5 +3825,4 @@
+      * {@link #hasSystemFeature}: The device includes an uncalibrated limited axes gyroscope.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_GYROSCOPE_LIMITED_AXES_UNCALIBRATED =
+                 "android.hardware.sensor.gyroscope_limited_axes_uncalibrated";
+@@ -3935,5 +3832,4 @@
+      * {@link #hasSystemFeature}: The device includes a light sensor.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_LIGHT = "android.hardware.sensor.light";
+ 
+@@ -3942,5 +3838,4 @@
+      * {@link #hasSystemFeature}: The device includes a proximity sensor.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_PROXIMITY = "android.hardware.sensor.proximity";
+ 
+@@ -3949,5 +3844,4 @@
+      * {@link #hasSystemFeature}: The device includes a hardware step counter.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_STEP_COUNTER = "android.hardware.sensor.stepcounter";
+ 
+@@ -3956,5 +3850,4 @@
+      * {@link #hasSystemFeature}: The device includes a hardware step detector.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_STEP_DETECTOR = "android.hardware.sensor.stepdetector";
+ 
+@@ -3963,5 +3856,4 @@
+      * {@link #hasSystemFeature}: The device includes a heart rate monitor.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_HEART_RATE = "android.hardware.sensor.heartrate";
+ 
+@@ -3970,5 +3862,4 @@
+      * {@link #hasSystemFeature}: The heart rate sensor on this device is an Electrocardiogram.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_HEART_RATE_ECG =
+             "android.hardware.sensor.heartrate.ecg";
+@@ -3978,5 +3869,4 @@
+      * {@link #hasSystemFeature}: The device includes a relative humidity sensor.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_RELATIVE_HUMIDITY =
+             "android.hardware.sensor.relative_humidity";
+@@ -3986,5 +3876,4 @@
+      * {@link #hasSystemFeature}: The device includes an ambient temperature sensor.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_AMBIENT_TEMPERATURE =
+             "android.hardware.sensor.ambient_temperature";
+@@ -3994,5 +3883,4 @@
+      * {@link #hasSystemFeature}: The device includes a hinge angle sensor.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_HINGE_ANGLE = "android.hardware.sensor.hinge_angle";
+ 
+@@ -4001,5 +3889,4 @@
+      * {@link #hasSystemFeature}: The device includes a heading sensor.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_HEADING = "android.hardware.sensor.heading";
+ 
+@@ -4009,5 +3896,4 @@
+      * devices via the dynamic sensors API.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SENSOR_DYNAMIC_HEAD_TRACKER = "android.hardware.sensor.dynamic.head_tracker";
+ 
+@@ -4017,5 +3903,4 @@
+      * capabilities.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_HIFI_SENSORS =
+             "android.hardware.sensor.hifi_sensors";
+@@ -4027,5 +3912,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_ASSIST_GESTURE = "android.hardware.sensor.assist";
+ 
+@@ -4035,5 +3919,4 @@
+      * communication support.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY = "android.hardware.telephony";
+ 
+@@ -4044,5 +3927,4 @@
+      * <p>This feature should only be defined if {@link #FEATURE_TELEPHONY} has been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_CDMA = "android.hardware.telephony.cdma";
+ 
+@@ -4053,5 +3935,4 @@
+      * <p>This feature should only be defined if {@link #FEATURE_TELEPHONY} has been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_GSM = "android.hardware.telephony.gsm";
+ 
+@@ -4069,5 +3950,4 @@
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_CARRIERLOCK =
+             "android.hardware.telephony.carrierlock";
+@@ -4080,5 +3960,4 @@
+      * has been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_EUICC = "android.hardware.telephony.euicc";
+ 
+@@ -4094,5 +3973,4 @@
+      * This feature should only be defined if {@link #FEATURE_TELEPHONY_EUICC} have been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_EUICC_MEP = "android.hardware.telephony.euicc.mep";
+ 
+@@ -4104,5 +3982,4 @@
+      * and {@link #FEATURE_TELEPHONY_RADIO_ACCESS} have been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_MBMS = "android.hardware.telephony.mbms";
+ 
+@@ -4113,5 +3990,4 @@
+      * <p>This feature should only be defined if {@link #FEATURE_TELEPHONY_DATA} has been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_IMS = "android.hardware.telephony.ims";
+ 
+@@ -4143,5 +4019,4 @@
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_IMS_SINGLE_REGISTRATION =
+             "android.hardware.telephony.ims.singlereg";
+@@ -4151,5 +4026,4 @@
+      * The device supports Telecom Service APIs.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELECOM = "android.software.telecom";
+ 
+@@ -4161,5 +4035,4 @@
+      * {@link #FEATURE_TELEPHONY_SUBSCRIPTION}, and {@link #FEATURE_TELECOM} have been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_CALLING = "android.hardware.telephony.calling";
+ 
+@@ -4171,5 +4044,4 @@
+      * and {@link #FEATURE_TELEPHONY_RADIO_ACCESS} have been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_DATA = "android.hardware.telephony.data";
+ 
+@@ -4181,5 +4053,4 @@
+      * and {@link #FEATURE_TELEPHONY_RADIO_ACCESS} have been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_MESSAGING = "android.hardware.telephony.messaging";
+ 
+@@ -4190,5 +4061,4 @@
+      * <p>This feature should only be defined if {@link #FEATURE_TELEPHONY} has been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_RADIO_ACCESS =
+             "android.hardware.telephony.radio.access";
+@@ -4203,5 +4073,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_SATELLITE = "android.hardware.telephony.satellite";
+ 
+@@ -4212,5 +4081,4 @@
+      * <p>This feature should only be defined if {@link #FEATURE_TELEPHONY} has been defined.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEPHONY_SUBSCRIPTION =
+             "android.hardware.telephony.subscription";
+@@ -4221,6 +4089,4 @@
+      * <a href="https://www.threadgroup.org">Thread</a> networking protocol.
+      */
+-    @FlaggedApi(com.android.net.thread.platform.flags.Flags.FLAG_THREAD_ENABLED_PLATFORM)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_THREAD_NETWORK = "android.hardware.thread_network";
+ 
+@@ -4230,5 +4096,4 @@
+      * other devices via ultra wideband.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_UWB = "android.hardware.uwb";
+ 
+@@ -4238,5 +4103,4 @@
+      * as the USB host.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_USB_HOST = "android.hardware.usb.host";
+ 
+@@ -4246,6 +4110,4 @@
+      * as the USB device.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+-    @FlaggedApi(android.hardware.usb.flags.Flags.FLAG_ENABLE_FEATURE_USB_DEVICE)
+     public static final String FEATURE_USB_DEVICE = "android.hardware.usb.device";
+ 
+@@ -4254,5 +4116,4 @@
+      * {@link #hasSystemFeature}: The device supports connecting to USB accessories.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_USB_ACCESSORY = "android.hardware.usb.accessory";
+ 
+@@ -4261,5 +4122,4 @@
+      * {@link #hasSystemFeature}: The SIP API is enabled on the device.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SIP = "android.software.sip";
+ 
+@@ -4268,5 +4128,4 @@
+      * {@link #hasSystemFeature}: The device supports SIP-based VOIP.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SIP_VOIP = "android.software.sip.voip";
+ 
+@@ -4277,5 +4136,4 @@
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CONNECTION_SERVICE = "android.software.connectionservice";
+ 
+@@ -4284,5 +4142,4 @@
+      * {@link #hasSystemFeature}: The device's display has a touch screen.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TOUCHSCREEN = "android.hardware.touchscreen";
+ 
+@@ -4292,5 +4149,4 @@
+      * multitouch sufficient for basic two-finger gesture detection.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TOUCHSCREEN_MULTITOUCH = "android.hardware.touchscreen.multitouch";
+ 
+@@ -4300,5 +4156,4 @@
+      * tracking two or more fingers fully independently.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TOUCHSCREEN_MULTITOUCH_DISTINCT = "android.hardware.touchscreen.multitouch.distinct";
+ 
+@@ -4309,5 +4164,4 @@
+      * more simultaneous independent pointers.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TOUCHSCREEN_MULTITOUCH_JAZZHAND = "android.hardware.touchscreen.multitouch.jazzhand";
+ 
+@@ -4321,5 +4175,4 @@
+      * presumed to also support faketouch.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_FAKETOUCH = "android.hardware.faketouch";
+ 
+@@ -4338,5 +4191,4 @@
+      * result in the corresponding two-finger touch event.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_FAKETOUCH_MULTITOUCH_DISTINCT = "android.hardware.faketouch.multitouch.distinct";
+ 
+@@ -4353,5 +4205,4 @@
+      * {@link #FEATURE_FAKETOUCH_MULTITOUCH_DISTINCT}.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_FAKETOUCH_MULTITOUCH_JAZZHAND = "android.hardware.faketouch.multitouch.jazzhand";
+ 
+@@ -4360,5 +4211,4 @@
+      * {@link #hasSystemFeature}: The device has biometric hardware to detect a fingerprint.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_FINGERPRINT = "android.hardware.fingerprint";
+ 
+@@ -4367,5 +4217,4 @@
+      * {@link #hasSystemFeature}: The device has biometric hardware to perform face authentication.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_FACE = "android.hardware.biometrics.face";
+ 
+@@ -4374,5 +4223,4 @@
+      * {@link #hasSystemFeature}: The device has biometric hardware to perform iris authentication.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_IRIS = "android.hardware.biometrics.iris";
+ 
+@@ -4384,5 +4232,4 @@
+      * both portrait and landscape.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SCREEN_PORTRAIT = "android.hardware.screen.portrait";
+ 
+@@ -4394,5 +4241,4 @@
+      * both portrait and landscape.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SCREEN_LANDSCAPE = "android.hardware.screen.landscape";
+ 
+@@ -4401,5 +4247,4 @@
+      * {@link #hasSystemFeature}: The device supports live wallpapers.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_LIVE_WALLPAPER = "android.software.live_wallpaper";
+     /**
+@@ -4407,5 +4252,4 @@
+      * {@link #hasSystemFeature}: The device supports app widgets.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_APP_WIDGETS = "android.software.app_widgets";
+     /**
+@@ -4414,5 +4258,4 @@
+      * {@link android.R.attr#cantSaveState} API.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CANT_SAVE_STATE = "android.software.cant_save_state";
+ 
+@@ -4425,5 +4268,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     @SystemApi
+     public static final String FEATURE_GAME_SERVICE = "android.software.game_service";
+@@ -4436,5 +4278,4 @@
+      * {@link android.app.VoiceInteractor}.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VOICE_RECOGNIZERS = "android.software.voice_recognizers";
+ 
+@@ -4445,5 +4286,4 @@
+      * by third party applications.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_HOME_SCREEN = "android.software.home_screen";
+ 
+@@ -4453,5 +4293,4 @@
+      * with the {@link android.inputmethodservice.InputMethodService} API.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_INPUT_METHODS = "android.software.input_methods";
+ 
+@@ -4460,5 +4299,4 @@
+      * {@link #hasSystemFeature}: The device supports device policy enforcement via device admins.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_DEVICE_ADMIN = "android.software.device_admin";
+ 
+@@ -4470,5 +4308,4 @@
+      * feature will use resources associated with the "television" UI mode.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_LEANBACK = "android.software.leanback";
+ 
+@@ -4479,5 +4316,4 @@
+      * not enforced by the system.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_LEANBACK_ONLY = "android.software.leanback_only";
+ 
+@@ -4488,5 +4324,4 @@
+      * {@link android.media.tv.TvInputService} API.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_LIVE_TV = "android.software.live_tv";
+ 
+@@ -4495,5 +4330,4 @@
+      * {@link #hasSystemFeature}: The device supports WiFi (802.11) networking.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_WIFI = "android.hardware.wifi";
+ 
+@@ -4502,5 +4336,4 @@
+      * {@link #hasSystemFeature}: The device supports Wi-Fi Direct networking.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_WIFI_DIRECT = "android.hardware.wifi.direct";
+ 
+@@ -4509,5 +4342,4 @@
+      * {@link #hasSystemFeature}: The device supports Wi-Fi Aware.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_WIFI_AWARE = "android.hardware.wifi.aware";
+ 
+@@ -4518,5 +4350,4 @@
+      * {@link WifiManager#addOrUpdatePasspointConfiguration} for more info.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_WIFI_PASSPOINT = "android.hardware.wifi.passpoint";
+ 
+@@ -4525,5 +4356,4 @@
+      * {@link #hasSystemFeature}: The device supports Wi-Fi RTT (IEEE 802.11mc).
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_WIFI_RTT = "android.hardware.wifi.rtt";
+ 
+@@ -4534,5 +4364,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_LOWPAN = "android.hardware.lowpan";
+ 
+@@ -4549,5 +4378,4 @@
+      * like interfaces.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_AUTOMOTIVE = "android.hardware.type.automotive";
+ 
+@@ -4562,5 +4390,4 @@
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TELEVISION = "android.hardware.type.television";
+ 
+@@ -4571,5 +4398,4 @@
+      * the wrist. The user is very close when interacting with the device.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_WATCH = "android.hardware.type.watch";
+ 
+@@ -4580,5 +4406,4 @@
+      * user-installable apps.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_EMBEDDED = "android.hardware.type.embedded";
+ 
+@@ -4591,5 +4416,4 @@
+      * {@link #FEATURE_FREEFORM_WINDOW_MANAGEMENT} feature as well.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_PC = "android.hardware.type.pc";
+ 
+@@ -4600,6 +4424,4 @@
+      * are worn on the user's body and likely require a companion device for user interactions.
+      */
+-    @FlaggedApi(com.android.microxr.Flags.FLAG_XR_GLASSES_FEATURE)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_XR_PERIPHERAL = "android.hardware.type.xr_peripheral";
+ 
+@@ -4608,5 +4430,4 @@
+      * The device supports printing.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_PRINTING = "android.software.print";
+ 
+@@ -4616,5 +4437,4 @@
+      * with devices via {@link android.companion.CompanionDeviceManager}.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_COMPANION_DEVICE_SETUP
+             = "android.software.companion_device_setup";
+@@ -4624,5 +4444,4 @@
+      * The device can perform backup and restore operations on installed applications.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_BACKUP = "android.software.backup";
+ 
+@@ -4632,5 +4451,4 @@
+      * Windows have title bars and can be moved and resized.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_FREEFORM_WINDOW_MANAGEMENT
+             = "android.software.freeform_window_management";
+@@ -4640,5 +4458,4 @@
+      * The device supports picture-in-picture multi-window mode.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_PICTURE_IN_PICTURE = "android.software.picture_in_picture";
+ 
+@@ -4649,5 +4466,4 @@
+      * @see android.app.PictureInPictureParams.Builder#setExpandedAspectRatio
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_EXPANDED_PICTURE_IN_PICTURE
+             = "android.software.expanded_picture_in_picture";
+@@ -4660,5 +4476,4 @@
+      * on the device.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_ACTIVITIES_ON_SECONDARY_DISPLAYS
+             = "android.software.activities_on_secondary_displays";
+@@ -4669,5 +4484,4 @@
+      * {@link DevicePolicyManager}.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_MANAGED_USERS = "android.software.managed_users";
+ 
+@@ -4682,5 +4496,4 @@
+      * The device supports verified boot.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VERIFIED_BOOT = "android.software.verified_boot";
+ 
+@@ -4690,5 +4503,4 @@
+      * with that user is securely deleted and no longer available.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SECURELY_REMOVES_USERS
+             = "android.software.securely_removes_users";
+@@ -4696,5 +4508,4 @@
+     /** @hide */
+     @TestApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_FILE_BASED_ENCRYPTION
+             = "android.software.file_based_encryption";
+@@ -4702,5 +4513,4 @@
+     /** @hide */
+     @TestApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_ADOPTABLE_STORAGE
+             = "android.software.adoptable_storage";
+@@ -4711,5 +4521,4 @@
+      * lacking this feature will not have a functioning WebView implementation.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_WEBVIEW = "android.software.webview";
+ 
+@@ -4718,5 +4527,4 @@
+      * {@link #hasSystemFeature}: This device supports ethernet.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_ETHERNET = "android.hardware.ethernet";
+ 
+@@ -4727,5 +4535,4 @@
+      */
+     @TestApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_HDMI_CEC = "android.hardware.hdmi.cec";
+ 
+@@ -4735,5 +4542,4 @@
+      * includes a compatible game controller in the box.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_GAMEPAD = "android.hardware.gamepad";
+ 
+@@ -4742,5 +4548,4 @@
+      * The device has a full implementation of the android.media.midi.* APIs.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_MIDI = "android.software.midi";
+ 
+@@ -4756,5 +4561,4 @@
+      */
+     @Deprecated
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VR_MODE = "android.software.vr.mode";
+ 
+@@ -4770,5 +4574,4 @@
+      * and must meet CDD requirements to provide a high-quality VR experience.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VR_MODE_HIGH_PERFORMANCE
+             = "android.hardware.vr.high_performance";
+@@ -4780,5 +4583,4 @@
+      * providers}.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_AUTOFILL = "android.software.autofill";
+ 
+@@ -4787,5 +4589,4 @@
+      * The device implements headtracking suitable for a VR device.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_VR_HEADTRACKING = "android.hardware.vr.headtracking";
+ 
+@@ -4820,5 +4621,4 @@
+      * hardware-backed keystore but it may not support all features listed above.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_HARDWARE_KEYSTORE = "android.hardware.hardware_keystore";
+ 
+@@ -4855,5 +4655,4 @@
+      * set the device may have StrongBox but it may not support all features listed above.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_STRONGBOX_KEYSTORE =
+             "android.hardware.strongbox_keystore";
+@@ -4864,5 +4663,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_SLICES_DISABLED = "android.software.slices_disabled";
+ 
+@@ -4874,5 +4672,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_DEVICE_UNIQUE_ATTESTATION =
+             "android.hardware.device_unique_attestation";
+@@ -4886,6 +4683,4 @@
+      * @see DevicePolicyManager#isDeviceIdAttestationSupported
+      */
+-    @FlaggedApi(android.security.keystore2.Flags.FLAG_MAKE_ID_ATTESTATION_FEATURE_PUBLIC)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_DEVICE_ID_ATTESTATION =
+             "android.software.device_id_attestation";
+@@ -4898,5 +4693,4 @@
+      * VTIs with kernel patches allowing updates of output/set mark via UPDSA.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_IPSEC_TUNNELS = "android.software.ipsec_tunnels";
+ 
+@@ -4908,5 +4702,4 @@
+      * the kernel fixes to support cross-address-family IPsec tunnel migration
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_IPSEC_TUNNEL_MIGRATION =
+             "android.software.ipsec_tunnel_migration";
+@@ -4919,5 +4712,4 @@
+      * @see android.service.controls.ControlsProviderService
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CONTROLS = "android.software.controls";
+ 
+@@ -4931,5 +4723,4 @@
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_REBOOT_ESCROW = "android.hardware.reboot_escrow";
+ 
+@@ -4947,5 +4738,4 @@
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_INCREMENTAL_DELIVERY =
+             "android.software.incremental_delivery";
+@@ -4959,5 +4749,4 @@
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_EROFS_LEGACY = "android.software.erofs_legacy";
+ 
+@@ -4970,5 +4759,4 @@
+      */
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_EROFS = "android.software.erofs";
+ 
+@@ -4981,5 +4769,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_TUNER = "android.hardware.tv.tuner";
+ 
+@@ -4990,5 +4777,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_APP_ENUMERATION = "android.software.app_enumeration";
+ 
+@@ -4998,5 +4784,4 @@
+      * count equals to 1.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_KEYSTORE_SINGLE_USE_KEY =
+             "android.hardware.keystore.single_use_key";
+@@ -5007,5 +4792,4 @@
+      * count (including count equals to 1).
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_KEYSTORE_LIMITED_USE_KEY =
+             "android.hardware.keystore.limited_use_key";
+@@ -5016,5 +4800,4 @@
+      * See {@link android.security.keystore.KeyGenParameterSpec.Builder#setAttestKeyAlias}.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_KEYSTORE_APP_ATTEST_KEY =
+             "android.hardware.keystore.app_attest_key";
+@@ -5027,5 +4810,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_APP_COMPAT_OVERRIDES =
+             "android.software.app_compat_overrides";
+@@ -5037,5 +4819,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     @TestApi
+     public static final String FEATURE_COMMUNAL_MODE = "android.software.communal_mode";
+@@ -5047,5 +4828,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_DREAM_OVERLAY = "android.software.dream_overlay";
+ 
+@@ -5056,5 +4836,4 @@
+      * @see android.accessibilityservice.MagnificationConfig#MAGNIFICATION_MODE_WINDOW
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_WINDOW_MAGNIFICATION =
+             "android.software.window_magnification";
+@@ -5064,5 +4843,4 @@
+      * supports retrieval of user credentials, via integration with credential providers.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_CREDENTIALS = "android.software.credentials";
+ 
+@@ -5071,5 +4849,4 @@
+      * supports locking (for example, by a financing provider in case of a missed payment).
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_DEVICE_LOCK = "android.software.device_lock";
+ 
+@@ -5079,5 +4856,4 @@
+      * app.
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_WALLET_LOCATION_BASED_SUGGESTIONS =
+             "android.software.wallet_location_based_suggestions";
+@@ -5089,5 +4865,4 @@
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_ROTARY_ENCODER_LOW_RES =
+             "android.hardware.rotaryencoder.lowres";
+@@ -5099,5 +4874,4 @@
+    * @hide
+    */
+-  @SdkConstant(SdkConstantType.FEATURE)
+   public static final String FEATURE_CONTEXTUAL_SEARCH_HELPER =
+       "android.software.contextualsearch";
+@@ -5108,5 +4882,4 @@
+      */
+     @FlaggedApi(android.xr.Flags.FLAG_XR_MANIFEST_ENTRIES)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_XR_INPUT_CONTROLLER =
+         "android.hardware.xr.input.controller";
+@@ -5117,5 +4890,4 @@
+      */
+     @FlaggedApi(android.xr.Flags.FLAG_XR_MANIFEST_ENTRIES)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_XR_INPUT_HAND_TRACKING =
+         "android.hardware.xr.input.hand_tracking";
+@@ -5126,5 +4898,4 @@
+      */
+     @FlaggedApi(android.xr.Flags.FLAG_XR_MANIFEST_ENTRIES)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_XR_INPUT_EYE_TRACKING =
+         "android.hardware.xr.input.eye_tracking";
+@@ -5143,5 +4914,4 @@
+      */
+     @FlaggedApi(android.xr.Flags.FLAG_XR_MANIFEST_ENTRIES)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_XR_API_OPENXR =
+         "android.software.xr.api.openxr";
+@@ -5156,5 +4926,4 @@
+      */
+     @FlaggedApi(android.xr.Flags.FLAG_XR_MANIFEST_ENTRIES)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_XR_API_SPATIAL =
+         "android.software.xr.api.spatial";
+@@ -5168,5 +4937,4 @@
+     @FlaggedApi(android.aiseal.Flags.FLAG_AISEAL_HOST_APIS)
+     @SystemApi
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_AISEAL = "android.software.aiseal";
+ 
+@@ -5176,5 +4944,4 @@
+      */
+     @FlaggedApi(com.android.npumanager.Flags.FLAG_NPUMANAGER_ENABLED)
+-    @SdkConstant(SdkConstantType.FEATURE)
+     public static final String FEATURE_NEURAL_PROCESSING_UNIT =
+         "android.hardware.npu";
+@@ -5397,5 +5164,4 @@
+     @SystemApi
+     @FlaggedApi(android.content.pm.Flags.FLAG_VERIFICATION_SERVICE)
+-    @SdkConstant(SdkConstantType.SERVICE_ACTION)
+     public static final String ACTION_VERIFY_DEVELOPER =
+             "android.content.pm.action.VERIFY_DEVELOPER";
+@@ -5423,5 +5189,4 @@
+      */
+     @SystemApi
+-    @FlaggedApi(android.permission.flags.Flags.FLAG_DEVICE_AWARE_PERMISSION_APIS_ENABLED)
+     public static final String EXTRA_REQUEST_PERMISSIONS_DEVICE_ID =
+             "android.content.pm.extra.REQUEST_PERMISSIONS_DEVICE_ID";
+@@ -5746,10 +5511,4 @@
+             | FLAG_PERMISSION_TRUSTED_UI_CONSENTED;
+ 
+-    /**
+-     * Injected activity in app that forwards user to setting activity of that app.
+-     *
+-     * @hide
+-     */
+-    public static final String APP_DETAILS_ACTIVITY_CLASS_NAME = AppDetailsActivity.class.getName();
+ 
+     /**
+@@ -6080,6 +5839,8 @@
+      *             caller.
+      */
+-    public abstract PackageInfo getPackageInfo(@NonNull String packageName, int flags)
+-            throws NameNotFoundException;
++    public PackageInfo getPackageInfo(@NonNull String packageName, int flags)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6117,6 +5878,8 @@
+      *             caller.
+      */
+-    public abstract PackageInfo getPackageInfo(@NonNull VersionedPackage versionedPackage,
+-            int flags) throws NameNotFoundException;
++    public PackageInfo getPackageInfo(@NonNull VersionedPackage versionedPackage,
++            int flags) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6154,6 +5917,8 @@
+     @RequiresPermission(Manifest.permission.INTERACT_ACROSS_USERS)
+     @UnsupportedAppUsage
+-    public abstract PackageInfo getPackageInfoAsUser(@NonNull String packageName,
+-            int flags, @UserIdInt int userId) throws NameNotFoundException;
++    public PackageInfo getPackageInfoAsUser(@NonNull String packageName,
++            int flags, @UserIdInt int userId) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6176,5 +5941,7 @@
+      * the canonical name for each package.
+      */
+-    public abstract String[] currentToCanonicalPackageNames(@NonNull String[] packageNames);
++    public String[] currentToCanonicalPackageNames(String[] names) {
++        return names.clone();
++    }
+ 
+     /**
+@@ -6184,5 +5951,7 @@
+      * the current name for each package.
+      */
+-    public abstract String[] canonicalToCurrentPackageNames(@NonNull String[] packageNames);
++    public String[] canonicalToCurrentPackageNames(@NonNull String[] packageNames) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6206,5 +5975,7 @@
+      * @see #getLaunchIntentSenderForPackage(String)
+      */
+-     public abstract @Nullable Intent getLaunchIntentForPackage(@NonNull String packageName);
++     public @Nullable Intent getLaunchIntentForPackage(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6252,5 +6023,7 @@
+      *         does not contain such an activity.
+      */
+-    public abstract @Nullable Intent getLeanbackLaunchIntentForPackage(@NonNull String packageName);
++    public @Nullable Intent getLeanbackLaunchIntentForPackage(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6268,5 +6041,7 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract @Nullable Intent getCarLaunchIntentForPackage(@NonNull String packageName);
++    public @Nullable Intent getCarLaunchIntentForPackage(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6306,6 +6081,8 @@
+      *             caller.
+      */
+-    public abstract int[] getPackageGids(@NonNull String packageName)
+-            throws NameNotFoundException;
++    public int[] getPackageGids(@NonNull String packageName)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6326,6 +6103,8 @@
+      */
+ 
+-    public abstract int[] getPackageGids(@NonNull String packageName, int flags)
+-            throws NameNotFoundException;
++    public int[] getPackageGids(@NonNull String packageName, int flags)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6353,6 +6132,8 @@
+      *             caller.
+      */
+-    public abstract int getPackageUid(@NonNull String packageName, int flags)
+-            throws NameNotFoundException;
++    public int getPackageUid(@NonNull String packageName, int flags)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6381,6 +6162,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract int getPackageUidAsUser(@NonNull String packageName, @UserIdInt int userId)
+-            throws NameNotFoundException;
++    public int getPackageUidAsUser(@NonNull String packageName, @UserIdInt int userId)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6391,6 +6174,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract int getPackageUidAsUser(@NonNull String packageName,
+-            int flags, @UserIdInt int userId) throws NameNotFoundException;
++    public int getPackageUidAsUser(@NonNull String packageName,
++            int flags, @UserIdInt int userId) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6429,6 +6214,8 @@
+      */
+     //@Deprecated
+-    public abstract PermissionInfo getPermissionInfo(@NonNull String permName,
+-            @PermissionInfoFlags int flags) throws NameNotFoundException;
++    public PermissionInfo getPermissionInfo(@NonNull String permName,
++            @PermissionInfoFlags int flags) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6446,6 +6233,8 @@
+     //@Deprecated
+     @NonNull
+-    public abstract List<PermissionInfo> queryPermissionsByGroup(@Nullable String permissionGroup,
+-            @PermissionInfoFlags int flags) throws NameNotFoundException;
++    public List<PermissionInfo> queryPermissionsByGroup(@Nullable String permissionGroup,
++            @PermissionInfoFlags int flags) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6459,5 +6248,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+-    public abstract boolean arePermissionsIndividuallyControlled();
++    public boolean arePermissionsIndividuallyControlled() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6467,5 +6258,7 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract boolean isWirelessConsentModeEnabled();
++    public boolean isWirelessConsentModeEnabled() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6484,6 +6277,8 @@
+     //@Deprecated
+     @NonNull
+-    public abstract PermissionGroupInfo getPermissionGroupInfo(@NonNull String groupName,
+-            @PermissionGroupInfoFlags int flags) throws NameNotFoundException;
++    public PermissionGroupInfo getPermissionGroupInfo(@NonNull String groupName,
++            @PermissionGroupInfoFlags int flags) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6496,6 +6291,8 @@
+     //@Deprecated
+     @NonNull
+-    public abstract List<PermissionGroupInfo> getAllPermissionGroups(
+-            @PermissionGroupInfoFlags int flags);
++    public List<PermissionGroupInfo> getAllPermissionGroups(
++            @PermissionGroupInfoFlags int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6544,16 +6341,13 @@
+      *             found on the system.
+      */
+-    @NonNull
+-    public abstract ApplicationInfo getApplicationInfo(@NonNull String packageName,
+-            int flags) throws NameNotFoundException;
++    public ApplicationInfo getApplicationInfo(String pkg, int flags) throws NameNotFoundException {
++        return getApplicationInfo(pkg, ApplicationInfoFlags.of(flags));
++    }
+ 
+     /**
+      * See {@link #getApplicationInfo(String, int)}.
+      */
+-    @NonNull
+-    public ApplicationInfo getApplicationInfo(@NonNull String packageName,
+-            @NonNull ApplicationInfoFlags flags) throws NameNotFoundException {
+-        throw new UnsupportedOperationException(
+-                "getApplicationInfo not implemented in subclass");
++    public ApplicationInfo getApplicationInfo(String pkg, ApplicationInfoFlags flags) throws NameNotFoundException {
++        return getApplicationInfoAsUser(pkg, flags.getValue(), UserHandle.USER_SYSTEM);
+     }
+ 
+@@ -6566,6 +6360,8 @@
+     @NonNull
+     @UnsupportedAppUsage
+-    public abstract ApplicationInfo getApplicationInfoAsUser(@NonNull String packageName,
+-            int flags, @UserIdInt int userId) throws NameNotFoundException;
++    public ApplicationInfo getApplicationInfoAsUser(@NonNull String packageName,
++            int flags, @UserIdInt int userId) throws NameNotFoundException {
++        return getApplicationInfoAsUser(packageName, (long) flags, userId);
++    }
+ 
+     /** @hide */
+@@ -6574,6 +6370,5 @@
+             @NonNull ApplicationInfoFlags flags, @UserIdInt int userId)
+             throws NameNotFoundException {
+-        throw new UnsupportedOperationException(
+-                "getApplicationInfoAsUser not implemented in subclass");
++        return getApplicationInfoAsUser(packageName, flags.getValue(), userId);
+     }
+ 
+@@ -6645,7 +6440,9 @@
+      *             found on the system.
+      */
+-    @NonNull
+-    public abstract ActivityInfo getActivityInfo(@NonNull ComponentName component,
+-            int flags) throws NameNotFoundException;
++    public ActivityInfo getActivityInfo(ComponentName component, int flags) throws NameNotFoundException {
++        ResolveInfo result = resolveActivity(new Intent().setComponent(component), flags);
++        if (result == null) throw new NameNotFoundException(component.flattenToString());
++        return result.activityInfo;
++    }
+ 
+     /**
+@@ -6655,6 +6452,7 @@
+     public ActivityInfo getActivityInfo(@NonNull ComponentName component,
+             @NonNull ComponentInfoFlags flags) throws NameNotFoundException {
+-        throw new UnsupportedOperationException(
+-                "getActivityInfo not implemented in subclass");
++        ResolveInfo info = resolveActivity(new Intent().setComponent(component), ResolveInfoFlags.of(flags.getValue()));
++        if (info == null) throw new NameNotFoundException(component.flattenToString());
++        return info.activityInfo;
+     }
+ 
+@@ -6675,6 +6473,8 @@
+      */
+     @NonNull
+-    public abstract ActivityInfo getReceiverInfo(@NonNull ComponentName component,
+-            int flags) throws NameNotFoundException;
++    public ActivityInfo getReceiverInfo(@NonNull ComponentName component,
++            int flags) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6702,6 +6502,8 @@
+      */
+     @NonNull
+-    public abstract ServiceInfo getServiceInfo(@NonNull ComponentName component,
+-            int flags) throws NameNotFoundException;
++    public ServiceInfo getServiceInfo(@NonNull ComponentName component,
++            int flags) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6731,6 +6533,8 @@
+      */
+     @NonNull
+-    public abstract ProviderInfo getProviderInfo(@NonNull ComponentName component,
+-            int flags) throws NameNotFoundException;
++    public ProviderInfo getProviderInfo(@NonNull ComponentName component,
++            int flags) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6791,5 +6595,7 @@
+      */
+     @NonNull
+-    public abstract List<PackageInfo> getInstalledPackages(int flags);
++    public List<PackageInfo> getInstalledPackages(int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6862,6 +6668,8 @@
+      */
+     @NonNull
+-    public abstract List<PackageInfo> getPackagesHoldingPermissions(
+-            @NonNull String[] permissions, int flags);
++    public List<PackageInfo> getPackagesHoldingPermissions(
++            @NonNull String[] permissions, int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6897,6 +6705,8 @@
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS_FULL)
+-    public abstract List<PackageInfo> getInstalledPackagesAsUser(int flags,
+-            @UserIdInt int userId);
++    public List<PackageInfo> getInstalledPackagesAsUser(int flags,
++            @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6934,6 +6744,8 @@
+     @CheckResult
+     @PermissionResult
+-    public abstract int checkPermission(@NonNull String permName,
+-            @NonNull String packageName);
++    public int checkPermission(@NonNull String permName,
++            @NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -6951,6 +6763,8 @@
+     @CheckResult
+     //@Deprecated
+-    public abstract boolean isPermissionRevokedByPolicy(@NonNull String permName,
+-            @NonNull String packageName);
++    public boolean isPermissionRevokedByPolicy(@NonNull String permName,
++            @NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7021,7 +6835,8 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    @FlaggedApi(android.permission.flags.Flags.FLAG_PERMISSION_TREE_APIS_DEPRECATED)
+     @Deprecated
+-    public abstract boolean addPermission(@NonNull PermissionInfo info);
++    public boolean addPermission(@NonNull PermissionInfo info) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7038,7 +6853,8 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    @FlaggedApi(android.permission.flags.Flags.FLAG_PERMISSION_TREE_APIS_DEPRECATED)
+     @Deprecated
+-    public abstract boolean addPermissionAsync(@NonNull PermissionInfo info);
++    public boolean addPermissionAsync(@NonNull PermissionInfo info) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7061,7 +6877,8 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    @FlaggedApi(android.permission.flags.Flags.FLAG_PERMISSION_TREE_APIS_DEPRECATED)
+     @Deprecated
+-    public abstract void removePermission(@NonNull String permName);
++    public void removePermission(@NonNull String permName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7121,6 +6938,8 @@
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.GRANT_RUNTIME_PERMISSIONS)
+-    public abstract void grantRuntimePermission(@NonNull String packageName,
+-            @NonNull String permName, @NonNull UserHandle user);
++    public void grantRuntimePermission(@NonNull String packageName,
++            @NonNull String permName, @NonNull UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7149,6 +6968,8 @@
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.REVOKE_RUNTIME_PERMISSIONS)
+-    public abstract void revokeRuntimePermission(@NonNull String packageName,
+-            @NonNull String permName, @NonNull UserHandle user);
++    public void revokeRuntimePermission(@NonNull String packageName,
++            @NonNull String permName, @NonNull UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7201,6 +7022,8 @@
+     })
+     @PermissionFlags
+-    public abstract int getPermissionFlags(@NonNull String permName,
+-            @NonNull String packageName, @NonNull UserHandle user);
++    public int getPermissionFlags(@NonNull String permName,
++            @NonNull String packageName, @NonNull UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7223,7 +7046,9 @@
+             android.Manifest.permission.REVOKE_RUNTIME_PERMISSIONS
+     })
+-    public abstract void updatePermissionFlags(@NonNull String permName,
++    public void updatePermissionFlags(@NonNull String permName,
+             @NonNull String packageName, @PermissionFlags int flagMask,
+-            @PermissionFlags int flagValues, @NonNull UserHandle user);
++            @PermissionFlags int flagValues, @NonNull UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7490,5 +7315,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract boolean shouldShowRequestPermissionRationale(@NonNull String permName);
++    public boolean shouldShowRequestPermissionRationale(@NonNull String permName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7547,6 +7374,8 @@
+     @CheckResult
+     @SignatureResult
+-    public abstract int checkSignatures(@NonNull String packageName1,
+-            @NonNull String packageName2);
++    public int checkSignatures(@NonNull String packageName1,
++            @NonNull String packageName2) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7568,5 +7397,7 @@
+      */
+     @CheckResult
+-    public abstract @SignatureResult int checkSignatures(int uid1, int uid2);
++    public @SignatureResult int checkSignatures(int uid1, int uid2) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7583,5 +7414,7 @@
+      * id, or null if there are no known packages with the given id.
+      */
+-    public abstract @Nullable String[] getPackagesForUid(int uid);
++    public @Nullable String[] getPackagesForUid(int uid) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7596,5 +7429,7 @@
+      * uid is not currently assigned.
+      */
+-    public abstract @Nullable String getNameForUid(int uid);
++    public @Nullable String getNameForUid(int uid) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7606,5 +7441,7 @@
+     @SuppressWarnings({"HiddenAbstractMethod", "NullableCollection"})
+     @TestApi
+-    public abstract @Nullable String[] getNamesForUids(int[] uids);
++    public @Nullable String[] getNamesForUids(int[] uids) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7623,6 +7460,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract int getUidForSharedUser(@NonNull String sharedUserName)
+-            throws NameNotFoundException;
++    public int getUidForSharedUser(@NonNull String sharedUserName)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7645,5 +7484,7 @@
+      */
+     @NonNull
+-    public abstract List<ApplicationInfo> getInstalledApplications(int flags);
++    public List<ApplicationInfo> getInstalledApplications(int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7682,6 +7523,8 @@
+     @NonNull
+     @TestApi
+-    public abstract List<ApplicationInfo> getInstalledApplicationsAsUser(
+-            int flags, @UserIdInt int userId);
++    public List<ApplicationInfo> getInstalledApplicationsAsUser(
++            int flags, @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7697,8 +7540,9 @@
+     }
+ 
+-    /**
+-     * Gets the instant applications the user recently used.
+-     *
+-     * @return The instant app list.
++
++    /**
++     * Gets the icon for an instant application.
++     *
++     * @param packageName The app package name.
+      *
+      * @hide
+@@ -7707,17 +7551,7 @@
+     @SystemApi
+     @RequiresPermission(Manifest.permission.ACCESS_INSTANT_APPS)
+-    public abstract @NonNull List<InstantAppInfo> getInstantApps();
+-
+-    /**
+-     * Gets the icon for an instant application.
+-     *
+-     * @param packageName The app package name.
+-     *
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @SystemApi
+-    @RequiresPermission(Manifest.permission.ACCESS_INSTANT_APPS)
+-    public abstract @Nullable Drawable getInstantAppIcon(String packageName);
++    public @Nullable Drawable getInstantAppIcon(String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7731,5 +7565,7 @@
+      * @see #getInstantAppCookieMaxBytes()
+      */
+-    public abstract boolean isInstantApp();
++    public boolean isInstantApp() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7745,5 +7581,7 @@
+      * @see #clearInstantAppCookie()
+      */
+-    public abstract boolean isInstantApp(@NonNull String packageName);
++    public boolean isInstantApp(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7759,5 +7597,7 @@
+      * @see #clearInstantAppCookie()
+      */
+-    public abstract int getInstantAppCookieMaxBytes();
++    public int getInstantAppCookieMaxBytes() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7766,5 +7606,7 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract int getInstantAppCookieMaxSize();
++    public int getInstantAppCookieMaxSize() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7784,5 +7626,7 @@
+      * @see #clearInstantAppCookie()
+      */
+-    public abstract @NonNull byte[] getInstantAppCookie();
++    public @NonNull byte[] getInstantAppCookie() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7795,5 +7639,7 @@
+      * @see #clearInstantAppCookie()
+      */
+-    public abstract void clearInstantAppCookie();
++    public void clearInstantAppCookie() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7818,5 +7664,7 @@
+      * @throws IllegalArgumentException if the array exceeds max cookie size.
+      */
+-    public abstract void updateInstantAppCookie(@Nullable byte[] cookie);
++    public void updateInstantAppCookie(@Nullable byte[] cookie) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7824,5 +7672,7 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract boolean setInstantAppCookie(@Nullable byte[] cookie);
++    public boolean setInstantAppCookie(@Nullable byte[] cookie) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7835,5 +7685,7 @@
+      */
+     @Nullable
+-    public abstract String[] getSystemSharedLibraryNames();
++    public String[] getSystemSharedLibraryNames() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7847,5 +7699,7 @@
+      * @see #MATCH_UNINSTALLED_PACKAGES
+      */
+-    public abstract @NonNull List<SharedLibraryInfo> getSharedLibraries(int flags);
++    public @NonNull List<SharedLibraryInfo> getSharedLibraries(int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7875,6 +7729,8 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract @NonNull List<SharedLibraryInfo> getSharedLibrariesAsUser(int flags,
+-            @UserIdInt int userId);
++    public @NonNull List<SharedLibraryInfo> getSharedLibrariesAsUser(int flags,
++            @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7935,5 +7791,7 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public abstract @NonNull String getServicesSystemSharedLibraryPackageName();
++    public @NonNull String getServicesSystemSharedLibraryPackageName() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7947,5 +7805,7 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public abstract @NonNull String getSharedSystemSharedLibraryPackageName();
++    public @NonNull String getSharedSystemSharedLibraryPackageName() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7959,6 +7819,8 @@
+      * @see android.provider.Settings.Global#BOOT_COUNT
+      */
+-    public abstract @Nullable ChangedPackages getChangedPackages(
+-            @IntRange(from=0) int sequenceNumber);
++    public @Nullable ChangedPackages getChangedPackages(
++            @IntRange(from=0) int sequenceNumber) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7970,5 +7832,7 @@
+      */
+     @NonNull
+-    public abstract FeatureInfo[] getSystemAvailableFeatures();
++    public FeatureInfo[] getSystemAvailableFeatures() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7980,6 +7844,5 @@
+      * @return Returns true if the devices supports the feature, else false.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationPackageManager")
+-    public abstract boolean hasSystemFeature(@NonNull String featureName);
++    public boolean hasSystemFeature(String feature) { return "android.hardware.touchscreen".equals(feature); }
+ 
+     /**
+@@ -7992,6 +7855,7 @@
+      * @return Returns true if the devices supports the feature, else false.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationPackageManager")
+-    public abstract boolean hasSystemFeature(@NonNull String featureName, int version);
++    public boolean hasSystemFeature(@NonNull String featureName, int version) {
++        return version <= 0 && hasSystemFeature(featureName);
++    }
+ 
+     /**
+@@ -8023,14 +7887,12 @@
+      *         containing something else, such as the activity resolver.
+      */
+-    @Nullable
+-    public abstract ResolveInfo resolveActivity(@NonNull Intent intent, int flags);
++    public ResolveInfo resolveActivity(Intent intent, int flags) { return resolveActivity(intent, ResolveInfoFlags.of(flags)); }
+ 
+     /**
+      * See {@link #resolveActivity(Intent, int)}.
+      */
+-    @Nullable
+-    public ResolveInfo resolveActivity(@NonNull Intent intent, @NonNull ResolveInfoFlags flags) {
+-        throw new UnsupportedOperationException(
+-                "resolveActivity not implemented in subclass");
++    public ResolveInfo resolveActivity(Intent intent, ResolveInfoFlags flags) {
++        List<ResolveInfo> result = queryIntentActivities(intent, flags);
++        return result.isEmpty() ? null : result.get(0);
+     }
+ 
+@@ -8094,6 +7956,8 @@
+     @Nullable
+     @UnsupportedAppUsage
+-    public abstract ResolveInfo resolveActivityAsUser(@NonNull Intent intent,
+-            int flags, @UserIdInt int userId);
++    public ResolveInfo resolveActivityAsUser(@NonNull Intent intent,
++            int flags, @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8125,15 +7989,13 @@
+      *         empty list is returned.
+      */
+-    @NonNull
+-    public abstract List<ResolveInfo> queryIntentActivities(@NonNull Intent intent, int flags);
++    public List<ResolveInfo> queryIntentActivities(Intent intent, int flags) {
++        return queryIntentActivitiesAsUser(intent, flags, UserHandle.USER_SYSTEM);
++    }
+ 
+     /**
+      * See {@link #queryIntentActivities(Intent, int)}.
+      */
+-    @NonNull
+-    public List<ResolveInfo> queryIntentActivities(@NonNull Intent intent,
+-            @NonNull ResolveInfoFlags flags) {
+-        throw new UnsupportedOperationException(
+-                "queryIntentActivities not implemented in subclass");
++    public List<ResolveInfo> queryIntentActivities(Intent intent, ResolveInfoFlags flags) {
++        return queryIntentActivitiesAsUser(intent, flags.getValue(), UserHandle.USER_SYSTEM);
+     }
+ 
+@@ -8158,9 +8020,7 @@
+      * @hide
+      */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @NonNull
+-    @UnsupportedAppUsage
+-    public abstract List<ResolveInfo> queryIntentActivitiesAsUser(@NonNull Intent intent,
+-            int flags, @UserIdInt int userId);
++    public List<ResolveInfo> queryIntentActivitiesAsUser(Intent intent, int flags, int user) {
++        return queryIntentActivitiesAsUser(intent, (long) flags, user);
++    }
+ 
+     /**
+@@ -8171,6 +8031,5 @@
+     public List<ResolveInfo> queryIntentActivitiesAsUser(@NonNull Intent intent,
+             @NonNull ResolveInfoFlags flags, @UserIdInt int userId) {
+-        throw new UnsupportedOperationException(
+-                "queryIntentActivitiesAsUser not implemented in subclass");
++        return queryIntentActivitiesAsUser(intent, flags.getValue(), userId);
+     }
+ 
+@@ -8246,6 +8105,8 @@
+      */
+     @NonNull
+-    public abstract List<ResolveInfo> queryIntentActivityOptions(@Nullable ComponentName caller,
+-            @Nullable Intent[] specifics, @NonNull Intent intent, int flags);
++    public List<ResolveInfo> queryIntentActivityOptions(@Nullable ComponentName caller,
++            @Nullable Intent[] specifics, @NonNull Intent intent, int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8271,6 +8132,8 @@
+      *         no matching receivers, returns an empty list.
+      */
+-    @NonNull
+-    public abstract List<ResolveInfo> queryBroadcastReceivers(@NonNull Intent intent, int flags);
++    public java.util.List<ResolveInfo> queryBroadcastReceivers(Intent intent, int flags) {
++        // The embedded package catalog contains launchable activities only.
++        return java.util.Collections.emptyList();
++    }
+ 
+     /**
+@@ -8328,6 +8191,8 @@
+     @NonNull
+     @UnsupportedAppUsage
+-    public abstract List<ResolveInfo> queryBroadcastReceiversAsUser(@NonNull Intent intent,
+-            int flags, @UserIdInt int userId);
++    public List<ResolveInfo> queryBroadcastReceiversAsUser(@NonNull Intent intent,
++            int flags, @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8352,12 +8217,5 @@
+     public List<ResolveInfo> queryBroadcastReceivers(@NonNull Intent intent,
+             int flags, @UserIdInt int userId) {
+-        final String msg = "Shame on you for calling the hidden API "
+-                + "queryBroadcastReceivers(). Shame!";
+-        if (VMRuntime.getRuntime().getTargetSdkVersion() >= Build.VERSION_CODES.O) {
+-            throw new UnsupportedOperationException(msg);
+-        } else {
+-            Log.d(TAG, msg);
+-            return queryBroadcastReceiversAsUser(intent, flags, userId);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8375,5 +8233,7 @@
+      */
+     @Nullable
+-    public abstract ResolveInfo resolveService(@NonNull Intent intent, int flags);
++    public ResolveInfo resolveService(@NonNull Intent intent, int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8392,6 +8252,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @Nullable
+-    public abstract ResolveInfo resolveServiceAsUser(@NonNull Intent intent,
+-            int flags, @UserIdInt int userId);
++    public ResolveInfo resolveServiceAsUser(@NonNull Intent intent,
++            int flags, @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8420,6 +8282,8 @@
+      */
+     @NonNull
+-    public abstract List<ResolveInfo> queryIntentServices(@NonNull Intent intent,
+-            int flags);
++    public List<ResolveInfo> queryIntentServices(@NonNull Intent intent,
++            int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8452,6 +8316,8 @@
+     @NonNull
+     @UnsupportedAppUsage
+-    public abstract List<ResolveInfo> queryIntentServicesAsUser(@NonNull Intent intent,
+-            int flags, @UserIdInt int userId);
++    public List<ResolveInfo> queryIntentServicesAsUser(@NonNull Intent intent,
++            int flags, @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8519,6 +8385,8 @@
+     @NonNull
+     @UnsupportedAppUsage
+-    public abstract List<ResolveInfo> queryIntentContentProvidersAsUser(
+-            @NonNull Intent intent, int flags, @UserIdInt int userId);
++    public List<ResolveInfo> queryIntentContentProvidersAsUser(
++            @NonNull Intent intent, int flags, @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8582,6 +8450,8 @@
+      */
+     @NonNull
+-    public abstract List<ResolveInfo> queryIntentContentProviders(@NonNull Intent intent,
+-            int flags);
++    public List<ResolveInfo> queryIntentContentProviders(@NonNull Intent intent,
++            int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8612,6 +8482,8 @@
+      */
+     @Nullable
+-    public abstract ProviderInfo resolveContentProvider(@NonNull String authority,
+-            int flags);
++    public ProviderInfo resolveContentProvider(@NonNull String authority,
++            int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8641,6 +8513,8 @@
+     @Nullable
+     @UnsupportedAppUsage
+-    public abstract ProviderInfo resolveContentProviderAsUser(@NonNull String providerName,
+-            int flags, @UserIdInt int userId);
++    public ProviderInfo resolveContentProviderAsUser(@NonNull String providerName,
++            int flags, @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8695,6 +8569,8 @@
+      */
+     @NonNull
+-    public abstract List<ProviderInfo> queryContentProviders(
+-            @Nullable String processName, int uid, int flags);
++    public List<ProviderInfo> queryContentProviders(
++            @Nullable String processName, int uid, int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8758,7 +8634,8 @@
+      */
+     @NonNull
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ApplicationPackageManager")
+-    public abstract InstrumentationInfo getInstrumentationInfo(@NonNull ComponentName className,
+-            @InstrumentationInfoFlags int flags) throws NameNotFoundException;
++    public InstrumentationInfo getInstrumentationInfo(@NonNull ComponentName className,
++            @InstrumentationInfoFlags int flags) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8775,6 +8652,8 @@
+      */
+     @NonNull
+-    public abstract List<InstrumentationInfo> queryInstrumentation(@NonNull String targetPackage,
+-            @InstrumentationInfoFlags int flags);
++    public List<InstrumentationInfo> queryInstrumentation(@NonNull String targetPackage,
++            @InstrumentationInfoFlags int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8795,7 +8674,7 @@
+      * an image could not be found for any reason.
+      */
+-    @Nullable
+-    public abstract Drawable getDrawable(@NonNull String packageName, @DrawableRes int resid,
+-            @Nullable ApplicationInfo appInfo);
++    public Drawable getDrawable(String pkg, int resId, ApplicationInfo optional) {
++        return getDrawableForDensity(pkg, resId, 0, optional);
++    }
+ 
+     /**
+@@ -8814,7 +8693,9 @@
+      * @see #getActivityIcon(Intent)
+      */
+-    @NonNull
+-    public abstract Drawable getActivityIcon(@NonNull ComponentName activityName)
+-            throws NameNotFoundException;
++    public Drawable getActivityIcon(ComponentName component) throws NameNotFoundException {
++        ResolveInfo info = resolveActivity(new Intent().setComponent(component), 0);
++        if (info == null) throw new NameNotFoundException(component.flattenToString());
++        return info.loadIcon(this);
++    }
+ 
+     /**
+@@ -8835,7 +8716,9 @@
+      * @see #getActivityIcon(ComponentName)
+      */
+-    @NonNull
+-    public abstract Drawable getActivityIcon(@NonNull Intent intent)
+-            throws NameNotFoundException;
++    public Drawable getActivityIcon(Intent intent) throws NameNotFoundException {
++        ResolveInfo result = resolveActivity(intent, 0);
++        if (result == null) throw new NameNotFoundException(intent.toString());
++        return result.loadIcon(this);
++    }
+ 
+     /**
+@@ -8853,6 +8736,8 @@
+      */
+     @Nullable
+-    public abstract Drawable getActivityBanner(@NonNull ComponentName activityName)
+-            throws NameNotFoundException;
++    public Drawable getActivityBanner(@NonNull ComponentName activityName)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8872,6 +8757,8 @@
+      */
+     @Nullable
+-    public abstract Drawable getActivityBanner(@NonNull Intent intent)
+-            throws NameNotFoundException;
++    public Drawable getActivityBanner(@NonNull Intent intent)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8881,6 +8768,11 @@
+      * @return Drawable Image of the icon.
+      */
+-    @NonNull
+-    public abstract Drawable getDefaultActivityIcon();
++    public Drawable getDefaultActivityIcon() {
++        try {
++            return context.getDrawable(android.R.drawable.sym_def_app_icon);
++        } catch (Resources.NotFoundException unavailable) {
++            return new DefaultActivityIcon();
++        }
++    }
+ 
+     /**
+@@ -8895,6 +8787,5 @@
+      * @see #getApplicationIcon(String)
+      */
+-    @NonNull
+-    public abstract Drawable getApplicationIcon(@NonNull ApplicationInfo info);
++    public Drawable getApplicationIcon(ApplicationInfo info) { return info.loadIcon(this); }
+ 
+     /**
+@@ -8914,7 +8805,5 @@
+      * @see #getApplicationIcon(ApplicationInfo)
+      */
+-    @NonNull
+-    public abstract Drawable getApplicationIcon(@NonNull String packageName)
+-            throws NameNotFoundException;
++    public Drawable getApplicationIcon(String pkg) throws NameNotFoundException { return getApplicationIcon(getApplicationInfo(pkg, 0)); }
+ 
+     /**
+@@ -8927,5 +8816,7 @@
+      */
+     @Nullable
+-    public abstract Drawable getApplicationBanner(@NonNull ApplicationInfo info);
++    public Drawable getApplicationBanner(@NonNull ApplicationInfo info) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8944,6 +8835,8 @@
+      */
+     @Nullable
+-    public abstract Drawable getApplicationBanner(@NonNull String packageName)
+-            throws NameNotFoundException;
++    public Drawable getApplicationBanner(@NonNull String packageName)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8961,6 +8854,8 @@
+      */
+     @Nullable
+-    public abstract Drawable getActivityLogo(@NonNull ComponentName activityName)
+-            throws NameNotFoundException;
++    public Drawable getActivityLogo(@NonNull ComponentName activityName)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8983,6 +8878,8 @@
+      */
+     @Nullable
+-    public abstract Drawable getActivityLogo(@NonNull Intent intent)
+-            throws NameNotFoundException;
++    public Drawable getActivityLogo(@NonNull Intent intent)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8998,5 +8895,7 @@
+      */
+     @Nullable
+-    public abstract Drawable getApplicationLogo(@NonNull ApplicationInfo info);
++    public Drawable getApplicationLogo(@NonNull ApplicationInfo info) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9018,6 +8917,8 @@
+      */
+     @Nullable
+-    public abstract Drawable getApplicationLogo(@NonNull String packageName)
+-            throws NameNotFoundException;
++    public Drawable getApplicationLogo(@NonNull String packageName)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9037,7 +8938,5 @@
+      *         determined by the system.
+      */
+-    @NonNull
+-    public abstract Drawable getUserBadgedIcon(@NonNull Drawable drawable,
+-            @NonNull UserHandle user);
++    public Drawable getUserBadgedIcon(Drawable icon, UserHandle user) { return icon; }
+ 
+     /**
+@@ -9066,6 +8965,8 @@
+      */
+     @NonNull
+-    public abstract Drawable getUserBadgedDrawableForDensity(@NonNull Drawable drawable,
+-            @NonNull UserHandle user, @Nullable Rect badgeLocation, int badgeDensity);
++    public Drawable getUserBadgedDrawableForDensity(@NonNull Drawable drawable,
++            @NonNull UserHandle user, @Nullable Rect badgeLocation, int badgeDensity) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9084,5 +8985,7 @@
+     @Nullable
+     @UnsupportedAppUsage
+-    public abstract Drawable getUserBadgeForDensity(@NonNull UserHandle user, int density);
++    public Drawable getUserBadgeForDensity(@NonNull UserHandle user, int density) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9103,6 +9006,8 @@
+     @Nullable
+     @UnsupportedAppUsage
+-    public abstract Drawable getUserBadgeForDensityNoBackground(@NonNull UserHandle user,
+-            int density);
++    public Drawable getUserBadgeForDensityNoBackground(@NonNull UserHandle user,
++            int density) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9117,7 +9022,5 @@
+      *         determined by the system.
+      */
+-    @NonNull
+-    public abstract CharSequence getUserBadgedLabel(@NonNull CharSequence label,
+-            @NonNull UserHandle user);
++    public CharSequence getUserBadgedLabel(CharSequence label, UserHandle user) { return label; }
+ 
+     /**
+@@ -9138,7 +9041,14 @@
+      * if the text could not be found for any reason.
+      */
+-    @Nullable
+-    public abstract CharSequence getText(@NonNull String packageName, @StringRes int resid,
+-            @Nullable ApplicationInfo appInfo);
++    public CharSequence getText(String pkg, int resId, ApplicationInfo optional) {
++        try {
++            if (context.getPackageName().equals(pkg)) return context.getText(resId);
++            Resources resources = optional == null ? getResourcesForApplication(pkg)
++                    : getResourcesForApplication(optional);
++            return resources.getText(resId);
++        } catch (NameNotFoundException | Resources.NotFoundException error) {
++            return null;
++        }
++    }
+ 
+     /**
+@@ -9159,6 +9069,14 @@
+      */
+     @Nullable
+-    public abstract XmlResourceParser getXml(@NonNull String packageName, @XmlRes int resid,
+-            @Nullable ApplicationInfo appInfo);
++    public XmlResourceParser getXml(@NonNull String packageName, @XmlRes int resid,
++            @Nullable ApplicationInfo appInfo) {
++        try {
++            final Resources resources = appInfo == null ? getResourcesForApplication(packageName)
++                    : getResourcesForApplication(appInfo);
++            return resources.getXml(resid);
++        } catch (NameNotFoundException | Resources.NotFoundException error) {
++            return null;
++        }
++    }
+ 
+     /**
+@@ -9169,6 +9087,5 @@
+      * @param info The {@link ApplicationInfo} of the application to get the label of.
+      */
+-    @NonNull
+-    public abstract CharSequence getApplicationLabel(@NonNull ApplicationInfo info);
++    public CharSequence getApplicationLabel(ApplicationInfo info) { return info.loadLabel(this); }
+ 
+     /**
+@@ -9188,6 +9105,8 @@
+      */
+     @NonNull
+-    public abstract Resources getResourcesForActivity(@NonNull ComponentName activityName)
+-            throws NameNotFoundException;
++    public Resources getResourcesForActivity(@NonNull ComponentName activityName)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9201,7 +9120,28 @@
+      * application could not be loaded (most likely because it was uninstalled).
+      */
+-    @NonNull
+-    public abstract Resources getResourcesForApplication(@NonNull ApplicationInfo app)
+-            throws NameNotFoundException;
++    public Resources getResourcesForApplication(ApplicationInfo info) throws NameNotFoundException {
++        if (context.getPackageName().equals(info.packageName)) return context.getResources();
++        if ("android".equals(info.packageName)) return Resources.getSystem();
++        String path = info.publicSourceDir == null ? info.sourceDir : info.publicSourceDir;
++        if (path == null) throw new NameNotFoundException(info.packageName);
++        Resources local = context.getResources();
++        String locale = local.getConfiguration().getLocaleTag();
++        int density = local.getDisplayMetrics().densityDpi;
++        List<Object> key = Arrays.asList(path, locale, density);
++        synchronized (packageResources) {
++            Resources resources = packageResources.get(key);
++            if (resources == null) {
++                try {
++                    resources = local.forPackage(path, locale, density);
++                } catch (IOException error) {
++                    throw new NameNotFoundException(info.packageName + ": " + error.getMessage());
++                }
++                packageResources.put(key, resources);
++            }
++            resources.updateDisplay(local.getDisplayMetrics().widthPixels,
++                    local.getDisplayMetrics().heightPixels, density);
++            return resources;
++        }
++    }
+ 
+     /**
+@@ -9236,7 +9176,8 @@
+      * @see #getResourcesForApplication(ApplicationInfo)
+      */
+-    @NonNull
+-    public abstract Resources getResourcesForApplication(@NonNull String packageName)
+-            throws NameNotFoundException;
++    public Resources getResourcesForApplication(String pkg) throws NameNotFoundException {
++        if ("android".equals(pkg)) return Resources.getSystem();
++        return getResourcesForApplication(getApplicationInfo(pkg, 0));
++    }
+ 
+     /**
+@@ -9265,6 +9206,8 @@
+                     + " instead.")
+     @Deprecated
+-    public abstract Resources getResourcesForApplicationAsUser(@NonNull String packageName,
+-            @UserIdInt int userId) throws NameNotFoundException;
++    public Resources getResourcesForApplicationAsUser(@NonNull String packageName,
++            @UserIdInt int userId) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9290,59 +9233,5 @@
+     public PackageInfo getPackageArchiveInfo(@NonNull String archiveFilePath,
+             @NonNull PackageInfoFlags flags) {
+-        final File apkFile = new File(archiveFilePath);
+-
+-        @PackageInfoFlagsBits long flagsBits = flags.getValue();
+-        if ((flagsBits & (MATCH_DIRECT_BOOT_UNAWARE | MATCH_DIRECT_BOOT_AWARE)) != 0) {
+-            // Caller expressed an explicit opinion about what encryption
+-            // aware/unaware components they want to see, so fall through and
+-            // give them what they want
+-        } else {
+-            // Caller expressed no opinion, so match everything
+-            flagsBits |= MATCH_DIRECT_BOOT_AWARE | MATCH_DIRECT_BOOT_UNAWARE;
+-        }
+-
+-        int parserFlags = 0;
+-        if ((flagsBits & (GET_SIGNATURES | GET_SIGNING_CERTIFICATES)) != 0) {
+-            parserFlags |= PARSE_COLLECT_CERTIFICATES;
+-        }
+-
+-        final PackageParser2 parser2 = new PackageParser2(/*separateProcesses*/ null,
+-                /*displayMetrics*/ null,/*cacher*/ null,
+-                new PackageParser2.Callback() {
+-                    @Override
+-                    public boolean hasFeature(String feature) {
+-                        return PackageManager.this.hasSystemFeature(feature);
+-                    }
+-
+-                    @NonNull
+-                    @Override
+-                    public Set<String> getHiddenApiWhitelistedApps() {
+-                        return Collections.emptySet();
+-                    }
+-
+-                    @NonNull
+-                    @Override
+-                    public Set<String> getInstallConstraintsAllowlist() {
+-                        return Collections.emptySet();
+-                    }
+-
+-                    @Override
+-                    public boolean isChangeEnabled(long changeId,
+-                            @androidx.annotation.NonNull ApplicationInfo appInfo) {
+-                        return false;
+-                    }
+-                });
+-
+-        try {
+-            ParsedPackage pp = parser2.parsePackage(apkFile, parserFlags, false);
+-            pp.hideAsFinal();
+-
+-            return PackageInfoCommonUtils.generate(pp, flagsBits, UserHandle.myUserId());
+-        } catch (PackageParserException e) {
+-            Log.w(TAG, "Failure to parse package archive apkFile= " +apkFile);
+-            return null;
+-        } finally {
+-            parser2.close();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9357,6 +9246,8 @@
+     @Deprecated
+     @SystemApi
+-    public abstract int installExistingPackage(@NonNull String packageName)
+-            throws NameNotFoundException;
++    public int installExistingPackage(@NonNull String packageName)
++            throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9370,6 +9261,8 @@
+     @Deprecated
+     @SystemApi
+-    public abstract int installExistingPackage(@NonNull String packageName,
+-            @InstallReason int installReason) throws NameNotFoundException;
++    public int installExistingPackage(@NonNull String packageName,
++            @InstallReason int installReason) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9387,6 +9280,8 @@
+             Manifest.permission.INTERACT_ACROSS_USERS_FULL})
+     @UnsupportedAppUsage
+-    public abstract int installExistingPackageAsUser(@NonNull String packageName,
+-            @UserIdInt int userId) throws NameNotFoundException;
++    public int installExistingPackageAsUser(@NonNull String packageName,
++            @UserIdInt int userId) throws NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9405,5 +9300,7 @@
+      *            PACKAGE_VERIFICATION_AGENT permission.
+      */
+-    public abstract void verifyPendingInstall(int id, int verificationCode);
++    public void verifyPendingInstall(int id, int verificationCode) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9443,6 +9340,8 @@
+      *            PACKAGE_VERIFICATION_AGENT permission.
+      */
+-    public abstract void extendVerificationTimeout(int id,
+-            int verificationCodeAtTimeout, long millisecondsToDelay);
++    public void extendVerificationTimeout(int id,
++            int verificationCodeAtTimeout, long millisecondsToDelay) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9470,6 +9369,8 @@
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.INTENT_FILTER_VERIFICATION_AGENT)
+-    public abstract void verifyIntentFilter(int verificationId, int verificationCode,
+-            @NonNull List<String> failedDomains);
++    public void verifyIntentFilter(int verificationId, int verificationCode,
++            @NonNull List<String> failedDomains) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9498,6 +9399,8 @@
+     @SystemApi
+     @RequiresPermission(Manifest.permission.INTERACT_ACROSS_USERS_FULL)
+-    public abstract int getIntentVerificationStatusAsUser(@NonNull String packageName,
+-            @UserIdInt int userId);
++    public int getIntentVerificationStatusAsUser(@NonNull String packageName,
++            @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9534,26 +9437,9 @@
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.SET_PREFERRED_APPLICATIONS)
+-    public abstract boolean updateIntentVerificationStatusAsUser(@NonNull String packageName,
+-            int status, @UserIdInt int userId);
+-
+-    /**
+-     * Get the list of IntentFilterVerificationInfo for a specific package and User.
+-     *
+-     * @param packageName the package name. When this parameter is set to a non null value,
+-     *                    the results will be filtered by the package name provided.
+-     *                    Otherwise, there will be no filtering and it will return a list
+-     *                    corresponding for all packages
+-     *
+-     * @return a list of IntentFilterVerificationInfo for a specific package.
+-     *
+-     * @deprecated Use {@link DomainVerificationManager} instead.
+-     * @hide
+-     */
+-    @Deprecated
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @NonNull
+-    @SystemApi
+-    public abstract List<IntentFilterVerificationInfo> getIntentFilterVerifications(
+-            @NonNull String packageName);
++    public boolean updateIntentVerificationStatusAsUser(@NonNull String packageName,
++            int status, @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+ 
+     /**
+@@ -9571,5 +9457,7 @@
+     @NonNull
+     @SystemApi
+-    public abstract List<IntentFilter> getAllIntentFilters(@NonNull String packageName);
++    public List<IntentFilter> getAllIntentFilters(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9587,5 +9475,7 @@
+     @SystemApi
+     @RequiresPermission(Manifest.permission.INTERACT_ACROSS_USERS_FULL)
+-    public abstract String getDefaultBrowserPackageNameAsUser(@UserIdInt int userId);
++    public String getDefaultBrowserPackageNameAsUser(@UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9606,6 +9496,8 @@
+             Manifest.permission.SET_PREFERRED_APPLICATIONS,
+             Manifest.permission.INTERACT_ACROSS_USERS_FULL})
+-    public abstract boolean setDefaultBrowserPackageNameAsUser(@Nullable String packageName,
+-            @UserIdInt int userId);
++    public boolean setDefaultBrowserPackageNameAsUser(@Nullable String packageName,
++            @UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9624,6 +9516,8 @@
+      * null to clear the association.
+      */
+-    public abstract void setInstallerPackageName(@NonNull String targetPackage,
+-            @Nullable String installerPackageName);
++    public void setInstallerPackageName(@NonNull String targetPackage,
++            @Nullable String installerPackageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /** @hide */
+@@ -9631,51 +9525,9 @@
+     @SystemApi
+     @RequiresPermission(Manifest.permission.INSTALL_PACKAGES)
+-    public abstract void setUpdateAvailable(@NonNull String packageName, boolean updateAvailable);
+-
+-    /**
+-     * Attempts to delete a package. Since this may take a little while, the
+-     * result will be posted back to the given observer. A deletion will fail if
+-     * the calling context lacks the
+-     * {@link android.Manifest.permission#DELETE_PACKAGES} permission, if the
+-     * named package cannot be found, or if the named package is a system
+-     * package.
+-     *
+-     * @param packageName The name of the package to delete
+-     * @param observer An observer callback to get notified when the package
+-     *            deletion is complete.
+-     *            {@link android.content.pm.IPackageDeleteObserver#packageDeleted}
+-     *            will be called when that happens. observer may be null to
+-     *            indicate that no callback is desired.
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @RequiresPermission(Manifest.permission.DELETE_PACKAGES)
+-    @UnsupportedAppUsage
+-    public abstract void deletePackage(@NonNull String packageName,
+-            @Nullable IPackageDeleteObserver observer, @DeleteFlags int flags);
+-
+-    /**
+-     * Attempts to delete a package. Since this may take a little while, the
+-     * result will be posted back to the given observer. A deletion will fail if
+-     * the named package cannot be found, or if the named package is a system
+-     * package.
+-     *
+-     * @param packageName The name of the package to delete
+-     * @param observer An observer callback to get notified when the package
+-     *            deletion is complete.
+-     *            {@link android.content.pm.IPackageDeleteObserver#packageDeleted}
+-     *            will be called when that happens. observer may be null to
+-     *            indicate that no callback is desired.
+-     * @param userId The user Id
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @RequiresPermission(anyOf = {
+-            Manifest.permission.DELETE_PACKAGES,
+-            Manifest.permission.INTERACT_ACROSS_USERS_FULL})
+-    @UnsupportedAppUsage
+-    public abstract void deletePackageAsUser(@NonNull String packageName,
+-            @Nullable IPackageDeleteObserver observer, @DeleteFlags int flags,
+-            @UserIdInt int userId);
++    public void setUpdateAvailable(@NonNull String packageName, boolean updateAvailable) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
+ 
+     /**
+@@ -9691,5 +9543,7 @@
+     @Deprecated
+     @Nullable
+-    public abstract String getInstallerPackageName(@NonNull String packageName);
++    public String getInstallerPackageName(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9708,8 +9562,7 @@
+      * @throws NameNotFoundException if the given package name is not available to the caller.
+      */
+-    @NonNull
+-    public InstallSourceInfo getInstallSourceInfo(@NonNull String packageName)
+-            throws NameNotFoundException {
+-        throw new UnsupportedOperationException("getInstallSourceInfo not implemented");
++    public InstallSourceInfo getInstallSourceInfo(String pkg) throws NameNotFoundException {
++        getApplicationInfo(pkg, 0);
++        return new InstallSourceInfo(null, null, null, null);
+     }
+ 
+@@ -9725,100 +9578,7 @@
+     }
+ 
+-    /**
+-     * Attempts to clear the user data directory of an application.
+-     * Since this may take a little while, the result will
+-     * be posted back to the given observer.  A deletion will fail if the
+-     * named package cannot be found, or if the named package is a "system package".
+-     *
+-     * @param packageName The name of the package
+-     * @param observer An observer callback to get notified when the operation is finished
+-     * {@link android.content.pm.IPackageDataObserver#onRemoveCompleted(String, boolean)}
+-     * will be called when that happens.  observer may be null to indicate that
+-     * no callback is desired.
+-     *
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    @RequiresPermission(Manifest.permission.CLEAR_APP_USER_DATA)
+-    public abstract void clearApplicationUserData(@NonNull String packageName,
+-            @Nullable IPackageDataObserver observer);
+-    /**
+-     * Attempts to delete the cache files associated with an application.
+-     * Since this may take a little while, the result will
+-     * be posted back to the given observer.  A deletion will fail if the calling context
+-     * lacks the {@link android.Manifest.permission#DELETE_CACHE_FILES} permission, if the
+-     * named package cannot be found, or if the named package is a "system package".
+-     *
+-     * @param packageName The name of the package to delete
+-     * @param observer An observer callback to get notified when the cache file deletion
+-     * is complete.
+-     * {@link android.content.pm.IPackageDataObserver#onRemoveCompleted(String, boolean)}
+-     * will be called when that happens.  observer may be null to indicate that
+-     * no callback is desired.
+-     *
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    public abstract void deleteApplicationCacheFiles(@NonNull String packageName,
+-            @Nullable IPackageDataObserver observer);
+-
+-    /**
+-     * Attempts to delete the cache files associated with an application for a given user. Since
+-     * this may take a little while, the result will be posted back to the given observer. A
+-     * deletion will fail if the calling context lacks the
+-     * {@link android.Manifest.permission#DELETE_CACHE_FILES} permission, if the named package
+-     * cannot be found, or if the named package is a "system package". If {@code userId} does not
+-     * belong to the calling user, the caller must have
+-     * {@link android.Manifest.permission#INTERACT_ACROSS_USERS} permission.
+-     *
+-     * @param packageName The name of the package to delete
+-     * @param userId the user for which the cache files needs to be deleted
+-     * @param observer An observer callback to get notified when the cache file deletion is
+-     *            complete.
+-     *            {@link android.content.pm.IPackageDataObserver#onRemoveCompleted(String, boolean)}
+-     *            will be called when that happens. observer may be null to indicate that no
+-     *            callback is desired.
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    public abstract void deleteApplicationCacheFilesAsUser(@NonNull String packageName,
+-            @UserIdInt int userId, @Nullable IPackageDataObserver observer);
+-
+-    /**
+-     * Free storage by deleting LRU sorted list of cache files across
+-     * all applications. If the currently available free storage
+-     * on the device is greater than or equal to the requested
+-     * free storage, no cache files are cleared. If the currently
+-     * available storage on the device is less than the requested
+-     * free storage, some or all of the cache files across
+-     * all applications are deleted (based on last accessed time)
+-     * to increase the free storage space on the device to
+-     * the requested value. There is no guarantee that clearing all
+-     * the cache files from all applications will clear up
+-     * enough storage to achieve the desired value.
+-     * @param freeStorageSize The number of bytes of storage to be
+-     * freed by the system. Say if freeStorageSize is XX,
+-     * and the current free storage is YY,
+-     * if XX is less than YY, just return. if not free XX-YY number
+-     * of bytes if possible.
+-     * @param observer call back used to notify when
+-     * the operation is completed
+-     *
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public void freeStorageAndNotify(long freeStorageSize,
+-            @Nullable IPackageDataObserver observer) {
+-        freeStorageAndNotify(null, freeStorageSize, observer);
+-    }
+-
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    public abstract void freeStorageAndNotify(@Nullable String volumeUuid, long freeStorageSize,
+-            @Nullable IPackageDataObserver observer);
++
++
++
+ 
+     /**
+@@ -9853,44 +9613,10 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract void freeStorage(@Nullable String volumeUuid, long freeStorageSize,
+-            @Nullable IntentSender pi);
+-
+-    /**
+-     * Retrieve the size information for a package.
+-     * Since this may take a little while, the result will
+-     * be posted back to the given observer.  The calling context
+-     * should have the {@link android.Manifest.permission#GET_PACKAGE_SIZE} permission.
+-     *
+-     * @param packageName The name of the package whose size information is to be retrieved
+-     * @param userId The user whose size information should be retrieved.
+-     * @param observer An observer callback to get notified when the operation
+-     * is complete.
+-     * {@link android.content.pm.IPackageStatsObserver#onGetStatsCompleted(PackageStats, boolean)}
+-     * The observer's callback is invoked with a PackageStats object(containing the
+-     * code, data and cache sizes of the package) and a boolean value representing
+-     * the status of the operation. observer may be null to indicate that
+-     * no callback is desired.
+-     *
+-     * @deprecated use {@link StorageStatsManager} instead.
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @Deprecated
+-    @UnsupportedAppUsage
+-    public abstract void getPackageSizeInfoAsUser(@NonNull String packageName,
+-            @UserIdInt int userId, @Nullable IPackageStatsObserver observer);
+-
+-    /**
+-     * Like {@link #getPackageSizeInfoAsUser(String, int, IPackageStatsObserver)}, but
+-     * returns the size for the calling user.
+-     *
+-     * @deprecated use {@link StorageStatsManager} instead.
+-     * @hide
+-     */
+-    @Deprecated
+-    @UnsupportedAppUsage
+-    public void getPackageSizeInfo(@NonNull String packageName, IPackageStatsObserver observer) {
+-        getPackageSizeInfoAsUser(packageName, getUserId(), observer);
+-    }
++    public void freeStorage(@Nullable String volumeUuid, long freeStorageSize,
++            @Nullable IntentSender pi) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
+ 
+     /**
+@@ -9903,5 +9629,7 @@
+      */
+     @Deprecated
+-    public abstract void addPackageToPreferred(@NonNull String packageName);
++    public void addPackageToPreferred(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9914,5 +9642,7 @@
+      */
+     @Deprecated
+-    public abstract void removePackageFromPreferred(@NonNull String packageName);
++    public void removePackageFromPreferred(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9934,5 +9664,7 @@
+     @NonNull
+     @Deprecated
+-    public abstract List<PackageInfo> getPreferredPackages(int flags);
++    public List<PackageInfo> getPreferredPackages(int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -9959,6 +9691,8 @@
+      */
+     @Deprecated
+-    public abstract void addPreferredActivity(@NonNull IntentFilter filter, int match,
+-            @Nullable ComponentName[] set, @NonNull ComponentName activity);
++    public void addPreferredActivity(@NonNull IntentFilter filter, int match,
++            @Nullable ComponentName[] set, @NonNull ComponentName activity) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10010,6 +9744,8 @@
+     @Deprecated
+     @UnsupportedAppUsage
+-    public abstract void replacePreferredActivity(@NonNull IntentFilter filter, int match,
+-            @Nullable ComponentName[] set, @NonNull ComponentName activity);
++    public void replacePreferredActivity(@NonNull IntentFilter filter, int match,
++            @Nullable ComponentName[] set, @NonNull ComponentName activity) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10069,5 +9805,7 @@
+      */
+     @Deprecated
+-    public abstract void clearPackagePreferredActivities(@NonNull String packageName);
++    public void clearPackagePreferredActivities(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10107,6 +9845,8 @@
+      */
+     @Deprecated
+-    public abstract int getPreferredActivities(@NonNull List<IntentFilter> outFilters,
+-            @NonNull List<ComponentName> outActivities, @Nullable String packageName);
++    public int getPreferredActivities(@NonNull List<IntentFilter> outFilters,
++            @NonNull List<ComponentName> outActivities, @Nullable String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10118,5 +9858,7 @@
+     @Nullable
+     @UnsupportedAppUsage
+-    public abstract ComponentName getHomeActivities(@NonNull List<ResolveInfo> outActivities);
++    public ComponentName getHomeActivities(@NonNull List<ResolveInfo> outActivities) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10134,6 +9876,8 @@
+     @RequiresPermission(value = android.Manifest.permission.CHANGE_COMPONENT_ENABLED_STATE,
+             conditional = true)
+-    public abstract void setComponentEnabledSetting(@NonNull ComponentName componentName,
+-            @EnabledState int newState, @EnabledFlags int flags);
++    public void setComponentEnabledSetting(@NonNull ComponentName componentName,
++            @EnabledState int newState, @EnabledFlags int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10173,6 +9917,8 @@
+      * @return Returns the current enabled state for the component.
+      */
+-    public abstract @EnabledState int getComponentEnabledSetting(
+-            @NonNull ComponentName componentName);
++    public @EnabledState int getComponentEnabledSetting(
++            @NonNull ComponentName componentName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10222,6 +9968,8 @@
+     @RequiresPermission(value = android.Manifest.permission.CHANGE_COMPONENT_ENABLED_STATE,
+             conditional = true)
+-    public abstract void setApplicationEnabledSetting(@NonNull String packageName,
+-            @EnabledState int newState, @EnabledFlags int flags);
++    public void setApplicationEnabledSetting(@NonNull String packageName,
++            @EnabledState int newState, @EnabledFlags int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10236,5 +9984,7 @@
+      * @throws IllegalArgumentException if the named package does not exist.
+      */
+-    public abstract @EnabledState int getApplicationEnabledSetting(@NonNull String packageName);
++    public @EnabledState int getApplicationEnabledSetting(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10248,5 +9998,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract void flushPackageRestrictionsAsUser(@UserIdInt int userId);
++    public void flushPackageRestrictionsAsUser(@UserIdInt int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10259,6 +10011,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract boolean setApplicationHiddenSettingAsUser(@NonNull String packageName,
+-            boolean hidden, @NonNull UserHandle userHandle);
++    public boolean setApplicationHiddenSettingAsUser(@NonNull String packageName,
++            boolean hidden, @NonNull UserHandle userHandle) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10269,6 +10023,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract boolean getApplicationHiddenSettingAsUser(@NonNull String packageName,
+-            @NonNull UserHandle userHandle);
++    public boolean getApplicationHiddenSettingAsUser(@NonNull String packageName,
++            @NonNull UserHandle userHandle) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10295,5 +10051,5 @@
+      * Return whether the device has been booted into safe mode.
+      */
+-    public abstract boolean isSafeMode();
++    public boolean isSafeMode() { return false; }
+ 
+     /**
+@@ -10308,6 +10064,8 @@
+     @SystemApi
+     @RequiresPermission(Manifest.permission.OBSERVE_GRANT_REVOKE_PERMISSIONS)
+-    public abstract void addOnPermissionsChangeListener(
+-            @NonNull OnPermissionsChangedListener listener);
++    public void addOnPermissionsChangeListener(
++            @NonNull OnPermissionsChangedListener listener) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10322,48 +10080,12 @@
+     @SystemApi
+     @RequiresPermission(Manifest.permission.OBSERVE_GRANT_REVOKE_PERMISSIONS)
+-    public abstract void removeOnPermissionsChangeListener(
+-            @NonNull OnPermissionsChangedListener listener);
+-
+-    /**
+-     * Return the {@link KeySet} associated with the String alias for this
+-     * application.
+-     *
+-     * @param alias The alias for a given {@link KeySet} as defined in the
+-     *        application's AndroidManifest.xml.
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @NonNull
+-    @UnsupportedAppUsage
+-    public abstract KeySet getKeySetByAlias(@NonNull String packageName, @NonNull String alias);
+-
+-    /** Return the signing {@link KeySet} for this application.
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @NonNull
+-    @UnsupportedAppUsage
+-    public abstract KeySet getSigningKeySet(@NonNull String packageName);
+-
+-    /**
+-     * Return whether the package denoted by packageName has been signed by all
+-     * of the keys specified by the {@link KeySet} ks.  This will return true if
+-     * the package has been signed by additional keys (a superset) as well.
+-     * Compare to {@link #isSignedByExactly(String packageName, KeySet ks)}.
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    public abstract boolean isSignedBy(@NonNull String packageName, @NonNull KeySet ks);
+-
+-    /**
+-     * Return whether the package denoted by packageName has been signed by all
+-     * of, and only, the keys specified by the {@link KeySet} ks. Compare to
+-     * {@link #isSignedBy(String packageName, KeySet ks)}.
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage
+-    public abstract boolean isSignedByExactly(@NonNull String packageName, @NonNull KeySet ks);
++    public void removeOnPermissionsChangeListener(
++            @NonNull OnPermissionsChangedListener listener) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
++
++
+ 
+     /**
+@@ -10400,5 +10122,4 @@
+      */
+     @SystemApi
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_ACTIVITY_START_INTERCEPTOR_SPEEDBUMPS)
+     public static final int RESTRICTION_CONFIRM_WITH_SPEEDBUMP = 0x00000004;
+ 
+@@ -10504,124 +10225,5 @@
+     }
+ 
+-    /**
+-     * Puts the given packages in a suspended state, where attempts at starting activities are
+-     * denied.
+-     *
+-     * <p>The suspended application's notifications and all of its windows will be hidden, any
+-     * of its started activities will be stopped and it won't be able to ring the device.
+-     * It doesn't remove the data or the actual package file.
+-     *
+-     * <p>When the user tries to launch a suspended app, a system dialog alerting them that the app
+-     * is suspended will be shown instead.
+-     * The caller can optionally customize the dialog by passing a {@link SuspendDialogInfo} object
+-     * to this API. This dialog will have a button that starts the
+-     * {@link Intent#ACTION_SHOW_SUSPENDED_APP_DETAILS} intent if the suspending app declares an
+-     * activity which handles this action.
+-     *
+-     * <p>The packages being suspended must already be installed. If a package is uninstalled, it
+-     * will no longer be suspended.
+-     *
+-     * <p>Optionally, the suspending app can provide extra information in the form of
+-     * {@link PersistableBundle} objects to be shared with the apps being suspended and the
+-     * launcher to support customization that they might need to handle the suspended state.
+-     *
+-     * <p>The caller must hold {@link Manifest.permission#SUSPEND_APPS} to use this API except for
+-     * device owner and profile owner.
+-     *
+-     * @param packageNames The names of the packages to set the suspended status.
+-     * @param suspended If set to {@code true}, the packages will be suspended, if set to
+-     * {@code false}, the packages will be unsuspended.
+-     * @param appExtras An optional {@link PersistableBundle} that the suspending app can provide
+-     *                  which will be shared with the apps being suspended. Ignored if
+-     *                  {@code suspended} is false.
+-     * @param launcherExtras An optional {@link PersistableBundle} that the suspending app can
+-     *                       provide which will be shared with the launcher. Ignored if
+-     *                       {@code suspended} is false.
+-     * @param dialogInfo An optional {@link SuspendDialogInfo} object describing the dialog that
+-     *                   should be shown to the user when they try to launch a suspended app.
+-     *                   Ignored if {@code suspended} is false.
+-     *
+-     * @return an array of package names for which the suspended status could not be set as
+-     * requested in this method. Returns {@code null} if {@code packageNames} was {@code null}.
+-     *
+-     * @see #isPackageSuspended
+-     * @see SuspendDialogInfo
+-     * @see SuspendDialogInfo.Builder
+-     * @see Intent#ACTION_SHOW_SUSPENDED_APP_DETAILS
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(value=Manifest.permission.SUSPEND_APPS, conditional=true)
+-    @Nullable
+-    public String[] setPackagesSuspended(@Nullable String[] packageNames, boolean suspended,
+-            @Nullable PersistableBundle appExtras, @Nullable PersistableBundle launcherExtras,
+-            @Nullable SuspendDialogInfo dialogInfo) {
+-        throw new UnsupportedOperationException("setPackagesSuspended not implemented");
+-    }
+-
+-    /**
+-     * Puts the given packages in a suspended state, where attempts at starting activities are
+-     * denied.
+-     *
+-     * <p>The suspended application's notifications and all of its windows will be hidden, any
+-     * of its started activities will be stopped and it won't be able to ring the device.
+-     * It doesn't remove the data or the actual package file.
+-     *
+-     * <p>When the user tries to launch a suspended app, a system dialog alerting them that the app
+-     * is suspended will be shown instead.
+-     * The caller can optionally customize the dialog by passing a {@link SuspendDialogInfo} object
+-     * to this API. This dialog will have a button that starts the
+-     * {@link Intent#ACTION_SHOW_SUSPENDED_APP_DETAILS} intent if the suspending app declares an
+-     * activity which handles this action.
+-     *
+-     * <p>The packages being suspended must already be installed. If a package is uninstalled, it
+-     * will no longer be suspended.
+-     *
+-     * <p>Optionally, the suspending app can provide extra information in the form of
+-     * {@link PersistableBundle} objects to be shared with the apps being suspended and the
+-     * launcher to support customization that they might need to handle the suspended state.
+-     *
+-     * <p>The caller must hold {@link Manifest.permission#SUSPEND_APPS} to use this API except for
+-     * device owner and profile owner or the {@link Manifest.permission#QUARANTINE_APPS} if the
+-     * caller is using {@link #FLAG_SUSPEND_QUARANTINED}.
+-     *
+-     * @param packageNames The names of the packages to set the suspended status.
+-     * @param suspended If set to {@code true}, the packages will be suspended, if set to
+-     * {@code false}, the packages will be unsuspended.
+-     * @param appExtras An optional {@link PersistableBundle} that the suspending app can provide
+-     *                  which will be shared with the apps being suspended. Ignored if
+-     *                  {@code suspended} is false.
+-     * @param launcherExtras An optional {@link PersistableBundle} that the suspending app can
+-     *                       provide which will be shared with the launcher. Ignored if
+-     *                       {@code suspended} is false.
+-     * @param dialogInfo An optional {@link SuspendDialogInfo} object describing the dialog that
+-     *                   should be shown to the user when they try to launch a suspended app.
+-     *                   Ignored if {@code suspended} is false.
+-     * @param flags Optional behavior flags.
+-     *
+-     * @return an array of package names for which the suspended status could not be set as
+-     * requested in this method. Returns {@code null} if {@code packageNames} was {@code null}.
+-     *
+-     * @see #isPackageSuspended
+-     * @see SuspendDialogInfo
+-     * @see SuspendDialogInfo.Builder
+-     * @see Intent#ACTION_SHOW_SUSPENDED_APP_DETAILS
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @FlaggedApi(android.content.pm.Flags.FLAG_QUARANTINED_ENABLED)
+-    @RequiresPermission(anyOf = {
+-            Manifest.permission.SUSPEND_APPS,
+-            Manifest.permission.QUARANTINE_APPS
+-    }, conditional = true)
+-    @SuppressLint("NullableCollection")
+-    @Nullable
+-    public String[] setPackagesSuspended(@Nullable String[] packageNames, boolean suspended,
+-            @Nullable PersistableBundle appExtras, @Nullable PersistableBundle launcherExtras,
+-            @Nullable SuspendDialogInfo dialogInfo, @SuspendedFlags int flags) {
+-        throw new UnsupportedOperationException("setPackagesSuspended not implemented");
+-    }
++
+ 
+     /**
+@@ -10661,5 +10263,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract boolean isPackageSuspendedForUser(@NonNull String packageName, int userId);
++    public boolean isPackageSuspendedForUser(@NonNull String packageName, int userId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10868,6 +10472,8 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract void setApplicationCategoryHint(@NonNull String packageName,
+-            @ApplicationInfo.Category int categoryHint);
++    public void setApplicationCategoryHint(@NonNull String packageName,
++            @ApplicationInfo.Category int categoryHint) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /** @hide */
+@@ -10885,51 +10491,24 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract int getMoveStatus(int moveId);
++    public int getMoveStatus(int moveId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /** @hide */
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract void registerMoveCallback(@NonNull MoveCallback callback,
+-            @NonNull Handler handler);
++    public void registerMoveCallback(@NonNull MoveCallback callback,
++            @NonNull Handler handler) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+     /** @hide */
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract void unregisterMoveCallback(@NonNull MoveCallback callback);
+-
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public abstract int movePackage(@NonNull String packageName, @NonNull VolumeInfo vol);
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public abstract @Nullable VolumeInfo getPackageCurrentVolume(@NonNull ApplicationInfo app);
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @NonNull
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public abstract List<VolumeInfo> getPackageCandidateVolumes(
+-            @NonNull ApplicationInfo app);
+-
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract int movePrimaryStorage(@NonNull VolumeInfo vol);
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract @Nullable VolumeInfo getPrimaryStorageCurrentVolume();
+-    /** @hide */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract @NonNull List<VolumeInfo> getPrimaryStorageCandidateVolumes();
+-
+-    /**
+-     * Returns the device identity that verifiers can use to associate their scheme to a particular
+-     * device. This should not be used by anything other than a package verifier.
+-     *
+-     * @return identity that uniquely identifies current device
+-     * @hide
+-     */
+-    @SuppressWarnings("HiddenAbstractMethod")
+-    @NonNull
+-    public abstract VerifierDeviceIdentity getVerifierDeviceIdentity();
++    public void unregisterMoveCallback(@NonNull MoveCallback callback) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
++
+ 
+     /**
+@@ -10940,5 +10519,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract boolean isUpgrade();
++    public boolean isUpgrade() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -10953,5 +10534,5 @@
+      * applications on the device.
+      */
+-    public abstract @NonNull PackageInstaller getPackageInstaller();
++    public PackageInstaller getPackageInstaller() { return installer; }
+ 
+     /**
+@@ -10971,6 +10552,8 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public abstract void addCrossProfileIntentFilter(@NonNull IntentFilter filter,
+-            @UserIdInt int sourceUserId, @UserIdInt int targetUserId, int flags);
++    public void addCrossProfileIntentFilter(@NonNull IntentFilter filter,
++            @UserIdInt int sourceUserId, @UserIdInt int targetUserId, int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -11001,5 +10584,7 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public abstract void clearCrossProfileIntentFilters(@UserIdInt int sourceUserId);
++    public void clearCrossProfileIntentFilters(@UserIdInt int sourceUserId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -11009,6 +10594,8 @@
+     @NonNull
+     @UnsupportedAppUsage
+-    public abstract Drawable loadItemIcon(@NonNull PackageItemInfo itemInfo,
+-            @Nullable ApplicationInfo appInfo);
++    public Drawable loadItemIcon(@NonNull PackageItemInfo itemInfo,
++            @Nullable ApplicationInfo appInfo) {
++        return loadUnbadgedItemIcon(itemInfo, appInfo);
++    }
+ 
+     /**
+@@ -11018,11 +10605,17 @@
+     @NonNull
+     @UnsupportedAppUsage
+-    public abstract Drawable loadUnbadgedItemIcon(@NonNull PackageItemInfo itemInfo,
+-            @Nullable ApplicationInfo appInfo);
++    public Drawable loadUnbadgedItemIcon(@NonNull PackageItemInfo itemInfo,
++            @Nullable ApplicationInfo appInfo) {
++        final Drawable drawable = itemInfo.icon == 0 ? null
++                : getDrawable(itemInfo.packageName, itemInfo.icon, appInfo);
++        return drawable != null ? drawable : itemInfo.loadDefaultIcon(this);
++    }
+ 
+     /** @hide */
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract boolean isPackageAvailable(@NonNull String packageName);
++    public boolean isPackageAvailable(@NonNull String packageName) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /** @hide */
+@@ -11224,98 +10817,5 @@
+     }
+ 
+-    /** @hide */
+-    public static class LegacyPackageDeleteObserver extends PackageDeleteObserver {
+-        private final IPackageDeleteObserver mLegacy;
+-
+-        public LegacyPackageDeleteObserver(IPackageDeleteObserver legacy) {
+-            mLegacy = legacy;
+-        }
+-
+-        @Override
+-        public void onPackageDeleted(String basePackageName, int returnCode, String msg) {
+-            if (mLegacy == null) return;
+-            try {
+-                mLegacy.packageDeleted(basePackageName, returnCode);
+-            } catch (RemoteException ignored) {
+-            }
+-        }
+-    }
+-
+-    /**
+-     * A parcelable class to pass as an intent extra to the PackageInstaller. When an uninstall is
+-     * completed (both successfully or unsuccessfully), the result is sent to the uninstall
+-     * initiators.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    public static final class UninstallCompleteCallback implements Parcelable {
+-        private IPackageDeleteObserver2 mBinder;
+-
+-        /** @hide */
+-        @IntDef(prefix = { "DELETE_" }, value = {
+-                DELETE_SUCCEEDED,
+-                DELETE_FAILED_INTERNAL_ERROR,
+-                DELETE_FAILED_DEVICE_POLICY_MANAGER,
+-                DELETE_FAILED_USER_RESTRICTED,
+-                DELETE_FAILED_OWNER_BLOCKED,
+-                DELETE_FAILED_ABORTED,
+-                DELETE_FAILED_USED_SHARED_LIBRARY,
+-                DELETE_FAILED_APP_PINNED,
+-        })
+-        @Retention(RetentionPolicy.SOURCE)
+-        public @interface DeleteStatus{}
+-
+-        /** @hide */
+-        public UninstallCompleteCallback(@NonNull IBinder binder) {
+-            mBinder = IPackageDeleteObserver2.Stub.asInterface(binder);
+-        }
+-
+-        /** @hide */
+-        private UninstallCompleteCallback(Parcel in) {
+-            mBinder = IPackageDeleteObserver2.Stub.asInterface(in.readStrongBinder());
+-        }
+-
+-        public static final @NonNull Parcelable.Creator<UninstallCompleteCallback> CREATOR =
+-                new Parcelable.Creator<>() {
+-                    public UninstallCompleteCallback createFromParcel(Parcel source) {
+-                        return new UninstallCompleteCallback(source);
+-                    }
+-
+-                    public UninstallCompleteCallback[] newArray(int size) {
+-                        return new UninstallCompleteCallback[size];
+-                    }
+-                };
+-
+-        /**
+-         * Called when an uninstallation is completed successfully or unsuccessfully.
+-         *
+-         * @param packageName The name of the package being uninstalled.
+-         * @param resultCode Result code of the operation.
+-         * @param errorMessage Error message if any.
+-         *
+-         * @hide */
+-        @SystemApi
+-        public void onUninstallComplete(@NonNull String packageName, @DeleteStatus int resultCode,
+-                @Nullable String errorMessage) {
+-            try {
+-                mBinder.onPackageDeleted(packageName, resultCode, errorMessage);
+-            } catch (RemoteException e) {
+-                // no-op
+-            }
+-        }
+-
+-        /** @hide */
+-        @Override
+-        public int describeContents() {
+-            return 0;
+-        }
+-
+-        /** @hide */
+-        @Override
+-        public void writeToParcel(@NonNull Parcel dest, int flags) {
+-            dest.writeStrongBinder(mBinder.asBinder());
+-        }
+-    }
++
+ 
+     /**
+@@ -11333,5 +10833,7 @@
+     @TestApi
+     @InstallReason
+-    public abstract int getInstallReason(@NonNull String packageName, @NonNull UserHandle user);
++    public int getInstallReason(@NonNull String packageName, @NonNull UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -11350,5 +10852,7 @@
+      * @see android.provider.Settings#ACTION_MANAGE_UNKNOWN_APP_SOURCES
+      */
+-    public abstract boolean canRequestPackageInstalls();
++    public boolean canRequestPackageInstalls() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -11362,5 +10866,7 @@
+     @Nullable
+     @SystemApi
+-    public abstract ComponentName getInstantAppResolverSettingsComponent();
++    public ComponentName getInstantAppResolverSettingsComponent() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -11374,5 +10880,7 @@
+     @Nullable
+     @SystemApi
+-    public abstract ComponentName getInstantAppInstallerComponent();
++    public ComponentName getInstantAppInstallerComponent() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -11384,6 +10892,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @Nullable
+-    public abstract String getInstantAppAndroidId(@NonNull String packageName,
+-            @NonNull UserHandle user);
++    public String getInstantAppAndroidId(@NonNull String packageName,
++            @NonNull UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -11413,16 +10923,9 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+-    public abstract void registerDexModule(@NonNull String dexModulePath,
+-            @Nullable DexModuleRegisterCallback callback);
+-
+-    /**
+-     * Returns the {@link ArtManager} associated with this package manager.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    public @NonNull ArtManager getArtManager() {
+-        throw new UnsupportedOperationException("getArtManager not implemented in subclass");
+-    }
++    public void registerDexModule(@NonNull String dexModulePath,
++            @Nullable DexModuleRegisterCallback callback) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+ 
+     /**
+@@ -11609,5 +11112,5 @@
+      */
+     public void requestChecksums(@NonNull String packageName, boolean includeSplits,
+-            @Checksum.TypeMask int required, @NonNull List<Certificate> trustedInstallers,
++            int required, @NonNull List<Certificate> trustedInstallers,
+             @NonNull OnChecksumsReadyListener onChecksumsReadyListener)
+             throws CertificateEncodingException, NameNotFoundException {
+@@ -11788,9 +11291,10 @@
+      * @see LauncherActivityInfo#getIcon(int)
+      */
+-    public boolean isDefaultApplicationIcon(@NonNull Drawable drawable) {
+-        int resId = drawable instanceof AdaptiveIconDrawable
+-                ? ((AdaptiveIconDrawable) drawable).getSourceDrawableResId() : Resources.ID_NULL;
+-        return resId == com.android.internal.R.drawable.sym_def_app_icon
+-                || resId == com.android.internal.R.drawable.sym_app_on_sd_unavailable_icon;
++    public boolean isDefaultApplicationIcon(Drawable drawable) {
++        if (drawable instanceof DefaultActivityIcon) return true;
++        if (!(drawable instanceof AdaptiveIconDrawable icon)) return false;
++        int id = icon.getSourceDrawableResId();
++        return id != 0 && (id == android.R.drawable.sym_def_app_icon || id == Resources.getSystem()
++                .getIdentifier("sym_app_on_sd_unavailable_icon", "drawable", "android"));
+     }
+ 
+@@ -11977,9 +11481,5 @@
+      */
+     public void makeProviderVisible(int recipientUid, String visibleAuthority) {
+-        try {
+-            ActivityThread.getPackageManager().makeProviderVisible(recipientUid, visibleAuthority);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12065,15 +11565,9 @@
+     private static ApplicationInfo getApplicationInfoAsUserUncached(
+             String packageName, @ApplicationInfoFlagsBits long flags, int userId) {
+-        try {
+-            return ActivityThread.getPackageManager()
+-                    .getApplicationInfo(packageName, flags, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private static String packageInfoApi() {
+-        return PropertyInvalidatedCache.apiFromProperty(
+-            PermissionManager.CACHE_KEY_PACKAGE_INFO_CACHE);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12081,24 +11575,9 @@
+     private final static int MAX_INFO_CACHE_ENTRIES = 2048;
+ 
+-    /** @hide */
+-    @VisibleForTesting
+-    public static final PropertyInvalidatedCache<ApplicationInfoQuery, ApplicationInfo>
+-            sApplicationInfoCache = new PropertyInvalidatedCache<>(
+-                new PropertyInvalidatedCache.Args(MODULE_SYSTEM)
+-                .maxEntries(MAX_INFO_CACHE_ENTRIES).api(packageInfoApi()).cacheNulls(true),
+-                "getApplicationInfo", null) {
+-
+-                @Override
+-                public ApplicationInfo recompute(ApplicationInfoQuery query) {
+-                    return getApplicationInfoAsUserUncached(
+-                            query.packageName, query.flags, query.userId);
+-                }
+-            };
+ 
+     /** @hide */
+     public static ApplicationInfo getApplicationInfoAsUserCached(
+             String packageName, @ApplicationInfoFlagsBits long flags, int userId) {
+-        return sApplicationInfoCache.query(
+-                new ApplicationInfoQuery(packageName, flags, userId));
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12109,5 +11588,5 @@
+      */
+     public static void disableApplicationInfoCache() {
+-        sApplicationInfoCache.disableLocal();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12160,28 +11639,12 @@
+     private static PackageInfo getPackageInfoAsUserUncached(
+             String packageName, @PackageInfoFlagsBits long flags, int userId) {
+-        try {
+-            return ActivityThread.getPackageManager().getPackageInfo(packageName, flags, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    private static final PropertyInvalidatedCache<PackageInfoQuery, PackageInfo>
+-            sPackageInfoCache = new PropertyInvalidatedCache<>(
+-                new PropertyInvalidatedCache.Args(MODULE_SYSTEM)
+-                .maxEntries(MAX_INFO_CACHE_ENTRIES).api(packageInfoApi()).cacheNulls(true),
+-                "getPackageInfo", null) {
+-
+-                @Override
+-                public PackageInfo recompute(PackageInfoQuery query) {
+-                    return getPackageInfoAsUserUncached(
+-                            query.packageName, query.flags, query.userId);
+-                }
+-            };
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+ 
+     /** @hide */
+     public static PackageInfo getPackageInfoAsUserCached(
+             String packageName, @PackageInfoFlagsBits long flags, int userId) {
+-        return sPackageInfoCache.query(new PackageInfoQuery(packageName, flags, userId));
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12191,5 +11654,5 @@
+      */
+     public static void disablePackageInfoCache() {
+-        sPackageInfoCache.disableLocal();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12200,5 +11663,5 @@
+      */
+     public static void corkPackageInfoCache() {
+-        sPackageInfoCache.corkInvalidations();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12209,5 +11672,5 @@
+      */
+     public static void uncorkPackageInfoCache() {
+-        sPackageInfoCache.uncorkInvalidations();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12218,5 +11681,5 @@
+      */
+     public static void invalidatePackageInfoCache() {
+-        sPackageInfoCache.invalidateCache();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12228,9 +11691,5 @@
+     @TestApi
+     public IBinder getHoldLockToken() {
+-        try {
+-            return ActivityThread.getPackageManager().getHoldLockToken();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12244,9 +11703,5 @@
+     @TestApi
+     public void holdLock(IBinder token, int durationMs) {
+-        try {
+-            ActivityThread.getPackageManager().holdLock(token, durationMs);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12260,9 +11715,5 @@
+     @TestApi
+     public void setKeepUninstalledPackages(@NonNull List<String> packageList) {
+-        try {
+-            ActivityThread.getPackageManager().setKeepUninstalledPackages(packageList);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12311,27 +11762,5 @@
+     }
+ 
+-    /**
+-     * Register for notifications of package changes such as install, removal and other events.
+-     *
+-     * @param callback the callback to register for receiving the change events
+-     * @param userId The id of registered user
+-     * @hide
+-     */
+-    public void registerPackageMonitorCallback(@NonNull IRemoteCallback callback, int userId) {
+-        throw new UnsupportedOperationException(
+-                "registerPackageMonitorCallback not implemented in subclass");
+-    }
+-
+-    /**
+-     * Unregister for notifications of package changes such as install, removal and other events.
+-     *
+-     * @param callback the callback to unregister for receiving the change events
+-     * @see #registerPackageMonitorCallback(IRemoteCallback, int)
+-     * @hide
+-     */
+-    public void unregisterPackageMonitorCallback(@NonNull IRemoteCallback callback) {
+-        throw new UnsupportedOperationException(
+-                "unregisterPackageMonitorCallback not implemented in subclass");
+-    }
++
+ 
+     /**
+@@ -12438,24 +11867,8 @@
+      */
+     public static @NonNull SigningInfo getVerifiedSigningInfo(@NonNull String path,
+-            @AppSigningSchemeVersion int minAppSigningSchemeVersion) throws SigningInfoException {
+-        ParseTypeImpl input = ParseTypeImpl.forDefaultParsing();
+-        ParseResult<SigningDetails> result =
+-                ApkSignatureVerifier.verify(input, path, minAppSigningSchemeVersion);
+-        if (result.isError()) {
+-            throw new SigningInfoException(
+-                    result.getErrorCode(), result.getErrorMessage(), result.getException());
+-        }
+-        return new SigningInfo(result.getResult());
+-    }
+-
+-    /**
+-     * As the generated feature count is useful for classes that may not be compiled in the same
+-     * annotation processing unit as PackageManager, we redeclare it here for visibility.
+-     *
+-     * @hide
+-     */
+-    @VisibleForTesting
+-    public static final int SDK_FEATURE_COUNT =
+-            com.android.internal.pm.SystemFeaturesMetadata.SDK_FEATURE_COUNT;
++            int minAppSigningSchemeVersion) throws SigningInfoException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+ 
+     /**
+@@ -12470,5 +11883,5 @@
+     @VisibleForTesting
+     public static int maybeGetSdkFeatureIndex(String featureName) {
+-        return com.android.internal.pm.SystemFeaturesMetadata.maybeGetSdkFeatureIndex(featureName);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -12485,3 +11898,112 @@
+                 "getAppUidForPrivateComputeCoreUid not implemented in subclass");
+     }
++    private List<ResolveInfo> queryIntentActivitiesAsUser(Intent intent, long flags, int user) {
++        ComponentName component = intent.getComponent();
++        String pkg = component == null ? intent.getPackage() : component.getPackageName();
++        String activity = component == null ? null : component.getClassName();
++        Entry[] found = nativeQuery(intent.getAction(), pkg, activity, intent.getDataString(),
++                intent.getType(), categoryArray(intent), flags, user);
++        ArrayList<ResolveInfo> result = new ArrayList<>(found.length);
++        for (Entry entry : found) {
++            if (entry.activity != null && (entry.enabled || (flags & MATCH_DISABLED_COMPONENTS) != 0)) {
++                result.add(entry.resolveInfo());
++            }
++        }
++        return result;
++    }
++
++    ApplicationInfo getApplicationInfoAsUser(String pkg, long flags, int user) throws NameNotFoundException {
++        if (user == UserHandle.USER_SYSTEM && context.getPackageName().equals(pkg)) {
++            return new ApplicationInfo(context.getApplicationInfo());
++        }
++        Entry info = nativeApplication(pkg, flags, user);
++        if (info == null) throw new NameNotFoundException(pkg);
++        return info.applicationInfo();
++    }
++
++    public void closePackageResources() {
++        synchronized (packageResources) {
++            for (Resources resources : packageResources.values()) resources.close();
++            packageResources.clear();
++        }
++    }
++
++    Drawable getDrawableForDensity(String pkg, int resId, int density, ApplicationInfo optional) {
++        try {
++            if (context.getPackageName().equals(pkg)) {
++                return context.getResources().getDrawableForDensity(resId, density, context.getTheme());
++            }
++            Resources resources = optional == null ? getResourcesForApplication(pkg)
++                    : getResourcesForApplication(optional);
++            return resources.getDrawableForDensity(resId, density, null);
++        } catch (NameNotFoundException | Resources.NotFoundException error) {
++            return null;
++        }
++    }
++
++    public void launch(Intent intent, UserHandle user, Bundle options) {
++        ComponentName component = intent.getComponent();
++        String pkg = component == null ? intent.getPackage() : component.getPackageName();
++        String cls = component == null ? null : component.getClassName();
++        if (!nativeLaunch(intent.getAction(), pkg, cls, intent.getDataString(), intent.getType(),
++                categoryArray(intent), intent.getFlags(), user.getIdentifier())) {
++            throw new ActivityNotFoundException(intent.toString());
++        }
++    }
++
++    private static native Entry[] nativeQuery(String action, String pkg, String activity, String data,
++                                               String mime, String[] categories, long flags, int user);
++
++    private static native Entry nativeApplication(String pkg, long flags, int user);
++
++    private static native boolean nativeLaunch(String action, String pkg, String activity, String data,
++                                               String mime, String[] categories, int flags, int user);
++    /** Creates the package manager for the embedded APK catalog. @hide */
++    public static PackageManager forHost(Context context) {
++        return new PackageManager(context) {};
++    }
++
++    private Context context;
++    private PackageInstaller installer;
++    private final HashMap<List<Object>, Resources> packageResources = new HashMap<>();
++
++    private PackageManager(Context context) {
++        this.context = Objects.requireNonNull(context);
++        this.installer = new PackageInstaller();
++    }
++
++    private static String[] categoryArray(Intent intent) {
++        Set<String> categories = intent.getCategories();
++        return categories == null ? new String[0] : categories.toArray(new String[0]);
++    }
++    private static final class Entry {
++        final String pkg, activity, label, apk;
++        final int icon;
++        final boolean enabled;
++        private Entry(String pkg, String activity, String label, String apk, int icon, boolean enabled) {
++            this.pkg = pkg; this.activity = activity; this.label = label; this.apk = apk;
++            this.icon = icon; this.enabled = enabled;
++        }
++        ApplicationInfo applicationInfo() {
++            ApplicationInfo info = new ApplicationInfo();
++            info.packageName = pkg;
++            info.sourceDir = info.publicSourceDir = apk;
++            info.nonLocalizedLabel = label;
++            info.icon = icon;
++            info.enabled = enabled;
++            return info;
++        }
++        ResolveInfo resolveInfo() {
++            ResolveInfo result = new ResolveInfo();
++            ActivityInfo info = new ActivityInfo();
++            info.applicationInfo = applicationInfo();
++            info.packageName = pkg; info.name = activity; info.enabled = enabled; info.exported = true;
++            result.activityInfo = info;
++            return result;
++        }
++    }
++
++    private static final class DefaultActivityIcon extends ColorDrawable {
++        DefaultActivityIcon() { super(0xff8b9299); }
++    }
+ }

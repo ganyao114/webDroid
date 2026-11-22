@@ -3,6 +3,7 @@ package android.app;
 import android.appwidget.AppWidgetManager;
 import android.content.ComponentName;
 import android.content.BroadcastReceiver;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
@@ -14,6 +15,7 @@ import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.content.res.Configuration;
 import android.content.res.Resources;
+import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
 import android.hardware.display.DisplayManager;
 import android.os.Bundle;
@@ -31,6 +33,7 @@ import com.android.internal.policy.PhoneLayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewRootImpl;
 import android.view.WindowManager;
 import android.view.WindowMetrics;
 import java.io.IOException;
@@ -43,6 +46,7 @@ import org.wasmandroid.ui.XmlValues;
 public final class UiRuntime {
     private static Activity current;
     private static AppContext context;
+    private static ViewRootImpl root;
     private static final ArrayList<Pointer> pointers = new ArrayList<>();
     private static long downTime, keyDownTime;
 
@@ -76,7 +80,7 @@ public final class UiRuntime {
         }
         private final ArrayList<ReceiverRegistration> receivers = new ArrayList<>();
         final PackageManager packages;
-        final android.content.ContentResolver resolver = new android.content.ContentResolver();
+        final ContentResolver resolver;
         private LayoutInflater inflater;
         private LauncherApps launcher;
         private WallpaperManager wallpaper;
@@ -87,7 +91,8 @@ public final class UiRuntime {
 
         AppContext(Resources resources, ApplicationInfo info) {
             this.resources = resources; this.info = info;
-            packages = new PackageManager(this);
+            packages = PackageManager.forHost(this);
+            resolver = new ContentResolver(this) {};
             displays = new DisplayManager(new Display(resources));
             windows = new WindowManager() {
                 @Override public Display getDefaultDisplay() { return getDisplay(); }
@@ -212,7 +217,7 @@ public final class UiRuntime {
                 return inputMethod;
             }
             if (WALLPAPER_SERVICE.equals(name)) {
-                if (wallpaper == null) wallpaper = new WallpaperManager();
+                if (wallpaper == null) wallpaper = new WallpaperManager(this);
                 return wallpaper;
             }
             if (ACCESSIBILITY_SERVICE.equals(name)) {
@@ -244,14 +249,22 @@ public final class UiRuntime {
             Manifest manifest = readManifest(resources, apkPath, requested, withFramework ? 1 : 0);
             AppContext app = new AppContext(resources, manifest.info);
             context = app;
+            Application.setEmbeddedProcessName(manifest.info.packageName);
             app.application = createApplication(app, manifest.application);
             app.application.onCreate();
             Activity activity = nativeCreateActivity(manifest.activity);
             ComponentName component = new ComponentName(manifest.info.packageName, manifest.activity);
-            activity.attach(app, Intent.makeMainActivity(component), manifest.theme);
+            activity.attachEmbedded(app, Intent.makeMainActivity(component), manifest.theme);
+            EmbeddedWindow window = new EmbeddedWindow(activity);
+            activity.attachEmbeddedWindow(window);
+            try (TypedArray attrs = activity.obtainStyledAttributes(
+                    new int[] {android.R.attr.windowBackground})) {
+                if (attrs.hasValue(0)) window.setBackgroundDrawable(attrs.getDrawable(0));
+            }
+            root = new ViewRootImpl(window.getDecorView(), window);
             current = activity;
             activity.performCreate(null);
-            finishIfRequested();
+            resume();
         } catch (IOException | XmlPullParserException | RuntimeException | Error error) {
             try {
                 if (context != null) destroy();
@@ -274,8 +287,6 @@ public final class UiRuntime {
         application.attach(context);
         return application;
     }
-
-    static String currentProcessName() { return context == null ? null : context.getPackageName(); }
 
     private static Manifest readManifest(Resources res, String path, String requested, int baseIndex)
             throws IOException, XmlPullParserException {
@@ -364,19 +375,56 @@ public final class UiRuntime {
     public static void packageChanged(String name, boolean replaced) {
         if (context != null && context.launcher != null) context.launcher.dispatchPackageChanged(name, replaced);
     }
-    public static void pause() { if (current != null) current.performPause(); finishIfRequested(); }
-    public static void stop() { if (current != null) current.performStop(); finishIfRequested(); }
-    public static void resume() { if (current != null) current.performResume(); finishIfRequested(); }
+    public static void pause() {
+        pauseActivity(current, root);
+        finishIfRequested();
+    }
+    private static void pauseActivity(Activity activity, ViewRootImpl windowRoot) {
+        if (activity == null || !activity.isResumed()) return;
+        windowRoot.setWindowFocus(false);
+        activity.onWindowFocusChanged(false);
+        activity.performPause();
+    }
+    public static void stop() {
+        pauseActivity(current, root);
+        if (current != null) current.performStop(false, "host stop");
+        finishIfRequested();
+    }
+    public static void resume() {
+        if (current != null && !current.isResumed() && !current.isFinishing()) {
+            current.performResume(false, "host resume");
+            if (current != null && current.isResumed() && !current.isFinishing()) {
+                root.setWindowFocus(true);
+                current.onWindowFocusChanged(true);
+            }
+        }
+        finishIfRequested();
+    }
     public static void destroy() {
         Activity old = current;
         AppContext app = context;
+        ViewRootImpl oldRoot = root;
         current = null;
         context = null;
+        root = null;
         pointers.clear();
         try {
-            if (old != null) old.performDestroy();
+            if (old != null) {
+                pauseActivity(old, oldRoot);
+                old.performDestroy();
+            }
         } finally {
-            if (app != null) app.closeResources();
+            try {
+                if (oldRoot != null) oldRoot.detach();
+            } finally {
+                if (app != null) {
+                    try {
+                        app.closeResources();
+                    } finally {
+                        if (context == null) Application.setEmbeddedProcessName(null);
+                    }
+                }
+            }
         }
     }
     private static void finishIfRequested() { if (current != null && current.isFinishing()) destroy(); }
@@ -385,7 +433,7 @@ public final class UiRuntime {
     private static boolean drew, forceDraw;
     private static final Runnable TRAVERSE = () -> {
         if (current != null && current.isResumed() && !current.isFinishing())
-            drew = current.viewRoot().doFrame(frameWidth, frameHeight, frameDensity, forceDraw);
+            drew = root.doFrame(frameWidth, frameHeight, frameDensity, forceDraw);
     };
 
     /** Return 0 after destruction, 1 while paused, 2 after drawing or 3 for a retained frame. */
@@ -471,7 +519,7 @@ public final class UiRuntime {
 
     public static boolean dispatchIme(String text, boolean composing) {
         if (current == null || !current.isResumed()) return false;
-        boolean handled = current.dispatchImeText(text, composing);
+        boolean handled = root.dispatchImeText(text, composing);
         finishIfRequested();
         return handled;
     }

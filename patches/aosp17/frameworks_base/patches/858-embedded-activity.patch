@@ -1,0 +1,3423 @@
+--- a/frameworks/base/core/java/android/app/Activity.java
++++ b/frameworks/base/core/java/android/app/Activity.java
+@@ -22,5 +22,4 @@
+ import static android.Manifest.permission.INTERACT_ACROSS_USERS_FULL;
+ import static android.Manifest.permission.INTERNAL_SYSTEM_WINDOW;
+-import static android.app.Instrumentation.DEBUG_FINISH_ACTIVITY;
+ import static android.app.WindowConfiguration.WINDOWING_MODE_PINNED;
+ import static android.app.WindowConfiguration.inMultiWindowMode;
+@@ -39,9 +38,7 @@
+ import android.annotation.IntDef;
+ import android.annotation.LayoutRes;
+-import android.annotation.MainThread;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SpecialUsers.CanBeCURRENT;
+ import android.annotation.StyleRes;
+ import android.annotation.SuppressLint;
+@@ -49,10 +46,7 @@
+ import android.annotation.TestApi;
+ import android.annotation.UiContext;
+-import android.app.ActivityOptions.SceneTransitionInfo;
+ import android.app.VoiceInteractor.Request;
+ import android.app.admin.DevicePolicyManager;
+ import android.app.assist.AssistContent;
+-import android.app.compat.CompatChanges;
+-import android.app.jank.JankTracker;
+ import android.compat.annotation.ChangeId;
+ import android.compat.annotation.EnabledSince;
+@@ -66,5 +60,4 @@
+ import android.content.Context;
+ import android.content.CursorLoader;
+-import android.content.IIntentSender;
+ import android.content.Intent;
+ import android.content.IntentSender;
+@@ -91,5 +84,4 @@
+ import android.os.Bundle;
+ import android.os.CancellationSignal;
+-import android.os.GraphicsEnvironment;
+ import android.os.Handler;
+ import android.os.IBinder;
+@@ -100,6 +92,4 @@
+ import android.os.Process;
+ import android.os.RemoteException;
+-import android.os.ServiceManager;
+-import android.os.ServiceManager.ServiceNotFoundException;
+ import android.os.StrictMode;
+ import android.os.SystemClock;
+@@ -120,5 +110,4 @@
+ import android.util.Log;
+ import android.util.PrintWriterPrinter;
+-import android.util.Slog;
+ import android.util.SparseArray;
+ import android.util.SuperNotCalledException;
+@@ -138,13 +127,9 @@
+ import android.view.MenuItem;
+ import android.view.MotionEvent;
+-import android.view.RemoteAnimationDefinition;
+ import android.view.SearchEvent;
+ import android.view.View;
+-import android.view.View.OnCreateContextMenuListener;
+ import android.view.ViewGroup;
+ import android.view.ViewGroup.LayoutParams;
+ import android.view.ViewManager;
+-import android.view.ViewRootImpl;
+-import android.view.ViewRootImpl.ActivityConfigCallback;
+ import android.view.Window;
+ import android.view.Window.WindowControllerCallback;
+@@ -152,36 +137,21 @@
+ import android.view.WindowInsetsController;
+ import android.view.WindowManager;
+-import android.view.WindowManagerGlobal;
+ import android.view.accessibility.AccessibilityEvent;
+-import android.view.autofill.AutofillClientController;
+ import android.view.autofill.AutofillId;
+-import android.view.autofill.AutofillManager.AutofillClient;
+ import android.view.autofill.AutofillValue;
+ import android.view.contentcapture.ContentCaptureContext;
+ import android.view.contentcapture.ContentCaptureManager;
+-import android.view.contentcapture.ContentCaptureManager.ContentCaptureClient;
+ import android.view.translation.TranslationSpec;
+-import android.view.translation.UiTranslationController;
+-import android.view.translation.UiTranslationSpec;
+ import android.widget.AdapterView;
+ import android.widget.Toast;
+ import android.widget.Toolbar;
+ import android.window.BackEvent;
+-import android.window.ObserverOnBackAnimationCallback;
+ import android.window.OnBackInvokedCallback;
+ import android.window.OnBackInvokedDispatcher;
+ import android.window.SplashScreen;
+-import android.window.WindowOnBackInvokedDispatcher;
+ 
+ import com.android.internal.R;
+ import com.android.internal.annotations.GuardedBy;
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.app.IVoiceInteractionManagerService;
+-import com.android.internal.app.IVoiceInteractor;
+-import com.android.internal.app.ToolbarActionBar;
+-import com.android.internal.app.WindowDecorActionBar;
+-import com.android.internal.policy.DecorView;
+-import com.android.internal.policy.PhoneWindow;
+-import com.android.internal.util.dump.DumpableContainerImpl;
+ 
+ import dalvik.system.VMRuntime;
+@@ -772,7 +742,6 @@
+         implements LayoutInflater.Factory2,
+         Window.Callback, KeyEvent.Callback,
+-        OnCreateContextMenuListener, ComponentCallbacks2,
+-        Window.OnWindowDismissedCallback,
+-        ContentCaptureManager.ContentCaptureClient {
++        ComponentCallbacks2,
++        Window.OnWindowDismissedCallback {
+     private static final String TAG = "Activity";
+     private static final boolean DEBUG_LIFECYCLE = false;
+@@ -824,5 +793,4 @@
+     private static final int LOG_AM_ON_TOP_RESUMED_LOST_CALLED = 30065;
+     private OnBackInvokedCallback mDefaultBackCallback;
+-    private ObserverOnBackAnimationCallback mObserverBackCallback;
+ 
+     /**
+@@ -896,6 +864,4 @@
+     @UnsupportedAppUsage
+     /*package*/ ActivityInfo mActivityInfo;
+-    @UnsupportedAppUsage
+-    /*package*/ ActivityThread mMainThread;
+     @UnsupportedAppUsage(trackingBug = 137825207, maxTargetSdk = Build.VERSION_CODES.Q,
+             publicAlternatives = "Use {@code androidx.fragment.app.Fragment} and "
+@@ -972,6 +938,4 @@
+     final FragmentController mFragments = FragmentController.createController(new HostCallbacks());
+ 
+-    /** The scene transition info. */
+-    SceneTransitionInfo mSceneTransitionInfo;
+ 
+     /** Whether this activity was launched from a bubble. **/
+@@ -1021,17 +985,10 @@
+ 
+     @SuppressWarnings("unused")
+-    private final Object mInstanceTracker = StrictMode.trackActivity(this);
+ 
+     private Thread mUiThread;
+ 
+-    @UnsupportedAppUsage
+-    final ActivityTransitionState mActivityTransitionState = new ActivityTransitionState();
+-    SharedElementCallback mEnterTransitionListener = SharedElementCallback.NULL_CALLBACK;
+-    SharedElementCallback mExitTransitionListener = SharedElementCallback.NULL_CALLBACK;
+ 
+     private boolean mHasCurrentPermissionsRequest;
+ 
+-    /** The autofill client controller. Always access via {@link #getAutofillClientController()}. */
+-    private AutofillClientController mAutofillClientController;
+ 
+     private boolean mIsInMultiWindowMode;
+@@ -1078,81 +1035,12 @@
+     private boolean mShouldDockBigOverlays;
+ 
+-    private UiTranslationController mUiTranslationController;
+ 
+     private SplashScreen mSplashScreen;
+ 
+-    @Nullable
+-    private DumpableContainerImpl mDumpableContainer;
+ 
+     private ComponentCallbacksController mCallbacksController;
+ 
+-    @Nullable private IVoiceInteractionManagerService mVoiceInteractionManagerService;
+-    private ScreenCaptureCallbackHandler mScreenCaptureCallbackHandler;
+-
+-    private final WindowControllerCallback mWindowControllerCallback =
+-            new WindowControllerCallback() {
+-        /**
+-         * Moves the activity between {@link WindowConfiguration#WINDOWING_MODE_FREEFORM} windowing
+-         * mode and {@link WindowConfiguration#WINDOWING_MODE_FULLSCREEN}.
+-         *
+-         * @hide
+-         */
+-        @Override
+-        public void toggleFreeformWindowingMode() {
+-            ActivityClient.getInstance().toggleFreeformWindowingMode(mToken);
+-        }
+-
+-        /**
+-         * Puts the activity in picture-in-picture mode if the activity supports.
+-         * @see android.R.attr#supportsPictureInPicture
+-         * @hide
+-         */
+-        @Override
+-        public void enterPictureInPictureModeIfPossible() {
+-            if (mActivityInfo.supportsPictureInPicture()) {
+-                enterPictureInPictureMode();
+-            }
+-        }
+-
+-        @Override
+-        public boolean isTaskRoot() {
+-            return ActivityClient.getInstance().getTaskForActivity(
+-                    mToken, true /* onlyRoot */) >= 0;
+-        }
+-
+-        /**
+-         * Update the forced status bar color.
+-         * @hide
+-         */
+-        @Override
+-        public void updateStatusBarColor(int color) {
+-            mTaskDescription.setStatusBarColor(color);
+-            setTaskDescription(mTaskDescription);
+-        }
+-
+-        /**
+-         * Update the forced status bar appearance.
+-         * @hide
+-         */
+-        @Override
+-        public void updateSystemBarsAppearance(int appearance) {
+-            mTaskDescription.setSystemBarsAppearance(appearance);
+-            setTaskDescription(mTaskDescription);
+-        }
+-
+-        /**
+-         * Update the forced navigation bar color.
+-         * @hide
+-         */
+-        @Override
+-        public void updateNavigationBarColor(int color) {
+-            mTaskDescription.setNavigationBarColor(color);
+-            setTaskDescription(mTaskDescription);
+-        }
+-
+-    };
+-
+-    @Nullable
+-    private JankTracker mJankTracker;
++
++
+ 
+     private static native String getDlWarning();
+@@ -1205,5 +1093,4 @@
+      * @see #setIntent(Intent, ComponentCaller)
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+     @SuppressLint("OnNameExpected")
+     public @Nullable ComponentCaller getCaller() {
+@@ -1226,5 +1113,4 @@
+      * @see #getCaller
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+     @SuppressLint("OnNameExpected")
+     public void setIntent(@Nullable Intent newIntent, @Nullable ComponentCaller newCaller) {
+@@ -1263,13 +1149,5 @@
+      */
+     public void setLocusContext(@Nullable LocusId locusId, @Nullable Bundle bundle) {
+-        try {
+-            ActivityManager.getService().setActivityLocusContext(mComponent, locusId, mToken);
+-        } catch (RemoteException re) {
+-            re.rethrowFromSystemServer();
+-        }
+-        // If locusId is not null pass it to the Content Capture.
+-        if (locusId != null) {
+-            setLocusContextToContentCapture(locusId, bundle);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1303,12 +1181,6 @@
+      * @see android.app.assist.AssistContent#setSessionTransferUri
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_ENABLE_DESKTOP_WINDOWING_APP_TO_WEB_EDUCATION)
+     public final void requestOpenInBrowserEducation() {
+-        try {
+-            ActivityTaskManager
+-                  .getService().requestOpenInBrowserEducation(mToken);
+-        } catch (RemoteException e) {
+-            // Empty
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1425,51 +1297,9 @@
+ 
+     private void notifyContentCaptureManagerIfNeeded(@ContentCaptureNotificationType int type) {
+-        if (Trace.isTagEnabled(Trace.TRACE_TAG_ACTIVITY_MANAGER)) {
+-            Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER,
+-                    "notifyContentCapture(" + getContentCaptureTypeAsString(type) + ") for "
+-                            + mComponent.toShortString());
+-        }
+-        try {
+-            final ContentCaptureManager cm = getContentCaptureManager();
+-            if (cm == null) return;
+-
+-            switch (type) {
+-                case CONTENT_CAPTURE_START:
+-                    //TODO(b/111276913): decide whether the InteractionSessionId should be
+-                    // saved / restored in the activity bundle - probably not
+-                    final Window window = getWindow();
+-                    if (window != null) {
+-                        cm.updateWindowAttributes(window.getAttributes());
+-                    }
+-                    cm.onActivityCreated(mToken, mShareableActivityToken, getComponentName());
+-                    break;
+-                case CONTENT_CAPTURE_RESUME:
+-                    cm.onActivityResumed();
+-                    break;
+-                case CONTENT_CAPTURE_PAUSE:
+-                    cm.onActivityPaused();
+-                    break;
+-                case CONTENT_CAPTURE_STOP:
+-                    cm.onActivityDestroyed();
+-                    break;
+-                default:
+-                    Log.wtf(TAG, "Invalid @ContentCaptureNotificationType: " + type);
+-            }
+-        } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private void setLocusContextToContentCapture(LocusId locusId, @Nullable Bundle bundle) {
+-        final ContentCaptureManager cm = getContentCaptureManager();
+-        if (cm == null) return;
+-
+-        ContentCaptureContext.Builder contentCaptureContextBuilder =
+-                new ContentCaptureContext.Builder(locusId);
+-        if (bundle != null) {
+-            contentCaptureContextBuilder.setExtras(bundle);
+-        }
+-        cm.getMainContentCaptureSession().setContentCaptureContext(
+-                contentCaptureContextBuilder.build());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1477,28 +1307,8 @@
+     protected void attachBaseContext(Context newBase) {
+         super.attachBaseContext(newBase);
+-        if (newBase != null) {
+-            newBase.setAutofillClient(getAutofillClient());
+-            newBase.setContentCaptureOptions(getContentCaptureOptions());
+-        }
+-    }
+-
+-    /** @hide */
+-    @Override
+-    public final AutofillClient getAutofillClient() {
+-        return getAutofillClientController();
+-    }
+-
+-    private AutofillClientController getAutofillClientController() {
+-        if (mAutofillClientController == null) {
+-            mAutofillClientController = new AutofillClientController(this);
+-        }
+-        return mAutofillClientController;
+-    }
+-
+-    /** @hide */
+-    @Override
+-    public final ContentCaptureClient getContentCaptureClient() {
+-        return this;
+-    }
++    }
++
++
++
+ 
+     /**
+@@ -1556,13 +1366,6 @@
+     @Override
+     public void registerComponentCallbacks(ComponentCallbacks callback) {
+-        if (CompatChanges.isChangeEnabled(OVERRIDABLE_COMPONENT_CALLBACKS)
+-                && mCallbacksController == null) {
+-            mCallbacksController = new ComponentCallbacksController();
+-        }
+-        if (mCallbacksController != null) {
+-            mCallbacksController.registerCallbacks(callback);
+-        } else {
+-            super.registerComponentCallbacks(callback);
+-        }
++        if (mCallbacksController == null) mCallbacksController = new ComponentCallbacksController();
++        mCallbacksController.registerCallbacks(callback);
+     }
+ 
+@@ -1823,12 +1626,10 @@
+ 
+     private void dispatchActivityRestarted() {
+-        if (android.app.Flags.onRestartActivityLifecycleCallback()) {
+-            getApplication().dispatchActivityRestarted(this);
+-            Object[] callbacks = collectActivityLifecycleCallbacks();
+-            if (callbacks != null) {
+-                for (int i = callbacks.length - 1; i >= 0; i--) {
+-                    ((Application.ActivityLifecycleCallbacks) callbacks[i])
+-                            .onActivityRestarted(this);
+-                }
++        getApplication().dispatchActivityRestarted(this);
++        Object[] callbacks = collectActivityLifecycleCallbacks();
++        if (callbacks != null) {
++            for (int i = callbacks.length - 1; i >= 0; i--) {
++                ((Application.ActivityLifecycleCallbacks) callbacks[i])
++                        .onActivityRestarted(this);
+             }
+         }
+@@ -1846,19 +1647,6 @@
+ 
+     private void notifyVoiceInteractionManagerServiceActivityEvent(
+-            @VoiceInteractionSession.VoiceInteractionActivityEventType int type) {
+-        if (mVoiceInteractionManagerService == null) {
+-            mVoiceInteractionManagerService = IVoiceInteractionManagerService.Stub.asInterface(
+-                    ServiceManager.getService(Context.VOICE_INTERACTION_MANAGER_SERVICE));
+-            if (mVoiceInteractionManagerService == null) {
+-                Log.w(TAG, "notifyVoiceInteractionManagerServiceActivityEvent: Can not get "
+-                        + "VoiceInteractionManagerService");
+-                return;
+-            }
+-        }
+-        try {
+-            mVoiceInteractionManagerService.notifyActivityEventChanged(mToken, type);
+-        } catch (RemoteException e) {
+-            // Empty
+-        }
++            int type) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1889,61 +1677,13 @@
+      * @see #onPostCreate
+      */
+-    @MainThread
+     @CallSuper
+     protected void onCreate(@Nullable Bundle savedInstanceState) {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onCreate " + this + ": " + savedInstanceState);
+-
+-        if (mLastNonConfigurationInstances != null) {
+-            mFragments.restoreLoaderNonConfig(mLastNonConfigurationInstances.loaders);
+-        }
+-        if (mActivityInfo.parentActivityName != null) {
+-            if (mActionBar == null) {
+-                mEnableDefaultActionBarUp = true;
+-            } else {
+-                mActionBar.setDefaultDisplayHomeAsUpEnabled(true);
+-            }
+-        }
+-
+         if (savedInstanceState != null) {
+-            getAutofillClientController().onActivityCreated(savedInstanceState);
+-
+-            Parcelable p = savedInstanceState.getParcelable(FRAGMENTS_TAG);
+-            mFragments.restoreAllState(p, mLastNonConfigurationInstances != null
+-                    ? mLastNonConfigurationInstances.fragments : null);
++            Parcelable state = savedInstanceState.getParcelable(FRAGMENTS_TAG);
++            mFragments.restoreAllState(state, (FragmentManagerNonConfig) null);
+         }
+         mFragments.dispatchCreate();
+         dispatchActivityCreated(savedInstanceState);
+-        if (mVoiceInteractor != null) {
+-            mVoiceInteractor.attachActivity(this);
+-        }
+-        mRestoredFromBundle = savedInstanceState != null;
+         mCalled = true;
+-
+-        boolean aheadOfTimeBack = WindowOnBackInvokedDispatcher
+-                .isOnBackInvokedCallbackEnabled(this);
+-        if (aheadOfTimeBack) {
+-            // Add onBackPressed as default back behavior.
+-            mDefaultBackCallback = this::onBackInvoked;
+-            getOnBackInvokedDispatcher().registerSystemOnBackInvokedCallback(mDefaultBackCallback);
+-        }
+-        mObserverBackCallback = new ObserverOnBackAnimationCallback() {
+-                @Override
+-                public void onBackStarted(@NonNull BackEvent backEvent) {
+-                    onUserInteraction();
+-                }
+-
+-                @Override
+-                public void onBackInvoked() {
+-                    onUserInteraction();
+-                }
+-
+-                @Override
+-                public void onBackCancelled() {}
+-            };
+-        // Register a ObserverOnBackAnimationCallback with PRIORITY_SYSTEM_NAVIGATION_OBSERVER
+-        // to get notified on every back navigation so that onUserInteraction can be called.
+-        getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+-                OnBackInvokedDispatcher.PRIORITY_SYSTEM_NAVIGATION_OBSERVER,
+-                mObserverBackCallback);
+     }
+ 
+@@ -1957,10 +1697,5 @@
+ 
+     private SplashScreen getOrCreateSplashScreen() {
+-        synchronized (this) {
+-            if (mSplashScreen == null) {
+-                mSplashScreen = new SplashScreen.SplashScreenImpl(this);
+-            }
+-            return mSplashScreen;
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2119,10 +1854,5 @@
+ 
+     private Dialog createDialog(Integer dialogId, Bundle state, Bundle args) {
+-        final Dialog dialog = onCreateDialog(dialogId, args);
+-        if (dialog == null) {
+-            return null;
+-        }
+-        dialog.dispatchOnCreate(state);
+-        return dialog;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2152,15 +1882,7 @@
+     @CallSuper
+     protected void onPostCreate(@Nullable Bundle savedInstanceState) {
+-        if (!isChild()) {
+-            mTitleReady = true;
+-            onTitleChanged(getTitle(), getTitleColor());
+-        }
+-
++        mTitleReady = true;
++        onTitleChanged(getTitle(), getTitleColor());
+         mCalled = true;
+-
+-        notifyContentCaptureManagerIfNeeded(CONTENT_CAPTURE_START);
+-
+-        notifyVoiceInteractionManagerServiceActivityEvent(
+-                VoiceInteractionSession.VOICE_INTERACTION_ACTIVITY_EVENT_START);
+     }
+ 
+@@ -2201,12 +1923,7 @@
+     @CallSuper
+     protected void onStart() {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onStart " + this);
+         mCalled = true;
+-
+         mFragments.doLoaderStart();
+-
+         dispatchActivityStarted();
+-
+-        getAutofillClientController().onActivityStarted();
+     }
+ 
+@@ -2281,11 +1998,5 @@
+     @CallSuper
+     protected void onResume() {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onResume " + this);
+         dispatchActivityResumed();
+-        mActivityTransitionState.onResume(this);
+-        getAutofillClientController().onActivityResumed();
+-
+-        notifyContentCaptureManagerIfNeeded(CONTENT_CAPTURE_RESUME);
+-
+         mCalled = true;
+     }
+@@ -2305,20 +2016,6 @@
+     @CallSuper
+     protected void onPostResume() {
+-        final Window win = getWindow();
+-        if (win != null) win.makeActive();
+-        if (mActionBar != null) mActionBar.setShowHideAnimationEnabled(true);
+-
+-        // Because the test case "com.android.launcher3.jank.BinderTests#testPressHome" doesn't
+-        // allow any binder call in onResume, we call this method in onPostResume.
+-        notifyVoiceInteractionManagerServiceActivityEvent(
+-                VoiceInteractionSession.VOICE_INTERACTION_ACTIVITY_EVENT_RESUME);
+-
+-        // Notify autofill
+-        getAutofillClientController().onActivityPostResumed();
+-
+-        if (android.app.jank.Flags.detailedAppJankMetricsApi()) {
+-            startAppJankTracking();
+-        }
+-
++        mTitleReady = true;
++        onTitleChanged(getTitle(), getTitleColor());
+         mCalled = true;
+     }
+@@ -2348,32 +2045,7 @@
+ 
+     final void performTopResumedActivityChanged(boolean isTopResumedActivity, String reason) {
+-        onTopResumedActivityChanged(isTopResumedActivity);
+-
+-        if (isTopResumedActivity) {
+-            EventLogTags.writeWmOnTopResumedGainedCalled(mIdent, getComponentName().getClassName(),
+-                    reason);
+-        } else {
+-            EventLogTags.writeWmOnTopResumedLostCalled(mIdent, getComponentName().getClassName(),
+-                    reason);
+-        }
+-    }
+-
+-    void setVoiceInteractor(IVoiceInteractor voiceInteractor) {
+-        if (mVoiceInteractor != null) {
+-            final Request[] requests = mVoiceInteractor.getActiveRequests();
+-            if (requests != null) {
+-                for (Request activeRequest : mVoiceInteractor.getActiveRequests()) {
+-                    activeRequest.cancel();
+-                    activeRequest.clear();
+-                }
+-            }
+-        }
+-        if (voiceInteractor == null) {
+-            mVoiceInteractor = null;
+-        } else {
+-            mVoiceInteractor = new VoiceInteractor(voiceInteractor, this, this,
+-                    Looper.myLooper());
+-        }
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+ 
+     /**
+@@ -2387,5 +2059,5 @@
+     @Override
+     public int getNextAutofillId() {
+-        return getAutofillClientController().getNextAutofillId();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2411,6 +2083,5 @@
+      */
+     public boolean isVoiceInteractionRoot() {
+-        return mVoiceInteractor != null
+-                && ActivityClient.getInstance().isRootVoiceInteraction(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2431,9 +2102,5 @@
+      */
+     public boolean isLocalVoiceInteractionSupported() {
+-        try {
+-            return ActivityTaskManager.getService().supportsLocalVoiceInteraction();
+-        } catch (RemoteException re) {
+-        }
+-        return false;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2445,5 +2112,5 @@
+      */
+     public void startLocalVoiceInteraction(Bundle privateOptions) {
+-        ActivityClient.getInstance().startLocalVoiceInteraction(mToken, privateOptions);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2471,5 +2138,5 @@
+      */
+     public void stopLocalVoiceInteraction() {
+-        ActivityClient.getInstance().stopLocalVoiceInteraction(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2500,4 +2167,5 @@
+      */
+     protected void onNewIntent(Intent intent) {
++
+     }
+ 
+@@ -2521,5 +2189,4 @@
+      * @see #getCaller
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+     public void onNewIntent(@NonNull Intent intent, @NonNull ComponentCaller caller) {
+         onNewIntent(intent);
+@@ -2535,11 +2202,5 @@
+      */
+     final void performSaveInstanceState(@NonNull Bundle outState) {
+-        dispatchActivityPreSaveInstanceState(outState);
+-        onSaveInstanceState(outState);
+-        saveManagedDialogs(outState);
+-        mActivityTransitionState.saveState(outState);
+-        storeHasCurrentPermissionRequest(outState);
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onSaveInstanceState " + this + ": " + outState);
+-        dispatchActivityPostSaveInstanceState(outState);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2555,11 +2216,5 @@
+     final void performSaveInstanceState(@NonNull Bundle outState,
+             @NonNull PersistableBundle outPersistentState) {
+-        dispatchActivityPreSaveInstanceState(outState);
+-        onSaveInstanceState(outState, outPersistentState);
+-        saveManagedDialogs(outState);
+-        storeHasCurrentPermissionRequest(outState);
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onSaveInstanceState " + this + ": " + outState +
+-                ", " + outPersistentState);
+-        dispatchActivityPostSaveInstanceState(outState);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2614,9 +2269,8 @@
+         outState.putBundle(WINDOW_HIERARCHY_TAG, mWindow.saveHierarchyState());
+ 
+-        Parcelable p = mFragments.saveAllState();
+-        if (p != null) {
+-            outState.putParcelable(FRAGMENTS_TAG, p);
+-        }
+-        getAutofillClientController().onSaveInstanceState(outState);
++        Parcelable fragments = mFragments.saveAllState();
++        if (fragments != null) {
++            outState.putParcelable(FRAGMENTS_TAG, fragments);
++        }
+         dispatchActivitySaveInstanceState(outState);
+     }
+@@ -2718,13 +2372,5 @@
+     @CallSuper
+     protected void onPause() {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onPause " + this);
+         dispatchActivityPaused();
+-        getAutofillClientController().onActivityPaused();
+-
+-        notifyContentCaptureManagerIfNeeded(CONTENT_CAPTURE_PAUSE);
+-
+-        notifyVoiceInteractionManagerServiceActivityEvent(
+-                VoiceInteractionSession.VOICE_INTERACTION_ACTIVITY_EVENT_PAUSE);
+-
+         mCalled = true;
+     }
+@@ -2869,10 +2515,5 @@
+      */
+     public final void requestShowKeyboardShortcuts() {
+-        final ComponentName sysuiComponent = ComponentName.unflattenFromString(
+-                getResources().getString(
+-                        com.android.internal.R.string.config_systemUIServiceComponent));
+-        Intent intent = new Intent(Intent.ACTION_SHOW_KEYBOARD_SHORTCUTS);
+-        intent.setPackage(sysuiComponent.getPackageName());
+-        sendBroadcastAsUser(intent, Process.myUserHandle());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2881,10 +2522,5 @@
+      */
+     public final void dismissKeyboardShortcutsHelper() {
+-        final ComponentName sysuiComponent = ComponentName.unflattenFromString(
+-                getResources().getString(
+-                        com.android.internal.R.string.config_systemUIServiceComponent));
+-        Intent intent = new Intent(Intent.ACTION_DISMISS_KEYBOARD_SHORTCUTS);
+-        intent.setPackage(sysuiComponent.getPackageName());
+-        sendBroadcastAsUser(intent, Process.myUserHandle());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2927,5 +2563,5 @@
+      */
+     public boolean showAssist(Bundle args) {
+-        return ActivityClient.getInstance().showAssistFromActivity(mToken, args);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2947,15 +2583,6 @@
+     @CallSuper
+     protected void onStop() {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onStop " + this);
+-        if (mActionBar != null) mActionBar.setShowHideAnimationEnabled(false);
+-        mActivityTransitionState.onStop(this);
+         dispatchActivityStopped();
+-        mTranslucentCallback = null;
+         mCalled = true;
+-
+-        getAutofillClientController().onActivityStopped(mIntent, mChangingConfigurations);
+-
+-        notifyVoiceInteractionManagerServiceActivityEvent(
+-                VoiceInteractionSession.VOICE_INTERACTION_ACTIVITY_EVENT_STOP);
+     }
+ 
+@@ -2990,8 +2617,5 @@
+     @CallSuper
+     protected void onDestroy() {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onDestroy " + this);
+         mCalled = true;
+-
+-        getAutofillClientController().onActivityDestroyed();
+ 
+         // dismiss any dialogs we are managing.
+@@ -3019,27 +2643,9 @@
+         }
+ 
+-        // Close any open search dialog
+-        if (mSearchManager != null) {
+-            mSearchManager.stopSearch();
+-        }
+-
+-        if (mActionBar != null) {
+-            mActionBar.onDestroy();
+-        }
+-
+         dispatchActivityDestroyed();
+ 
+-        notifyContentCaptureManagerIfNeeded(CONTENT_CAPTURE_STOP);
+-
+-        if (mUiTranslationController != null) {
+-            mUiTranslationController.onActivityDestroyed();
+-        }
+         if (mDefaultBackCallback != null) {
+             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(mDefaultBackCallback);
+             mDefaultBackCallback = null;
+-        }
+-        if (mObserverBackCallback != null) {
+-            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(mObserverBackCallback);
+-            mObserverBackCallback = null;
+         }
+ 
+@@ -3069,18 +2675,5 @@
+      */
+     public void reportFullyDrawn() {
+-        if (mDoReportFullyDrawn) {
+-            if (Trace.isTagEnabled(Trace.TRACE_TAG_ACTIVITY_MANAGER)) {
+-                Trace.traceBegin(Trace.TRACE_TAG_ACTIVITY_MANAGER,
+-                        "reportFullyDrawn() for " + mComponent.toShortString());
+-            }
+-            mDoReportFullyDrawn = false;
+-            try {
+-                ActivityClient.getInstance().reportActivityFullyDrawn(
+-                        mToken, mRestoredFromBundle);
+-                VMRuntime.getRuntime().notifyStartupCompleted();
+-            } finally {
+-                Trace.traceEnd(Trace.TRACE_TAG_ACTIVITY_MANAGER);
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3236,30 +2829,5 @@
+      */
+     public boolean enterPictureInPictureMode(@NonNull PictureInPictureParams params) {
+-        if (!deviceSupportsPictureInPictureMode()) {
+-            return false;
+-        }
+-        if (params == null) {
+-            throw new IllegalArgumentException("Expected non-null picture-in-picture params");
+-        }
+-        if (!mCanEnterPictureInPicture) {
+-            if (isTvImplicitEnterPipProhibited()) {
+-                // Don't throw exception on TV so that apps don't crash when not adapted to new
+-                // restrictions.
+-                Log.e(TAG,
+-                        "Activity must be resumed to enter picture-in-picture and not about to be"
+-                                + " paused. Implicit app entry is only permitted on TV if android"
+-                                + ".permission.TV_IMPLICIT_ENTER_PIP is held by the app.");
+-                return false;
+-            }
+-            throw new IllegalStateException("Activity must be resumed to enter"
+-                    + " picture-in-picture");
+-        }
+-        // Set mIsInPictureInPictureMode earlier and don't wait for
+-        // onPictureInPictureModeChanged callback here. This is to ensure that
+-        // isInPictureInPictureMode returns true in the following onPause callback.
+-        // See https://developer.android.com/guide/topics/ui/picture-in-picture for guidance.
+-        mIsInPictureInPictureMode = ActivityClient.getInstance().enterPictureInPictureMode(
+-                mToken, params);
+-        return mIsInPictureInPictureMode;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3271,11 +2839,5 @@
+      */
+     public void setPictureInPictureParams(@NonNull PictureInPictureParams params) {
+-        if (!deviceSupportsPictureInPictureMode()) {
+-            return;
+-        }
+-        if (params == null) {
+-            throw new IllegalArgumentException("Expected non-null picture-in-picture params");
+-        }
+-        ActivityClient.getInstance().setPictureInPictureParams(mToken, params);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3287,15 +2849,9 @@
+      */
+     public int getMaxNumPictureInPictureActions() {
+-        return ActivityTaskManager.getMaxNumPictureInPictureActions(this);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private boolean isTvImplicitEnterPipProhibited() {
+-        PackageManager pm = getPackageManager();
+-        if (android.app.Flags.enableTvImplicitEnterPipRestriction()) {
+-            return pm.hasSystemFeature(PackageManager.FEATURE_LEANBACK)
+-                    && pm.checkPermission(Manifest.permission.TV_IMPLICIT_ENTER_PIP,
+-                    getPackageName()) == PackageManager.PERMISSION_DENIED;
+-        }
+-        return false;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3351,6 +2907,5 @@
+     public void requestFullscreenMode(@FullscreenModeRequest int request,
+             @Nullable OutcomeReceiver<Void, Throwable> approvalCallback) {
+-        FullscreenRequestHandler.getInstance().requestFullscreenMode(
+-                request, approvalCallback, getActivityToken(), getMainExecutor());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3374,6 +2929,5 @@
+      */
+     public void setShouldDockBigOverlays(boolean shouldDockBigOverlays) {
+-        ActivityClient.getInstance().setShouldDockBigOverlays(mToken, shouldDockBigOverlays);
+-        mShouldDockBigOverlays = shouldDockBigOverlays;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3443,24 +2997,11 @@
+      */
+     public void onConfigurationChanged(@NonNull Configuration newConfig) {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onConfigurationChanged " + this + ": " + newConfig);
+-        mCalled = true;
+-
++        mCurrentConfig = newConfig;
+         mFragments.dispatchConfigurationChanged(newConfig);
+-
+-        if (mWindow != null) {
+-            // Pass the configuration changed event to the window
+-            mWindow.onConfigurationChanged(newConfig);
+-        }
+-
+-        if (mActionBar != null) {
+-            // Do this last; the action bar will need to access
+-            // view changes from above.
+-            mActionBar.onConfigurationChanged(newConfig);
+-        }
+-
+-        dispatchActivityConfigurationChanged();
+         if (mCallbacksController != null) {
+             mCallbacksController.dispatchConfigurationChanged(newConfig);
+         }
++        dispatchActivityConfigurationChanged();
++        mCalled = true;
+     }
+ 
+@@ -3601,49 +3142,17 @@
+ 
+     NonConfigurationInstances retainNonConfigurationInstances() {
+-        Object activity = onRetainNonConfigurationInstance();
+-        HashMap<String, Object> children = onRetainNonConfigurationChildInstances();
+-        FragmentManagerNonConfig fragments = mFragments.retainNestedNonConfig();
+-
+-        // We're already stopped but we've been asked to retain.
+-        // Our fragments are taken care of but we need to mark the loaders for retention.
+-        // In order to do this correctly we need to restart the loaders first before
+-        // handing them off to the next activity.
+-        mFragments.doLoaderStart();
+-        mFragments.doLoaderStop(true);
+-        ArrayMap<String, LoaderManager> loaders = mFragments.retainLoaderNonConfig();
+-
+-        if (activity == null && children == null && fragments == null && loaders == null
+-                && mVoiceInteractor == null) {
+-            return null;
+-        }
+-
+-        NonConfigurationInstances nci = new NonConfigurationInstances();
+-        nci.activity = activity;
+-        nci.children = children;
+-        nci.fragments = fragments;
+-        nci.loaders = loaders;
+-        if (mVoiceInteractor != null) {
+-            mVoiceInteractor.retainInstance();
+-            nci.voiceInteractor = mVoiceInteractor;
+-        }
+-        return nci;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     public void onLowMemory() {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onLowMemory " + this);
+         mCalled = true;
+         mFragments.dispatchLowMemory();
+-        if (mCallbacksController != null) {
+-            mCallbacksController.dispatchLowMemory();
+-        }
++        if (mCallbacksController != null) mCallbacksController.dispatchLowMemory();
+     }
+ 
+     public void onTrimMemory(int level) {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onTrimMemory " + this + ": " + level);
+         mCalled = true;
+         mFragments.dispatchTrimMemory(level);
+-        if (mCallbacksController != null) {
+-            mCallbacksController.dispatchTrimMemory(level);
+-        }
++        if (mCallbacksController != null) mCallbacksController.dispatchTrimMemory(level);
+     }
+ 
+@@ -3879,5 +3388,4 @@
+     @Nullable
+     public ActionBar getActionBar() {
+-        initWindowDecorActionBar();
+         return mActionBar;
+     }
+@@ -3899,31 +3407,5 @@
+      */
+     public void setActionBar(@Nullable Toolbar toolbar) {
+-        final ActionBar ab = getActionBar();
+-        if (ab instanceof WindowDecorActionBar) {
+-            throw new IllegalStateException("This Activity already has an action bar supplied " +
+-                    "by the window decor. Do not request Window.FEATURE_ACTION_BAR and set " +
+-                    "android:windowActionBar to false in your theme to use a Toolbar instead.");
+-        }
+-
+-        // If we reach here then we're setting a new action bar
+-        // First clear out the MenuInflater to make sure that it is valid for the new Action Bar
+-        mMenuInflater = null;
+-
+-        // If we have an action bar currently, destroy it
+-        if (ab != null) {
+-            ab.onDestroy();
+-        }
+-
+-        if (toolbar != null) {
+-            final ToolbarActionBar tbab = new ToolbarActionBar(toolbar, getTitle(), this);
+-            mActionBar = tbab;
+-            mWindow.setCallback(tbab.getWrappedWindowCallback());
+-        } else {
+-            mActionBar = null;
+-            // Re-set the original window callback since we may have already set a Toolbar wrapper
+-            mWindow.setCallback(this);
+-        }
+-
+-        invalidateOptionsMenu();
++        if (toolbar != null) throw new UnsupportedOperationException("The embedded window has no action bar");
+     }
+ 
+@@ -3933,19 +3415,5 @@
+      */
+     private void initWindowDecorActionBar() {
+-        Window window = getWindow();
+-
+-        // Initializing the window decor can change window feature flags.
+-        // Make sure that we have the correct set before performing the test below.
+-        window.getDecorView();
+-
+-        if (isChild() || !window.hasFeature(Window.FEATURE_ACTION_BAR) || mActionBar != null) {
+-            return;
+-        }
+-
+-        mActionBar = new WindowDecorActionBar(this);
+-        mActionBar.setDefaultDisplayHomeAsUpEnabled(mEnableDefaultActionBarUp);
+-
+-        mWindow.setDefaultIcon(mActivityInfo.getIconResource());
+-        mWindow.setDefaultLogo(mActivityInfo.getLogoResource());
++        // The host window has no platform action bar.
+     }
+ 
+@@ -3961,5 +3429,5 @@
+     public void setContentView(@LayoutRes int layoutResID) {
+         getWindow().setContentView(layoutResID);
+-        initWindowDecorActionBar();
++        onContentChanged();
+     }
+ 
+@@ -3981,5 +3449,5 @@
+     public void setContentView(View view) {
+         getWindow().setContentView(view);
+-        initWindowDecorActionBar();
++        onContentChanged();
+     }
+ 
+@@ -4180,72 +3648,8 @@
+      */
+     public boolean onKeyDown(int keyCode, KeyEvent event)  {
+-        if (keyCode == KeyEvent.KEYCODE_BACK) {
+-            if (getApplicationInfo().targetSdkVersion
+-                    >= Build.VERSION_CODES.ECLAIR) {
+-                event.startTracking();
+-            } else {
+-                onBackPressed();
+-            }
+-            return true;
+-        }
+-
+-        if (keyCode == KeyEvent.KEYCODE_ESCAPE && mWindow.shouldCloseOnTouchOutside()) {
+-            event.startTracking();
+-            finish();
+-            return true;
+-        }
+-
+-        if (mDefaultKeyMode == DEFAULT_KEYS_DISABLE) {
+-            return false;
+-        } else if (mDefaultKeyMode == DEFAULT_KEYS_SHORTCUT) {
+-            Window w = getWindow();
+-            if (w.hasFeature(Window.FEATURE_OPTIONS_PANEL) &&
+-                    w.performPanelShortcut(Window.FEATURE_OPTIONS_PANEL, keyCode, event,
+-                            Menu.FLAG_ALWAYS_PERFORM_CLOSE)) {
+-                return true;
+-            }
+-            return false;
+-        } else if (keyCode == KeyEvent.KEYCODE_TAB) {
+-            // Don't consume TAB here since it's used for navigation. Arrow keys
+-            // aren't considered "typing keys" so they already won't get consumed.
+-            return false;
+-        } else {
+-            // Common code for DEFAULT_KEYS_DIALER & DEFAULT_KEYS_SEARCH_*
+-            boolean clearSpannable = false;
+-            boolean handled;
+-            if ((event.getRepeatCount() != 0) || event.isSystem()) {
+-                clearSpannable = true;
+-                handled = false;
+-            } else {
+-                handled = TextKeyListener.getInstance().onKeyDown(
+-                        null, mDefaultKeySsb, keyCode, event);
+-                if (handled && mDefaultKeySsb.length() > 0) {
+-                    // something useable has been typed - dispatch it now.
+-
+-                    final String str = mDefaultKeySsb.toString();
+-                    clearSpannable = true;
+-
+-                    switch (mDefaultKeyMode) {
+-                    case DEFAULT_KEYS_DIALER:
+-                        Intent intent = new Intent(Intent.ACTION_DIAL,  Uri.parse("tel:" + str));
+-                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-                        startActivity(intent);
+-                        break;
+-                    case DEFAULT_KEYS_SEARCH_LOCAL:
+-                        startSearch(str, false, null, false);
+-                        break;
+-                    case DEFAULT_KEYS_SEARCH_GLOBAL:
+-                        startSearch(str, false, null, true);
+-                        break;
+-                    }
+-                }
+-            }
+-            if (clearSpannable) {
+-                mDefaultKeySsb.clear();
+-                mDefaultKeySsb.clearSpans();
+-                Selection.setSelection(mDefaultKeySsb,0);
+-            }
+-            return handled;
+-        }
++        return keyCode == KeyEvent.KEYCODE_BACK
++                || keyCode == KeyEvent.KEYCODE_SEARCH
++                && (mDefaultKeyMode == DEFAULT_KEYS_SEARCH_LOCAL || mDefaultKeyMode == DEFAULT_KEYS_SEARCH_GLOBAL)
++                && onSearchRequested();
+     }
+ 
+@@ -4280,22 +3684,7 @@
+      */
+     public boolean onKeyUp(int keyCode, KeyEvent event) {
+-        int sdkVersion = getApplicationInfo().targetSdkVersion;
+-        if (sdkVersion >= Build.VERSION_CODES.ECLAIR) {
+-            if (keyCode == KeyEvent.KEYCODE_BACK
+-                    && event.isTracking()
+-                    && !event.isCanceled()
+-                    && mDefaultBackCallback == null) {
+-                // Using legacy back handling.
+-                onBackPressed();
+-                return true;
+-            }
+-        }
+-
+-        if (keyCode == KeyEvent.KEYCODE_ESCAPE
+-                && event.isTracking()) {
+-            return true;
+-        }
+-
+-        return false;
++        if (keyCode != KeyEvent.KEYCODE_BACK || event.isCanceled()) return false;
++        performBackPressed();
++        return true;
+     }
+ 
+@@ -4309,19 +3698,4 @@
+     }
+ 
+-    private static final class RequestFinishCallback extends IRequestFinishCallback.Stub {
+-        private final WeakReference<Activity> mActivityRef;
+-
+-        RequestFinishCallback(WeakReference<Activity> activityRef) {
+-            mActivityRef = activityRef;
+-        }
+-
+-        @Override
+-        public void requestFinish() {
+-            Activity activity = mActivityRef.get();
+-            if (activity != null) {
+-                activity.mHandler.post(activity::finishAfterTransition);
+-            }
+-        }
+-    }
+ 
+     /**
+@@ -4369,26 +3743,12 @@
+     @Deprecated
+     public void onBackPressed() {
+-        if (mActionBar != null && mActionBar.collapseActionView()) {
+-            return;
+-        }
+-
+-        FragmentManager fragmentManager = mFragments.getFragmentManager();
+-
+-        if (!fragmentManager.isStateSaved() && fragmentManager.popBackStackImmediate()) {
+-            return;
+-        }
+-        onBackInvoked();
++        final FragmentManager fragments = mFragments.getFragmentManager();
++        if (fragments.isStateSaved() || !fragments.popBackStackImmediate()) {
++            finish();
++        }
+     }
+ 
+     private void onBackInvoked() {
+-        // Inform activity task manager that the activity received a back press.
+-        // This call allows ActivityTaskManager to intercept or move the task
+-        // to the back when needed.
+-        ActivityClient.getInstance().onBackPressed(mToken,
+-                new RequestFinishCallback(new WeakReference<>(this)));
+-
+-        if (isTaskRoot()) {
+-            getAutofillClientController().onActivityBackPressed(mIntent);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4404,7 +3764,5 @@
+      */
+     public boolean onKeyShortcut(int keyCode, KeyEvent event) {
+-        // Let the Action Bar have a chance at handling the shortcut.
+-        ActionBar actionBar = getActionBar();
+-        return (actionBar != null && actionBar.onKeyShortcut(keyCode, event));
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4497,16 +3855,5 @@
+ 
+     public void onWindowAttributesChanged(WindowManager.LayoutParams params) {
+-        // Update window manager if: we have a view, that view is
+-        // attached to its parent (which will be a RootView), and
+-        // this activity is not embedded.
+-        if (mParent == null) {
+-            View decor = mDecor;
+-            if (decor != null && decor.getParent() != null) {
+-                getWindowManager().updateViewLayout(decor, params);
+-                if (mContentCaptureManager != null) {
+-                    mContentCaptureManager.updateWindowAttributes(params);
+-                }
+-            }
+-        }
++
+     }
+ 
+@@ -4620,21 +3967,5 @@
+     public boolean dispatchKeyEvent(KeyEvent event) {
+         onUserInteraction();
+-
+-        // Let action bars open menus in response to the menu key prioritized over
+-        // the window handling it
+-        final int keyCode = event.getKeyCode();
+-        if (keyCode == KeyEvent.KEYCODE_MENU &&
+-                mActionBar != null && mActionBar.onMenuKeyEvent(event)) {
+-            return true;
+-        }
+-
+-        Window win = getWindow();
+-        if (win.superDispatchKeyEvent(event)) {
+-            return true;
+-        }
+-        View decor = mDecor;
+-        if (decor == null) decor = win.getDecorView();
+-        return event.dispatch(this, decor != null
+-                ? decor.getKeyDispatcherState() : null, this);
++        return getWindow().superDispatchKeyEvent(event) || event.dispatch(this);
+     }
+ 
+@@ -4789,13 +4120,5 @@
+     @Override
+     public boolean onMenuOpened(int featureId, @NonNull Menu menu) {
+-        if (featureId == Window.FEATURE_ACTION_BAR) {
+-            initWindowDecorActionBar();
+-            if (mActionBar != null) {
+-                mActionBar.dispatchMenuVisibilityChanged(true);
+-            } else {
+-                Log.e(TAG, "Tried to open action bar menu with no action bar");
+-            }
+-        }
+-        return true;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4860,19 +4183,5 @@
+      */
+     public void onPanelClosed(int featureId, @NonNull Menu menu) {
+-        switch (featureId) {
+-            case Window.FEATURE_OPTIONS_PANEL:
+-                mFragments.dispatchOptionsMenuClosed(menu);
+-                onOptionsMenuClosed(menu);
+-                break;
+-
+-            case Window.FEATURE_CONTEXT_MENU:
+-                onContextMenuClosed(menu);
+-                break;
+-
+-            case Window.FEATURE_ACTION_BAR:
+-                initWindowDecorActionBar();
+-                mActionBar.dispatchMenuVisibilityChanged(false);
+-                break;
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -4883,8 +4192,5 @@
+      */
+     public void invalidateOptionsMenu() {
+-        if (mWindow.hasFeature(Window.FEATURE_OPTIONS_PANEL) &&
+-                (mActionBar == null || !mActionBar.invalidateOptionsMenu())) {
+-            mWindow.invalidatePanelMenu(Window.FEATURE_OPTIONS_PANEL);
+-        }
++        if (mWindow != null) mWindow.invalidatePanelMenu(Window.FEATURE_OPTIONS_PANEL);
+     }
+ 
+@@ -5098,8 +4404,5 @@
+      */
+     public void openOptionsMenu() {
+-        if (mWindow.hasFeature(Window.FEATURE_OPTIONS_PANEL) &&
+-                (mActionBar == null || !mActionBar.openOptionsMenu())) {
+-            mWindow.openPanel(Window.FEATURE_OPTIONS_PANEL, null);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5109,8 +4412,5 @@
+      */
+     public void closeOptionsMenu() {
+-        if (mWindow.hasFeature(Window.FEATURE_OPTIONS_PANEL) &&
+-                (mActionBar == null || !mActionBar.closeOptionsMenu())) {
+-            mWindow.closePanel(Window.FEATURE_OPTIONS_PANEL);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5142,5 +4442,5 @@
+      */
+     public void registerForContextMenu(View view) {
+-        view.setOnCreateContextMenuListener(this);
++        throw new UnsupportedOperationException("The embedded view has no context menu");
+     }
+ 
+@@ -5153,5 +4453,5 @@
+      */
+     public void unregisterForContextMenu(View view) {
+-        view.setOnCreateContextMenuListener(null);
++        // The embedded view has no context-menu listener.
+     }
+ 
+@@ -5470,13 +4770,9 @@
+      */
+     public boolean onSearchRequested() {
+-        final int uiMode = getResources().getConfiguration().uiMode
+-            & Configuration.UI_MODE_TYPE_MASK;
+-        if (uiMode != Configuration.UI_MODE_TYPE_TELEVISION
+-                && uiMode != Configuration.UI_MODE_TYPE_WATCH) {
+-            startSearch(null, false, null, false);
+-            return true;
+-        } else {
+-            return false;
+-        }
++        SearchManager search = getSystemService(SearchManager.class);
++        ComponentName target = search == null ? null : search.getGlobalSearchActivity();
++        if (target == null) return false;
++        startActivity(new Intent(SearchManager.INTENT_ACTION_GLOBAL_SEARCH).setComponent(target));
++        return true;
+     }
+ 
+@@ -5623,5 +4919,5 @@
+             initWindowDecorActionBar();
+             if (mActionBar != null) {
+-                mMenuInflater = new MenuInflater(mActionBar.getThemedContext(), this);
++                mMenuInflater = new MenuInflater(mActionBar.getThemedContext());
+             } else {
+                 mMenuInflater = new MenuInflater(this);
+@@ -5634,5 +4930,5 @@
+     public void setTheme(int resid) {
+         super.setTheme(resid);
+-        mWindow.setTheme(resid);
++        if (mWindow != null) mWindow.setTheme(resid);
+     }
+ 
+@@ -5843,68 +5139,7 @@
+      * @see Context#DEVICE_ID_DEFAULT
+      */
+-    @FlaggedApi(Flags.FLAG_DEVICE_AWARE_PERMISSION_APIS_ENABLED)
+     public final void requestPermissions(@NonNull String[] permissions, int requestCode,
+             int deviceId) {
+-        // Pre M apps shouldn't request permissions, as permissions are granted at install time.
+-        if (getApplicationInfo().targetSdkVersion < Build.VERSION_CODES.M) {
+-            onRequestPermissionsResult(requestCode, new String[0], new int[0], deviceId);
+-        }
+-
+-        if (requestCode < 0) {
+-            throw new IllegalArgumentException("requestCode should be >= 0");
+-        }
+-
+-        if (mHasCurrentPermissionsRequest) {
+-            Log.w(TAG, "Can request only one set of permissions at a time");
+-            // Dispatch the callback with empty arrays which means a cancellation.
+-            onRequestPermissionsResult(requestCode, new String[0], new int[0], deviceId);
+-            return;
+-        }
+-
+-        if (!getAttributionSource().getRenouncedPermissions().isEmpty()) {
+-            for (int i = 0; i < permissions.length; i++) {
+-                if (getAttributionSource().getRenouncedPermissions().contains(permissions[i])) {
+-                    throw new IllegalArgumentException("Cannot request renounced permission: "
+-                            + permissions[i]);
+-                }
+-            }
+-        }
+-
+-        final Context context = getDeviceId() == deviceId ? this : createDeviceContext(deviceId);
+-        if (Flags.permissionRequestShortCircuitEnabled()) {
+-            int[] permissionsState = getPermissionRequestStates(context, permissions);
+-            boolean hasRequestablePermission = false;
+-            for (int i = 0; i < permissionsState.length; i++) {
+-                if (permissionsState[i] == Context.PERMISSION_REQUEST_STATE_REQUESTABLE) {
+-                    hasRequestablePermission = true;
+-                    break;
+-                }
+-            }
+-            // If none of the permissions is requestable, finish the request here.
+-            if (!hasRequestablePermission) {
+-                mHasCurrentPermissionsRequest = true;
+-                Log.v(TAG, "No requestable permission in the request.");
+-                int[] results = new int[permissionsState.length];
+-                for (int i = 0; i < permissionsState.length; i++) {
+-                    if (permissionsState[i] == Context.PERMISSION_REQUEST_STATE_GRANTED) {
+-                        results[i] = PackageManager.PERMISSION_GRANTED;
+-                    } else {
+-                        results[i] = PackageManager.PERMISSION_DENIED;
+-                    }
+-                }
+-                // Currently permission request result is passed to the client app asynchronously
+-                // in onRequestPermissionsResult, lets keep async behavior here as well.
+-                mHandler.post(() -> {
+-                    mHasCurrentPermissionsRequest = false;
+-                    onRequestPermissionsResult(requestCode, permissions, results, deviceId);
+-                });
+-                return;
+-            }
+-        }
+-
+-        final PackageManager packageManager = context.getPackageManager();
+-        final Intent intent = packageManager.buildRequestPermissionsIntent(permissions);
+-        startActivityForResult(REQUEST_PERMISSIONS_WHO_PREFIX, intent, requestCode, null);
+-        mHasCurrentPermissionsRequest = true;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -5966,5 +5201,4 @@
+      * @see #requestPermissions
+      */
+-    @FlaggedApi(Flags.FLAG_DEVICE_AWARE_PERMISSION_APIS_ENABLED)
+     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
+             @NonNull int[] grantResults, int deviceId) {
+@@ -5983,8 +5217,5 @@
+     @Override
+     public boolean shouldShowRequestPermissionRationale(@NonNull String permission) {
+-        if (Flags.shouldShowPermissionRationaleInContextEnabled()) {
+-            return super.shouldShowRequestPermissionRationale(permission);
+-        }
+-        return getPackageManager().shouldShowRequestPermissionRationale(permission);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6002,5 +5233,4 @@
+      * @see #onRequestPermissionsResult
+      */
+-    @FlaggedApi(Flags.FLAG_DEVICE_AWARE_PERMISSION_APIS_ENABLED)
+     @SuppressLint("OnNameExpected")
+     // Suppress lint as this is an overload of the original API.
+@@ -6065,37 +5295,8 @@
+     public void startActivityForResult(@RequiresPermission Intent intent, int requestCode,
+             @Nullable Bundle options) {
+-        if (mParent == null) {
+-            options = transferSpringboardActivityOptions(options);
+-            Instrumentation.ActivityResult ar =
+-                mInstrumentation.execStartActivity(
+-                    this, mMainThread.getApplicationThread(), mToken, this,
+-                    intent, requestCode, options);
+-            if (ar != null) {
+-                mMainThread.sendActivityResult(
+-                    mToken, mEmbeddedID, requestCode, ar.getResultCode(),
+-                    ar.getResultData());
+-            }
+-            if (requestCode >= 0) {
+-                // If this start is requesting a result, we can avoid making
+-                // the activity visible until the result is received.  Setting
+-                // this code during onCreate(Bundle savedInstanceState) or onResume() will keep the
+-                // activity hidden during this time, to avoid flickering.
+-                // This can only be done when a result is requested because
+-                // that guarantees we will get information back when the
+-                // activity is finished, no matter what happens to it.
+-                mStartedActivity = true;
+-            }
+-
+-            cancelInputsAndStartExitTransition(options);
+-            // TODO Consider clearing/flushing other event sources and events for child windows.
+-        } else {
+-            if (options != null) {
+-                mParent.startActivityFromChild(this, intent, requestCode, options);
+-            } else {
+-                // Note we want to go through this method for compatibility with
+-                // existing applications that may have overridden it.
+-                mParent.startActivityFromChild(this, intent, requestCode);
+-            }
+-        }
++        if (requestCode >= 0) {
++            throw new UnsupportedOperationException("The embedded host has no activity results");
++        }
++        getBaseContext().startActivity(intent, options);
+     }
+ 
+@@ -6106,11 +5307,5 @@
+      */
+     private void cancelInputsAndStartExitTransition(Bundle options) {
+-        final View decor = mWindow != null ? mWindow.peekDecorView() : null;
+-        if (decor != null) {
+-            decor.cancelPendingInputEvents();
+-        }
+-        if (options != null) {
+-            mActivityTransitionState.startExitOutTransition(this, options);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6124,15 +5319,9 @@
+      */
+     public boolean isActivityTransitionRunning() {
+-        return mActivityTransitionState.isTransitionRunning();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private Bundle transferSpringboardActivityOptions(@Nullable Bundle options) {
+-        if (options == null && (mWindow != null && !mWindow.isActive())) {
+-            final SceneTransitionInfo info = getSceneTransitionInfo();
+-            if (info != null) {
+-                return ActivityOptions.makeBasic().setSceneTransitionInfo(info).toBundle();
+-            }
+-        }
+-        return options;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6170,5 +5359,5 @@
+     @RequiresPermission(anyOf = {INTERACT_ACROSS_USERS, INTERACT_ACROSS_USERS_FULL})
+     public void startActivityForResultAsUser(@NonNull Intent intent, int requestCode,
+-            @NonNull @CanBeCURRENT UserHandle user) {
++            @NonNull UserHandle user) {
+         startActivityForResultAsUser(intent, requestCode, null, user);
+     }
+@@ -6209,5 +5398,5 @@
+     @RequiresPermission(anyOf = {INTERACT_ACROSS_USERS, INTERACT_ACROSS_USERS_FULL})
+     public void startActivityForResultAsUser(@NonNull Intent intent, int requestCode,
+-            @Nullable Bundle options, @NonNull @CanBeCURRENT UserHandle user) {
++            @Nullable Bundle options, @NonNull UserHandle user) {
+         startActivityForResultAsUser(intent, mEmbeddedID, requestCode, options, user);
+     }
+@@ -6249,28 +5438,6 @@
+     public void startActivityForResultAsUser(@NonNull Intent intent, @NonNull String resultWho,
+             int requestCode,
+-            @Nullable Bundle options, @NonNull @CanBeCURRENT UserHandle user) {
+-        if (mParent != null) {
+-            throw new RuntimeException("Can't be called from a child");
+-        }
+-        options = transferSpringboardActivityOptions(options);
+-        Instrumentation.ActivityResult ar = mInstrumentation.execStartActivity(
+-                this, mMainThread.getApplicationThread(), mToken, resultWho, intent, requestCode,
+-                options, user);
+-        if (ar != null) {
+-            mMainThread.sendActivityResult(
+-                    mToken, mEmbeddedID, requestCode, ar.getResultCode(), ar.getResultData());
+-        }
+-        if (requestCode >= 0) {
+-            // If this start is requesting a result, we can avoid making
+-            // the activity visible until the result is received.  Setting
+-            // this code during onCreate(Bundle savedInstanceState) or onResume() will keep the
+-            // activity hidden during this time, to avoid flickering.
+-            // This can only be done when a result is requested because
+-            // that guarantees we will get information back when the
+-            // activity is finished, no matter what happens to it.
+-            mStartedActivity = true;
+-        }
+-
+-        cancelInputsAndStartExitTransition(options);
++            @Nullable Bundle options, @NonNull UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6279,5 +5446,5 @@
+      */
+     @Override
+-    public void startActivityAsUser(Intent intent, @CanBeCURRENT UserHandle user) {
++    public void startActivityAsUser(Intent intent, UserHandle user) {
+         startActivityAsUser(intent, null, user);
+     }
+@@ -6299,19 +5466,6 @@
+     @RequiresPermission(anyOf = {INTERACT_ACROSS_USERS, INTERACT_ACROSS_USERS_FULL})
+     public void startActivityAsUser(@NonNull Intent intent,
+-            @Nullable Bundle options, @NonNull @CanBeCURRENT UserHandle user) {
+-        if (mParent != null) {
+-            throw new RuntimeException("Can't be called from a child");
+-        }
+-        options = transferSpringboardActivityOptions(options);
+-        Instrumentation.ActivityResult ar =
+-                mInstrumentation.execStartActivity(
+-                        this, mMainThread.getApplicationThread(), mToken, mEmbeddedID,
+-                        intent, -1, options, user);
+-        if (ar != null) {
+-            mMainThread.sendActivityResult(
+-                mToken, mEmbeddedID, -1, ar.getResultCode(),
+-                ar.getResultData());
+-        }
+-        cancelInputsAndStartExitTransition(options);
++            @Nullable Bundle options, @NonNull UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6344,17 +5498,5 @@
+     public void startActivityAsCaller(Intent intent, @Nullable Bundle options,
+             boolean ignoreTargetSecurity, int userId, int requestCode) {
+-        if (mParent != null) {
+-            throw new RuntimeException("Can't be called from a child");
+-        }
+-        options = transferSpringboardActivityOptions(options);
+-        Instrumentation.ActivityResult ar =
+-                mInstrumentation.execStartActivityAsCaller(
+-                        this, mMainThread.getApplicationThread(), mToken, this,
+-                        intent, requestCode, options, ignoreTargetSecurity, userId);
+-        if (ar != null) {
+-            mMainThread.sendActivityResult(
+-                    mToken, mEmbeddedID, requestCode, ar.getResultCode(), ar.getResultData());
+-        }
+-        cancelInputsAndStartExitTransition(options);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6444,40 +5586,5 @@
+             @Nullable Bundle options)
+             throws IntentSender.SendIntentException {
+-        try {
+-            options = transferSpringboardActivityOptions(options);
+-            String resolvedType = null;
+-            if (fillInIntent != null) {
+-                fillInIntent.migrateExtraStreamToClipData(this);
+-                fillInIntent.prepareToLeaveProcess(this);
+-                resolvedType = fillInIntent.resolveTypeIfNeeded(getContentResolver());
+-            }
+-            int result = ActivityTaskManager.getService()
+-                .startActivityIntentSender(mMainThread.getApplicationThread(),
+-                        intent != null ? intent.getTarget() : null,
+-                        intent != null ? intent.getWhitelistToken() : null,
+-                        fillInIntent, resolvedType, mToken, who,
+-                        requestCode, flagsMask, flagsValues, options);
+-            if (result == ActivityManager.START_CANCELED) {
+-                throw new IntentSender.SendIntentException();
+-            }
+-            Instrumentation.checkStartActivityResult(result, null);
+-
+-            if (options != null) {
+-                // Only when the options are not null, as the intent can point to something other
+-                // than an Activity.
+-                cancelInputsAndStartExitTransition(options);
+-            }
+-        } catch (RemoteException e) {
+-        }
+-        if (requestCode >= 0) {
+-            // If this start is requesting a result, we can avoid making
+-            // the activity visible until the result is received.  Setting
+-            // this code during onCreate(Bundle savedInstanceState) or onResume() will keep the
+-            // activity hidden during this time, to avoid flickering.
+-            // This can only be done when a result is requested because
+-            // that guarantees we will get information back when the
+-            // activity is finished, no matter what happens to it.
+-            mStartedActivity = true;
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6522,12 +5629,5 @@
+     @Override
+     public void startActivity(Intent intent, @Nullable Bundle options) {
+-        getAutofillClientController().onStartActivity(intent, mIntent);
+-        if (options != null) {
+-            startActivityForResult(intent, -1, options);
+-        } else {
+-            // Note we want to go through this call for compatibility with
+-            // applications that may have overridden the method.
+-            startActivityForResult(intent, -1);
+-        }
++        getBaseContext().startActivity(intent, options);
+     }
+ 
+@@ -6572,6 +5672,5 @@
+     @Override
+     public void startActivities(Intent[] intents, @Nullable Bundle options) {
+-        mInstrumentation.execStartActivities(this, mMainThread.getApplicationThread(),
+-                mToken, this, intents, options);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6685,43 +5784,5 @@
+     public boolean startActivityIfNeeded(@RequiresPermission @NonNull Intent intent,
+             int requestCode, @Nullable Bundle options) {
+-        if (Instrumentation.DEBUG_START_ACTIVITY) {
+-            Log.d("Instrumentation", "startActivity: intent=" + intent
+-                    + " requestCode=" + requestCode + " options=" + options, new Throwable());
+-        }
+-        if (mParent == null) {
+-            int result = ActivityManager.START_RETURN_INTENT_TO_CALLER;
+-            try {
+-                Uri referrer = onProvideReferrer();
+-                if (referrer != null) {
+-                    intent.putExtra(Intent.EXTRA_REFERRER, referrer);
+-                }
+-                intent.migrateExtraStreamToClipData(this);
+-                intent.prepareToLeaveProcess(this);
+-                result = ActivityTaskManager.getService()
+-                    .startActivity(mMainThread.getApplicationThread(), getOpPackageName(),
+-                            getAttributionTag(), intent,
+-                            intent.resolveTypeIfNeeded(getContentResolver()), mToken, mEmbeddedID,
+-                            requestCode, ActivityManager.START_FLAG_ONLY_IF_NEEDED, null, options);
+-            } catch (RemoteException e) {
+-                // Empty
+-            }
+-
+-            Instrumentation.checkStartActivityResult(result, intent);
+-
+-            if (requestCode >= 0) {
+-                // If this start is requesting a result, we can avoid making
+-                // the activity visible until the result is received.  Setting
+-                // this code during onCreate(Bundle savedInstanceState) or onResume() will keep the
+-                // activity hidden during this time, to avoid flickering.
+-                // This can only be done when a result is requested because
+-                // that guarantees we will get information back when the
+-                // activity is finished, no matter what happens to it.
+-                mStartedActivity = true;
+-            }
+-            return result != ActivityManager.START_RETURN_INTENT_TO_CALLER;
+-        }
+-
+-        throw new UnsupportedOperationException(
+-            "startActivityIfNeeded can only be called from a top-level activity");
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6770,18 +5831,5 @@
+     public boolean startNextMatchingActivity(@RequiresPermission @NonNull Intent intent,
+             @Nullable Bundle options) {
+-        if (mParent == null) {
+-            try {
+-                intent.migrateExtraStreamToClipData(this);
+-                intent.prepareToLeaveProcess(this);
+-                return ActivityTaskManager.getService()
+-                    .startNextMatchingActivity(mToken, intent, options);
+-            } catch (RemoteException e) {
+-                // Empty
+-            }
+-            return false;
+-        }
+-
+-        throw new UnsupportedOperationException(
+-            "startNextMatchingActivity can only be called from a top-level activity");
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6831,15 +5879,5 @@
+     public void startActivityFromChild(@NonNull Activity child, @RequiresPermission Intent intent,
+             int requestCode, @Nullable Bundle options) {
+-        options = transferSpringboardActivityOptions(options);
+-        Instrumentation.ActivityResult ar =
+-            mInstrumentation.execStartActivity(
+-                this, mMainThread.getApplicationThread(), mToken, child,
+-                intent, requestCode, options);
+-        if (ar != null) {
+-            mMainThread.sendActivityResult(
+-                mToken, child.mEmbeddedID, requestCode,
+-                ar.getResultCode(), ar.getResultData());
+-        }
+-        cancelInputsAndStartExitTransition(options);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -6897,5 +5935,5 @@
+     private void startActivityAsUserFromFragment(@NonNull Fragment fragment,
+             @RequiresPermission Intent intent, int requestCode, @Nullable Bundle options,
+-            @CanBeCURRENT UserHandle user) {
++            UserHandle user) {
+         startActivityForResultAsUser(intent, fragment.mWho, requestCode, options, user);
+     }
+@@ -6908,19 +5946,5 @@
+     public void startActivityForResult(
+             String who, Intent intent, int requestCode, @Nullable Bundle options) {
+-        Uri referrer = onProvideReferrer();
+-        if (referrer != null) {
+-            intent.putExtra(Intent.EXTRA_REFERRER, referrer);
+-        }
+-        options = transferSpringboardActivityOptions(options);
+-        Instrumentation.ActivityResult ar =
+-            mInstrumentation.execStartActivity(
+-                this, mMainThread.getApplicationThread(), mToken, who,
+-                intent, requestCode, options);
+-        if (ar != null) {
+-            mMainThread.sendActivityResult(
+-                mToken, who, requestCode,
+-                ar.getResultCode(), ar.getResultData());
+-        }
+-        cancelInputsAndStartExitTransition(options);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7092,10 +6116,5 @@
+     public void overrideActivityTransition(@OverrideTransition int overrideType,
+             @AnimRes int enterAnim, @AnimRes int exitAnim, @ColorInt int backgroundColor) {
+-        if (overrideType != OVERRIDE_TRANSITION_OPEN && overrideType != OVERRIDE_TRANSITION_CLOSE) {
+-            throw new IllegalArgumentException("Override type must be either open or close");
+-        }
+-
+-        ActivityClient.getInstance().overrideActivityTransition(mToken,
+-                overrideType == OVERRIDE_TRANSITION_OPEN, enterAnim, exitAnim, backgroundColor);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7110,9 +6129,5 @@
+      */
+     public void clearOverrideActivityTransition(@OverrideTransition int overrideType) {
+-        if (overrideType != OVERRIDE_TRANSITION_OPEN && overrideType != OVERRIDE_TRANSITION_CLOSE) {
+-            throw new IllegalArgumentException("Override type must be either open or close");
+-        }
+-        ActivityClient.getInstance().clearOverrideActivityTransition(mToken,
+-                overrideType == OVERRIDE_TRANSITION_OPEN);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7166,6 +6181,5 @@
+     @Deprecated
+     public void overridePendingTransition(int enterAnim, int exitAnim, int backgroundColor) {
+-        ActivityClient.getInstance().overridePendingTransition(mToken, getPackageName(), enterAnim,
+-                exitAnim, backgroundColor);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7200,5 +6214,5 @@
+     @RequiresPermission(android.Manifest.permission.MANAGE_MEDIA_PROJECTION)
+     public final void setForceSendResultForMediaProjection() {
+-        ActivityClient.getInstance().setForceSendResultForMediaProjection(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7304,5 +6318,5 @@
+     @Nullable
+     public String getCallingPackage() {
+-        return ActivityClient.getInstance().getCallingPackage(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7323,5 +6337,5 @@
+     @Nullable
+     public ComponentName getCallingActivity() {
+-        return ActivityClient.getInstance().getCallingActivity(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7363,5 +6377,5 @@
+      */
+     public int getLaunchedFromUid() {
+-        return ActivityClient.getInstance().getLaunchedFromUid(getActivityToken());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7404,5 +6418,5 @@
+     @Nullable
+     public String getLaunchedFromPackage() {
+-        return ActivityClient.getInstance().getLaunchedFromPackage(getActivityToken());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7416,5 +6430,4 @@
+      * @see ComponentCaller
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+     @SuppressLint("OnNameExpected")
+     public @NonNull ComponentCaller getInitialCaller() {
+@@ -7444,5 +6457,4 @@
+      * @see #getCaller
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+     @SuppressLint("OnNameExpected")
+     public @NonNull ComponentCaller getCurrentCaller() {
+@@ -7540,11 +6552,5 @@
+      */
+     public void recreate() {
+-        if (mParent != null) {
+-            throw new IllegalStateException("Can only be called on top-level activity");
+-        }
+-        if (Looper.myLooper() != mMainThread.getLooper()) {
+-            throw new IllegalStateException("Must be called from main thread");
+-        }
+-        mMainThread.scheduleRelaunchActivity(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7555,27 +6561,5 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     private void finish(int finishTask) {
+-        if (DEBUG_FINISH_ACTIVITY) {
+-            Log.d(Instrumentation.TAG, "finishActivity: finishTask=" + finishTask, new Throwable());
+-        }
+-        if (mParent == null) {
+-            int resultCode;
+-            Intent resultData;
+-            synchronized (this) {
+-                resultCode = mResultCode;
+-                resultData = mResultData;
+-            }
+-            if (false) Log.v(TAG, "Finishing self: token=" + mToken);
+-            if (resultData != null) {
+-                resultData.prepareToLeaveProcess(this);
+-            }
+-            if (ActivityClient.getInstance().finishActivity(mToken, resultCode, resultData,
+-                    finishTask)) {
+-                mFinished = true;
+-            }
+-        } else {
+-            mParent.finishFromChild(this);
+-        }
+-
+-        getAutofillClientController().onActivityFinish(mIntent);
++        mFinished = true;
+     }
+ 
+@@ -7604,13 +6588,5 @@
+      */
+     public void finishAffinity() {
+-        if (mParent != null) {
+-            throw new IllegalStateException("Can not be called from an embedded activity");
+-        }
+-        if (mResultCode != RESULT_CANCELED || mResultData != null) {
+-            throw new IllegalStateException("Can not be called to deliver a result");
+-        }
+-        if (ActivityClient.getInstance().finishActivityAffinity(mToken)) {
+-            mFinished = true;
+-        }
++        finish();
+     }
+ 
+@@ -7638,7 +6614,5 @@
+      */
+     public void finishAfterTransition() {
+-        if (!mActivityTransitionState.startExitBackTransition(this)) {
+-            finish();
+-        }
++        finish();
+     }
+ 
+@@ -7653,9 +6627,5 @@
+      */
+     public void finishActivity(int requestCode) {
+-        if (mParent == null) {
+-            ActivityClient.getInstance().finishSubActivity(mToken, mEmbeddedID, requestCode);
+-        } else {
+-            mParent.finishActivityFromChild(this, requestCode);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7671,5 +6641,5 @@
+     @Deprecated
+     public void finishActivityFromChild(@NonNull Activity child, int requestCode) {
+-        ActivityClient.getInstance().finishSubActivity(mToken, child.mEmbeddedID, requestCode);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7694,5 +6664,5 @@
+      */
+     public boolean releaseInstance() {
+-        return ActivityClient.getInstance().releaseActivityInstance(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7749,5 +6719,4 @@
+      *               intent.
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+     public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data,
+             @NonNull ComponentCaller caller) {
+@@ -7773,25 +6742,4 @@
+     }
+ 
+-    /**
+-     * Sets if Handoff is enabled for this Activity. See
+-     * {@link #isHandoffEnabled} to get if Handoff is currently enabled on this
+-     * Activity.
+-     *
+-     * If Handoff is enabled, this Activity will only be eligible to be handed off to other devices
+-     * if it is the topmost Activity in its Task.
+-     *
+-     * Callers may specify optional parameters to specify when Handoff is appropriate for the
+-     * current activity. See {@link HandoffActivityParams} for more details.
+-     *
+-     * @param handoffActivityParams Configuration parameters for Handoff.
+-     */
+-    @FlaggedApi(android.companion.Flags.FLAG_TASK_CONTINUITY)
+-    public final void setHandoffEnabled(
+-        boolean handoffEnabled,
+-        @Nullable HandoffActivityParams handoffActivityParams) {
+-        ActivityClient.getInstance().setHandoffEnabled(
+-                mToken, handoffEnabled, handoffActivityParams);
+-        mIsHandoffEnabled = handoffEnabled;
+-    }
+ 
+     /**
+@@ -7844,17 +6792,6 @@
+      */
+     public PendingIntent createPendingResult(int requestCode, @NonNull Intent data,
+-            @PendingIntent.Flags int flags) {
+-        String packageName = getPackageName();
+-        try {
+-            data.prepareToLeaveProcess(this);
+-            IIntentSender target = ActivityManager.getService().getIntentSenderWithFeature(
+-                    ActivityManager.INTENT_SENDER_ACTIVITY_RESULT, packageName, getAttributionTag(),
+-                    mParent == null ? mToken : mParent.mToken, mEmbeddedID, requestCode,
+-                    new Intent[]{data}, null, flags, null, getUserId());
+-            return target != null ? new PendingIntent(target) : null;
+-        } catch (RemoteException e) {
+-            // Empty
+-        }
+-        return null;
++            int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7886,12 +6823,4 @@
+      */
+     public void setRequestedOrientation(@ActivityInfo.ScreenOrientation int requestedOrientation) {
+-        if (requestedOrientation == mLastRequestedOrientation) {
+-            return;
+-        }
+-        if (mParent == null) {
+-            ActivityClient.getInstance().setRequestedOrientation(mToken, requestedOrientation);
+-        } else {
+-            mParent.setRequestedOrientation(requestedOrientation);
+-        }
+         mLastRequestedOrientation = requestedOrientation;
+     }
+@@ -7924,12 +6853,5 @@
+     @ActivityInfo.ScreenOrientation
+     public int getRequestedOrientation() {
+-        if (mLastRequestedOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSET) {
+-            return mLastRequestedOrientation;
+-        }
+-        if (mParent == null) {
+-            return ActivityClient.getInstance().getRequestedOrientation(mToken);
+-        } else {
+-            return mParent.getRequestedOrientation();
+-        }
++        return mLastRequestedOrientation;
+     }
+ 
+@@ -7941,5 +6863,5 @@
+      */
+     public int getTaskId() {
+-        return ActivityClient.getInstance().getTaskForActivity(mToken, false /* onlyRoot */);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7951,5 +6873,5 @@
+      */
+     public boolean isTaskRoot() {
+-        return mWindowControllerCallback.isTaskRoot();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7966,5 +6888,5 @@
+      */
+     public boolean moveTaskToBack(boolean nonRoot) {
+-        return ActivityClient.getInstance().moveActivityTaskToBack(mToken, nonRoot);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -7997,5 +6919,4 @@
+ 
+     /** @hide */
+-    @Override
+     public final ComponentName contentCaptureClientGetComponentName() {
+         return getComponentName();
+@@ -8043,28 +6964,10 @@
+ 
+     private void ensureSearchManager() {
+-        if (mSearchManager != null) {
+-            return;
+-        }
+-
+-        try {
+-            mSearchManager = new SearchManager(this, null);
+-        } catch (ServiceNotFoundException e) {
+-            throw new IllegalStateException(e);
+-        }
++        mSearchManager = getSystemService(SearchManager.class);
+     }
+ 
+     @Override
+     public Object getSystemService(@ServiceName @NonNull String name) {
+-        if (getBaseContext() == null) {
+-            throw new IllegalStateException(
+-                    "System services not available to Activities before onCreate()");
+-        }
+-
+-        if (WINDOW_SERVICE.equals(name)) {
+-            return mWindowManager;
+-        } else if (SEARCH_SERVICE.equals(name)) {
+-            ensureSearchManager();
+-            return mSearchManager;
+-        }
++        if (WINDOW_SERVICE.equals(name) && mWindowManager != null) return mWindowManager;
+         return super.getSystemService(name);
+     }
+@@ -8120,15 +7023,7 @@
+ 
+     protected void onTitleChanged(CharSequence title, int color) {
+-        if (mTitleReady) {
+-            final Window win = getWindow();
+-            if (win != null) {
+-                win.setTitle(title);
+-                if (color != 0) {
+-                    win.setTitleColor(color);
+-                }
+-            }
+-            if (mActionBar != null) {
+-                mActionBar.setWindowTitle(title);
+-            }
++        if (mTitleReady && mWindow != null) {
++            mWindow.setTitle(title);
++            if (color != 0) mWindow.setTitleColor(color);
+         }
+     }
+@@ -8152,32 +7047,5 @@
+         if (mTaskDescription != taskDescription) {
+             mTaskDescription.copyFromPreserveHiddenFields(taskDescription);
+-            // Scale the icon down to something reasonable if it is provided
+-            if (taskDescription.getIconFilename() == null && taskDescription.getIcon() != null) {
+-                final int size = ActivityManager.getLauncherLargeIconSizeInner(this);
+-                final Bitmap icon = Bitmap.createScaledBitmap(taskDescription.getIcon(), size, size,
+-                        true);
+-                mTaskDescription.setIcon(Icon.createWithBitmap(icon));
+-            }
+-            // Scale the badge down to something reasonable if it is provided
+-            final Icon badge = taskDescription.getBadge();
+-            if (badge != null) {
+-                if (badge.getType() == Icon.TYPE_BITMAP) {
+-                    final int size = ActivityManager.getLauncherLargeIconSizeInner(this);
+-                    final Bitmap bitmap =
+-                            Bitmap.createScaledBitmap(badge.getBitmap(), size, size, true);
+-                    mTaskDescription.setBadge(Icon.createWithBitmap(bitmap));
+-                } else {
+-                    mTaskDescription.setBadge(badge);
+-                }
+-            }
+-        }
+-        if (mLastTaskDescriptionHashCode == mTaskDescription.hashCode()) {
+-            // Early return if the hashCode is the same.
+-            // Note that we do not use #equals() to perform the check because there are several
+-            // places in this class that directly sets the value to mTaskDescription.
+-            return;
+-        }
+-        mLastTaskDescriptionHashCode = mTaskDescription.hashCode();
+-        ActivityClient.getInstance().setTaskDescription(mToken, mTaskDescription);
++        }
+     }
+ 
+@@ -8416,8 +7284,5 @@
+     @TestApi
+     public final boolean addDumpable(@NonNull Dumpable dumpable) {
+-        if (mDumpableContainer == null) {
+-            mDumpableContainer = new DumpableContainerImpl();
+-        }
+-        return mDumpableContainer.addDumpable(dumpable);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8434,110 +7299,10 @@
+             @SuppressLint("UseParcelFileDescriptor") @Nullable FileDescriptor fd,
+             @NonNull PrintWriter writer, @Nullable String[] args) {
+-
+-        // Lazy-load mDumpableContainer with Dumpables activity might already have a reference to
+-        if (mAutofillClientController != null) {
+-            addDumpable(mAutofillClientController);
+-        }
+-        if (mUiTranslationController != null) {
+-            addDumpable(mUiTranslationController);
+-        }
+-        if (mContentCaptureManager != null) {
+-            mContentCaptureManager.addDumpable(this);
+-        }
+-
+-        boolean dumpInternalState = true;
+-        String arg = null;
+-        if (args != null && args.length > 0) {
+-            arg = args[0];
+-            boolean isSpecialCase = true;
+-            // Handle special cases
+-            switch (arg) {
+-                case DUMP_ARG_AUTOFILL:
+-                    dumpLegacyDumpable(prefix, writer, arg,
+-                            AutofillClientController.DUMPABLE_NAME);
+-                    return;
+-                case DUMP_ARG_CONTENT_CAPTURE:
+-                    dumpLegacyDumpable(prefix, writer, arg,
+-                            ContentCaptureManager.DUMPABLE_NAME);
+-                    return;
+-                case DUMP_ARG_TRANSLATION:
+-                    dumpLegacyDumpable(prefix, writer, arg,
+-                            UiTranslationController.DUMPABLE_NAME);
+-                    return;
+-                case DUMP_ARG_LIST_DUMPABLES:
+-                    if (mDumpableContainer == null) {
+-                        writer.print(prefix); writer.println("No dumpables");
+-                    } else {
+-                        mDumpableContainer.listDumpables(prefix, writer);
+-                    }
+-                    return;
+-                case DUMP_ARG_DUMP_DUMPABLE:
+-                    if (args.length == 1) {
+-                        writer.print(DUMP_ARG_DUMP_DUMPABLE);
+-                        writer.println(" requires the dumpable name");
+-                    } else if (mDumpableContainer == null) {
+-                        writer.println("no dumpables");
+-                    } else {
+-                        // Strips --dump-dumpable NAME
+-                        String[] prunedArgs = new String[args.length - 2];
+-                        System.arraycopy(args, 2, prunedArgs, 0, prunedArgs.length);
+-                        mDumpableContainer.dumpOneDumpable(prefix, writer, args[1], prunedArgs);
+-                    }
+-                    break;
+-                default:
+-                    isSpecialCase = false;
+-                    break;
+-            }
+-            if (isSpecialCase) {
+-                dumpInternalState = !CompatChanges.isChangeEnabled(DUMP_IGNORES_SPECIAL_ARGS);
+-            }
+-        }
+-
+-        if (dumpInternalState) {
+-            dump(prefix, fd, writer, args);
+-        } else {
+-            Log.i(TAG, "Not calling dump() on " + this + " because of special argument " + arg);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     void dumpInner(@NonNull String prefix, @Nullable FileDescriptor fd,
+             @NonNull PrintWriter writer, @Nullable String[] args) {
+-        String innerPrefix = prefix + "  ";
+-
+-        writer.print(prefix); writer.print("Local Activity ");
+-                writer.print(Integer.toHexString(System.identityHashCode(this)));
+-                writer.println(" State:");
+-        writer.print(innerPrefix); writer.print("mResumed=");
+-                writer.print(mResumed); writer.print(" mStopped=");
+-                writer.print(mStopped); writer.print(" mFinished=");
+-                writer.println(mFinished);
+-        writer.print(innerPrefix); writer.print("mIsInMultiWindowMode=");
+-                writer.print(mIsInMultiWindowMode);
+-                writer.print(" mIsInPictureInPictureMode=");
+-                writer.println(mIsInPictureInPictureMode);
+-        writer.print(innerPrefix); writer.print("mChangingConfigurations=");
+-                writer.println(mChangingConfigurations);
+-        writer.print(innerPrefix); writer.print("mCurrentConfig=");
+-                writer.println(mCurrentConfig);
+-
+-        mFragments.dumpLoaders(innerPrefix, fd, writer, args);
+-        mFragments.getFragmentManager().dump(innerPrefix, fd, writer, args);
+-        if (mVoiceInteractor != null) {
+-            mVoiceInteractor.dump(innerPrefix, fd, writer, args);
+-        }
+-
+-        if (getWindow() != null &&
+-                getWindow().peekDecorView() != null &&
+-                getWindow().peekDecorView().getViewRootImpl() != null) {
+-            getWindow().peekDecorView().getViewRootImpl().dump(prefix, writer);
+-        }
+-
+-        mHandler.getLooper().dump(new PrintWriterPrinter(writer), prefix);
+-
+-        ResourcesManager.getInstance().dump(prefix, writer);
+-
+-        if (mDumpableContainer != null) {
+-            mDumpableContainer.dumpAllDumpables(prefix, writer, args);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8560,5 +7325,5 @@
+      */
+     public boolean isImmersive() {
+-        return ActivityClient.getInstance().isImmersive(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8571,8 +7336,5 @@
+      */
+     final boolean isTopOfTask() {
+-        if (mToken == null || mWindow == null) {
+-            return false;
+-        }
+-        return ActivityClient.getInstance().isTopOfTask(getActivityToken());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8613,10 +7375,5 @@
+ 
+     private boolean convertFromTranslucentInternal() {
+-        mTranslucentCallback = null;
+-        if (ActivityClient.getInstance().convertFromTranslucent(mToken)) {
+-            WindowManagerGlobal.getInstance().changeCanvasOpacity(mToken, true /* opaque */);
+-            return true;
+-        }
+-        return false;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8647,50 +7404,13 @@
+     public boolean convertToTranslucent(TranslucentConversionListener callback,
+             ActivityOptions options) {
+-        mTranslucentCallback = callback;
+-        mChangeCanvasToTranslucent = ActivityClient.getInstance().convertToTranslucent(
+-                mToken, options == null ? null : options.toBundle());
+-        WindowManagerGlobal.getInstance().changeCanvasOpacity(mToken, false);
+-
+-        if (!mChangeCanvasToTranslucent && mTranslucentCallback != null) {
+-            // Window is already translucent.
+-            mTranslucentCallback.onTranslucentConversionComplete(true /* drawComplete */);
+-        }
+-        return mChangeCanvasToTranslucent;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     /** @hide */
+     void onTranslucentConversionComplete(boolean drawComplete) {
+-        if (mTranslucentCallback != null) {
+-            mTranslucentCallback.onTranslucentConversionComplete(drawComplete);
+-            mTranslucentCallback = null;
+-        }
+-        if (mChangeCanvasToTranslucent) {
+-            WindowManagerGlobal.getInstance().changeCanvasOpacity(mToken, false);
+-        }
+-    }
+-
+-    /** @hide */
+-    public void onNewSceneTransitionInfo(ActivityOptions.SceneTransitionInfo info) {
+-        mActivityTransitionState.setEnterSceneTransitionInfo(this, info);
+-        if (!mStopped) {
+-            mActivityTransitionState.enterReady(this);
+-        }
+-    }
+-
+-    /**
+-     * Takes the {@link SceneTransitionInfo} passed in from the launching activity or passed back
+-     * from an activity launched by this activity in its call to {@link
+-     * #convertToTranslucent(TranslucentConversionListener, ActivityOptions)}
+-     *
+-     * @return The {@link SceneTransitionInfo} which based on the ActivityOptions that originally
+-     *         passed to {@link #convertToTranslucent}.
+-     * @hide
+-     */
+-    SceneTransitionInfo getSceneTransitionInfo() {
+-        final SceneTransitionInfo sceneTransitionInfo = mSceneTransitionInfo;
+-        // The info only applies once.
+-        mSceneTransitionInfo = null;
+-        return sceneTransitionInfo;
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
+ 
+     /**
+@@ -8811,9 +7531,5 @@
+      */
+     public void dispatchEnterAnimationComplete() {
+-        onEnterAnimationComplete();
+-        if (getWindow() != null && getWindow().getDecorView() != null) {
+-            View decorView = getWindow().getDecorView();
+-            decorView.getViewTreeObserver().dispatchOnEnterAnimationComplete();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8833,5 +7549,5 @@
+      */
+     public void setImmersive(boolean i) {
+-        ActivityClient.getInstance().setImmersive(mToken, i);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8892,7 +7608,5 @@
+     public void setVrModeEnabled(boolean enabled, @NonNull ComponentName requestedComponent)
+           throws PackageManager.NameNotFoundException {
+-        if (ActivityClient.getInstance().setVrMode(mToken, enabled, requestedComponent) != 0) {
+-            throw new PackageManager.NameNotFoundException(requestedComponent.flattenToString());
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8938,12 +7652,5 @@
+     @Override
+     public ActionMode onWindowStartingActionMode(ActionMode.Callback callback) {
+-        // Only Primary ActionModes are represented in the ActionBar.
+-        if (mActionModeTypeStarting == ActionMode.TYPE_PRIMARY) {
+-            initWindowDecorActionBar();
+-            if (mActionBar != null) {
+-                return mActionBar.startActionMode(callback);
+-            }
+-        }
+-        return null;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8998,18 +7705,5 @@
+      */
+     public boolean shouldUpRecreateTask(Intent targetIntent) {
+-        try {
+-            PackageManager pm = getPackageManager();
+-            ComponentName cn = targetIntent.getComponent();
+-            if (cn == null) {
+-                cn = targetIntent.resolveActivity(pm);
+-            }
+-            ActivityInfo info = pm.getActivityInfo(cn, 0);
+-            if (info.taskAffinity == null) {
+-                return false;
+-            }
+-            return ActivityClient.getInstance().shouldUpRecreateTask(mToken, info.taskAffinity);
+-        } catch (NameNotFoundException e) {
+-            return false;
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9037,30 +7731,5 @@
+      */
+     public boolean navigateUpTo(Intent upIntent) {
+-        if (mParent == null) {
+-            ComponentName destInfo = upIntent.getComponent();
+-            if (destInfo == null) {
+-                destInfo = upIntent.resolveActivity(getPackageManager());
+-                if (destInfo == null) {
+-                    return false;
+-                }
+-                upIntent = new Intent(upIntent);
+-                upIntent.setComponent(destInfo);
+-            }
+-            int resultCode;
+-            Intent resultData;
+-            synchronized (this) {
+-                resultCode = mResultCode;
+-                resultData = mResultData;
+-            }
+-            if (resultData != null) {
+-                resultData.prepareToLeaveProcess(this);
+-            }
+-            upIntent.prepareToLeaveProcess(this);
+-            String resolvedType = upIntent.resolveTypeIfNeeded(getContentResolver());
+-            return ActivityClient.getInstance().navigateUpTo(mToken, upIntent, resolvedType,
+-                    resultCode, resultData);
+-        } else {
+-            return mParent.navigateUpToFromChild(this, upIntent);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9126,8 +7795,5 @@
+      */
+     public void setEnterSharedElementCallback(SharedElementCallback callback) {
+-        if (callback == null) {
+-            callback = SharedElementCallback.NULL_CALLBACK;
+-        }
+-        mEnterTransitionListener = callback;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9142,8 +7808,5 @@
+      */
+     public void setExitSharedElementCallback(SharedElementCallback callback) {
+-        if (callback == null) {
+-            callback = SharedElementCallback.NULL_CALLBACK;
+-        }
+-        mExitTransitionListener = callback;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9164,5 +7827,5 @@
+      */
+     public void postponeEnterTransition() {
+-        mActivityTransitionState.postponeEnterTransition();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9173,5 +7836,5 @@
+      */
+     public void startPostponedEnterTransition() {
+-        mActivityTransitionState.startPostponedEnterTransition();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9184,9 +7847,5 @@
+      */
+     public DragAndDropPermissions requestDragAndDropPermissions(DragEvent event) {
+-        DragAndDropPermissions dragAndDropPermissions = DragAndDropPermissions.obtain(event);
+-        if (dragAndDropPermissions != null && dragAndDropPermissions.take(getActivityToken())) {
+-            return dragAndDropPermissions;
+-        }
+-        return null;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9198,93 +7857,5 @@
+     }
+ 
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    final void attach(Context context, ActivityThread aThread,
+-            Instrumentation instr, IBinder token, int ident,
+-            Application application, Intent intent, ActivityInfo info,
+-            CharSequence title, Activity parent, String id,
+-            NonConfigurationInstances lastNonConfigurationInstances,
+-            Configuration config, String referrer, IVoiceInteractor voiceInteractor,
+-            Window window, ActivityConfigCallback activityConfigCallback, IBinder assistToken,
+-            IBinder shareableActivityToken) {
+-        attach(context, aThread, instr, token, ident, application, intent, info, title, parent, id,
+-                lastNonConfigurationInstances, config, referrer, voiceInteractor, window,
+-                activityConfigCallback, assistToken, shareableActivityToken, null);
+-    }
+-
+-    final void attach(Context context, ActivityThread aThread,
+-            Instrumentation instr, IBinder token, int ident,
+-            Application application, Intent intent, ActivityInfo info,
+-            CharSequence title, Activity parent, String id,
+-            NonConfigurationInstances lastNonConfigurationInstances,
+-            Configuration config, String referrer, IVoiceInteractor voiceInteractor,
+-            Window window, ActivityConfigCallback activityConfigCallback, IBinder assistToken,
+-            IBinder shareableActivityToken, IBinder initialCallerInfoAccessToken) {
+-
+-        // mIntent field hast to be set before calling attachBaseContext, as SDK Runtime activities
+-        // extract a token from the intent's extra to identify the related SDK as part of overriding
+-        // attachBaseContext.
+-        mIntent = intent;
+-        attachBaseContext(context);
+-
+-        mFragments.attachHost(null /*parent*/);
+-        mActivityInfo = info;
+-
+-        mWindow = new PhoneWindow(this, window, activityConfigCallback);
+-        mWindow.setWindowControllerCallback(mWindowControllerCallback);
+-        mWindow.setCallback(this);
+-        mWindow.setOnWindowDismissedCallback(this);
+-        mWindow.getLayoutInflater().setPrivateFactory(this);
+-        if (info.softInputMode != WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED) {
+-            mWindow.setSoftInputMode(info.softInputMode);
+-        }
+-        if (info.uiOptions != 0) {
+-            mWindow.setUiOptions(info.uiOptions);
+-        }
+-        mUiThread = Thread.currentThread();
+-
+-        mMainThread = aThread;
+-        mInstrumentation = instr;
+-        mToken = token;
+-        mAssistToken = assistToken;
+-        mShareableActivityToken = shareableActivityToken;
+-        mIdent = ident;
+-        mApplication = application;
+-        mReferrer = referrer;
+-        mComponent = intent.getComponent();
+-        mTitle = title;
+-        mParent = parent;
+-        mEmbeddedID = id;
+-        mLastNonConfigurationInstances = lastNonConfigurationInstances;
+-        if (voiceInteractor != null) {
+-            if (lastNonConfigurationInstances != null) {
+-                mVoiceInteractor = lastNonConfigurationInstances.voiceInteractor;
+-            } else {
+-                mVoiceInteractor = new VoiceInteractor(voiceInteractor, this, this,
+-                        Looper.myLooper());
+-            }
+-        }
+-
+-        mWindow.setWindowManager(
+-                (WindowManager)context.getSystemService(Context.WINDOW_SERVICE),
+-                mToken, mComponent.flattenToString(),
+-                (info.flags & ActivityInfo.FLAG_HARDWARE_ACCELERATED) != 0);
+-        if (mParent != null) {
+-            mWindow.setContainer(mParent.getWindow());
+-        }
+-        mWindowManager = mWindow.getWindowManager();
+-        mCurrentConfig = config;
+-
+-        mWindow.setColorMode(info.colorMode);
+-        mWindow.setPreferMinimalPostProcessing(
+-                (info.flags & ActivityInfo.FLAG_PREFER_MINIMAL_POST_PROCESSING) != 0);
+-
+-        getAutofillClientController().onActivityAttached(application);
+-        setContentCaptureOptions(application.getContentCaptureOptions());
+-
+-        if (android.security.Flags.contentUriPermissionApis()) {
+-            mInitialCaller = new ComponentCaller(getActivityToken(), initialCallerInfoAccessToken);
+-            mCaller = mInitialCaller;
+-        }
+-    }
++
+ 
+     /** @hide */
+@@ -9304,9 +7875,4 @@
+     }
+ 
+-    /** @hide */
+-    @VisibleForTesting
+-    public final ActivityThread getActivityThread() {
+-        return mMainThread;
+-    }
+ 
+     /** @hide */
+@@ -9321,105 +7887,32 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     final void performCreate(Bundle icicle, PersistableBundle persistentState) {
+-        if (Trace.isTagEnabled(Trace.TRACE_TAG_WINDOW_MANAGER)) {
+-            Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performCreate:"
+-                    + mComponent.getClassName());
+-        }
+         dispatchActivityPreCreated(icicle);
+-        mCanEnterPictureInPicture = true;
+-        // initialize mIsInMultiWindowMode and mIsInPictureInPictureMode before onCreate
+-        final int windowingMode = getResources().getConfiguration().windowConfiguration
+-                .getWindowingMode();
+-        mIsInMultiWindowMode = inMultiWindowMode(windowingMode);
+-        mIsInPictureInPictureMode = windowingMode == WINDOWING_MODE_PINNED;
+-        mShouldDockBigOverlays = getResources().getBoolean(R.bool.config_dockBigOverlayWindows);
+-        restoreHasCurrentPermissionRequest(icicle);
+-        final long startTime = SystemClock.uptimeMillis();
+-        if (persistentState != null) {
+-            onCreate(icicle, persistentState);
+-        } else {
+-            onCreate(icicle);
+-        }
+-        final long duration = SystemClock.uptimeMillis() - startTime;
+-        EventLogTags.writeWmOnCreateCalled(mIdent, getComponentName().getClassName(),
+-                "performCreate", duration);
+-        mActivityTransitionState.readState(icicle);
+-
+-        mVisibleFromClient = !mWindow.getWindowStyle().getBoolean(
+-                com.android.internal.R.styleable.Window_windowNoDisplay, false);
++        mCalled = false;
++        if (persistentState == null) onCreate(icicle);
++        else onCreate(icicle, persistentState);
++        if (!mCalled) mFragments.dispatchCreate();
+         mFragments.dispatchActivityCreated();
+-        mActivityTransitionState.setEnterSceneTransitionInfo(this, getSceneTransitionInfo());
+         dispatchActivityPostCreated(icicle);
+-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+     }
+ 
+     final void performNewIntent(@NonNull Intent intent) {
+-        Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performNewIntent");
+-        mCanEnterPictureInPicture = true;
+-        onNewIntent(intent);
+-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+-    }
+-
+-    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+     final void performNewIntent(@NonNull Intent intent, @NonNull ComponentCaller caller) {
+-        Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performNewIntent");
+-        mCanEnterPictureInPicture = true;
+-        mCurrentCaller = caller;
+-        onNewIntent(intent, caller);
+-        mCurrentCaller = null;
+-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     final void performStart(String reason) {
+-        if (Trace.isTagEnabled(Trace.TRACE_TAG_WINDOW_MANAGER)) {
+-            Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performStart:"
+-                    + mComponent.getClassName());
+-        }
+         dispatchActivityPreStarted();
+-        mActivityTransitionState.setEnterSceneTransitionInfo(this, getSceneTransitionInfo());
+         mFragments.noteStateNotSaved();
++        mFragments.execPendingActions();
+         mCalled = false;
+-        mFragments.execPendingActions();
+-        final long startTime = SystemClock.uptimeMillis();
+-        mInstrumentation.callActivityOnStart(this);
+-        final long duration = SystemClock.uptimeMillis() - startTime;
+-        EventLogTags.writeWmOnStartCalled(mIdent, getComponentName().getClassName(), reason,
+-                duration);
+-
+-        if (!mCalled) {
+-            throw new SuperNotCalledException(
+-                "Activity " + mComponent.toShortString() +
+-                " did not call through to super.onStart()");
+-        }
++        onStart();
++        mStopped = false;
++        mEmbeddedStarted = true;
+         mFragments.dispatchStart();
+         mFragments.reportLoaderStart();
+-
+-        // Warn app developers if the dynamic linker logged anything during startup.
+-        boolean isAppDebuggable =
+-                (mApplication.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+-        if (isAppDebuggable) {
+-            String dlwarning = getDlWarning();
+-            if (dlwarning != null) {
+-                String appName = getApplicationInfo().loadLabel(getPackageManager())
+-                        .toString();
+-                String warning = "Detected problems with app native libraries\n" +
+-                                 "(please consult log for detail):\n" + dlwarning;
+-                if (isAppDebuggable) {
+-                      new AlertDialog.Builder(this).
+-                          setTitle(appName).
+-                          setMessage(warning).
+-                          setPositiveButton(android.R.string.ok, null).
+-                          setCancelable(false).
+-                          show();
+-                } else {
+-                    Toast.makeText(this, appName + "\n" + warning, Toast.LENGTH_LONG).show();
+-                }
+-            }
+-        }
+-
+-        GraphicsEnvironment.getInstance().showAngleInUseDialogBox(this);
+-
+-        mActivityTransitionState.enterReady(this);
+         dispatchActivityPostStarted();
+-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+     }
+ 
+@@ -9431,269 +7924,79 @@
+      */
+     final void performRestart(boolean start) {
+-        Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performRestart");
+-        mCanEnterPictureInPicture = true;
++        if (!mStopped || !mEmbeddedStarted) return;
+         mFragments.noteStateNotSaved();
+-
+-        if (mToken != null && mParent == null) {
+-            // No need to check mStopped, the roots will check if they were actually stopped.
+-            WindowManagerGlobal.getInstance().setStoppedState(mToken, false /* stopped */);
+-        }
+-
++        mCalled = false;
++        onRestart();
++        if (start && !mFinished) performStart("restart");
++    }
++
++    final void performResume(boolean followedByPause, String reason) {
++        if (mDestroyed || mFinished || mResumed) return;
+         if (mStopped) {
+-            mStopped = false;
+-
+-            synchronized (mManagedCursors) {
+-                final int N = mManagedCursors.size();
+-                for (int i=0; i<N; i++) {
+-                    ManagedCursor mc = mManagedCursors.get(i);
+-                    if (mc.mReleased || mc.mUpdated) {
+-                        if (!mc.mCursor.requery()) {
+-                            if (getApplicationInfo().targetSdkVersion
+-                                    >= android.os.Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+-                                throw new IllegalStateException(
+-                                        "trying to requery an already closed cursor  "
+-                                        + mc.mCursor);
+-                            }
+-                        }
+-                        mc.mReleased = false;
+-                        mc.mUpdated = false;
+-                    }
+-                }
+-            }
+-
+-            mCalled = false;
+-            final long startTime = SystemClock.uptimeMillis();
+-            mInstrumentation.callActivityOnRestart(this);
+-            final long duration = SystemClock.uptimeMillis() - startTime;
+-            EventLogTags.writeWmOnRestartCalled(mIdent, getComponentName().getClassName(),
+-                    "performRestart", duration);
+-            if (!mCalled) {
+-                throw new SuperNotCalledException(
+-                    "Activity " + mComponent.toShortString() +
+-                    " did not call through to super.onRestart()");
+-            }
+-            if (start) {
+-                performStart("performRestart");
+-            }
+-        }
+-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+-    }
+-
+-    final void performResume(boolean followedByPause, String reason) {
+-        if (Trace.isTagEnabled(Trace.TRACE_TAG_WINDOW_MANAGER)) {
+-            Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performResume:"
+-                    + mComponent.getClassName());
+-        }
++            performRestart(false);
++            if (!mFinished) performStart(reason);
++        }
++        if (mFinished) return;
+         dispatchActivityPreResumed();
+-
+-        mCanEnterPictureInPicture = true;
+-
+         mFragments.execPendingActions();
+-
+-        mLastNonConfigurationInstances = null;
+-
+-        getAutofillClientController().onActivityPerformResume(followedByPause);
+-
++        mResumed = true;
+         mCalled = false;
+-        final long startTime = SystemClock.uptimeMillis();
+-        // mResumed is set by the instrumentation
+-        mInstrumentation.callActivityOnResume(this);
+-        long duration = SystemClock.uptimeMillis() - startTime;
+-        EventLogTags.writeWmOnResumeCalled(mIdent, getComponentName().getClassName(), reason,
+-                duration);
+-        if (!mCalled) {
+-            throw new SuperNotCalledException(
+-                "Activity " + mComponent.toShortString() +
+-                " did not call through to super.onResume()");
+-        }
+-
+-        // invisible activities must be finished before onResume) completes
+-        if (!mVisibleFromClient && !mFinished) {
+-            Log.w(TAG, "An activity without a UI must call finish() before onResume() completes");
+-            if (getApplicationInfo().targetSdkVersion
+-                    > android.os.Build.VERSION_CODES.LOLLIPOP_MR1) {
+-                throw new IllegalStateException(
+-                        "Activity " + mComponent.toShortString() +
+-                        " did not call finish() prior to onResume() completing");
+-            }
+-        }
+-
+-        // Now really resume, and install the current status bar and menu.
+-        mCalled = false;
+-
++        onResume();
+         mFragments.dispatchResume();
+         mFragments.execPendingActions();
+-
+-        duration = SystemClock.uptimeMillis() - startTime;
+-        if (duration > SLOW_OP_DURATION_MS) {
+-            Log.w(TAG, "Slow operation Fragment dispatchResume since onResume"
+-                    + ", duration=" + duration);
+-        }
+-
+         onPostResume();
+-        if (!mCalled) {
+-            throw new SuperNotCalledException(
+-                "Activity " + mComponent.toShortString() +
+-                " did not call through to super.onPostResume()");
+-        }
+-        duration = SystemClock.uptimeMillis() - startTime;
+-        if (duration > SLOW_OP_DURATION_MS) {
+-            Log.w(TAG, "Slow operation onPostResume since onResume, duration=" + duration);
+-        }
+-
+         dispatchActivityPostResumed();
+-
+-        duration = SystemClock.uptimeMillis() - startTime;
+-        if (duration > SLOW_OP_DURATION_MS) {
+-            Log.w(TAG, "Slow operation dispatchActivityPostResumed since onResume"
+-                    + ", duration=" + duration);
+-        }
+-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+     }
+ 
+     final void performPause() {
+-        if (Trace.isTagEnabled(Trace.TRACE_TAG_WINDOW_MANAGER)) {
+-            Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performPause:"
+-                    + mComponent.getClassName());
+-        }
++        if (!mResumed) return;
++        dispatchActivityPrePaused();
++        mResumed = false;
++        mFragments.dispatchPause();
++        mCalled = false;
++        onPause();
++        dispatchActivityPostPaused();
++    }
++
++    final void performUserLeaving() {
++        onUserInteraction();
+ 
+         if (isTvImplicitEnterPipProhibited()) {
+             mCanEnterPictureInPicture = false;
+         }
+-
+-        dispatchActivityPrePaused();
+-        mDoReportFullyDrawn = false;
+-        mFragments.dispatchPause();
+-        if (android.app.jank.Flags.detailedAppJankMetricsApi()) {
+-            stopAppJankTracking();
+-        }
++        onUserLeaveHint();
++    }
++
++    final void performStop(boolean preserveWindow, String reason) {
++        if (mStopped) return;
++        performPause();
++        dispatchActivityPreStopped();
++        mFragments.dispatchStop();
+         mCalled = false;
+-        final long startTime = SystemClock.uptimeMillis();
+-        onPause();
+-        final long duration = SystemClock.uptimeMillis() - startTime;
+-        EventLogTags.writeWmOnPausedCalled(mIdent, getComponentName().getClassName(),
+-                "performPause", duration);
+-        mResumed = false;
+-        if (!mCalled && getApplicationInfo().targetSdkVersion
+-                >= android.os.Build.VERSION_CODES.GINGERBREAD) {
+-            throw new SuperNotCalledException(
+-                    "Activity " + mComponent.toShortString() +
+-                    " did not call through to super.onPause()");
+-        }
+-        dispatchActivityPostPaused();
+-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+-    }
+-
+-    final void performUserLeaving() {
+-        onUserInteraction();
+-
+-        if (isTvImplicitEnterPipProhibited()) {
+-            mCanEnterPictureInPicture = false;
+-        }
+-        onUserLeaveHint();
+-    }
+-
+-    final void performStop(boolean preserveWindow, String reason) {
+-        if (Trace.isTagEnabled(Trace.TRACE_TAG_WINDOW_MANAGER)) {
+-            Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performStop:"
+-                    + mComponent.getClassName());
+-        }
+-        mDoReportFullyDrawn = false;
+-        mFragments.doLoaderStop(mChangingConfigurations /*retain*/);
+-
+-        // Disallow entering picture-in-picture after the activity has been stopped
+-        mCanEnterPictureInPicture = false;
+-
+-        if (!mStopped) {
+-            dispatchActivityPreStopped();
+-            if (mWindow != null) {
+-                mWindow.closeAllPanels();
+-            }
+-
+-            // If we're preserving the window, don't setStoppedState to true, since we
+-            // need the window started immediately again. Stopping the window will
+-            // destroys hardware resources and causes flicker.
+-            if (!preserveWindow && mToken != null && mParent == null) {
+-                WindowManagerGlobal.getInstance().setStoppedState(mToken, true);
+-            }
+-
+-            mFragments.dispatchStop();
+-
+-            mCalled = false;
+-            final long startTime = SystemClock.uptimeMillis();
+-            mInstrumentation.callActivityOnStop(this);
+-            final long duration = SystemClock.uptimeMillis() - startTime;
+-            EventLogTags.writeWmOnStopCalled(mIdent, getComponentName().getClassName(), reason,
+-                    duration);
+-            if (!mCalled) {
+-                throw new SuperNotCalledException(
+-                    "Activity " + mComponent.toShortString() +
+-                    " did not call through to super.onStop()");
+-            }
+-
+-            synchronized (mManagedCursors) {
+-                final int N = mManagedCursors.size();
+-                for (int i=0; i<N; i++) {
+-                    ManagedCursor mc = mManagedCursors.get(i);
+-                    if (!mc.mReleased) {
+-                        mc.mCursor.deactivate();
+-                        mc.mReleased = true;
+-                    }
+-                }
+-            }
+-
+-            mStopped = true;
+-            dispatchActivityPostStopped();
+-        }
+-        mResumed = false;
+-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
++        onStop();
++        mStopped = true;
++        dispatchActivityPostStopped();
+     }
+ 
+     final void performDestroy() {
+-        if (Trace.isTagEnabled(Trace.TRACE_TAG_WINDOW_MANAGER)) {
+-            Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performDestroy:"
+-                    + mComponent.getClassName());
+-        }
++        if (mDestroyed) return;
++        performStop(false, "destroy");
+         dispatchActivityPreDestroyed();
+         mDestroyed = true;
+         mWindow.destroy();
+         mFragments.dispatchDestroy();
+-        final long startTime = SystemClock.uptimeMillis();
+         onDestroy();
+-        final long duration = SystemClock.uptimeMillis() - startTime;
+-        EventLogTags.writeWmOnDestroyCalled(mIdent, getComponentName().getClassName(),
+-                "performDestroy", duration);
+         mFragments.doLoaderDestroy();
+-        if (mVoiceInteractor != null) {
+-            mVoiceInteractor.detachActivity();
+-        }
+         dispatchActivityPostDestroyed();
+-        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
+     }
+ 
+     final void dispatchMultiWindowModeChanged(boolean isInMultiWindowMode,
+             Configuration newConfig) {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG,
+-                "dispatchMultiWindowModeChanged " + this + ": " + isInMultiWindowMode
+-                        + " " + newConfig);
+-        mIsInMultiWindowMode = isInMultiWindowMode;
+-        mFragments.dispatchMultiWindowModeChanged(isInMultiWindowMode, newConfig);
+-        if (mWindow != null) {
+-            mWindow.onMultiWindowModeChanged();
+-        }
+-        onMultiWindowModeChanged(isInMultiWindowMode, newConfig);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     final void dispatchPictureInPictureModeChanged(boolean isInPictureInPictureMode,
+             Configuration newConfig) {
+-        if (DEBUG_LIFECYCLE) Slog.v(TAG,
+-                "dispatchPictureInPictureModeChanged " + this + ": " + isInPictureInPictureMode
+-                        + " " + newConfig);
+-        mIsInPictureInPictureMode = isInPictureInPictureMode;
+-        mFragments.dispatchPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
+-        if (mWindow != null) {
+-            mWindow.onPictureInPictureModeChanged(isInPictureInPictureMode);
+-        }
+-        onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9702,5 +8005,4 @@
+      */
+     @UnsupportedAppUsage
+-    @FlaggedApi(android.nfc.Flags.FLAG_ENABLE_NFC_MAINLINE)
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+     public final boolean isResumed() {
+@@ -9729,57 +8031,10 @@
+     void dispatchActivityResult(String who, int requestCode, int resultCode, Intent data,
+             String reason) {
+-        if (android.security.Flags.contentUriPermissionApis()) {
+-            internalDispatchActivityResult(who, requestCode, resultCode, data,
+-                    new ComponentCaller(getActivityToken(), /* callerToken */ null), reason);
+-        } else {
+-            internalDispatchActivityResult(who, requestCode, resultCode, data, null, reason);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private void internalDispatchActivityResult(String who, int requestCode, int resultCode,
+             Intent data, ComponentCaller caller, String reason) {
+-        if (false) Log.v(
+-            TAG, "Dispatching result: who=" + who + ", reqCode=" + requestCode
+-            + ", resCode=" + resultCode + ", data=" + data);
+-        mFragments.noteStateNotSaved();
+-        if (who == null) {
+-            if (android.security.Flags.contentUriPermissionApis()) {
+-                mCurrentCaller = caller;
+-                onActivityResult(requestCode, resultCode, data, caller);
+-                mCurrentCaller = null;
+-            } else {
+-                onActivityResult(requestCode, resultCode, data);
+-            }
+-        } else if (who.startsWith(REQUEST_PERMISSIONS_WHO_PREFIX)) {
+-            who = who.substring(REQUEST_PERMISSIONS_WHO_PREFIX.length());
+-            if (TextUtils.isEmpty(who)) {
+-                dispatchRequestPermissionsResult(requestCode, data);
+-            } else {
+-                Fragment frag = mFragments.findFragmentByWho(who);
+-                if (frag != null) {
+-                    dispatchRequestPermissionsResultToFragment(requestCode, data, frag);
+-                }
+-            }
+-        } else if (who.startsWith("@android:view:")) {
+-            ArrayList<ViewRootImpl> views = WindowManagerGlobal.getInstance().getRootViews(
+-                    getActivityToken());
+-            for (ViewRootImpl viewRoot : views) {
+-                if (viewRoot.getView() != null
+-                        && viewRoot.getView().dispatchActivityResult(
+-                                who, requestCode, resultCode, data)) {
+-                    return;
+-                }
+-            }
+-        } else if (who.startsWith(AutofillClientController.AUTO_FILL_AUTH_WHO_PREFIX)) {
+-            getAutofillClientController().onDispatchActivityResult(requestCode, resultCode, data);
+-        } else {
+-            Fragment frag = mFragments.findFragmentByWho(who);
+-            if (frag != null) {
+-                frag.onActivityResult(requestCode, resultCode, data);
+-            }
+-        }
+-
+-        EventLogTags.writeWmOnActivityResultCalled(mIdent, getComponentName().getClassName(),
+-                reason);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9807,5 +8062,5 @@
+      */
+     public void startLockTask() {
+-        ActivityClient.getInstance().startLockTaskModeByToken(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9827,5 +8082,5 @@
+      */
+     public void stopLockTask() {
+-        ActivityClient.getInstance().stopLockTaskModeByToken(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9836,5 +8091,5 @@
+      */
+     public void showLockTaskEscapeMessage() {
+-        ActivityClient.getInstance().showLockTaskEscapeMessage(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9947,5 +8202,5 @@
+      */
+     public void setRecentsScreenshotEnabled(boolean enabled) {
+-        ActivityClient.getInstance().setRecentsScreenshotEnabled(mToken, enabled);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9964,5 +8219,5 @@
+      */
+     public void setShowWhenLocked(boolean showWhenLocked) {
+-        ActivityClient.getInstance().setShowWhenLocked(mToken, showWhenLocked);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -9983,5 +8238,5 @@
+      */
+     public void setInheritShowWhenLocked(boolean inheritShowWhenLocked) {
+-        ActivityClient.getInstance().setInheritShowWhenLocked(mToken, inheritShowWhenLocked);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -10006,5 +8261,5 @@
+      */
+     public void setTurnScreenOn(boolean turnScreenOn) {
+-        ActivityClient.getInstance().setTurnScreenOn(mToken, turnScreenOn);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -10025,18 +8280,7 @@
+     @SuppressLint("OnNameExpected")
+     public void setAllowCrossUidActivitySwitchFromBelow(boolean allowed) {
+-        ActivityClient.getInstance().setAllowCrossUidActivitySwitchFromBelow(mToken, allowed);
+-    }
+-
+-    /**
+-     * Registers remote animations per transition type for this activity.
+-     *
+-     * @param definition The remote animation definition that defines which transition would run
+-     *                   which remote animation.
+-     * @hide
+-     */
+-    @RequiresPermission(CONTROL_REMOTE_APP_TRANSITION_ANIMATIONS)
+-    public void registerRemoteAnimations(RemoteAnimationDefinition definition) {
+-        ActivityClient.getInstance().registerRemoteAnimations(mToken, definition);
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+ 
+     /**
+@@ -10047,20 +8291,7 @@
+     @RequiresPermission(CONTROL_REMOTE_APP_TRANSITION_ANIMATIONS)
+     public void unregisterRemoteAnimations() {
+-        ActivityClient.getInstance().unregisterRemoteAnimations(mToken);
+-    }
+-
+-    /**
+-     * Notify {@link UiTranslationController} the ui translation state is changed.
+-     * @hide
+-     */
+-    public void updateUiTranslationState(int state, TranslationSpec sourceSpec,
+-            TranslationSpec targetSpec, List<AutofillId> viewIds,
+-            UiTranslationSpec uiTranslationSpec) {
+-        if (mUiTranslationController == null) {
+-            mUiTranslationController = new UiTranslationController(this, getApplicationContext());
+-        }
+-        mUiTranslationController.updateUiTranslationState(
+-                state, sourceSpec, targetSpec, viewIds, uiTranslationSpec);
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+ 
+     /**
+@@ -10080,5 +8311,5 @@
+      */
+     public void enableTaskLocaleOverride() {
+-        ActivityClient.getInstance().enableTaskLocaleOverride(mToken);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -10089,5 +8320,5 @@
+     @RequiresPermission(INTERNAL_SYSTEM_WINDOW)
+     public void setActivityRecordInputSinkEnabled(boolean enabled) {
+-        ActivityClient.getInstance().setActivityRecordInputSinkEnabled(mToken, enabled);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -10204,42 +8435,7 @@
+     @NonNull
+     public OnBackInvokedDispatcher getOnBackInvokedDispatcher() {
+-        if (mWindow == null) {
+-            throw new IllegalStateException("OnBackInvokedDispatcher are not available on "
+-                    + "non-visual activities");
+-        }
+-        return mWindow.getOnBackInvokedDispatcher();
+-    }
+-
+-    /**
+-     * Retrieves {@link HandoffActivityData} representing this activity, allowing it to be recreated
+-     * on another device owned by the user.
+-     *
+-     * The system automatically handles calling #onHandoffActivityDataRequested. This will only be
+-     * called if {@link #isHandoffEnabled} is {@code true} for this activity.
+-     *
+-     * If {@link #isHandoffEnabled} is {@code true}, the activity is expected to return a non-null
+-     * value. Returning {@code null} will present an error to the user indicating Handoff
+-     * unexpectedly failed.
+-     *
+-     * If the current activity is in the foreground on the current device, the app's icon
+-     * representing this activity will be shown on other nearby devices owned
+-     * by the user. If the user selects this icon, the system will call this method
+-     * to retrieve the data needed to recreate this activity on another device.
+-     *
+-     * When this activity is stopped, the system will call this method
+-     * to retrieve {@link HandoffActivityData} for caching. This allows the user
+-     * to hand this activity off to another device even if it is not currently
+-     * running. In these situations, {@link HandoffActivityDataRequestInfo#isActiveRequest}
+-     * will be {@code false}.
+-     *
+-     * @param requestInfo the request info for the activity data.
+-     * @return the activity data for handoff.
+-     */
+-    @FlaggedApi(android.companion.Flags.FLAG_TASK_CONTINUITY)
+-    @Nullable
+-    public HandoffActivityData onHandoffActivityDataRequested(
+-        @NonNull HandoffActivityDataRequestInfo requestInfo) {
+-      return null;
+-    }
++        return mEmbeddedBack;
++    }
++
+ 
+     /**
+@@ -10265,8 +8461,5 @@
+             @NonNull @CallbackExecutor Executor executor,
+             @NonNull ScreenCaptureCallback callback) {
+-        if (mScreenCaptureCallbackHandler == null) {
+-            mScreenCaptureCallbackHandler = new ScreenCaptureCallbackHandler(mToken);
+-        }
+-        mScreenCaptureCallbackHandler.registerScreenCaptureCallback(executor, callback);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -10277,36 +8470,9 @@
+     @RequiresPermission(DETECT_SCREEN_CAPTURE)
+     public void unregisterScreenCaptureCallback(@NonNull ScreenCaptureCallback callback) {
+-        if (mScreenCaptureCallbackHandler != null) {
+-            mScreenCaptureCallbackHandler.unregisterScreenCaptureCallback(callback);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private void startAppJankTracking() {
+-        if (!shouldStartAppJankTracking()) {
+-            return;
+-        }
+-
+-        if (getWindow() != null && getWindow().peekDecorView() != null) {
+-            DecorView decorView = (DecorView) getWindow().peekDecorView();
+-            if (decorView.getVisibility() == View.VISIBLE) {
+-                decorView.setAppJankStatsCallback(new DecorView.AppJankStatsCallback() {
+-                    @Override
+-                    public JankTracker getAppJankTracker() {
+-                        return mJankTracker;
+-                    }
+-                });
+-                if (mJankTracker == null) {
+-                    if (android.app.jank.Flags.viewrootChoreographer()) {
+-                        mJankTracker = new JankTracker(decorView);
+-                    } else {
+-                        mJankTracker = new JankTracker(Choreographer.getInstance(), decorView);
+-                    }
+-                }
+-                // TODO b/377674765 confirm this is the string we want logged.
+-                mJankTracker.setActivityName(getComponentName().getClassName());
+-                mJankTracker.setAppUid(myUid());
+-                mJankTracker.enableAppJankTracking();
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -10322,15 +8488,5 @@
+      */
+     private boolean shouldStartAppJankTracking() {
+-        if (mApplication.getApplicationInfo().category == ApplicationInfo.CATEGORY_UNDEFINED) {
+-            return false;
+-        }
+-
+-        // Android feature flag, will be removed when feature rolled out.
+-        if (!android.app.jank.Flags.detailedAppJankMetricsLoggingEnabled()) {
+-            return false;
+-        }
+-
+-        // Configuration flag, limits work only to devices reporting metrics.
+-        return JankTracker.isJankTrackingSupported();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -10339,31 +8495,10 @@
+      */
+     private void stopAppJankTracking() {
+-        if (!android.app.jank.Flags.detailedAppJankMetricsLoggingEnabled()) {
+-            return;
+-        }
+-        if (mJankTracker != null) {
+-            mJankTracker.disableAppJankTracking();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     final void autofillViewIfAvailable(
+             @NonNull AutofillId targetAutofillId, @NonNull AutofillValue autofillValue) {
+-        if (false) Log.v(TAG, "autofill view in client app Activity, id: " + targetAutofillId);
+-        runOnUiThread(
+-                () -> {
+-                    View view =
+-                            getAutofillClientController()
+-                                    .autofillClientFindViewByAutofillIdTraversal(targetAutofillId);
+-                    if (view != null) {
+-                        // TODO: b/410146465 support virtual views
+-                        view.autofill(autofillValue);
+-                        view.requestFocus();
+-                        WindowInsetsController windowInsetsController =
+-                                view.getWindowInsetsController();
+-                        if (windowInsetsController != null) {
+-                            windowInsetsController.show(WindowInsets.Type.ime());
+-                        }
+-                    }
+-                });
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -10378,3 +8513,57 @@
+         }
+     }
++    private boolean mEmbeddedStarted;
++    private final BackDispatcher mEmbeddedBack = new BackDispatcher();
++
++    final void attachEmbedded(Context context, Intent intent, int theme) {
++        attachBaseContext(context);
++        mApplication = (Application) context.getApplicationContext();
++        mIntent = intent;
++        mComponent = intent.getComponent();
++        mActivityInfo = new ActivityInfo();
++        mActivityInfo.packageName = mComponent.getPackageName();
++        mActivityInfo.name = mComponent.getClassName();
++        mActivityInfo.applicationInfo = context.getApplicationInfo();
++        mCurrentConfig = context.getResources().getConfiguration();
++        mUiThread = Thread.currentThread();
++        mStopped = true;
++        mFragments.attachHost(null);
++        if (theme != 0) setTheme(theme);
++    }
++
++    final void attachEmbeddedWindow(Window window) {
++        mWindow = window;
++        mWindowManager = window.getWindowManager();
++        mWindow.setCallback(this);
++        getLayoutInflater().setPrivateFactory(this);
++    }
++
++    final void performBackPressed() {
++        OnBackInvokedCallback callback = mEmbeddedBack.getTopCallback();
++        if (callback == null) onBackPressed();
++        else callback.onBackInvoked();
++    }
++
++    private static final class BackDispatcher implements OnBackInvokedDispatcher {
++        private final ArrayList<OnBackInvokedCallback> callbacks = new ArrayList<>();
++        private final ArrayList<Integer> priorities = new ArrayList<>();
++        @Override public void registerOnBackInvokedCallback(int priority, OnBackInvokedCallback callback) {
++            if (callback == null) throw new NullPointerException("callback");
++            unregisterOnBackInvokedCallback(callback);
++            int i = callbacks.size();
++            while (i > 0 && priorities.get(i - 1) > priority) i--;
++            callbacks.add(i, callback);
++            priorities.add(i, priority);
++        }
++        @Override public void unregisterOnBackInvokedCallback(OnBackInvokedCallback callback) {
++            int i = callbacks.indexOf(callback);
++            if (i >= 0) {
++                callbacks.remove(i);
++                priorities.remove(i);
++            }
++        }
++        OnBackInvokedCallback getTopCallback() {
++            return callbacks.isEmpty() ? null : callbacks.get(callbacks.size() - 1);
++        }
++    }
+ }

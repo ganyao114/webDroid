@@ -1,0 +1,2261 @@
+--- a/frameworks/base/core/java/android/content/Context.java
++++ b/frameworks/base/core/java/android/content/Context.java
+@@ -18,8 +18,5 @@
+ 
+ import static android.app.appfunctions.flags.Flags.FLAG_ENABLE_APP_FUNCTION_MANAGER;
+-import static android.app.lskfreset.flags.Flags.FLAG_ENABLE_LSKF_RESET_MANAGER;
+ import static android.app.ondeviceintelligence.flags.Flags.FLAG_ENABLE_ON_DEVICE_INTELLIGENCE_MODULE;
+-import static android.content.flags.Flags.FLAG_ENABLE_BIND_PACKAGE_ISOLATED_PROCESS;
+-import static android.content.flags.Flags.FLAG_ENABLE_UPDATE_SERVICE_BINDINGS;
+ import static android.security.Flags.FLAG_SECURE_LOCKDOWN;
+ 
+@@ -29,5 +26,4 @@
+ import android.annotation.ColorInt;
+ import android.annotation.ColorRes;
+-import android.annotation.DisplayContext;
+ import android.annotation.DrawableRes;
+ import android.annotation.FlaggedApi;
+@@ -36,10 +32,5 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.PermissionMethod;
+-import android.annotation.PermissionName;
+-import android.annotation.RequiresFeature;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SpecialUsers.CanBeALL;
+-import android.annotation.SpecialUsers.CanBeCURRENT;
+ import android.annotation.StringDef;
+ import android.annotation.StringRes;
+@@ -56,12 +47,6 @@
+ import android.app.GameManager;
+ import android.app.GrammaticalInflectionManager;
+-import android.app.IApplicationThread;
+-import android.app.IBinderSession;
+-import android.app.IServiceConnection;
+-import android.app.VrManager;
+-import android.app.ambientcontext.AmbientContextManager;
+ import android.app.appfunctions.AppFunctionManager;
+ import android.app.people.PeopleManager;
+-import android.app.time.TimeManager;
+ import android.companion.virtual.VirtualDeviceManager;
+ import android.compat.annotation.ChangeId;
+@@ -93,5 +78,4 @@
+ import android.os.UserHandle;
+ import android.os.UserManager;
+-import android.os.allowlist.AllowlistManager;
+ import android.os.storage.StorageManager;
+ import android.provider.E2eeContactKeysManager;
+@@ -99,7 +83,4 @@
+ import android.ravenwood.annotation.RavenwoodKeep;
+ import android.ravenwood.annotation.RavenwoodKeepPartialClass;
+-import android.ravenwood.annotation.RavenwoodSupported;
+-import android.ravenwood.annotation.RavenwoodSupported.SupportType;
+-import android.telephony.TelephonyRegistryManager;
+ import android.util.AttributeSet;
+ import android.view.Display;
+@@ -110,13 +91,7 @@
+ import android.view.WindowManager;
+ import android.view.WindowManager.LayoutParams.WindowType;
+-import android.view.autofill.AutofillManager.AutofillClient;
+-import android.view.contentcapture.ContentCaptureManager.ContentCaptureClient;
+ import android.view.textclassifier.TextClassificationManager;
+-import android.window.WindowContext;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.compat.IPlatformCompat;
+-import com.android.internal.compat.IPlatformCompatNative;
+-import com.android.internal.protolog.ProtoLogConfigurationService;
+ 
+ import java.io.File;
+@@ -369,5 +344,4 @@
+          */
+         @TestApi
+-        @FlaggedApi(FLAG_ENABLE_UPDATE_SERVICE_BINDINGS)
+         public long getValue() {
+             return mValue;
+@@ -552,5 +526,4 @@
+      * defined by the service. This flag cannot be used without this attribute set.
+      */
+-    @FlaggedApi(FLAG_ENABLE_BIND_PACKAGE_ISOLATED_PROCESS)
+     public static final int BIND_PACKAGE_ISOLATED_PROCESS = 1 << 14;
+ 
+@@ -822,5 +795,4 @@
+      */
+     @NonNull
+-    @FlaggedApi(FLAG_ENABLE_UPDATE_SERVICE_BINDINGS)
+     public BindServiceFlags getUpdateableFlags() {
+         return BindServiceFlags.of(BIND_UPDATEABLE_FLAGS);
+@@ -898,5 +870,4 @@
+      * operation.
+      */
+-    @FlaggedApi(FLAG_ENABLE_UPDATE_SERVICE_BINDINGS)
+     public static final class UpdateBindingParams {
+         private ServiceConnection mConnection;
+@@ -1023,5 +994,4 @@
+      * @see #getResources()
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public abstract AssetManager getAssets();
+ 
+@@ -1037,15 +1007,10 @@
+      * @see #getAssets()
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public abstract Resources getResources();
+ 
+     /** Return PackageManager instance to find global package information. */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Almost no APIs on PackageManager are supported yet")
+     public abstract PackageManager getPackageManager();
+ 
+     /** Return a ContentResolver instance for your application's package. */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "only content://settings/ is understood for now", bug = 457841012)
+     public abstract ContentResolver getContentResolver();
+ 
+@@ -1061,6 +1026,7 @@
+      * @return The main looper.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract Looper getMainLooper();
++    public Looper getMainLooper() {
++        return Looper.getMainLooper();
++    }
+ 
+     /**
+@@ -1069,7 +1035,5 @@
+      * calls to application components (activities, services, etc).
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public Executor getMainExecutor() {
+-        // This is pretty inefficient, which is why ContextImpl overrides it
+         return new HandlerExecutor(new Handler(getMainLooper()));
+     }
+@@ -1100,5 +1064,4 @@
+      * </ul>
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public abstract Context getApplicationContext();
+ 
+@@ -1117,11 +1080,5 @@
+      */
+     public int getNextAutofillId() {
+-        if (sLastAutofillId == View.LAST_APP_AUTOFILL_ID - 1) {
+-            sLastAutofillId = View.NO_ID;
+-        }
+-
+-        sLastAutofillId++;
+-
+-        return sLastAutofillId;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1157,5 +1114,6 @@
+      */
+     public void registerComponentCallbacks(ComponentCallbacks callback) {
+-        getApplicationContext().registerComponentCallbacks(callback);
++        final Context application = getApplicationContext();
++        if (application != this) application.registerComponentCallbacks(callback);
+     }
+ 
+@@ -1165,5 +1123,6 @@
+      */
+     public void unregisterComponentCallbacks(ComponentCallbacks callback) {
+-        getApplicationContext().unregisterComponentCallbacks(callback);
++        final Context application = getApplicationContext();
++        if (application != this) application.unregisterComponentCallbacks(callback);
+     }
+ 
+@@ -1270,5 +1229,4 @@
+      * @param resid The style resource describing the theme.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public abstract void setTheme(@StyleRes int resid);
+ 
+@@ -1284,5 +1242,4 @@
+      */
+     @ViewDebug.ExportedProperty(deepExport = true)
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public abstract Resources.Theme getTheme();
+ 
+@@ -1347,9 +1304,9 @@
+      * Return a class loader you can use to retrieve classes in this package.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract ClassLoader getClassLoader();
++    public ClassLoader getClassLoader() {
++        return getClass().getClassLoader();
++    }
+ 
+     /** Return the name of this application's package. */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public abstract String getPackageName();
+ 
+@@ -1363,6 +1320,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract String getBasePackageName();
++    public String getBasePackageName() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1373,7 +1331,6 @@
+      */
+     @NonNull
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public String getOpPackageName() {
+-        throw new RuntimeException("Not implemented. Must override in a subclass.");
++        return getPackageName();
+     }
+ 
+@@ -1385,5 +1342,4 @@
+      * @return the attribution tag this context is for or {@code null} if this is the default.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public @Nullable String getAttributionTag() {
+         return null;
+@@ -1395,5 +1351,4 @@
+      * @see AttributionSource
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public @NonNull AttributionSource getAttributionSource() {
+         return null;
+@@ -1413,5 +1368,4 @@
+      * was created via {@link #createContext(ContextParams)}.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public @Nullable ContextParams getParams() {
+         return null;
+@@ -1419,5 +1373,4 @@
+ 
+     /** Return the full application info for this context's package. */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public abstract ApplicationInfo getApplicationInfo();
+ 
+@@ -1432,6 +1385,7 @@
+      * @return String Path to the resources.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract String getPackageResourcePath();
++    public String getPackageResourcePath() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1445,5 +1399,7 @@
+      * @return String Path to the code and assets.
+      */
+-    public abstract String getPackageCodePath();
++    public String getPackageCodePath() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1482,5 +1438,4 @@
+      * @see #MODE_PRIVATE
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public abstract SharedPreferences getSharedPreferences(String name, @PreferencesMode int mode);
+ 
+@@ -1505,6 +1460,7 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract SharedPreferences getSharedPreferences(File file, @PreferencesMode int mode);
++    public SharedPreferences getSharedPreferences(File file, @PreferencesMode int mode) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1522,5 +1478,7 @@
+      * @see #createDeviceProtectedStorageContext()
+      */
+-    public abstract boolean moveSharedPreferencesFrom(Context sourceContext, String name);
++    public boolean moveSharedPreferencesFrom(Context sourceContext, String name) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1533,9 +1491,13 @@
+      * @see #getSharedPreferences(String, int)
+      */
+-    public abstract boolean deleteSharedPreferences(String name);
++    public boolean deleteSharedPreferences(String name) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /** @hide */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract void reloadSharedPreferences();
++    public void reloadSharedPreferences() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1553,7 +1515,8 @@
+      * @see java.io.FileInputStream#FileInputStream(String)
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract FileInputStream openFileInput(String name)
+-        throws FileNotFoundException;
++    public FileInputStream openFileInput(String name)
++        throws FileNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1575,7 +1538,8 @@
+      * @see java.io.FileOutputStream#FileOutputStream(String)
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract FileOutputStream openFileOutput(String name, @FileMode int mode)
+-        throws FileNotFoundException;
++    public FileOutputStream openFileOutput(String name, @FileMode int mode)
++        throws FileNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1594,6 +1558,7 @@
+      * @see java.io.File#delete()
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract boolean deleteFile(String name);
++    public boolean deleteFile(String name) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1613,6 +1578,7 @@
+      * @see #getDir
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract File getFileStreamPath(String name);
++    public File getFileStreamPath(String name) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1630,6 +1596,7 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract File getSharedPreferencesPath(String name);
++    public File getSharedPreferencesPath(String name) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1648,6 +1615,7 @@
+      * @see ApplicationInfo#dataDir
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract File getDataDir();
++    public File getDataDir() {
++        return new File("/data/user/0/" + getPackageName());
++    }
+ 
+     /**
+@@ -1666,6 +1634,7 @@
+      * @see #getDir
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract File getFilesDir();
++    public File getFilesDir() {
++        return new File(getDataDir(), "files");
++    }
+ 
+     /**
+@@ -1714,6 +1683,7 @@
+      * @see android.app.backup.BackupAgent
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract File getNoBackupFilesDir();
++    public File getNoBackupFilesDir() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1803,5 +1773,7 @@
+      */
+     @Nullable
+-    public abstract File getExternalFilesDir(@Nullable String type);
++    public File getExternalFilesDir(@Nullable String type) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1865,5 +1837,7 @@
+      * @see Environment#isExternalStorageRemovable(File)
+      */
+-    public abstract File[] getExternalFilesDirs(String type);
++    public File[] getExternalFilesDirs(String type) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1939,5 +1913,7 @@
+      * @see Environment#isExternalStorageRemovable(File)
+      */
+-    public abstract File getObbDir();
++    public File getObbDir() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -1982,5 +1958,7 @@
+      * @see Environment#isExternalStorageRemovable(File)
+      */
+-    public abstract File[] getObbDirs();
++    public File[] getObbDirs() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2019,6 +1997,7 @@
+      * @see #getExternalCacheDir
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract File getCacheDir();
++    public File getCacheDir() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2041,6 +2020,7 @@
+      * @return The path of the directory holding application code cache files.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract File getCodeCacheDir();
++    public File getCodeCacheDir() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2099,5 +2079,7 @@
+      */
+     @Nullable
+-    public abstract File getExternalCacheDir();
++    public File getExternalCacheDir() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2110,5 +2092,7 @@
+     @Nullable
+     @SystemApi
+-    public abstract File getPreloadsFileCache();
++    public File getPreloadsFileCache() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2168,5 +2152,7 @@
+      * @see Environment#isExternalStorageRemovable(File)
+      */
+-    public abstract File[] getExternalCacheDirs();
++    public File[] getExternalCacheDirs() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2219,5 +2205,7 @@
+      */
+     @Deprecated
+-    public abstract File[] getExternalMediaDirs();
++    public File[] getExternalMediaDirs() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2231,5 +2219,7 @@
+      * @see #deleteFile
+      */
+-    public abstract String[] fileList();
++    public String[] fileList() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2256,6 +2246,7 @@
+      * @see #openFileOutput(String, int)
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract File getDir(String name, @FileMode int mode);
++    public File getDir(String name, @FileMode int mode) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2275,6 +2266,8 @@
+      * @see #deleteDatabase
+      */
+-    public abstract SQLiteDatabase openOrCreateDatabase(String name,
+-            @DatabaseMode int mode, CursorFactory factory);
++    public SQLiteDatabase openOrCreateDatabase(String name,
++            @DatabaseMode int mode, CursorFactory factory) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2302,7 +2295,9 @@
+      * @see #deleteDatabase
+      */
+-    public abstract SQLiteDatabase openOrCreateDatabase(String name,
++    public SQLiteDatabase openOrCreateDatabase(String name,
+             @DatabaseMode int mode, CursorFactory factory,
+-            @Nullable DatabaseErrorHandler errorHandler);
++            @Nullable DatabaseErrorHandler errorHandler) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2321,5 +2316,7 @@
+      * @see #createDeviceProtectedStorageContext()
+      */
+-    public abstract boolean moveDatabaseFrom(Context sourceContext, String name);
++    public boolean moveDatabaseFrom(Context sourceContext, String name) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2334,5 +2331,7 @@
+      * @see #openOrCreateDatabase
+      */
+-    public abstract boolean deleteDatabase(String name);
++    public boolean deleteDatabase(String name) {
++        return SQLiteDatabase.deleteDatabase(getDatabasePath(name));
++    }
+ 
+     /**
+@@ -2350,5 +2349,7 @@
+      * @see #openOrCreateDatabase
+      */
+-    public abstract File getDatabasePath(String name);
++    public File getDatabasePath(String name) {
++        return new File(new File(getDataDir(), "databases"), name);
++    }
+ 
+     /**
+@@ -2361,5 +2362,7 @@
+      * @see #deleteDatabase
+      */
+-    public abstract String[] databaseList();
++    public String[] databaseList() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2368,5 +2371,7 @@
+      */
+     @Deprecated
+-    public abstract Drawable getWallpaper();
++    public Drawable getWallpaper() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2375,5 +2380,7 @@
+      */
+     @Deprecated
+-    public abstract Drawable peekWallpaper();
++    public Drawable peekWallpaper() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2382,5 +2389,7 @@
+      */
+     @Deprecated
+-    public abstract int getWallpaperDesiredMinimumWidth();
++    public int getWallpaperDesiredMinimumWidth() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2389,5 +2398,7 @@
+      */
+     @Deprecated
+-    public abstract int getWallpaperDesiredMinimumHeight();
++    public int getWallpaperDesiredMinimumHeight() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2398,5 +2409,7 @@
+      */
+     @Deprecated
+-    public abstract void setWallpaper(Bitmap bitmap) throws IOException;
++    public void setWallpaper(Bitmap bitmap) throws IOException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2407,5 +2420,7 @@
+      */
+     @Deprecated
+-    public abstract void setWallpaper(InputStream data) throws IOException;
++    public void setWallpaper(InputStream data) throws IOException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2416,5 +2431,7 @@
+      */
+     @Deprecated
+-    public abstract void clearWallpaper() throws IOException;
++    public void clearWallpaper() throws IOException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2429,5 +2446,7 @@
+      * @see PackageManager#resolveActivity
+      */
+-    public abstract void startActivity(@RequiresPermission Intent intent);
++    public void startActivity(@RequiresPermission Intent intent) {
++        startActivity(intent, null);
++    }
+ 
+     /**
+@@ -2443,5 +2462,5 @@
+     @SystemApi
+     public void startActivityAsUser(@RequiresPermission @NonNull Intent intent,
+-            @NonNull @CanBeCURRENT UserHandle user) {
++            @NonNull UserHandle user) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -2491,5 +2510,5 @@
+     @SystemApi
+     public void startActivityAsUser(@RequiresPermission @NonNull Intent intent,
+-            @Nullable Bundle options, @NonNull @CanBeCURRENT UserHandle userId) {
++            @Nullable Bundle options, @NonNull UserHandle userId) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -2536,5 +2555,7 @@
+      * @see PackageManager#resolveActivity
+      */
+-    public abstract void startActivities(@RequiresPermission Intent[] intents);
++    public void startActivities(@RequiresPermission Intent[] intents) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2562,5 +2583,7 @@
+      * @see PackageManager#resolveActivity
+      */
+-    public abstract void startActivities(@RequiresPermission Intent[] intents, Bundle options);
++    public void startActivities(@RequiresPermission Intent[] intents, Bundle options) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2596,5 +2619,5 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+     public int startActivitiesAsUser(Intent[] intents, Bundle options,
+-            @CanBeCURRENT UserHandle userHandle) {
++            UserHandle userHandle) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -2616,7 +2639,9 @@
+      * @see #startIntentSender(IntentSender, Intent, int, int, int, Bundle)
+      */
+-    public abstract void startIntentSender(IntentSender intent, @Nullable Intent fillInIntent,
+-            @Intent.MutableFlags int flagsMask, @Intent.MutableFlags int flagsValues,
+-            int extraFlags) throws IntentSender.SendIntentException;
++    public void startIntentSender(IntentSender intent, @Nullable Intent fillInIntent,
++            int flagsMask, int flagsValues,
++            int extraFlags) throws IntentSender.SendIntentException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2645,7 +2670,9 @@
+      * @see #startIntentSender(IntentSender, Intent, int, int, int)
+      */
+-    public abstract void startIntentSender(IntentSender intent, @Nullable Intent fillInIntent,
+-            @Intent.MutableFlags int flagsMask, @Intent.MutableFlags int flagsValues,
+-            int extraFlags, @Nullable Bundle options) throws IntentSender.SendIntentException;
++    public void startIntentSender(IntentSender intent, @Nullable Intent fillInIntent,
++            int flagsMask, int flagsValues,
++            int extraFlags, @Nullable Bundle options) throws IntentSender.SendIntentException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2669,5 +2696,7 @@
+      * @see #sendOrderedBroadcast(Intent, String, BroadcastReceiver, Handler, int, String, Bundle)
+      */
+-    public abstract void sendBroadcast(@RequiresPermission Intent intent);
++    public void sendBroadcast(@RequiresPermission Intent intent) {
++        throw new UnsupportedOperationException("No local broadcast dispatcher");
++    }
+ 
+     /**
+@@ -2695,6 +2724,8 @@
+      * @see #sendOrderedBroadcast(Intent, String, BroadcastReceiver, Handler, int, String, Bundle)
+      */
+-    public abstract void sendBroadcast(@RequiresPermission Intent intent,
+-            @Nullable String receiverPermission);
++    public void sendBroadcast(@RequiresPermission Intent intent,
++            @Nullable String receiverPermission) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+ 
+@@ -2857,6 +2888,8 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    public abstract void sendBroadcastAsUserMultiplePermissions(Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, String[] receiverPermissions);
++    public void sendBroadcastAsUserMultiplePermissions(Intent intent,
++            UserHandle user, String[] receiverPermissions) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2899,6 +2932,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract void sendBroadcast(Intent intent,
+-            String receiverPermission, int appOp);
++    public void sendBroadcast(Intent intent,
++            String receiverPermission, int appOp) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2922,6 +2957,8 @@
+      * @see #sendOrderedBroadcast(Intent, String, BroadcastReceiver, Handler, int, String, Bundle)
+      */
+-    public abstract void sendOrderedBroadcast(@RequiresPermission Intent intent,
+-            @Nullable String receiverPermission);
++    public void sendOrderedBroadcast(@RequiresPermission Intent intent,
++            @Nullable String receiverPermission) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -2991,8 +3028,10 @@
+      * @see android.app.Activity#RESULT_OK
+      */
+-    public abstract void sendOrderedBroadcast(@RequiresPermission @NonNull Intent intent,
++    public void sendOrderedBroadcast(@RequiresPermission @NonNull Intent intent,
+             @Nullable String receiverPermission, @Nullable BroadcastReceiver resultReceiver,
+             @Nullable Handler scheduler, int initialCode, @Nullable String initialData,
+-            @Nullable Bundle initialExtras);
++            @Nullable Bundle initialExtras) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3053,8 +3092,10 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract void sendOrderedBroadcast(Intent intent,
++    public void sendOrderedBroadcast(Intent intent,
+             String receiverPermission, int appOp, BroadcastReceiver resultReceiver,
+             Handler scheduler, int initialCode, String initialData,
+-            Bundle initialExtras);
++            Bundle initialExtras) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3067,6 +3108,8 @@
+      */
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+-    public abstract void sendBroadcastAsUser(@RequiresPermission Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user);
++    public void sendBroadcastAsUser(@RequiresPermission Intent intent,
++            UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3085,6 +3128,8 @@
+      */
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+-    public abstract void sendBroadcastAsUser(@RequiresPermission Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, @Nullable String receiverPermission);
++    public void sendBroadcastAsUser(@RequiresPermission Intent intent,
++            UserHandle user, @Nullable String receiverPermission) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3108,7 +3153,9 @@
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+-    public abstract void sendBroadcastAsUser(@RequiresPermission Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, @Nullable String receiverPermission,
+-            @Nullable Bundle options);
++    public void sendBroadcastAsUser(@RequiresPermission Intent intent,
++            UserHandle user, @Nullable String receiverPermission,
++            @Nullable Bundle options) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3132,7 +3179,9 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public abstract void sendBroadcastAsUser(@RequiresPermission Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, @Nullable String receiverPermission,
+-            int appOp);
++    public void sendBroadcastAsUser(@RequiresPermission Intent intent,
++            UserHandle user, @Nullable String receiverPermission,
++            int appOp) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3166,9 +3215,11 @@
+      */
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+-    public abstract void sendOrderedBroadcastAsUser(@RequiresPermission Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, @Nullable String receiverPermission,
++    public void sendOrderedBroadcastAsUser(@RequiresPermission Intent intent,
++            UserHandle user, @Nullable String receiverPermission,
+             BroadcastReceiver resultReceiver,
+             @Nullable Handler scheduler, int initialCode, @Nullable String initialData,
+-            @Nullable  Bundle initialExtras);
++            @Nullable  Bundle initialExtras) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3181,8 +3232,10 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public abstract void sendOrderedBroadcastAsUser(Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, @Nullable String receiverPermission, int appOp,
++    public void sendOrderedBroadcastAsUser(Intent intent,
++            UserHandle user, @Nullable String receiverPermission, int appOp,
+             BroadcastReceiver resultReceiver, @Nullable Handler scheduler, int initialCode,
+-            @Nullable String initialData, @Nullable  Bundle initialExtras);
++            @Nullable String initialData, @Nullable  Bundle initialExtras) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3195,8 +3248,10 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+     @UnsupportedAppUsage
+-    public abstract void sendOrderedBroadcastAsUser(Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, @Nullable String receiverPermission, int appOp,
++    public void sendOrderedBroadcastAsUser(Intent intent,
++            UserHandle user, @Nullable String receiverPermission, int appOp,
+             @Nullable Bundle options, BroadcastReceiver resultReceiver, @Nullable Handler scheduler,
+-            int initialCode, @Nullable String initialData, @Nullable  Bundle initialExtras);
++            int initialCode, @Nullable String initialData, @Nullable  Bundle initialExtras) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3211,5 +3266,5 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+     public void sendOrderedBroadcastAsUserMultiplePermissions(Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, String[] receiverPermissions, int appOp,
++            UserHandle user, String[] receiverPermissions, int appOp,
+             Bundle options, BroadcastReceiver resultReceiver, Handler scheduler, int initialCode,
+             String initialData, Bundle initialExtras) {
+@@ -3351,5 +3406,7 @@
+     @Deprecated
+     @RequiresPermission(android.Manifest.permission.BROADCAST_STICKY)
+-    public abstract void sendStickyBroadcast(@RequiresPermission Intent intent);
++    public void sendStickyBroadcast(@RequiresPermission Intent intent) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3431,8 +3488,10 @@
+     @Deprecated
+     @RequiresPermission(android.Manifest.permission.BROADCAST_STICKY)
+-    public abstract void sendStickyOrderedBroadcast(@RequiresPermission Intent intent,
++    public void sendStickyOrderedBroadcast(@RequiresPermission Intent intent,
+             BroadcastReceiver resultReceiver,
+             @Nullable Handler scheduler, int initialCode, @Nullable String initialData,
+-            @Nullable Bundle initialExtras);
++            @Nullable Bundle initialExtras) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3452,5 +3511,7 @@
+     @Deprecated
+     @RequiresPermission(android.Manifest.permission.BROADCAST_STICKY)
+-    public abstract void removeStickyBroadcast(@RequiresPermission Intent intent);
++    public void removeStickyBroadcast(@RequiresPermission Intent intent) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3477,6 +3538,8 @@
+             android.Manifest.permission.BROADCAST_STICKY
+     })
+-    public abstract void sendStickyBroadcastAsUser(@RequiresPermission Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user);
++    public void sendStickyBroadcastAsUser(@RequiresPermission Intent intent,
++            UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3490,6 +3553,8 @@
+             android.Manifest.permission.BROADCAST_STICKY
+     })
+-    public abstract void sendStickyBroadcastAsUser(@RequiresPermission Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, Bundle options);
++    public void sendStickyBroadcastAsUser(@RequiresPermission Intent intent,
++            UserHandle user, Bundle options) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3530,8 +3595,10 @@
+             android.Manifest.permission.BROADCAST_STICKY
+     })
+-    public abstract void sendStickyOrderedBroadcastAsUser(@RequiresPermission Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user, BroadcastReceiver resultReceiver,
++    public void sendStickyOrderedBroadcastAsUser(@RequiresPermission Intent intent,
++            UserHandle user, BroadcastReceiver resultReceiver,
+             @Nullable Handler scheduler, int initialCode, @Nullable String initialData,
+-            @Nullable Bundle initialExtras);
++            @Nullable Bundle initialExtras) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3560,6 +3627,8 @@
+             android.Manifest.permission.BROADCAST_STICKY
+     })
+-    public abstract void removeStickyBroadcastAsUser(@RequiresPermission Intent intent,
+-            @CanBeALL @CanBeCURRENT UserHandle user);
++    public void removeStickyBroadcastAsUser(@RequiresPermission Intent intent,
++            UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3627,7 +3696,7 @@
+      * @see #unregisterReceiver
+      */
+-    @Nullable
+-    public abstract Intent registerReceiver(@Nullable BroadcastReceiver receiver,
+-                                            IntentFilter filter);
++    public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter) {
++        return registerReceiver(receiver, filter, null, null, 0);
++    }
+ 
+     /**
+@@ -3675,8 +3744,7 @@
+      * @see #unregisterReceiver
+      */
+-    @Nullable
+-    public abstract Intent registerReceiver(@Nullable BroadcastReceiver receiver,
+-                                            IntentFilter filter,
+-                                            @RegisterReceiverFlags int flags);
++    public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter, int flags) {
++        return registerReceiver(receiver, filter, null, null, flags);
++    }
+ 
+     /**
+@@ -3727,8 +3795,7 @@
+      * @see #unregisterReceiver
+      */
+-    @Nullable
+-    public abstract Intent registerReceiver(BroadcastReceiver receiver,
+-            IntentFilter filter, @Nullable String broadcastPermission,
+-            @Nullable Handler scheduler);
++    public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter, String permission, Handler handler) {
++        return registerReceiver(receiver, filter, permission, handler, 0);
++    }
+ 
+     /**
+@@ -3884,7 +3951,9 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS_FULL)
+     @UnsupportedAppUsage
+-    public abstract Intent registerReceiverAsUser(BroadcastReceiver receiver,
+-            @CanBeALL @CanBeCURRENT UserHandle user, IntentFilter filter,
+-            @Nullable String broadcastPermission, @Nullable Handler scheduler);
++    public Intent registerReceiverAsUser(BroadcastReceiver receiver,
++            UserHandle user, IntentFilter filter,
++            @Nullable String broadcastPermission, @Nullable Handler scheduler) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3925,8 +3994,10 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS_FULL)
+     @UnsupportedAppUsage
+-    public abstract Intent registerReceiverAsUser(BroadcastReceiver receiver,
+-            @CanBeALL @CanBeCURRENT UserHandle user, IntentFilter filter,
++    public Intent registerReceiverAsUser(BroadcastReceiver receiver,
++            UserHandle user, IntentFilter filter,
+             @Nullable String broadcastPermission,
+-            @Nullable Handler scheduler, @RegisterReceiverFlags int flags);
++            @Nullable Handler scheduler, @RegisterReceiverFlags int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -3941,5 +4012,7 @@
+      * @see #registerReceiver
+      */
+-    public abstract void unregisterReceiver(BroadcastReceiver receiver);
++    public void unregisterReceiver(BroadcastReceiver receiver) {
++        throw new IllegalArgumentException("Receiver is not registered");
++    }
+ 
+     /**
+@@ -4053,5 +4126,7 @@
+      */
+     @Nullable
+-    public abstract ComponentName startService(Intent service);
++    public ComponentName startService(Intent service) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -4103,5 +4178,7 @@
+      */
+     @Nullable
+-    public abstract ComponentName startForegroundService(Intent service);
++    public ComponentName startForegroundService(Intent service) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -4111,6 +4188,8 @@
+     @Nullable
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+-    public abstract ComponentName startForegroundServiceAsUser(Intent service,
+-            @CanBeCURRENT UserHandle user);
++    public ComponentName startForegroundServiceAsUser(Intent service,
++            UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -4149,5 +4228,7 @@
+      * @see #startService
+      */
+-    public abstract boolean stopService(Intent service);
++    public boolean stopService(Intent service) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -4158,5 +4239,7 @@
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+     @UnsupportedAppUsage
+-    public abstract ComponentName startServiceAsUser(Intent service, @CanBeCURRENT UserHandle user);
++    public ComponentName startServiceAsUser(Intent service, UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -4165,5 +4248,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @RequiresPermission(android.Manifest.permission.INTERACT_ACROSS_USERS)
+-    public abstract boolean stopServiceAsUser(Intent service, @CanBeCURRENT UserHandle user);
++    public boolean stopServiceAsUser(Intent service, UserHandle user) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -4231,6 +4316,8 @@
+      * @see #startService
+      */
+-    public abstract boolean bindService(@RequiresPermission @NonNull Intent service,
+-            @NonNull ServiceConnection conn, int flags);
++    public boolean bindService(@RequiresPermission @NonNull Intent service,
++            @NonNull ServiceConnection conn, int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -4363,5 +4450,5 @@
+     public boolean bindServiceAsUser(
+             @NonNull @RequiresPermission Intent service, @NonNull ServiceConnection conn, int flags,
+-            @NonNull @CanBeCURRENT UserHandle user) {
++            @NonNull UserHandle user) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -4379,5 +4466,5 @@
+     public boolean bindServiceAsUser(
+             @NonNull @RequiresPermission Intent service, @NonNull ServiceConnection conn,
+-            @NonNull BindServiceFlags flags, @NonNull @CanBeCURRENT UserHandle user) {
++            @NonNull BindServiceFlags flags, @NonNull UserHandle user) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -4395,5 +4482,5 @@
+     @UnsupportedAppUsage(trackingBug = 136728678)
+     public boolean bindServiceAsUser(Intent service, ServiceConnection conn, int flags,
+-            Handler handler, @CanBeCURRENT UserHandle user) {
++            Handler handler, UserHandle user) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -4412,5 +4499,5 @@
+     public boolean bindServiceAsUser(@NonNull Intent service, @NonNull ServiceConnection conn,
+             @NonNull BindServiceFlags flags, @NonNull Handler handler,
+-            @NonNull @CanBeCURRENT UserHandle user) {
++            @NonNull UserHandle user) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -4468,5 +4555,4 @@
+      * will trigger an exception.
+      */
+-    @FlaggedApi(FLAG_ENABLE_UPDATE_SERVICE_BINDINGS)
+     public void updateServiceBindings(@NonNull Collection<UpdateBindingParams> params) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+@@ -4483,5 +4569,7 @@
+      * @see #bindService
+      */
+-    public abstract void unbindService(@NonNull ServiceConnection conn);
++    public void unbindService(@NonNull ServiceConnection conn) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -4497,5 +4585,4 @@
+      * @see #updateServiceBindings
+      */
+-    @FlaggedApi(FLAG_ENABLE_UPDATE_SERVICE_BINDINGS)
+     public void rebindService(@NonNull ServiceConnection conn,
+             @NonNull BindServiceFlags flags) {
+@@ -4526,6 +4613,8 @@
+      * else {@code false} if it could not be found.
+      */
+-    public abstract boolean startInstrumentation(@NonNull ComponentName className,
+-            @Nullable String profileFile, @Nullable Bundle arguments);
++    public boolean startInstrumentation(@NonNull ComponentName className,
++            @Nullable String profileFile, @Nullable Bundle arguments) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /** @hide */
+@@ -4862,5 +4951,4 @@
+      * @see android.security.authenticationpolicy.AuthenticationPolicyManager
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public abstract Object getSystemService(@ServiceName @NonNull String name);
+ 
+@@ -4923,6 +5011,17 @@
+      * @return The service name or null if the class is not a supported system service.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract @Nullable String getSystemServiceName(@NonNull Class<?> serviceClass);
++    public String getSystemServiceName(Class<?> type) {
++        if (type == android.view.LayoutInflater.class) return LAYOUT_INFLATER_SERVICE;
++        if (type == android.content.pm.LauncherApps.class) return LAUNCHER_APPS_SERVICE;
++        if (type == android.view.inputmethod.InputMethodManager.class) return INPUT_METHOD_SERVICE;
++        if (type == android.view.WindowManager.class) return WINDOW_SERVICE;
++        if (type == android.hardware.display.DisplayManager.class) return DISPLAY_SERVICE;
++        if (type == android.os.UserManager.class) return USER_SERVICE;
++        if (type == android.appwidget.AppWidgetManager.class) return APPWIDGET_SERVICE;
++        if (type == android.app.WallpaperManager.class) return WALLPAPER_SERVICE;
++        if (type == android.view.accessibility.AccessibilityManager.class) return ACCESSIBILITY_SERVICE;
++        if (type == android.app.SearchManager.class) return SEARCH_SERVICE;
++        return null;
++    }
+ 
+     /**
+@@ -5172,5 +5271,4 @@
+      * @see android.security.keystore.KeyStoreManager
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_KEYSTORE_GRANT_API)
+     public static final String KEYSTORE_SERVICE = "keystore";
+ 
+@@ -5219,5 +5317,4 @@
+      * feedback.
+      */
+-    @FlaggedApi(android.os.multisensory.Flags.FLAG_ENABLE_MULTISENSORY_FEEDBACK)
+     @SuppressLint("ServiceName")
+     public static final String MULTISENSORY_MANAGER_SERVICE = "multisensory_manager";
+@@ -5317,5 +5414,4 @@
+      * @hide
+      */
+-    @FlaggedApi(com.android.net.thread.platform.flags.Flags.FLAG_THREAD_ENABLED_PLATFORM)
+     @SystemApi
+     public static final String THREAD_NETWORK_SERVICE = "thread_network";
+@@ -5480,5 +5576,4 @@
+      * @hide
+      */
+-    @FlaggedApi(android.net.wifi.flags.Flags.FLAG_USD)
+     @SystemApi
+     public static final String WIFI_USD_SERVICE = "wifi_usd";
+@@ -5687,5 +5782,4 @@
+      * @see android.telephony.PhoneNumberManager
+      */
+-    @FlaggedApi(com.android.internal.telephony.flags.Flags.FLAG_ENABLE_PHONE_NUMBER_PARSING_API)
+     public static final String TELEPHONY_PHONE_NUMBER_SERVICE = "telephony_phone_number";
+ 
+@@ -5841,5 +5935,4 @@
+      * @see #getSystemService(String)
+      */
+-    @FlaggedApi(android.service.autofill.Flags.FLAG_PUBLIC_AUTOFILL_SERVICE_NAME)
+     public static final String AUTOFILL_SERVICE = "autofill";
+ 
+@@ -6236,5 +6329,4 @@
+      * @see android.hardware.serial.SerialManager
+      */
+-    @FlaggedApi(android.hardware.serial.flags.Flags.FLAG_ENABLE_WIRED_SERIAL_API)
+     public static final String SERIAL_SERVICE = "serial";
+ 
+@@ -6413,5 +6505,4 @@
+      * @see android.media.tv.ad.TvAdManager
+      */
+-    @FlaggedApi(android.media.tv.flags.Flags.FLAG_ENABLE_AD_SERVICE_FW)
+     public static final String TV_AD_SERVICE = "tv_ad";
+ 
+@@ -6538,5 +6629,4 @@
+      * @hide
+      */
+-    @FlaggedApi(FLAG_ENABLE_LSKF_RESET_MANAGER)
+     public static final String LSKF_RESET_SERVICE = "lskf_reset";
+ 
+@@ -6922,5 +7012,4 @@
+      * @hide
+      */
+-    @FlaggedApi(com.android.ranging.flags.Flags.FLAG_RANGING_STACK_ENABLED)
+     @SystemApi
+     public static final String RANGING_SERVICE = "ranging";
+@@ -7147,5 +7236,4 @@
+      * @see #getSystemService(String)
+      */
+-    @FlaggedApi(com.android.webapp.flags.Flags.FLAG_ENABLE_WEB_APP_SERVICE_V2)
+     public static final String WEB_APP_SERVICE = "web_app";
+ 
+@@ -7219,5 +7307,4 @@
+      * @hide
+      */
+-    @FlaggedApi(android.permission.flags.Flags.FLAG_ENHANCED_CONFIRMATION_MODE_APIS_ENABLED)
+     @SystemApi
+     public static final String ECM_ENHANCED_CONFIRMATION_SERVICE = "ecm_enhanced_confirmation";
+@@ -7237,5 +7324,4 @@
+      * @see E2eeContactKeysManager
+      */
+-    @FlaggedApi(android.provider.Flags.FLAG_USER_KEYS)
+     public static final String CONTACT_KEYS_SERVICE = "contact_keys";
+ 
+@@ -7259,8 +7345,6 @@
+      * @hide
+      */
+-    @FlaggedApi(android.webkit.Flags.FLAG_UPDATE_SERVICE_IPC_WRAPPER)
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+     @SuppressLint("ServiceName")
+-    @RequiresFeature(PackageManager.FEATURE_WEBVIEW)
+     public static final String WEBVIEW_UPDATE_SERVICE = "webviewupdate";
+ 
+@@ -7273,6 +7357,4 @@
+      * @hide
+      */
+-    @FlaggedApi(
+-            com.android.server.telecom.flags.Flags.FLAG_TELECOM_MAINLINE_BLOCKED_NUMBERS_MANAGER)
+     @SystemApi
+     public static final String BLOCKED_NUMBERS_SERVICE = "blocked_numbers";
+@@ -7307,5 +7389,4 @@
+      */
+     @SystemApi
+-    @FlaggedApi(android.app.supervision.flags.Flags.FLAG_SUPERVISION_MANAGER_APIS)
+     public static final String SUPERVISION_SERVICE = "supervision";
+ 
+@@ -7332,5 +7413,4 @@
+      */
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+-    @FlaggedApi(android.security.Flags.FLAG_UPROBESTATS_BRIDGE_SERVICE)
+     public static final String UPROBESTATS_BRIDGE_SERVICE = "uprobestats_bridge";
+ 
+@@ -7346,5 +7426,4 @@
+      * @see android.service.chooser.ChooserManager
+      */
+-    @FlaggedApi(android.service.chooser.Flags.FLAG_INTERACTIVE_CHOOSER)
+     public static final String CHOOSER_SERVICE = "chooser";
+ 
+@@ -7396,5 +7475,4 @@
+      */
+     @SystemApi
+-    @FlaggedApi(android.bettertogether.flags.Flags.FLAG_ENABLE_D2D_CONNECTIVITY_SERVICE)
+     public static final String D2D_CONNECTIVITY_SERVICE = "d2d_connectivity";
+ 
+@@ -7417,9 +7495,9 @@
+     @CheckResult(suggest="#enforcePermission(String,int,int,String)")
+     @PackageManager.PermissionResult
+-    @PermissionMethod
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Returns PERMISSION_DENIED by default on Ravenwood")
+-    public abstract int checkPermission(
+-            @NonNull @PermissionName String permission, int pid, int uid);
++    public int checkPermission(
++            @NonNull String permission, int pid, int uid) {
++        java.util.Objects.requireNonNull(permission);
++        return PackageManager.PERMISSION_DENIED;
++    }
+ 
+     /** @hide */
+@@ -7427,8 +7505,8 @@
+     @PackageManager.PermissionResult
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Returns PERMISSION_DENIED by default on Ravenwood")
+-    public abstract int checkPermission(@NonNull String permission, int pid, int uid,
+-            IBinder callerToken);
++    public int checkPermission(@NonNull String permission, int pid, int uid,
++            IBinder callerToken) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7455,8 +7533,7 @@
+     @CheckResult(suggest="#enforceCallingPermission(String,String)")
+     @PackageManager.PermissionResult
+-    @PermissionMethod
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Returns PERMISSION_DENIED by default on Ravenwood")
+-    public abstract int checkCallingPermission(@NonNull @PermissionName String permission);
++    public int checkCallingPermission(@NonNull String permission) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7478,8 +7555,7 @@
+     @CheckResult(suggest="#enforceCallingOrSelfPermission(String,String)")
+     @PackageManager.PermissionResult
+-    @PermissionMethod(orSelf = true)
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Returns PERMISSION_DENIED by default on Ravenwood")
+-    public abstract int checkCallingOrSelfPermission(@NonNull @PermissionName String permission);
++    public int checkCallingOrSelfPermission(@NonNull String permission) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7495,7 +7571,8 @@
+      */
+     @PackageManager.PermissionResult
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Returns PERMISSION_DENIED by default on Ravenwood")
+-    public abstract int checkSelfPermission(@NonNull String permission);
++    public int checkSelfPermission(@NonNull String permission) {
++        java.util.Objects.requireNonNull(permission);
++        return PackageManager.PERMISSION_DENIED;
++    }
+ 
+     /**
+@@ -7511,9 +7588,8 @@
+      * @see #checkPermission(String, int, int)
+      */
+-    @PermissionMethod
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Returns PERMISSION_DENIED by default on Ravenwood")
+-    public abstract void enforcePermission(
+-            @NonNull @PermissionName String permission, int pid, int uid, @Nullable String message);
++    public void enforcePermission(
++            @NonNull String permission, int pid, int uid, @Nullable String message) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7535,9 +7611,8 @@
+      * @see #checkCallingPermission(String)
+      */
+-    @PermissionMethod
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Returns PERMISSION_DENIED by default on Ravenwood")
+-    public abstract void enforceCallingPermission(
+-            @NonNull @PermissionName String permission, @Nullable String message);
++    public void enforceCallingPermission(
++            @NonNull String permission, @Nullable String message) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7554,9 +7629,8 @@
+      * @see #checkCallingOrSelfPermission(String)
+      */
+-    @PermissionMethod(orSelf = true)
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Returns PERMISSION_DENIED by default on Ravenwood")
+-    public abstract void enforceCallingOrSelfPermission(
+-            @NonNull @PermissionName String permission, @Nullable String message);
++    public void enforceCallingOrSelfPermission(
++            @NonNull String permission, @Nullable String message) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7597,6 +7671,4 @@
+      * @see Activity#onRequestPermissionsResult(int, String[], int[])
+      */
+-    @FlaggedApi(
+-            android.permission.flags.Flags.FLAG_SHOULD_SHOW_PERMISSION_RATIONALE_IN_CONTEXT_ENABLED)
+     public boolean shouldShowRequestPermissionRationale(@NonNull String permission) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+@@ -7632,6 +7704,8 @@
+      * @see #revokeUriPermission
+      */
+-    public abstract void grantUriPermission(String toPackage, Uri uri,
+-            @Intent.GrantUriMode int modeFlags);
++    public void grantUriPermission(String toPackage, Uri uri,
++            int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7663,5 +7737,7 @@
+      * @see #grantUriPermission
+      */
+-    public abstract void revokeUriPermission(Uri uri, @Intent.AccessUriMode int modeFlags);
++    public void revokeUriPermission(Uri uri, int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7686,6 +7762,8 @@
+      * @see #grantUriPermission
+      */
+-    public abstract void revokeUriPermission(String toPackage, Uri uri,
+-            @Intent.AccessUriMode int modeFlags);
++    public void revokeUriPermission(String toPackage, Uri uri,
++            int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7710,6 +7788,8 @@
+     @CheckResult(suggest="#enforceUriPermission(Uri,int,int,String)")
+     @PackageManager.PermissionResult
+-    public abstract int checkUriPermission(Uri uri, int pid, int uid,
+-            @Intent.AccessUriMode int modeFlags);
++    public int checkUriPermission(Uri uri, int pid, int uid,
++            int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7737,8 +7817,7 @@
+      * @see #checkUriPermission(Uri, int, int, int)
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
+     @PackageManager.PermissionResult
+     public int checkContentUriPermissionFull(@NonNull Uri uri, int pid, int uid,
+-            @Intent.AccessUriMode int modeFlags) {
++            int modeFlags) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -7770,5 +7849,5 @@
+     @PackageManager.PermissionResult
+     public int[] checkUriPermissions(@NonNull List<Uri> uris, int pid, int uid,
+-            @Intent.AccessUriMode int modeFlags) {
++            int modeFlags) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -7777,6 +7856,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @PackageManager.PermissionResult
+-    public abstract int checkUriPermission(Uri uri, int pid, int uid,
+-            @Intent.AccessUriMode int modeFlags, IBinder callerToken);
++    public int checkUriPermission(Uri uri, int pid, int uid,
++            int modeFlags, IBinder callerToken) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7801,5 +7882,7 @@
+     @CheckResult(suggest="#enforceCallingUriPermission(Uri,int,String)")
+     @PackageManager.PermissionResult
+-    public abstract int checkCallingUriPermission(Uri uri, @Intent.AccessUriMode int modeFlags);
++    public int checkCallingUriPermission(Uri uri, int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7825,5 +7908,5 @@
+     @PackageManager.PermissionResult
+     public int[] checkCallingUriPermissions(@NonNull List<Uri> uris,
+-            @Intent.AccessUriMode int modeFlags) {
++            int modeFlags) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -7846,6 +7929,8 @@
+     @CheckResult(suggest="#enforceCallingOrSelfUriPermission(Uri,int,String)")
+     @PackageManager.PermissionResult
+-    public abstract int checkCallingOrSelfUriPermission(Uri uri,
+-            @Intent.AccessUriMode int modeFlags);
++    public int checkCallingOrSelfUriPermission(Uri uri,
++            int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7867,5 +7952,5 @@
+     @PackageManager.PermissionResult
+     public int[] checkCallingOrSelfUriPermissions(@NonNull List<Uri> uris,
+-            @Intent.AccessUriMode int modeFlags) {
++            int modeFlags) {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+@@ -7893,7 +7978,9 @@
+     @CheckResult(suggest="#enforceUriPermission(Uri,String,String,int,int,int,String)")
+     @PackageManager.PermissionResult
+-    public abstract int checkUriPermission(@Nullable Uri uri, @Nullable String readPermission,
++    public int checkUriPermission(@Nullable Uri uri, @Nullable String readPermission,
+             @Nullable String writePermission, int pid, int uid,
+-            @Intent.AccessUriMode int modeFlags);
++            int modeFlags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7914,6 +8001,8 @@
+      * @see #checkUriPermission(Uri, int, int, int)
+      */
+-    public abstract void enforceUriPermission(
+-            Uri uri, int pid, int uid, @Intent.AccessUriMode int modeFlags, String message);
++    public void enforceUriPermission(
++            Uri uri, int pid, int uid, int modeFlags, String message) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7934,6 +8023,8 @@
+      * @see #checkCallingUriPermission(Uri, int)
+      */
+-    public abstract void enforceCallingUriPermission(
+-            Uri uri, @Intent.AccessUriMode int modeFlags, String message);
++    public void enforceCallingUriPermission(
++            Uri uri, int modeFlags, String message) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7951,6 +8042,8 @@
+      * @see #checkCallingOrSelfUriPermission(Uri, int)
+      */
+-    public abstract void enforceCallingOrSelfUriPermission(
+-            Uri uri, @Intent.AccessUriMode int modeFlags, String message);
++    public void enforceCallingOrSelfUriPermission(
++            Uri uri, int modeFlags, String message) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -7973,8 +8066,10 @@
+      * @see #checkUriPermission(Uri, String, String, int, int, int)
+      */
+-    public abstract void enforceUriPermission(
++    public void enforceUriPermission(
+             @Nullable Uri uri, @Nullable String readPermission,
+-            @Nullable String writePermission, int pid, int uid, @Intent.AccessUriMode int modeFlags,
+-            @Nullable String message);
++            @Nullable String writePermission, int pid, int uid, int modeFlags,
++            @Nullable String message) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+ 
+@@ -8116,6 +8211,8 @@
+      * the given package name.
+      */
+-    public abstract Context createPackageContext(String packageName,
+-            @CreatePackageOptions int flags) throws PackageManager.NameNotFoundException;
++    public Context createPackageContext(String packageName,
++            @CreatePackageOptions int flags) throws PackageManager.NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8131,8 +8228,5 @@
+             @NonNull String packageName, @CreatePackageOptions int flags, @NonNull UserHandle user)
+             throws PackageManager.NameNotFoundException {
+-        if (Build.IS_ENG) {
+-            throw new IllegalStateException("createPackageContextAsUser not overridden!");
+-        }
+-        return this;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8147,9 +8241,6 @@
+     @NonNull
+     public Context createContextAsUser(
+-            @CanBeALL @CanBeCURRENT @NonNull UserHandle user, @CreatePackageOptions int flags) {
+-        if (Build.IS_ENG) {
+-            throw new IllegalStateException("createContextAsUser not overridden!");
+-        }
+-        return this;
++            @NonNull UserHandle user, @CreatePackageOptions int flags) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -8161,6 +8252,8 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @UnsupportedAppUsage
+-    public abstract Context createApplicationContext(ApplicationInfo application,
+-            @CreatePackageOptions int flags) throws PackageManager.NameNotFoundException;
++    public Context createApplicationContext(ApplicationInfo application,
++            @CreatePackageOptions int flags) throws PackageManager.NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8195,6 +8288,8 @@
+      * @return A {@link Context} with the given split's code and/or resources loaded.
+      */
+-    public abstract Context createContextForSplit(String splitName)
+-            throws PackageManager.NameNotFoundException;
++    public Context createContextForSplit(String splitName)
++            throws PackageManager.NameNotFoundException {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8208,6 +8303,5 @@
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+     @TestApi
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public @CanBeALL @CanBeCURRENT UserHandle getUser() {
++    public UserHandle getUser() {
+         return android.os.Process.myUserHandle();
+     }
+@@ -8219,7 +8313,6 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public @CanBeALL @CanBeCURRENT @UserIdInt int getUserId() {
+-        return android.os.UserHandle.myUserId();
++    public @UserIdInt int getUserId() {
++        return UserHandle.USER_SYSTEM;
+     }
+ 
+@@ -8239,7 +8332,8 @@
+      * @return A {@link Context} with the given configuration override.
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract Context createConfigurationContext(
+-            @NonNull Configuration overrideConfiguration);
++    public Context createConfigurationContext(
++            @NonNull Configuration overrideConfiguration) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8269,6 +8363,8 @@
+      * @return A context for the display.
+      */
+-    @DisplayContext
+-    public abstract Context createDisplayContext(@NonNull Display display);
++    public Context createDisplayContext(android.view.Display display) {
++        if (display != getDisplay()) throw new IllegalArgumentException("Unknown display");
++        return this;
++    }
+ 
+     /**
+@@ -8407,9 +8503,5 @@
+      * such as {@link android.app.Application Application} or {@link android.app.Service Service}.
+      */
+-    @UiContext
+-    @NonNull
+-    public Context createWindowContext(@WindowType int type, @Nullable Bundle options)  {
+-        throw new RuntimeException("Not implemented. Must override in a subclass.");
+-    }
++    public Context createWindowContext(int type, Bundle options) { return createWindowContext(getDisplay(), type, options); }
+ 
+     /**
+@@ -8435,10 +8527,7 @@
+      * @see #WALLPAPER_SERVICE
+      */
+-    @UiContext
+-    @NonNull
+-    public Context createWindowContext(@NonNull Display display, @WindowType int type,
+-            @SuppressLint("NullableCollection")
+-            @Nullable Bundle options) {
+-        throw new RuntimeException("Not implemented. Must override in a subclass.");
++    public Context createWindowContext(android.view.Display display, int type, Bundle options) {
++        if (display != getDisplay()) throw new IllegalArgumentException("Unknown display");
++        return this;
+     }
+ 
+@@ -8510,5 +8599,7 @@
+      * @see #isDeviceProtectedStorage()
+      */
+-    public abstract Context createDeviceProtectedStorageContext();
++    public Context createDeviceProtectedStorageContext() {
++        return this;
++    }
+ 
+     /**
+@@ -8539,5 +8630,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+-    public abstract Context createCredentialProtectedStorageContext();
++    public Context createCredentialProtectedStorageContext() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8566,6 +8659,7 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract DisplayAdjustments getDisplayAdjustments(int displayId);
++    public DisplayAdjustments getDisplayAdjustments(int displayId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8580,5 +8674,7 @@
+     @NonNull
+     public Display getDisplay() {
+-        throw new RuntimeException("Not implemented. Must override in a subclass.");
++        android.hardware.display.DisplayManager manager = getSystemService(android.hardware.display.DisplayManager.class);
++        if (manager == null) throw new UnsupportedOperationException("No display associated with this context");
++        return manager.getDisplay(Display.DEFAULT_DISPLAY);
+     }
+ 
+@@ -8590,6 +8686,4 @@
+      */
+     @Nullable
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Always returns null for now, until we fully support Display")
+     public Display getDisplayNoVerify() {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+@@ -8605,7 +8699,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @TestApi
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
+-            comment = "Always returns DEFAULT_DISPLAY for now, until we fully support Display")
+-    public abstract int getDisplayId();
++    public int getDisplayId() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8629,5 +8723,7 @@
+     @SuppressLint("UnflaggedApi") // @TestApi without associated feature.
+     @TestApi
+-    public abstract void updateDisplay(int displayId);
++    public void updateDisplay(int displayId) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8683,5 +8779,4 @@
+      * @see #isUiContext()
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public int getDeviceId() {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+@@ -8731,5 +8826,4 @@
+      * @see #CONTEXT_RESTRICTED
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public boolean isRestricted() {
+         return false;
+@@ -8742,6 +8836,7 @@
+      * @see #createDeviceProtectedStorageContext()
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract boolean isDeviceProtectedStorage();
++    public boolean isDeviceProtectedStorage() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8754,6 +8849,7 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract boolean isCredentialProtectedStorage();
++    public boolean isCredentialProtectedStorage() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8762,6 +8858,7 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+-    public abstract boolean canLoadUnsafeResources();
++    public boolean canLoadUnsafeResources() {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
+ 
+     /**
+@@ -8803,19 +8900,5 @@
+     }
+ 
+-    /**
+-     * @hide
+-     */
+-    @Nullable
+-    public IServiceConnection getServiceDispatcher(ServiceConnection conn, Handler handler,
+-            long flags) {
+-        throw new RuntimeException("Not implemented. Must override in a subclass.");
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public IApplicationThread getIApplicationThread() {
+-        throw new RuntimeException("Not implemented. Must override in a subclass.");
+-    }
++
+ 
+     /**
+@@ -8832,29 +8915,10 @@
+      * @hide
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public Handler getMainThreadHandler() {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+     }
+ 
+-    /**
+-     * @hide
+-     */
+-    public AutofillClient getAutofillClient() {
+-        return null;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void setAutofillClient(@SuppressWarnings("unused") AutofillClient client) {
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @Nullable
+-    public ContentCaptureClient getContentCaptureClient() {
+-        return null;
+-    }
++
++
+ 
+     /**
+@@ -8862,40 +8926,10 @@
+      */
+     public final boolean isAutofillCompatibilityEnabled() {
+-        final AutofillOptions options = getAutofillOptions();
+-        return options != null && options.compatModeEnabled;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @Nullable
+-    public AutofillOptions getAutofillOptions() {
+-        return null;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @TestApi
+-    public void setAutofillOptions(@SuppressWarnings("unused") @Nullable AutofillOptions options) {
+-    }
+-
+-    /**
+-     * Gets the Content Capture options for this context, or {@code null} if it's not allowlisted.
+-     *
+-     * @hide
+-     */
+-    @Nullable
+-    public ContentCaptureOptions getContentCaptureOptions() {
+-        return null;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @TestApi
+-    public void setContentCaptureOptions(
+-            @SuppressWarnings("unused") @Nullable ContentCaptureOptions options) {
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
++
++
+ 
+     /**
+@@ -8934,5 +8968,4 @@
+      * @see android.os.StrictMode.VmPolicy.Builder#detectIncorrectContextUse()
+      */
+-    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
+     public boolean isUiContext() {
+         throw new RuntimeException("Not implemented. Must override in a subclass.");
+--- a/frameworks/base/core/java/android/os/HandlerExecutor.java
++++ b/frameworks/base/core/java/android/os/HandlerExecutor.java
+@@ -19,5 +19,5 @@
+ import android.annotation.NonNull;
+ 
+-import com.android.internal.util.Preconditions;
++import java.util.Objects;
+ 
+ import java.util.concurrent.Executor;
+@@ -35,5 +35,5 @@
+ 
+     public HandlerExecutor(@NonNull Handler handler) {
+-        mHandler = Preconditions.checkNotNull(handler);
++        mHandler = Objects.requireNonNull(handler);
+     }
+ 
+--- a/frameworks/base/core/java/android/os/UserHandle.java
++++ b/frameworks/base/core/java/android/os/UserHandle.java
+@@ -17,14 +17,9 @@
+ package android.os;
+ 
+-import static android.app.privatecompute.flags.Flags.enablePccFrameworkSupport;
+-
+-import android.annotation.AppIdInt;
++
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.SpecialUsers.CanBeUsers;
+-import android.annotation.SpecialUsers.SpecialUser;
+ import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+-import android.annotation.UserIdInt;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.util.SparseArray;
+@@ -54,5 +49,5 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public static final @UserIdInt int USER_ALL = -1;
++    public static final int USER_ALL = -1;
+ 
+     /** @hide A user handle to indicate all users on the device */
+@@ -63,5 +58,5 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public static final @UserIdInt int USER_CURRENT = -2;
++    public static final int USER_CURRENT = -2;
+ 
+     /** @hide A user handle to indicate the current user of the device */
+@@ -73,5 +68,5 @@
+      *  to the caller's user instead of failing with a security exception */
+     @UnsupportedAppUsage
+-    public static final @UserIdInt int USER_CURRENT_OR_SELF = -3;
++    public static final int USER_CURRENT_OR_SELF = -3;
+ 
+     /** @hide A user handle to indicate that we would like to send to the current
+@@ -84,5 +79,5 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public static final @UserIdInt int USER_NULL = -10000;
++    public static final int USER_NULL = -10000;
+ 
+     private static final @NonNull UserHandle NULL = new UserHandle(USER_NULL);
+@@ -95,5 +90,5 @@
+     @UnsupportedAppUsage
+     @Deprecated
+-    public static final @UserIdInt int USER_OWNER = 0;
++    public static final int USER_OWNER = 0;
+ 
+     /**
+@@ -109,5 +104,5 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public static final @UserIdInt int USER_SYSTEM = 0;
++    public static final int USER_SYSTEM = 0;
+ 
+     /** @hide A user serial constant to indicate the "system" user of the device */
+@@ -178,4 +173,18 @@
+     }
+ 
++    // Android UID ranges, shared with the host package service.
++    private static final int FIRST_APPLICATION_CACHE_GID = 20000;
++    private static final int FIRST_APPLICATION_UID = 10000;
++    private static final int FIRST_APP_ZYGOTE_ISOLATED_UID = 90000;
++    private static final int FIRST_ISOLATED_UID = 99000;
++    private static final int FIRST_PCC_CACHE_GID = 60000;
++    private static final int FIRST_PCC_UID = 30000;
++    private static final int FIRST_SHARED_APPLICATION_GID = 50000;
++    private static final int LAST_APPLICATION_UID = 19999;
++    private static final int LAST_ISOLATED_UID = 99999;
++    private static final int LAST_PCC_UID = 39999;
++    private static final int ROOT_UID = 0;
++    private static final int SHARED_USER_GID = 9997;
++
+     /** @hide */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+@@ -183,21 +192,21 @@
+     /** @hide */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int AID_ROOT = android.os.Process.ROOT_UID;
++    public static final int AID_ROOT = ROOT_UID;
+     /** @hide */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int AID_APP_START = android.os.Process.FIRST_APPLICATION_UID;
++    public static final int AID_APP_START = FIRST_APPLICATION_UID;
+     /** @hide */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int AID_APP_END = android.os.Process.LAST_APPLICATION_UID;
++    public static final int AID_APP_END = LAST_APPLICATION_UID;
+     /** @hide */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int AID_SHARED_GID_START = android.os.Process.FIRST_SHARED_APPLICATION_GID;
++    public static final int AID_SHARED_GID_START = FIRST_SHARED_APPLICATION_GID;
+     /** @hide */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public static final int AID_CACHE_GID_START = android.os.Process.FIRST_APPLICATION_CACHE_GID;
++    public static final int AID_CACHE_GID_START = FIRST_APPLICATION_CACHE_GID;
+ 
+     /** The userId represented by this UserHandle. */
+     @UnsupportedAppUsage
+-    final @UserIdInt int mHandle;
++    final int mHandle;
+ 
+     /**
+@@ -232,22 +241,5 @@
+      */
+     public static boolean isSameAppIdWithPcc(int uid1, int uid2) {
+-        int appId1 = getAppId(uid1);
+-        int appId2 = getAppId(uid2);
+-
+-        if (appId1 == appId2) {
+-            return true;
+-        }
+-
+-        if (enablePccFrameworkSupport()) {
+-            if (Process.isPrivateComputeCoreUid(appId1)) {
+-                appId1 = Process.getAppUidForPrivateComputeCoreUid(appId1);
+-            }
+-            if (Process.isPrivateComputeCoreUid(appId2)) {
+-                appId2 = Process.getAppUidForPrivateComputeCoreUid(appId2);
+-            }
+-            return appId1 == appId2;
+-        }
+-
+-        return false;
++        return isSameApp(uid1, uid2);
+     }
+ 
+@@ -259,5 +251,6 @@
+     public static boolean isIsolated(int uid) {
+         if (uid > 0) {
+-            return Process.isIsolated(uid);
++            final int appId = getAppId(uid);
++            return appId >= FIRST_APP_ZYGOTE_ISOLATED_UID && appId <= LAST_ISOLATED_UID;
+         } else {
+             return false;
+@@ -275,5 +268,5 @@
+         if (uid > 0) {
+             final int appId = getAppId(uid);
+-            return appId >= Process.FIRST_APPLICATION_UID && appId <= Process.LAST_APPLICATION_UID;
++            return appId >= FIRST_APPLICATION_UID && appId <= LAST_APPLICATION_UID;
+         } else {
+             return false;
+@@ -288,5 +281,5 @@
+         if (uid >= 0) {
+             final int appId = getAppId(uid);
+-            return appId < Process.FIRST_APPLICATION_UID;
++            return appId < FIRST_APPLICATION_UID;
+         } else {
+             return false;
+@@ -317,5 +310,5 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public static @UserIdInt int getUserId(int uid) {
++    public static int getUserId(int uid) {
+         if (MU_ENABLED) {
+             return uid / PER_USER_RANGE;
+@@ -327,11 +320,11 @@
+     /** @hide */
+     @UnsupportedAppUsage
+-    public static @UserIdInt int getCallingUserId() {
+-        return getUserId(Binder.getCallingUid());
+-    }
+-
+-    /** @hide */
+-    public static @AppIdInt int getCallingAppId() {
+-        return getAppId(Binder.getCallingUid());
++    public static int getCallingUserId() {
++        return getUserId(Process.myUid());
++    }
++
++    /** @hide */
++    public static int getCallingAppId() {
++        return getAppId(Process.myUid());
+     }
+ 
+@@ -358,6 +351,6 @@
+     /** @hide */
+     @SystemApi
+-    public static @CanBeUsers(SpecialUser.ALLOW_EVERY) UserHandle of(
+-            @CanBeUsers(SpecialUser.ALLOW_EVERY) @UserIdInt int userId) {
++    public static UserHandle of(
++            int userId) {
+ 
+         if (userId == USER_SYSTEM) {
+@@ -387,5 +380,5 @@
+     /** @hide */
+     @VisibleForTesting
+-    public static UserHandle getUserHandleFromExtraCache(@UserIdInt int userId) {
++    public static UserHandle getUserHandleFromExtraCache(int userId) {
+         synchronized (sExtraUserHandleCache) {
+             final UserHandle extraCached = sExtraUserHandleCache.get(userId);
+@@ -409,5 +402,5 @@
+     @UnsupportedAppUsage
+     @TestApi
+-    public static int getUid(@UserIdInt int userId, @AppIdInt int appId) {
++    public static int getUid(int userId, int appId) {
+         if (MU_ENABLED && appId >= 0) {
+             return userId * PER_USER_RANGE + (appId % PER_USER_RANGE);
+@@ -425,5 +418,5 @@
+      */
+     @SystemApi
+-    public int getUid(@AppIdInt int appId) {
++    public int getUid(int appId) {
+         return getUid(getIdentifier(), appId);
+     }
+@@ -434,5 +427,5 @@
+      */
+     @SystemApi
+-    public static @AppIdInt int getAppId(int uid) {
++    public static int getAppId(int uid) {
+         return uid % PER_USER_RANGE;
+     }
+@@ -442,6 +435,6 @@
+      * @hide
+      */
+-    public static int getUserGid(@UserIdInt int userId) {
+-        return getUid(userId, Process.SHARED_USER_GID);
++    public static int getUserGid(int userId) {
++        return getUid(userId, SHARED_USER_GID);
+     }
+ 
+@@ -457,5 +450,5 @@
+ 
+     /** @hide */
+-    public static int getSharedAppGid(@UserIdInt int userId, @AppIdInt int appId) {
++    public static int getSharedAppGid(int userId, int appId) {
+         if (appId >= AID_APP_START && appId <= AID_APP_END) {
+             return (appId - AID_APP_START) + AID_SHARED_GID_START;
+@@ -472,8 +465,8 @@
+      */
+     @UnsupportedAppUsage
+-    public static @AppIdInt int getAppIdFromSharedAppGid(int gid) {
+-        final int appId = getAppId(gid) + Process.FIRST_APPLICATION_UID
+-                - Process.FIRST_SHARED_APPLICATION_GID;
+-        if (appId < 0 || appId >= Process.FIRST_SHARED_APPLICATION_GID) {
++    public static int getAppIdFromSharedAppGid(int gid) {
++        final int appId = getAppId(gid) + FIRST_APPLICATION_UID
++                - FIRST_SHARED_APPLICATION_GID;
++        if (appId < 0 || appId >= FIRST_SHARED_APPLICATION_GID) {
+             return -1;
+         }
+@@ -487,10 +480,10 @@
+ 
+     /** @hide */
+-    public static int getCacheAppGid(@UserIdInt int userId, @AppIdInt int appId) {
++    public static int getCacheAppGid(int userId, int appId) {
+         if (appId >= AID_APP_START && appId <= AID_APP_END) {
+             return getUid(userId, (appId - AID_APP_START) + AID_CACHE_GID_START);
+-        } else if (appId >= Process.FIRST_PCC_UID && appId <= Process.LAST_PCC_UID) {
+-            return getUid(userId, (appId - Process.FIRST_PCC_UID)
+-                    + Process.FIRST_PCC_CACHE_GID);
++        } else if (appId >= FIRST_PCC_UID && appId <= LAST_PCC_UID) {
++            return getUid(userId, (appId - FIRST_PCC_UID)
++                    + FIRST_PCC_CACHE_GID);
+         } else {
+             return -1;
+@@ -504,5 +497,5 @@
+      */
+     public static void formatUid(StringBuilder sb, int uid) {
+-        if (uid < Process.FIRST_APPLICATION_UID) {
++        if (uid < FIRST_APPLICATION_UID) {
+             sb.append(uid);
+         } else {
+@@ -511,17 +504,15 @@
+             final int appId = getAppId(uid);
+             if (isIsolated(appId)) {
+-                if (appId > Process.FIRST_ISOLATED_UID) {
++                if (appId > FIRST_ISOLATED_UID) {
+                     sb.append('i');
+-                    sb.append(appId - Process.FIRST_ISOLATED_UID);
++                    sb.append(appId - FIRST_ISOLATED_UID);
+                 } else {
+                     sb.append("ai");
+-                    sb.append(appId - Process.FIRST_APP_ZYGOTE_ISOLATED_UID);
++                    sb.append(appId - FIRST_APP_ZYGOTE_ISOLATED_UID);
+                 }
+-            } else if (enablePccFrameworkSupport() && Process.isPrivateComputeCoreUid(uid)) {
+-                sb.append('p');
+-                sb.append(appId - Process.FIRST_PCC_UID);
+-            } else if (appId >= Process.FIRST_APPLICATION_UID) {
++
++            } else if (appId >= FIRST_APPLICATION_UID) {
+                 sb.append('a');
+-                sb.append(appId - Process.FIRST_APPLICATION_UID);
++                sb.append(appId - FIRST_APPLICATION_UID);
+             } else {
+                 sb.append('s');
+@@ -554,5 +545,5 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+     public static void formatUid(PrintWriter pw, int uid) {
+-        if (uid < Process.FIRST_APPLICATION_UID) {
++        if (uid < FIRST_APPLICATION_UID) {
+             pw.print(uid);
+         } else {
+@@ -561,14 +552,14 @@
+             final int appId = getAppId(uid);
+             if (isIsolated(appId)) {
+-                if (appId > Process.FIRST_ISOLATED_UID) {
++                if (appId > FIRST_ISOLATED_UID) {
+                     pw.print('i');
+-                    pw.print(appId - Process.FIRST_ISOLATED_UID);
++                    pw.print(appId - FIRST_ISOLATED_UID);
+                 } else {
+                     pw.print("ai");
+-                    pw.print(appId - Process.FIRST_APP_ZYGOTE_ISOLATED_UID);
++                    pw.print(appId - FIRST_APP_ZYGOTE_ISOLATED_UID);
+                 }
+-            } else if (appId >= Process.FIRST_APPLICATION_UID) {
++            } else if (appId >= FIRST_APPLICATION_UID) {
+                 pw.print('a');
+-                pw.print(appId - Process.FIRST_APPLICATION_UID);
++                pw.print(appId - FIRST_APPLICATION_UID);
+             } else {
+                 pw.print('s');
+@@ -579,5 +570,5 @@
+ 
+     /** @hide */
+-    public static @UserIdInt int parseUserArg(String arg) {
++    public static int parseUserArg(String arg) {
+         int userId;
+         if ("all".equals(arg)) {
+@@ -601,5 +592,5 @@
+      */
+     @SystemApi
+-    public static @UserIdInt int myUserId() {
++    public static int myUserId() {
+         return getUserId(Process.myUid());
+     }
+@@ -616,5 +607,4 @@
+     @SystemApi
+     public boolean isOwner() {
+-        UserManager.logStaticDeprecation();
+         return this.equals(OWNER);
+     }
+@@ -631,5 +621,5 @@
+     /** @hide */
+     @UnsupportedAppUsage
+-    public UserHandle(@UserIdInt int userId) {
++    public UserHandle(int userId) {
+         mHandle = userId;
+     }
+@@ -640,5 +630,5 @@
+      */
+     @SystemApi
+-    public @UserIdInt int getIdentifier() {
++    public int getIdentifier() {
+         return mHandle;
+     }

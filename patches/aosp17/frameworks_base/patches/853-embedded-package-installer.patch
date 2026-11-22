@@ -1,0 +1,1472 @@
+--- a/frameworks/base/core/java/android/content/pm/PackageInstaller.java
++++ b/frameworks/base/core/java/android/content/pm/PackageInstaller.java
+@@ -34,5 +34,4 @@
+ import android.annotation.CallbackExecutor;
+ import android.annotation.CurrentTimeMillisLong;
+-import android.annotation.DurationMillisLong;
+ import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+@@ -40,12 +39,8 @@
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SdkConstant;
+-import android.annotation.SdkConstant.SdkConstantType;
+ import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+ import android.app.ActivityManager;
+-import android.app.ActivityThread;
+-import android.app.AppGlobals;
+ import android.app.PendingIntent;
+ import android.compat.annotation.UnsupportedAppUsage;
+@@ -59,16 +54,8 @@
+ import android.content.pm.PackageManager.InstallReason;
+ import android.content.pm.PackageManager.InstallScenario;
+-import android.content.pm.parsing.ApkLiteParseUtils;
+-import android.content.pm.parsing.PackageLite;
+-import android.content.pm.parsing.result.ParseResult;
+-import android.content.pm.parsing.result.ParseTypeImpl;
+-import android.content.pm.verify.developer.DeveloperVerificationSession;
+-import android.content.pm.verify.developer.DeveloperVerificationStatus;
+-import android.content.pm.verify.domain.DomainSet;
+ import android.graphics.Bitmap;
+ import android.icu.util.ULocale;
+ import android.net.Uri;
+ import android.os.Build;
+-import android.os.FileBridge;
+ import android.os.Handler;
+ import android.os.HandlerExecutor;
+@@ -76,7 +63,5 @@
+ import android.os.ParcelFileDescriptor;
+ import android.os.Parcelable;
+-import android.os.ParcelableException;
+ import android.os.PersistableBundle;
+-import android.os.RemoteCallback;
+ import android.os.RemoteException;
+ import android.os.SystemProperties;
+@@ -87,12 +72,9 @@
+ import android.util.ArrayMap;
+ import android.util.ArraySet;
+-import android.util.ExceptionUtils;
+-
+-import com.android.internal.content.InstallLocationUtils;
++
+ import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.DataClass;
+ import com.android.internal.util.IndentingPrintWriter;
+ import com.android.internal.util.Preconditions;
+-import com.android.internal.util.function.pooled.PooledLambda;
+ 
+ import java.io.Closeable;
+@@ -158,7 +140,4 @@
+             "android.content.pm.action.WAIT_INSTALL_CONSTRAINTS";
+ 
+-    /** @hide */
+-    public static final boolean ENABLE_REVOCABLE_FD =
+-            SystemProperties.getBoolean("fw.revocable_fd", false);
+ 
+     /**
+@@ -175,5 +154,4 @@
+      * The session to show details for is defined in {@link #EXTRA_SESSION_ID}.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_SESSION_DETAILS = "android.content.pm.action.SESSION_DETAILS";
+ 
+@@ -190,5 +168,4 @@
+      * session was created in {@link Intent#EXTRA_USER}.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_SESSION_COMMITTED =
+             "android.content.pm.action.SESSION_COMMITTED";
+@@ -199,5 +176,4 @@
+      * The associated session information is defined in {@link #EXTRA_SESSION}.
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+     public static final String ACTION_SESSION_UPDATED =
+             "android.content.pm.action.SESSION_UPDATED";
+@@ -642,63 +618,11 @@
+     public static final int STATUS_FAILURE_TIMEOUT = 8;
+ 
+-    /**
+-     * Default value, non-streaming installation session.
+-     *
+-     * @see #EXTRA_DATA_LOADER_TYPE
+-     * @hide
+-     */
+-    @SystemApi
+-    public static final int DATA_LOADER_TYPE_NONE = DataLoaderType.NONE;
+-
+-    /**
+-     * Streaming installation using data loader.
+-     *
+-     * @see #EXTRA_DATA_LOADER_TYPE
+-     * @hide
+-     */
+-    @SystemApi
+-    public static final int DATA_LOADER_TYPE_STREAMING = DataLoaderType.STREAMING;
+-
+-    /**
+-     * Streaming installation using Incremental FileSystem.
+-     *
+-     * @see #EXTRA_DATA_LOADER_TYPE
+-     * @hide
+-     */
+-    @SystemApi
+-    public static final int DATA_LOADER_TYPE_INCREMENTAL = DataLoaderType.INCREMENTAL;
+-
+-    /**
+-     * Target location for the file in installation session is /data/app/<packageName>-<id>.
+-     * This is the intended location for APKs.
+-     * Requires permission to install packages.
+-     * @hide
+-     */
+-    @SystemApi
+-    public static final int LOCATION_DATA_APP = InstallationFileLocation.DATA_APP;
+-
+-    /**
+-     * Target location for the file in installation session is
+-     * /data/media/<userid>/Android/obb/<packageName>. This is the intended location for OBBs.
+-     * @hide
+-     */
+-    @SystemApi
+-    public static final int LOCATION_MEDIA_OBB = InstallationFileLocation.MEDIA_OBB;
+-
+-    /**
+-     * Target location for the file in installation session is
+-     * /data/media/<userid>/Android/data/<packageName>.
+-     * This is the intended location for application data.
+-     * Can only be used by an app itself running under specific user.
+-     * @hide
+-     */
+-    @SystemApi
+-    public static final int LOCATION_MEDIA_DATA = InstallationFileLocation.MEDIA_DATA;
++
++
++
++
++
+ 
+     /** @hide */
+-    @IntDef(prefix = { "LOCATION_" }, value = {
+-            LOCATION_DATA_APP,
+-            LOCATION_MEDIA_OBB,
+-            LOCATION_MEDIA_DATA})
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface FileLocation{}
+@@ -1013,20 +937,6 @@
+                     | TYPE_PARTIAL_MERKLE_ROOT_1M_SHA512;
+ 
+-    private final IPackageInstaller mInstaller;
+-    private final int mUserId;
+-    private final String mInstallerPackageName;
+-    private final String mAttributionTag;
+-
+-    private final ArrayList<SessionCallbackDelegate> mDelegates = new ArrayList<>();
+-
+-    /** @hide */
+-    public PackageInstaller(IPackageInstaller installer,
+-            String installerPackageName, String installerAttributionTag, int userId) {
+-        Objects.requireNonNull(installer, "installer cannot be null");
+-        mInstaller = installer;
+-        mInstallerPackageName = installerPackageName;
+-        mAttributionTag = installerAttributionTag;
+-        mUserId = userId;
+-    }
++
++
+ 
+     /**
+@@ -1049,13 +959,5 @@
+      */
+     public int createSession(@NonNull SessionParams params) throws IOException {
+-        try {
+-            return mInstaller.createSession(params, mInstallerPackageName, mAttributionTag,
+-                    mUserId);
+-        } catch (RuntimeException e) {
+-            ExceptionUtils.maybeUnwrapIOException(e);
+-            throw e;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1070,14 +972,5 @@
+      */
+     public @NonNull Session openSession(int sessionId) throws IOException {
+-        try {
+-            try {
+-                return new Session(mInstaller.openSession(sessionId));
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        } catch (RuntimeException e) {
+-            ExceptionUtils.maybeUnwrapIOException(e);
+-            throw e;
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1091,9 +984,5 @@
+      */
+     public void updateSessionAppIcon(int sessionId, @Nullable Bitmap appIcon) {
+-        try {
+-            mInstaller.updateSessionAppIcon(sessionId, appIcon);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1106,10 +995,5 @@
+      */
+     public void updateSessionAppLabel(int sessionId, @Nullable CharSequence appLabel) {
+-        try {
+-            final String val = (appLabel != null) ? appLabel.toString() : null;
+-            mInstaller.updateSessionAppLabel(sessionId, val);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1124,9 +1008,5 @@
+      */
+     public void abandonSession(int sessionId) {
+-        try {
+-            mInstaller.abandonSession(sessionId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1140,9 +1020,5 @@
+      */
+     public @Nullable SessionInfo getSessionInfo(int sessionId) {
+-        try {
+-            return mInstaller.getSessionInfo(sessionId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return null;
+     }
+ 
+@@ -1161,9 +1037,5 @@
+     public @Nullable DeveloperVerificationUserConfirmationInfo
+     getDeveloperVerificationUserConfirmationInfo(int sessionId) {
+-        try {
+-            return mInstaller.getDeveloperVerificationUserConfirmationInfo(sessionId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1175,9 +1047,5 @@
+      */
+     public @NonNull List<SessionInfo> getAllSessions() {
+-        try {
+-            return mInstaller.getAllSessions(mUserId).getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return Collections.emptyList();
+     }
+ 
+@@ -1186,9 +1054,5 @@
+      */
+     public @NonNull List<SessionInfo> getMySessions() {
+-        try {
+-            return mInstaller.getMySessions(mInstallerPackageName, mUserId).getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return Collections.emptyList();
+     }
+ 
+@@ -1199,10 +1063,5 @@
+      */
+     public @NonNull List<SessionInfo> getStagedSessions() {
+-        try {
+-            // TODO: limit this to the mUserId?
+-            return mInstaller.getStagedSessions().getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return Collections.emptyList();
+     }
+ 
+@@ -1330,11 +1189,5 @@
+     public void uninstall(@NonNull VersionedPackage versionedPackage, @DeleteFlags int flags,
+             @NonNull IntentSender statusReceiver) {
+-        Objects.requireNonNull(versionedPackage, "versionedPackage cannot be null");
+-        try {
+-            mInstaller.uninstall(versionedPackage, mInstallerPackageName,
+-                    flags, statusReceiver, mUserId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1359,12 +1212,5 @@
+             @InstallReason int installReason,
+             @Nullable IntentSender statusReceiver) {
+-        Objects.requireNonNull(packageName, "packageName cannot be null");
+-        try {
+-            mInstaller.installExistingPackage(packageName,
+-                    PackageManager.INSTALL_ALL_WHITELIST_RESTRICTED_PERMISSIONS, installReason,
+-                    statusReceiver, mUserId, null);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1381,12 +1227,5 @@
+     public void uninstallExistingPackage(@NonNull String packageName,
+             @Nullable IntentSender statusReceiver) {
+-        Objects.requireNonNull(packageName, "packageName cannot be null");
+-        try {
+-            mInstaller.uninstallExistingPackage(
+-                    new VersionedPackage(packageName, PackageManager.VERSION_CODE_HIGHEST),
+-                    mInstallerPackageName, statusReceiver, mUserId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1407,17 +1246,5 @@
+             @NonNull SessionParams sessionParams,
+             @NonNull IntentSender statusReceiver) {
+-        Objects.requireNonNull(archivedPackageInfo, "archivedPackageInfo cannot be null");
+-        Objects.requireNonNull(sessionParams, "sessionParams cannot be null");
+-        Objects.requireNonNull(statusReceiver, "statusReceiver cannot be null");
+-        try {
+-            mInstaller.installPackageArchived(
+-                    archivedPackageInfo.getParcel(),
+-                    sessionParams,
+-                    statusReceiver,
+-                    mInstallerPackageName,
+-                    new UserHandle(mUserId));
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1426,9 +1253,5 @@
+     @RequiresPermission(android.Manifest.permission.INSTALL_PACKAGES)
+     public void setPermissionsResult(int sessionId, boolean accepted) {
+-        try {
+-            mInstaller.setPermissionsResult(sessionId, accepted);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1455,17 +1278,5 @@
+             @NonNull @CallbackExecutor Executor executor,
+             @NonNull Consumer<InstallConstraintsResult> callback) {
+-        Objects.requireNonNull(executor);
+-        Objects.requireNonNull(callback);
+-        try {
+-            var remoteCallback = new RemoteCallback(b -> {
+-                executor.execute(() -> {
+-                    callback.accept(b.getParcelable("result", InstallConstraintsResult.class));
+-                });
+-            });
+-            mInstaller.checkInstallConstraints(
+-                    mInstallerPackageName, packageNames, constraints, remoteCallback);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1495,11 +1306,6 @@
+             @NonNull InstallConstraints constraints,
+             @NonNull IntentSender callback,
+-            @DurationMillisLong long timeoutMillis) {
+-        try {
+-            mInstaller.waitForInstallConstraints(
+-                    mInstallerPackageName, packageNames, constraints, callback, timeoutMillis);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            long timeoutMillis) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1527,73 +1333,8 @@
+     public void commitSessionAfterInstallConstraintsAreMet(int sessionId,
+             @NonNull IntentSender statusReceiver, @NonNull InstallConstraints constraints,
+-            @DurationMillisLong long timeoutMillis) {
+-        try {
+-            var session = mInstaller.openSession(sessionId);
+-            session.seal();
+-            var packageNames = session.fetchPackageNames();
+-            var context = ActivityThread.currentApplication();
+-            var localIntentSender = new LocalIntentSender(context, sessionId, session,
+-                    statusReceiver);
+-            waitForInstallConstraints(packageNames, constraints,
+-                    localIntentSender.getIntentSender(), timeoutMillis);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    private static final class LocalIntentSender extends BroadcastReceiver {
+-
+-        private final Context mContext;
+-        private final IntentSender mStatusReceiver;
+-        private final int mSessionId;
+-        private final IPackageInstallerSession mSession;
+-
+-        LocalIntentSender(Context context, int sessionId, IPackageInstallerSession session,
+-                IntentSender statusReceiver) {
+-            mContext = context;
+-            mSessionId = sessionId;
+-            mSession = session;
+-            mStatusReceiver = statusReceiver;
+-        }
+-
+-        private IntentSender getIntentSender() {
+-            Intent intent = new Intent(ACTION_WAIT_INSTALL_CONSTRAINTS).setPackage(
+-                    mContext.getPackageName());
+-            mContext.registerReceiver(this, new IntentFilter(ACTION_WAIT_INSTALL_CONSTRAINTS),
+-                    Context.RECEIVER_EXPORTED);
+-            PendingIntent pendingIntent = PendingIntent.getBroadcast(mContext, 0, intent,
+-                    PendingIntent.FLAG_MUTABLE);
+-            return pendingIntent.getIntentSender();
+-        }
+-
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-            InstallConstraintsResult result = intent.getParcelableExtra(
+-                    PackageInstaller.EXTRA_INSTALL_CONSTRAINTS_RESULT,
+-                    InstallConstraintsResult.class);
+-            try {
+-                if (result.areAllConstraintsSatisfied()) {
+-                    mSession.commit(mStatusReceiver, false);
+-                } else {
+-                    // timeout
+-                    final Intent fillIn = new Intent();
+-                    fillIn.putExtra(PackageInstaller.EXTRA_SESSION_ID, mSessionId);
+-                    fillIn.putExtra(PackageInstaller.EXTRA_STATUS, STATUS_FAILURE_TIMEOUT);
+-                    fillIn.putExtra(PackageInstaller.EXTRA_STATUS_MESSAGE,
+-                            "Install constraints not satisfied within timeout");
+-                    mStatusReceiver.sendIntent(ActivityThread.currentApplication(), 0, fillIn, null,
+-                            null);
+-                }
+-            } catch (Exception ignore) {
+-                // no-op
+-            } finally {
+-                unregisterReceiver();
+-            }
+-        }
+-
+-        private void unregisterReceiver() {
+-            mContext.unregisterReceiver(this);
+-        }
+-    }
++            long timeoutMillis) {
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
+ 
+     /**
+@@ -1656,50 +1397,4 @@
+     }
+ 
+-    /** @hide */
+-    static class SessionCallbackDelegate extends IPackageInstallerCallback.Stub {
+-        private static final int MSG_SESSION_CREATED = 1;
+-        private static final int MSG_SESSION_BADGING_CHANGED = 2;
+-        private static final int MSG_SESSION_ACTIVE_CHANGED = 3;
+-        private static final int MSG_SESSION_PROGRESS_CHANGED = 4;
+-        private static final int MSG_SESSION_FINISHED = 5;
+-
+-        final SessionCallback mCallback;
+-        final Executor mExecutor;
+-
+-        SessionCallbackDelegate(SessionCallback callback, Executor executor) {
+-            mCallback = callback;
+-            mExecutor = executor;
+-        }
+-
+-        @Override
+-        public void onSessionCreated(int sessionId) {
+-            mExecutor.execute(PooledLambda.obtainRunnable(SessionCallback::onCreated, mCallback,
+-                    sessionId).recycleOnUse());
+-        }
+-
+-        @Override
+-        public void onSessionBadgingChanged(int sessionId) {
+-            mExecutor.execute(PooledLambda.obtainRunnable(SessionCallback::onBadgingChanged,
+-                    mCallback, sessionId).recycleOnUse());
+-        }
+-
+-        @Override
+-        public void onSessionActiveChanged(int sessionId, boolean active) {
+-            mExecutor.execute(PooledLambda.obtainRunnable(SessionCallback::onActiveChanged,
+-                    mCallback, sessionId, active).recycleOnUse());
+-        }
+-
+-        @Override
+-        public void onSessionProgressChanged(int sessionId, float progress) {
+-            mExecutor.execute(PooledLambda.obtainRunnable(SessionCallback::onProgressChanged,
+-                    mCallback, sessionId, progress).recycleOnUse());
+-        }
+-
+-        @Override
+-        public void onSessionFinished(int sessionId, boolean success) {
+-            mExecutor.execute(PooledLambda.obtainRunnable(SessionCallback::onFinished,
+-                    mCallback, sessionId, success).recycleOnUse());
+-        }
+-    }
+ 
+     /** @hide */
+@@ -1731,14 +1426,5 @@
+      */
+     public void registerSessionCallback(@NonNull SessionCallback callback, @NonNull Handler handler) {
+-        synchronized (mDelegates) {
+-            final SessionCallbackDelegate delegate = new SessionCallbackDelegate(callback,
+-                    new HandlerExecutor(handler));
+-            try {
+-                mInstaller.registerCallback(delegate, mUserId);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-            mDelegates.add(delegate);
+-        }
++        Objects.requireNonNull(callback);
+     }
+ 
+@@ -1753,17 +1439,5 @@
+      */
+     public void unregisterSessionCallback(@NonNull SessionCallback callback) {
+-        synchronized (mDelegates) {
+-            for (Iterator<SessionCallbackDelegate> i = mDelegates.iterator(); i.hasNext();) {
+-                final SessionCallbackDelegate delegate = i.next();
+-                if (delegate.mCallback == callback) {
+-                    try {
+-                        mInstaller.unregisterCallback(delegate);
+-                    } catch (RemoteException e) {
+-                        throw e.rethrowFromSystemServer();
+-                    }
+-                    i.remove();
+-                }
+-            }
+-        }
++        Objects.requireNonNull(callback);
+     }
+ 
+@@ -1785,9 +1459,5 @@
+             conditional = true)
+     public final @DeveloperVerificationPolicy int getDeveloperVerificationPolicy() {
+-        try {
+-            return mInstaller.getDeveloperVerificationPolicy(mUserId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1806,9 +1476,5 @@
+     @SystemApi
+     public final boolean setDeveloperVerificationPolicy(@DeveloperVerificationPolicy int policy) {
+-        try {
+-            return mInstaller.setDeveloperVerificationPolicy(policy, mUserId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1822,9 +1488,5 @@
+     @FlaggedApi(Flags.FLAG_VERIFICATION_SERVICE)
+     public final @Nullable ComponentName getDeveloperVerificationServiceProvider() {
+-        try {
+-            return mInstaller.getDeveloperVerificationServiceProvider();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1845,9 +1507,5 @@
+     @Nullable
+     public String getDeveloperVerificationPolicyDelegatePackage() {
+-        try {
+-            return mInstaller.getDeveloperVerificationPolicyDelegatePackage(mUserId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1863,10 +1521,5 @@
+     public void setDeveloperVerificationUserResponse(int sessionId,
+             @DeveloperVerificationUserResponse int developerVerificationUserResponse) {
+-        try {
+-            mInstaller.setDeveloperVerificationUserResponse(sessionId,
+-                    developerVerificationUserResponse);
+-        } catch (RemoteException e) {
+-            e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1891,11 +1544,5 @@
+      */
+     public static class Session implements Closeable {
+-        /** @hide */
+-        protected final IPackageInstallerSession mSession;
+-
+-        /** @hide */
+-        public Session(IPackageInstallerSession session) {
+-            mSession = session;
+-        }
++
+ 
+         /** @hide */
+@@ -1915,9 +1562,5 @@
+          */
+         public void setStagingProgress(float progress) {
+-            try {
+-                mSession.setClientProgress(progress);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -1925,9 +1568,5 @@
+         @UnsupportedAppUsage
+         public void addProgress(float progress) {
+-            try {
+-                mSession.addClientProgress(progress);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -1964,19 +1603,5 @@
+         public @NonNull OutputStream openWrite(@NonNull String name, long offsetBytes,
+                 long lengthBytes) throws IOException {
+-            try {
+-                if (ENABLE_REVOCABLE_FD) {
+-                    return new ParcelFileDescriptor.AutoCloseOutputStream(
+-                            mSession.openWrite(name, offsetBytes, lengthBytes));
+-                } else {
+-                    final ParcelFileDescriptor clientSocket = mSession.openWrite(name,
+-                            offsetBytes, lengthBytes);
+-                    return new FileBridge.FileBridgeOutputStream(clientSocket);
+-                }
+-            } catch (RuntimeException e) {
+-                ExceptionUtils.maybeUnwrapIOException(e);
+-                throw e;
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -1984,12 +1609,5 @@
+         public void write(@NonNull String name, long offsetBytes, long lengthBytes,
+                 @NonNull ParcelFileDescriptor fd) throws IOException {
+-            try {
+-                mSession.write(name, offsetBytes, lengthBytes, fd);
+-            } catch (RuntimeException e) {
+-                ExceptionUtils.maybeUnwrapIOException(e);
+-                throw e;
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2009,12 +1627,5 @@
+          */
+         public void stageViaHardLink(String target) throws IOException {
+-            try {
+-                mSession.stageViaHardLink(target);
+-            } catch (RuntimeException e) {
+-                ExceptionUtils.maybeUnwrapIOException(e);
+-                throw e;
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2025,21 +1636,5 @@
+          */
+         public void fsync(@NonNull OutputStream out) throws IOException {
+-            if (ENABLE_REVOCABLE_FD) {
+-                if (out instanceof ParcelFileDescriptor.AutoCloseOutputStream) {
+-                    try {
+-                        Os.fsync(((ParcelFileDescriptor.AutoCloseOutputStream) out).getFD());
+-                    } catch (ErrnoException e) {
+-                        throw e.rethrowAsIOException();
+-                    }
+-                } else {
+-                    throw new IllegalArgumentException("Unrecognized stream");
+-                }
+-            } else {
+-                if (out instanceof FileBridge.FileBridgeOutputStream) {
+-                    ((FileBridge.FileBridgeOutputStream) out).fsync();
+-                } else {
+-                    throw new IllegalArgumentException("Unrecognized stream");
+-                }
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2053,12 +1648,5 @@
+          */
+         public @NonNull String[] getNames() throws IOException {
+-            try {
+-                return mSession.getNames();
+-            } catch (RuntimeException e) {
+-                ExceptionUtils.maybeUnwrapIOException(e);
+-                throw e;
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2075,13 +1663,5 @@
+          */
+         public @NonNull InputStream openRead(@NonNull String name) throws IOException {
+-            try {
+-                final ParcelFileDescriptor pfd = mSession.openRead(name);
+-                return new ParcelFileDescriptor.AutoCloseInputStream(pfd);
+-            } catch (RuntimeException e) {
+-                ExceptionUtils.maybeUnwrapIOException(e);
+-                throw e;
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2097,31 +1677,7 @@
+          */
+         public void removeSplit(@NonNull String splitName) throws IOException {
+-            try {
+-                mSession.removeSplit(splitName);
+-            } catch (RuntimeException e) {
+-                ExceptionUtils.maybeUnwrapIOException(e);
+-                throw e;
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-
+-        /**
+-         * @return data loader params or null if the session is not using one.
+-         * @hide
+-         */
+-        @SystemApi
+-        @RequiresPermission(android.Manifest.permission.USE_INSTALLER_V2)
+-        public @Nullable DataLoaderParams getDataLoaderParams() {
+-            try {
+-                DataLoaderParamsParcel data = mSession.getDataLoaderParams();
+-                if (data == null) {
+-                    return null;
+-                }
+-                return new DataLoaderParams(data);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        }
++
+ 
+         /**
+@@ -2156,9 +1712,5 @@
+         public void addFile(@FileLocation int location, @NonNull String name, long lengthBytes,
+                 @NonNull byte[] metadata, @Nullable byte[] signature) {
+-            try {
+-                mSession.addFile(location, name, lengthBytes, metadata, signature);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2179,9 +1731,5 @@
+         @RequiresPermission(android.Manifest.permission.USE_INSTALLER_V2)
+         public void removeFile(@FileLocation int location, @NonNull String name) {
+-            try {
+-                mSession.removeFile(location, name);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2215,16 +1763,5 @@
+         public void setChecksums(@NonNull String name, @NonNull List<Checksum> checksums,
+                 @Nullable byte[] signature) throws IOException {
+-            Objects.requireNonNull(name);
+-            Objects.requireNonNull(checksums);
+-
+-            try {
+-                mSession.setChecksums(name, checksums.toArray(new Checksum[checksums.size()]),
+-                        signature);
+-            } catch (RuntimeException e) {
+-                ExceptionUtils.maybeUnwrapIOException(e);
+-                throw e;
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2278,40 +1815,10 @@
+          * @throws IllegalArgumentException if the list of trusted installer certificates is empty.
+          */
+-        public void requestChecksums(@NonNull String name, @Checksum.TypeMask int required,
++        public void requestChecksums(@NonNull String name, int required,
+                 @NonNull List<Certificate> trustedInstallers,
+                 @NonNull @CallbackExecutor Executor executor,
+                 @NonNull PackageManager.OnChecksumsReadyListener onChecksumsReadyListener)
+                 throws CertificateEncodingException, FileNotFoundException {
+-            Objects.requireNonNull(name);
+-            Objects.requireNonNull(trustedInstallers);
+-            Objects.requireNonNull(executor);
+-            Objects.requireNonNull(onChecksumsReadyListener);
+-            if (trustedInstallers == PackageManager.TRUST_ALL) {
+-                trustedInstallers = null;
+-            } else if (trustedInstallers == PackageManager.TRUST_NONE) {
+-                trustedInstallers = Collections.emptyList();
+-            } else if (trustedInstallers.isEmpty()) {
+-                throw new IllegalArgumentException(
+-                        "trustedInstallers has to be one of TRUST_ALL/TRUST_NONE or a non-empty "
+-                                + "list of certificates.");
+-            }
+-            try {
+-                IOnChecksumsReadyListener onChecksumsReadyListenerDelegate =
+-                        new IOnChecksumsReadyListener.Stub() {
+-                            @Override
+-                            public void onChecksumsReady(List<ApkChecksum> checksums)
+-                                    throws RemoteException {
+-                                executor.execute(
+-                                        () -> onChecksumsReadyListener.onChecksumsReady(checksums));
+-                            }
+-                        };
+-                mSession.requestChecksums(name, DEFAULT_CHECKSUMS, required,
+-                        encodeCertificates(trustedInstallers), onChecksumsReadyListenerDelegate);
+-            } catch (ParcelableException e) {
+-                e.maybeRethrow(FileNotFoundException.class);
+-                throw new RuntimeException(e);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2342,9 +1849,5 @@
+          */
+         public void commit(@NonNull IntentSender statusReceiver) {
+-            try {
+-                mSession.commit(statusReceiver, false);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2374,9 +1877,5 @@
+         @RequiresPermission(android.Manifest.permission.INSTALL_PACKAGES)
+         public void commitTransferred(@NonNull IntentSender statusReceiver) {
+-            try {
+-                mSession.commit(statusReceiver, true);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2403,14 +1902,5 @@
+         public void transfer(@NonNull String packageName)
+                 throws PackageManager.NameNotFoundException {
+-            Preconditions.checkArgument(!TextUtils.isEmpty(packageName));
+-
+-            try {
+-                mSession.transfer(packageName);
+-            } catch (ParcelableException e) {
+-                e.maybeRethrow(PackageManager.NameNotFoundException.class);
+-                throw new RuntimeException(e);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2421,9 +1911,5 @@
+         @Override
+         public void close() {
+-            try {
+-                mSession.close();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2437,9 +1923,5 @@
+          */
+         public void abandon() {
+-            try {
+-                mSession.abandon();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2449,9 +1931,5 @@
+          */
+         public boolean isMultiPackage() {
+-            try {
+-                return mSession.isMultiPackage();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2460,9 +1938,5 @@
+          */
+         public boolean isStaged() {
+-            try {
+-                return mSession.isStaged();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2472,9 +1946,5 @@
+          */
+         public int getInstallFlags() {
+-            try {
+-                return mSession.getInstallFlags();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2484,9 +1954,5 @@
+          */
+         public int getParentSessionId() {
+-            try {
+-                return mSession.getParentSessionId();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2497,9 +1963,5 @@
+         @NonNull
+         public int[] getChildSessionIds() {
+-            try {
+-                return mSession.getChildSessionIds();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2515,9 +1977,5 @@
+          */
+         public void addChildSessionId(int sessionId) {
+-            try {
+-                mSession.addChildSessionId(sessionId);
+-            } catch (RemoteException e) {
+-                e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2529,9 +1987,5 @@
+          */
+         public void removeChildSessionId(int sessionId) {
+-            try {
+-                mSession.removeChildSessionId(sessionId);
+-            } catch (RemoteException e) {
+-                e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2543,36 +1997,9 @@
+         @NonNull
+         public PersistableBundle getAppMetadata() {
+-            PersistableBundle data = null;
+-            try {
+-                ParcelFileDescriptor pfd = mSession.getAppMetadataFd();
+-                if (pfd != null) {
+-                    try (InputStream inputStream =
+-                            new ParcelFileDescriptor.AutoCloseInputStream(pfd)) {
+-                        data = PersistableBundle.readFromStream(inputStream);
+-                    }
+-                }
+-            } catch (RemoteException e) {
+-                e.rethrowFromSystemServer();
+-            } catch (IOException e) {
+-                throw new RuntimeException(e);
+-            }
+-            return data != null ? data : new PersistableBundle();
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+         private OutputStream openWriteAppMetadata() throws IOException {
+-            try {
+-                if (ENABLE_REVOCABLE_FD) {
+-                    return new ParcelFileDescriptor.AutoCloseOutputStream(
+-                            mSession.openWriteAppMetadata());
+-                } else {
+-                    final ParcelFileDescriptor clientSocket = mSession.openWriteAppMetadata();
+-                    return new FileBridge.FileBridgeOutputStream(clientSocket);
+-                }
+-            } catch (RuntimeException e) {
+-                ExceptionUtils.maybeUnwrapIOException(e);
+-                throw e;
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2587,16 +2014,5 @@
+          */
+         public void setAppMetadata(@Nullable PersistableBundle data) throws IOException {
+-            if (data == null || data.isEmpty()) {
+-                try {
+-                    mSession.removeAppMetadata();
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-                return;
+-            }
+-            Objects.requireNonNull(data);
+-            try (OutputStream outputStream = openWriteAppMetadata()) {
+-                data.writeToStream(outputStream);
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2636,11 +2052,5 @@
+         public void requestUserPreapproval(@NonNull PreapprovalDetails details,
+                 @NonNull IntentSender statusReceiver) {
+-            Preconditions.checkArgument(details != null, "preapprovalDetails cannot be null.");
+-            Preconditions.checkArgument(statusReceiver != null, "statusReceiver cannot be null.");
+-            try {
+-                mSession.requestUserPreapproval(details, statusReceiver);
+-            } catch (RemoteException e) {
+-                e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2650,9 +2060,5 @@
+          */
+         public boolean isApplicationEnabledSettingPersistent() {
+-            try {
+-                return mSession.isApplicationEnabledSettingPersistent();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2664,9 +2070,5 @@
+          */
+         public boolean isRequestUpdateOwnership() {
+-            try {
+-                return mSession.isRequestUpdateOwnership();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2700,11 +2102,5 @@
+         @RequiresPermission(Manifest.permission.ACCESS_INSTANT_APPS)
+         public void setPreVerifiedDomains(@NonNull Set<String> preVerifiedDomains) {
+-            Preconditions.checkArgument(preVerifiedDomains != null && !preVerifiedDomains.isEmpty(),
+-                    "Provided pre-verified domains cannot be null or empty.");
+-            try {
+-                mSession.setPreVerifiedDomains(new DomainSet(preVerifiedDomains));
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2723,10 +2119,5 @@
+         @NonNull
+         public Set<String> getPreVerifiedDomains() {
+-            try {
+-                DomainSet domainSet = mSession.getPreVerifiedDomains();
+-                return domainSet != null ? domainSet.getDomains() : Collections.emptySet();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+     }
+@@ -2743,11 +2134,5 @@
+     public InstallInfo readInstallInfo(@NonNull File file, int flags)
+             throws PackageParsingException {
+-        final ParseTypeImpl input = ParseTypeImpl.forDefaultParsing();
+-        final ParseResult<PackageLite> result = ApkLiteParseUtils.parsePackageLite(
+-                input.reset(), file, flags);
+-        if (result.isError()) {
+-            throw new PackageParsingException(result.getErrorCode(), result.getErrorMessage());
+-        }
+-        return new InstallInfo(result);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2764,11 +2149,5 @@
+     public InstallInfo readInstallInfo(@NonNull ParcelFileDescriptor pfd,
+             @Nullable String debugPathName, int flags) throws PackageParsingException {
+-        final ParseTypeImpl input = ParseTypeImpl.forDefaultParsing();
+-        final ParseResult<PackageLite> result = ApkLiteParseUtils.parseMonolithicPackageLite(input,
+-                pfd.getFileDescriptor(), debugPathName, flags);
+-        if (result.isError()) {
+-            throw new PackageParsingException(result.getErrorCode(), result.getErrorMessage());
+-        }
+-        return new InstallInfo(result);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2795,13 +2174,5 @@
+     public void requestArchive(@NonNull String packageName, @NonNull IntentSender statusReceiver)
+             throws PackageManager.NameNotFoundException {
+-        try {
+-            mInstaller.requestArchive(packageName, mInstallerPackageName, /*flags=*/ 0,
+-                    statusReceiver, new UserHandle(mUserId));
+-        } catch (ParcelableException e) {
+-            e.maybeRethrow(PackageManager.NameNotFoundException.class);
+-            throw new RuntimeException(e);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2831,14 +2202,5 @@
+     public void requestUnarchive(@NonNull String packageName, @NonNull IntentSender statusReceiver)
+             throws IOException, PackageManager.NameNotFoundException {
+-        try {
+-            mInstaller.requestUnarchive(packageName, mInstallerPackageName, statusReceiver,
+-                    new UserHandle(mUserId));
+-        } catch (ParcelableException e) {
+-            e.maybeRethrow(IOException.class);
+-            e.maybeRethrow(PackageManager.NameNotFoundException.class);
+-            throw new RuntimeException(e);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2865,13 +2227,5 @@
+             long requiredStorageBytes, @Nullable PendingIntent userActionIntent)
+             throws PackageManager.NameNotFoundException {
+-        try {
+-            mInstaller.reportUnarchivalStatus(unarchiveId, status, requiredStorageBytes,
+-                    userActionIntent, new UserHandle(mUserId));
+-        } catch (ParcelableException e) {
+-            e.maybeRethrow(PackageManager.NameNotFoundException.class);
+-            throw new RuntimeException(e);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2888,14 +2242,5 @@
+     public void reportUnarchivalState(@NonNull UnarchivalState unarchivalState)
+             throws PackageManager.NameNotFoundException {
+-        Objects.requireNonNull(unarchivalState);
+-        try {
+-            mInstaller.reportUnarchivalStatus(unarchivalState.getUnarchiveId(),
+-                    unarchivalState.getStatus(), unarchivalState.getRequiredStorageBytes(),
+-                    unarchivalState.getUserActionIntent(), new UserHandle(mUserId));
+-        } catch (ParcelableException e) {
+-            e.maybeRethrow(PackageManager.NameNotFoundException.class);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2921,9 +2266,5 @@
+         public @interface InstallLocation{}
+ 
+-        private PackageLite mPkg;
+-
+-        InstallInfo(ParseResult<PackageLite> result) {
+-            mPkg = result.getResult();
+-        }
++
+ 
+         /**
+@@ -2932,5 +2273,5 @@
+         @NonNull
+         public String getPackageName() {
+-            return mPkg.getPackageName();
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2940,5 +2281,5 @@
+          */
+         public @InstallLocation int getInstallLocation() {
+-            return mPkg.getInstallLocation();
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2951,5 +2292,5 @@
+          */
+         public long calculateInstalledSize(@NonNull SessionParams params) throws IOException {
+-            return InstallLocationUtils.calculateInstalledSize(mPkg, params.abiOverride);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2965,6 +2306,5 @@
+         public long calculateInstalledSize(@NonNull SessionParams params,
+                 @NonNull ParcelFileDescriptor pfd) throws IOException {
+-            return InstallLocationUtils.calculateInstalledSize(mPkg, params.abiOverride,
+-                    pfd.getFileDescriptor());
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+     }
+@@ -3148,6 +2488,4 @@
+         /** @hide */
+         public long requiredInstalledVersionCode = PackageManager.VERSION_CODE_HIGHEST;
+-        /** @hide */
+-        public DataLoaderParams dataLoaderParams;
+         /** @hide */
+         public int rollbackDataPolicy = PackageManager.ROLLBACK_DATA_POLICY_RESTORE;
+@@ -3220,9 +2558,4 @@
+             forceQueryableOverride = source.readBoolean();
+             requiredInstalledVersionCode = source.readLong();
+-            DataLoaderParamsParcel dataLoaderParamsParcel = source.readParcelable(
+-                    DataLoaderParamsParcel.class.getClassLoader(), android.content.pm.DataLoaderParamsParcel.class);
+-            if (dataLoaderParamsParcel != null) {
+-                dataLoaderParams = new DataLoaderParams(dataLoaderParamsParcel);
+-            }
+             rollbackDataPolicy = source.readInt();
+             rollbackLifetimeMillis = source.readLong();
+@@ -3241,40 +2574,5 @@
+         /** @hide */
+         public SessionParams copy() {
+-            SessionParams ret = new SessionParams(mode);
+-            ret.installFlags = installFlags;
+-            ret.installLocation = installLocation;
+-            ret.installReason = installReason;
+-            ret.installScenario = installScenario;
+-            ret.sizeBytes = sizeBytes;
+-            ret.appPackageName = appPackageName;
+-            ret.appIcon = appIcon;  // not a copy.
+-            ret.appLabel = appLabel;
+-            ret.originatingUri = originatingUri;  // not a copy, but immutable.
+-            ret.originatingUid = originatingUid;
+-            ret.referrerUri = referrerUri;  // not a copy, but immutable.
+-            ret.abiOverride = abiOverride;
+-            ret.volumeUuid = volumeUuid;
+-            ret.mPermissionStates.putAll(mPermissionStates);
+-            ret.whitelistedRestrictedPermissions = whitelistedRestrictedPermissions;
+-            ret.autoRevokePermissionsMode = autoRevokePermissionsMode;
+-            ret.installerPackageName = installerPackageName;
+-            ret.isMultiPackage = isMultiPackage;
+-            ret.isStaged = isStaged;
+-            ret.forceQueryableOverride = forceQueryableOverride;
+-            ret.requiredInstalledVersionCode = requiredInstalledVersionCode;
+-            ret.dataLoaderParams = dataLoaderParams;
+-            ret.rollbackDataPolicy = rollbackDataPolicy;
+-            ret.rollbackLifetimeMillis = rollbackLifetimeMillis;
+-            ret.rollbackImpactLevel = rollbackImpactLevel;
+-            ret.requireUserAction = requireUserAction;
+-            ret.packageSource = packageSource;
+-            ret.applicationEnabledSettingPersistent = applicationEnabledSettingPersistent;
+-            ret.developmentInstallFlags = developmentInstallFlags;
+-            ret.unarchiveId = unarchiveId;
+-            ret.dexoptCompilerFilter = dexoptCompilerFilter;
+-            ret.forceVerification = forceVerification;
+-            ret.isAutoInstallDependenciesEnabled = isAutoInstallDependenciesEnabled;
+-            ret.extensionParams = extensionParams;
+-            return ret;
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -3631,5 +2929,5 @@
+         @RequiresPermission(android.Manifest.permission.MANAGE_ROLLBACKS)
+         @FlaggedApi(Flags.FLAG_ROLLBACK_LIFETIME)
+-        public void setRollbackLifetimeMillis(@DurationMillisLong long lifetimeMillis) {
++        public void setRollbackLifetimeMillis(long lifetimeMillis) {
+             if (lifetimeMillis < 0) {
+                 throw new IllegalArgumentException("rollbackLifetimeMillis can't be negative.");
+@@ -3840,20 +3138,4 @@
+         }
+ 
+-        /**
+-         * Set the data loader params for the session.
+-         * This also switches installation into data loading mode and disallow direct writes into
+-         * staging folder.
+-         *
+-         * @see android.service.dataloader.DataLoaderService.DataLoader
+-         *
+-         * @hide
+-         */
+-        @SystemApi
+-        @RequiresPermission(allOf = {
+-                Manifest.permission.INSTALL_PACKAGES,
+-                Manifest.permission.USE_INSTALLER_V2})
+-        public void setDataLoaderParams(@NonNull DataLoaderParams dataLoaderParams) {
+-            this.dataLoaderParams = dataLoaderParams;
+-        }
+ 
+         /**
+@@ -4063,41 +3345,5 @@
+         /** @hide */
+         public void dump(IndentingPrintWriter pw) {
+-            pw.printPair("mode", mode);
+-            pw.printHexPair("installFlags", installFlags);
+-            pw.printPair("installLocation", installLocation);
+-            pw.printPair("installReason", installReason);
+-            pw.printPair("installScenario", installScenario);
+-            pw.printPair("sizeBytes", sizeBytes);
+-            pw.printPair("appPackageName", appPackageName);
+-            pw.printPair("appIcon", (appIcon != null));
+-            pw.printPair("appLabel", appLabel);
+-            pw.printPair("originatingUri", originatingUri);
+-            pw.printPair("originatingUid", originatingUid);
+-            pw.printPair("referrerUri", referrerUri);
+-            pw.printPair("abiOverride", abiOverride);
+-            pw.printPair("volumeUuid", volumeUuid);
+-            pw.printPair("mPermissionStates", mPermissionStates);
+-            pw.printPair("packageSource", packageSource);
+-            pw.printPair("whitelistedRestrictedPermissions", whitelistedRestrictedPermissions);
+-            pw.printPair("autoRevokePermissions", autoRevokePermissionsMode);
+-            pw.printPair("installerPackageName", installerPackageName);
+-            pw.printPair("isMultiPackage", isMultiPackage);
+-            pw.printPair("isStaged", isStaged);
+-            pw.printPair("forceQueryable", forceQueryableOverride);
+-            pw.printPair("requireUserAction", SessionInfo.userActionToString(requireUserAction));
+-            pw.printPair("requiredInstalledVersionCode", requiredInstalledVersionCode);
+-            pw.printPair("dataLoaderParams", dataLoaderParams);
+-            pw.printPair("rollbackDataPolicy", rollbackDataPolicy);
+-            pw.printPair("rollbackLifetimeMillis", rollbackLifetimeMillis);
+-            pw.printPair("rollbackImpactLevel", rollbackImpactLevel);
+-            pw.printPair("applicationEnabledSettingPersistent",
+-                    applicationEnabledSettingPersistent);
+-            pw.printHexPair("developmentInstallFlags", developmentInstallFlags);
+-            pw.printPair("unarchiveId", unarchiveId);
+-            pw.printPair("dexoptCompilerFilter", dexoptCompilerFilter);
+-            pw.printPair("forceVerification", forceVerification);
+-            pw.printPair("isAutoInstallDependenciesEnabled", isAutoInstallDependenciesEnabled);
+-            pw.printPair("extensionParams", extensionParams);
+-            pw.println();
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -4109,43 +3355,5 @@
+         @Override
+         public void writeToParcel(Parcel dest, int flags) {
+-            dest.writeInt(mode);
+-            dest.writeInt(installFlags);
+-            dest.writeInt(installLocation);
+-            dest.writeInt(installReason);
+-            dest.writeInt(installScenario);
+-            dest.writeLong(sizeBytes);
+-            dest.writeString(appPackageName);
+-            dest.writeParcelable(appIcon, flags);
+-            dest.writeString(appLabel);
+-            dest.writeParcelable(originatingUri, flags);
+-            dest.writeInt(originatingUid);
+-            dest.writeParcelable(referrerUri, flags);
+-            dest.writeString(abiOverride);
+-            dest.writeString(volumeUuid);
+-            dest.writeMap(mPermissionStates);
+-            dest.writeStringList(whitelistedRestrictedPermissions);
+-            dest.writeInt(autoRevokePermissionsMode);
+-            dest.writeString(installerPackageName);
+-            dest.writeBoolean(isMultiPackage);
+-            dest.writeBoolean(isStaged);
+-            dest.writeBoolean(forceQueryableOverride);
+-            dest.writeLong(requiredInstalledVersionCode);
+-            if (dataLoaderParams != null) {
+-                dest.writeParcelable(dataLoaderParams.getData(), flags);
+-            } else {
+-                dest.writeParcelable(null, flags);
+-            }
+-            dest.writeInt(rollbackDataPolicy);
+-            dest.writeLong(rollbackLifetimeMillis);
+-            dest.writeInt(rollbackImpactLevel);
+-            dest.writeInt(requireUserAction);
+-            dest.writeInt(packageSource);
+-            dest.writeBoolean(applicationEnabledSettingPersistent);
+-            dest.writeInt(developmentInstallFlags);
+-            dest.writeInt(unarchiveId);
+-            dest.writeString(dexoptCompilerFilter);
+-            dest.writeBoolean(forceVerification);
+-            dest.writeBoolean(isAutoInstallDependenciesEnabled);
+-            dest.writePersistableBundle(extensionParams);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -4392,5 +3600,5 @@
+             originatingUid = source.readInt();
+             referrerUri = source.readParcelable(null, android.net.Uri.class);
+-            grantedRuntimePermissions = source.readStringArray();
++            grantedRuntimePermissions = source.createStringArray();
+             whitelistedRestrictedPermissions = source.createStringArrayList();
+             autoRevokePermissionsMode = source.readInt();
+@@ -4521,16 +3729,5 @@
+          */
+         public @Nullable Bitmap getAppIcon() {
+-            if (appIcon == null) {
+-                // Icon may have been omitted for calls that return bulk session
+-                // lists, so try fetching the specific icon.
+-                try {
+-                    final SessionInfo info = AppGlobals.getPackageManager().getPackageInstaller()
+-                            .getSessionInfo(sessionId);
+-                    appIcon = (info != null) ? info.appIcon : null;
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-            return appIcon;
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -5997,6 +5194,4 @@
+             this.mUnarchiveId = unarchiveId;
+             this.mStatus = status;
+-            com.android.internal.util.AnnotationValidations.validate(
+-                    UnarchivalStatus.class, null, mStatus);
+             this.mRequiredStorageBytes = requiredStorageBytes;
+             this.mUserActionIntent = userActionIntent;
+@@ -6042,3 +5237,5 @@
+         }
+     }
++    /** The embedded host publishes APKs atomically. */
++    PackageInstaller() {}
+ }
