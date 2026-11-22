@@ -1,0 +1,70 @@
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/FontSizeUtils.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/FontSizeUtils.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/FontSizeUtils.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/FontSizeUtils.java
+@@ -18,3 +18,3 @@
+ 
+-import android.annotation.StyleRes;
++import androidx.annotation.StyleRes;
+ import android.content.res.TypedArray;
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/gestural/NavigationHandle.java
+@@ -20,3 +20,3 @@
+ import android.animation.ObjectAnimator;
+-import android.annotation.ColorInt;
++import androidx.annotation.ColorInt;
+ import android.content.Context;
+@@ -136,3 +136,3 @@
+     public void setDarkIntensity(float intensity) {
+-        int color = (int) ArgbEvaluator.getInstance().evaluate(intensity, mLightColor, mDarkColor);
++        int color = (int) new ArgbEvaluator().evaluate(intensity, mLightColor, mDarkColor);
+         if (mPaint.getColor() != color) {
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ButtonInterface.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ButtonInterface.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ButtonInterface.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ButtonInterface.java
+@@ -18,3 +18,3 @@
+ 
+-import android.annotation.Nullable;
++import androidx.annotation.Nullable;
+ import android.graphics.drawable.Drawable;
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/KeyButtonDrawable.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/KeyButtonDrawable.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/KeyButtonDrawable.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/KeyButtonDrawable.java
+@@ -19,5 +19,5 @@
+ import android.animation.ArgbEvaluator;
+-import android.annotation.ColorInt;
+-import android.annotation.DrawableRes;
+-import android.annotation.NonNull;
++import androidx.annotation.ColorInt;
++import androidx.annotation.DrawableRes;
++import androidx.annotation.NonNull;
+ import android.content.Context;
+@@ -121,3 +121,3 @@
+         mState.mDarkIntensity = intensity;
+-        final int color = (int) ArgbEvaluator.getInstance()
++        final int color = (int) new ArgbEvaluator()
+                 .evaluate(intensity, mState.mLightColor, mState.mDarkColor);
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ReverseLinearLayout.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ReverseLinearLayout.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ReverseLinearLayout.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ReverseLinearLayout.java
+@@ -18,3 +18,3 @@
+ 
+-import android.annotation.Nullable;
++import androidx.annotation.Nullable;
+ import android.content.Context;
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/StatusIconDisplayable.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/StatusIconDisplayable.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/StatusIconDisplayable.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/StatusIconDisplayable.java
+@@ -41,3 +41,3 @@
+     /** Sets the visible state that this displayable should be. */
+-    default void setVisibleState(@StatusBarIconView.VisibleState int state) {
++    default void setVisibleState(int state) {
+         setVisibleState(state, false);
+@@ -49,6 +49,5 @@
+      */
+-    void setVisibleState(@StatusBarIconView.VisibleState int state, boolean animate);
++    void setVisibleState(int state, boolean animate);
+ 
+     /** Returns the current visible state of this displayable. */
+-    @StatusBarIconView.VisibleState
+     int getVisibleState();

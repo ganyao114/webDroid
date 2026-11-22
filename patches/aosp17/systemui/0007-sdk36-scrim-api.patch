@@ -1,0 +1,51 @@
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/scrim/ScrimDrawable.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/scrim/ScrimDrawable.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/scrim/ScrimDrawable.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/scrim/ScrimDrawable.java
+@@ -19,8 +19,6 @@
+ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
+ import android.animation.ValueAnimator;
+-import android.annotation.NonNull;
+-import android.annotation.Nullable;
+ import android.graphics.Canvas;
+ import android.graphics.ColorFilter;
+ import android.graphics.Paint;
+@@ -32,15 +30,18 @@
+ import android.graphics.drawable.Drawable;
+ import android.view.animation.DecelerateInterpolator;
+ 
+-import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.graphics.ColorUtils;
+-import com.android.systemui.statusbar.notification.stack.StackStateAnimator;
++import androidx.annotation.NonNull;
++import androidx.annotation.Nullable;
++import androidx.annotation.VisibleForTesting;
++import androidx.core.graphics.ColorUtils;
+ 
+ /**
+  * Drawable used on SysUI scrims.
+  */
+ public class ScrimDrawable extends Drawable {
+     private static final String TAG = "ScrimDrawable";
++    // Same duration as the upstream StackStateAnimator scrim transition.
++    private static final long ANIMATION_DURATION_STANDARD = 360;
+ 
+     private boolean mShouldUseLargeScreenSize;
+     private final Paint mPaint;
+@@ -83,7 +84,7 @@
+             final int mainFrom = mMainColor;
+ 
+             ValueAnimator anim = ValueAnimator.ofFloat(0, 1);
+-            anim.setDuration(StackStateAnimator.ANIMATION_DURATION_STANDARD);
++            anim.setDuration(ANIMATION_DURATION_STANDARD);
+             anim.addUpdateListener(animation -> {
+                 float ratio = (float) animation.getAnimatedValue();
+                 mMainColor = ColorUtils.blendARGB(mainFrom, mainColor, ratio);
+@@ -119,7 +120,6 @@
+         return mAlpha;
+     }
+ 
+-    @Override
+     public void setXfermode(@Nullable Xfermode mode) {
+         mPaint.setXfermode(mode);
+         invalidateSelf();
