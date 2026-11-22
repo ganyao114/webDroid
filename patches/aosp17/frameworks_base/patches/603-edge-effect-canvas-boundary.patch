@@ -1,0 +1,137 @@
+--- a/frameworks/base/core/java/android/widget/EdgeEffect.java
++++ b/frameworks/base/core/java/android/widget/EdgeEffect.java
+@@ -21,7 +21,6 @@
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.compat.Compatibility;
+ import android.compat.annotation.ChangeId;
+ import android.compat.annotation.EnabledSince;
+ import android.compat.annotation.UnsupportedAppUsage;
+@@ -29,11 +28,8 @@
+ import android.content.res.TypedArray;
+ import android.graphics.BlendMode;
+ import android.graphics.Canvas;
+-import android.graphics.Matrix;
+ import android.graphics.Paint;
+-import android.graphics.RecordingCanvas;
+ import android.graphics.Rect;
+-import android.graphics.RenderNode;
+ import android.os.Build;
+ import android.util.AttributeSet;
+ import android.view.animation.AnimationUtils;
+@@ -224,8 +220,6 @@
+      * directly in case animations have been disabled (ex. for accessibility reasons)
+      */
+     private @EdgeEffectType int mEdgeEffectType = TYPE_GLOW;
+-    private Matrix mTmpMatrix = null;
+-    private float[] mTmpPoints = null;
+ 
+     /**
+      * Construct a new EdgeEffect with a theme appropriate for the provided context.
+@@ -245,8 +239,7 @@
+                 attrs, com.android.internal.R.styleable.EdgeEffect);
+         final int themeColor = a.getColor(
+                 com.android.internal.R.styleable.EdgeEffect_colorEdgeEffect, 0xff666666);
+-        mEdgeEffectType = Compatibility.isChangeEnabled(USE_STRETCH_EDGE_EFFECT_BY_DEFAULT)
+-                ? TYPE_STRETCH : TYPE_GLOW;
++        // The compositor supports the Canvas glow path. Stretch requires an HWUI RenderNode.
+         a.recycle();
+ 
+         mPaint.setAntiAlias(true);
+@@ -577,8 +570,7 @@
+      * Draw into the provided canvas. Assumes that the canvas has been rotated
+      * accordingly and the size has been set. The effect will be drawn the full
+      * width of X=0 to X=width, beginning from Y=0 and extending to some factor <
+-     * 1.f of height. The effect will only be visible on a
+-     * hardware canvas, e.g. {@link RenderNode#beginRecording()}.
++     * 1.f of height.
+      *
+      * @param canvas Canvas to draw into
+      * @return true if drawing should continue beyond this frame to continue the
+@@ -603,65 +595,8 @@
+             mPaint.setAlpha((int) (0xff * mGlowAlpha));
+             canvas.drawCircle(centerX, centerY, mRadius, mPaint);
+             canvas.restoreToCount(count);
+-        } else if (edgeEffectBehavior == TYPE_STRETCH && canvas instanceof RecordingCanvas) {
+-            if (mState == STATE_RECEDE) {
+-                updateSpring();
+-            }
+-            if (mDistance != 0f) {
+-                RecordingCanvas recordingCanvas = (RecordingCanvas) canvas;
+-                if (mTmpMatrix == null) {
+-                    mTmpMatrix = new Matrix();
+-                    mTmpPoints = new float[12];
+-                }
+-                //noinspection deprecation
+-                recordingCanvas.getMatrix(mTmpMatrix);
+-
+-                mTmpPoints[0] = 0;
+-                mTmpPoints[1] = 0; // top-left
+-                mTmpPoints[2] = mWidth;
+-                mTmpPoints[3] = 0; // top-right
+-                mTmpPoints[4] = mWidth;
+-                mTmpPoints[5] = mHeight; // bottom-right
+-                mTmpPoints[6] = 0;
+-                mTmpPoints[7] = mHeight; // bottom-left
+-                mTmpPoints[8] = mWidth * mDisplacement;
+-                mTmpPoints[9] = 0; // drag start point
+-                mTmpPoints[10] = mWidth * mDisplacement;
+-                mTmpPoints[11] = mHeight * mDistance; // drag point
+-                mTmpMatrix.mapPoints(mTmpPoints);
+-
+-                RenderNode renderNode = recordingCanvas.mNode;
+-
+-                float left = renderNode.getLeft()
+-                    + min(mTmpPoints[0], mTmpPoints[2], mTmpPoints[4], mTmpPoints[6]);
+-                float top = renderNode.getTop()
+-                    + min(mTmpPoints[1], mTmpPoints[3], mTmpPoints[5], mTmpPoints[7]);
+-                float right = renderNode.getLeft()
+-                    + max(mTmpPoints[0], mTmpPoints[2], mTmpPoints[4], mTmpPoints[6]);
+-                float bottom = renderNode.getTop()
+-                    + max(mTmpPoints[1], mTmpPoints[3], mTmpPoints[5], mTmpPoints[7]);
+-                // assume rotations of increments of 90 degrees
+-                float x = mTmpPoints[10] - mTmpPoints[8];
+-                float width = right - left;
+-                float vecX = dampStretchVector(Math.max(-1f, Math.min(1f, x / width)));
+-
+-                float y = mTmpPoints[11] - mTmpPoints[9];
+-                float height = bottom - top;
+-                float vecY = dampStretchVector(Math.max(-1f, Math.min(1f, y / height)));
+-
+-                boolean hasValidVectors = Float.isFinite(vecX) && Float.isFinite(vecY);
+-                if (right > left && bottom > top && mWidth > 0 && mHeight > 0 && hasValidVectors) {
+-                    renderNode.stretch(
+-                        vecX, // horizontal stretch intensity
+-                        vecY, // vertical stretch intensity
+-                        mWidth, // max horizontal stretch in pixels
+-                        mHeight // max vertical stretch in pixels
+-                    );
+-                }
+-            }
+         } else {
+-            // Animations have been disabled or this is TYPE_STRETCH and drawing into a Canvas
+-            // that isn't a Recording Canvas, so no effect can be shown. Just end the effect.
++            // Animations are disabled. Clear the pull and allow the view to stop redrawing.
+             mState = STATE_IDLE;
+             mDistance = 0;
+             mVelocity = 0;
+@@ -674,18 +609,6 @@
+         }
+ 
+         return mState != STATE_IDLE || oneLastFrame;
+-    }
+-
+-    private float min(float f1, float f2, float f3, float f4) {
+-        float min = Math.min(f1, f2);
+-        min = Math.min(min, f3);
+-        return Math.min(min, f4);
+-    }
+-
+-    private float max(float f1, float f2, float f3, float f4) {
+-        float max = Math.max(f1, f2);
+-        max = Math.max(max, f3);
+-        return Math.max(max, f4);
+     }
+ 
+     /**

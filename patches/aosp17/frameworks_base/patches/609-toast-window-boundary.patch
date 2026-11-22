@@ -1,0 +1,484 @@
+--- a/frameworks/base/core/java/android/widget/Toast.java
++++ b/frameworks/base/core/java/android/widget/Toast.java
+@@ -23,29 +23,20 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.StringRes;
+-import android.app.INotificationManager;
+-import android.app.ITransientNotification;
+-import android.app.ITransientNotificationCallback;
+-import android.compat.Compatibility;
+-import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledAfter;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.content.res.Resources;
+ import android.graphics.drawable.Drawable;
+-import android.os.Binder;
+ import android.os.Build;
+ import android.os.Handler;
+-import android.os.IBinder;
+ import android.os.Looper;
+ import android.os.Message;
+-import android.os.RemoteException;
+-import android.os.ServiceManager;
+ import android.util.Log;
++import android.view.Gravity;
++import android.view.LayoutInflater;
+ import android.view.View;
++import android.view.ViewGroup;
+ import android.view.WindowManager;
+-import android.view.accessibility.IAccessibilityManager;
+-import android.widget.flags.Flags;
+ 
+ import com.android.internal.annotations.GuardedBy;
+ import com.android.internal.annotations.VisibleForTesting;
+@@ -115,18 +106,7 @@
+      */
+     public static final int LENGTH_LONG = 1;
+ 
+-    /**
+-     * Text toasts will be rendered by SystemUI instead of in-app, so apps can't circumvent
+-     * background custom toast restrictions.
+-     */
+-    @ChangeId
+-    @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.Q)
+-    private static final long CHANGE_TEXT_TOASTS_IN_THE_SYSTEM = 147798919L;
+-
+-
+-    private final Binder mToken;
+     private final Context mContext;
+-    private final Handler mHandler;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+     final TN mTN;
+     @UnsupportedAppUsage
+@@ -169,12 +149,9 @@
+      */
+     public Toast(@NonNull Context context, @Nullable Looper looper) {
+         mContext = context;
+-        mToken = new Binder();
+         looper = getLooper(looper);
+-        mHandler = new Handler(looper);
+         mCallbacks = new ArrayList<>();
+-        mTN = new TN(context, context.getPackageName(), mToken,
+-                mCallbacks, looper);
++        mTN = new TN(context, mCallbacks, looper);
+         mTN.mY = context.getResources().getDimensionPixelSize(
+                 com.android.internal.R.dimen.toast_y_offset);
+         mTN.mGravity = context.getResources().getInteger(
+@@ -196,47 +173,9 @@
+      * toasts in quick succession.
+      */
+     public void show() {
+-        if (Compatibility.isChangeEnabled(CHANGE_TEXT_TOASTS_IN_THE_SYSTEM)) {
+-            checkState(mNextView != null || mText != null, "You must either set a text or a view");
+-        } else {
+-            if (mNextView == null) {
+-                throw new RuntimeException("setView must have been called");
+-            }
+-        }
+-
+-        INotificationManager service = getService();
+-        String pkg = mContext.getOpPackageName();
+-        TN tn = mTN;
+-        tn.mNextView = mNextView;
+-        final boolean isUiContext = mContext.isUiContext();
+-        final int displayId = mContext.getDisplayId();
+-
+-        boolean wasEnqueued = false;
+-        try {
+-            if (Compatibility.isChangeEnabled(CHANGE_TEXT_TOASTS_IN_THE_SYSTEM)) {
+-                if (mNextView != null) {
+-                    // It's a custom toast
+-                    wasEnqueued = service.enqueueToast(pkg, mToken, tn, mDuration, isUiContext,
+-                            displayId);
+-                } else {
+-                    // It's a text toast
+-                    ITransientNotificationCallback callback =
+-                            new CallbackBinder(mCallbacks, mHandler);
+-                    wasEnqueued = service.enqueueTextToast(pkg, mToken, mText, mDuration,
+-                            isUiContext, displayId, callback);
+-                }
+-            } else {
+-                wasEnqueued = service.enqueueToast(pkg, mToken, tn, mDuration, isUiContext,
+-                        displayId);
+-            }
+-        } catch (RemoteException e) {
+-            // Empty
+-        } finally {
+-            if (!wasEnqueued) {
+-                tn.mNextViewWeakRef = null;
+-                tn.mNextView = null;
+-            }
+-        }
++        checkState(mNextView != null || mText != null, "You must either set a text or a view");
++        // The guest has no notification service. Post presentation to its window looper.
++        mTN.show(mNextView != null ? mNextView : makeTextView(mContext, mText, null), mDuration);
+     }
+ 
+     /**
+@@ -245,16 +184,7 @@
+      * after the appropriate duration.
+      */
+     public void cancel() {
+-        if (Compatibility.isChangeEnabled(CHANGE_TEXT_TOASTS_IN_THE_SYSTEM)
+-                && mNextView == null) {
+-            try {
+-                getService().cancelToast(mContext.getOpPackageName(), mToken);
+-            } catch (RemoteException e) {
+-                // Empty
+-            }
+-        } else {
+-            mTN.cancel();
+-        }
++        mTN.cancel();
+     }
+ 
+     /**
+@@ -442,7 +372,8 @@
+     }
+ 
+     private boolean isSystemRenderedTextToast() {
+-        return Compatibility.isChangeEnabled(CHANGE_TEXT_TOASTS_IN_THE_SYSTEM) && mNextView == null;
++        return mContext.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.R
++                && mNextView == null;
+     }
+ 
+     /**
+@@ -474,7 +405,7 @@
+      */
+     @UnsupportedAppUsage
+     @Nullable public WindowManager.LayoutParams getWindowParams() {
+-        if (Compatibility.isChangeEnabled(CHANGE_TEXT_TOASTS_IN_THE_SYSTEM)) {
++        if (isSystemRenderedTextToast()) {
+             if (mNextView != null) {
+                 // Custom toasts
+                 return mTN.mParams;
+@@ -511,10 +442,10 @@
+             @NonNull CharSequence text, @Duration int duration) {
+         Toast result = new Toast(context, looper);
+ 
+-        if (Compatibility.isChangeEnabled(CHANGE_TEXT_TOASTS_IN_THE_SYSTEM)) {
++        if (result.isSystemRenderedTextToast()) {
+             result.mText = text;
+         } else {
+-            result.mNextView = ToastPresenter.getTextToastView(context, text);
++            result.mNextView = makeTextView(context, text, null);
+         }
+ 
+         result.mDuration = duration;
+@@ -539,9 +470,22 @@
+         }
+ 
+         Toast result = new Toast(context, looper);
+-        result.mNextView = ToastPresenter.getTextToastViewWithIcon(context, text, icon);
++        result.mNextView = makeTextView(context, text, icon);
+         result.mDuration = duration;
+         return result;
++    }
++
++    private static View makeTextView(Context context, CharSequence text, @Nullable Drawable icon) {
++        final int layout = icon == null ? com.android.internal.R.layout.transient_notification
++                : com.android.internal.R.layout.transient_notification_with_icon;
++        final View view = LayoutInflater.from(context).inflate(layout, null);
++        final TextView message = view.findViewById(com.android.internal.R.id.message);
++        message.setText(text);
++        if (icon != null) {
++            final ImageView image = view.findViewById(com.android.internal.R.id.icon);
++            image.setImageDrawable(icon);
++        }
++        return view;
+     }
+ 
+     /**
+@@ -572,7 +516,7 @@
+      * @param s The new text for the Toast.
+      */
+     public void setText(CharSequence s) {
+-        if (Compatibility.isChangeEnabled(CHANGE_TEXT_TOASTS_IN_THE_SYSTEM)) {
++        if (isSystemRenderedTextToast()) {
+             if (mNextView != null) {
+                 throw new IllegalStateException(
+                         "Text provided for custom toast, remove previous setView() calls if you "
+@@ -601,32 +545,13 @@
+         return mTN;
+     }
+ 
+-    // =======================================================================================
+-    // All the gunk below is the interaction with the Notification Service, which handles
+-    // the proper ordering of these system-wide.
+-    // =======================================================================================
+-
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+-    private static INotificationManager sService;
+-
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+-    static private INotificationManager getService() {
+-        if (sService != null) {
+-            return sService;
+-        }
+-        sService = INotificationManager.Stub.asInterface(
+-                ServiceManager.getService(Context.NOTIFICATION_SERVICE));
+-        return sService;
+-    }
+-
+     /**
+      * @hide
+      */
+     @VisibleForTesting
+-    public static class TN extends ITransientNotification.Stub {
++    public static class TN {
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+-        private final WindowManager.LayoutParams mParams;
+-
++        private final WindowManager.LayoutParams mParams = new WindowManager.LayoutParams();
+         private static final int SHOW = 0;
+         private static final int HIDE = 1;
+         private static final int CANCEL = 2;
+@@ -639,138 +564,102 @@
+         int mY;
+         float mHorizontalMargin;
+         float mVerticalMargin;
+-
+-
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+         View mView;
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+-        WeakReference<View> mNextViewWeakRef;
+-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+         View mNextView;
+         int mDuration;
+-
+         WindowManager mWM;
+ 
+-        final String mPackageName;
+-        final Binder mToken;
+-        private final ToastPresenter mPresenter;
+-
+-        @GuardedBy("mCallbacks")
++        private final Context mContext;
+         private final WeakReference<List<Callback>> mCallbacks;
+ 
+-        /**
+-         * Creates a {@link ITransientNotification} object.
+-         *
+-         * The parameter {@code callbacks} is not copied and is accessed with itself as its own
+-         * lock.
+-         */
+-        TN(Context context, String packageName, Binder token, List<Callback> callbacks,
+-                @Nullable Looper looper) {
+-            IAccessibilityManager accessibilityManager = IAccessibilityManager.Stub.asInterface(
+-                    ServiceManager.getService(Context.ACCESSIBILITY_SERVICE));
+-            mPresenter = new ToastPresenter(context, accessibilityManager, getService(),
+-                    packageName);
+-            mParams = mPresenter.getLayoutParams();
+-            mPackageName = packageName;
+-            mToken = token;
++        TN(Context context, List<Callback> callbacks, Looper looper) {
++            mContext = context;
+             mCallbacks = new WeakReference<>(callbacks);
+-
++            mParams.width = ViewGroup.LayoutParams.WRAP_CONTENT;
++            mParams.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+             mHandler = new Handler(looper, null) {
+                 @Override
+                 public void handleMessage(Message msg) {
+                     switch (msg.what) {
+-                        case SHOW: {
+-                            IBinder token = (IBinder) msg.obj;
+-                            handleShow(token);
++                        case SHOW:
++                            mNextView = (View) msg.obj;
++                            handleShow(msg.arg1);
+                             break;
+-                        }
+-                        case HIDE: {
++                        case HIDE:
++                        case CANCEL:
+                             handleHide();
+-                            // Don't do this in handleHide() because it is also invoked by
+-                            // handleShow()
+                             mNextView = null;
+                             break;
+-                        }
+-                        case CANCEL: {
+-                            handleHide();
+-                            // Don't do this in handleHide() because it is also invoked by
+-                            // handleShow()
+-                            mNextView = null;
+-                            try {
+-                                getService().cancelToast(mPackageName, mToken);
+-                            } catch (RemoteException e) {
+-                            }
+-                            break;
+-                        }
+                     }
+                 }
+             };
+         }
+ 
+         private List<Callback> getCallbacks() {
+-            synchronized (mCallbacks) {
+-                if (mCallbacks.get() != null) {
+-                    return new ArrayList<>(mCallbacks.get());
+-                } else {
+-                    return new ArrayList<>();
++            final List<Callback> callbacks = mCallbacks.get();
++            if (callbacks == null) {
++                return new ArrayList<>();
++            }
++            synchronized (callbacks) {
++                return new ArrayList<>(callbacks);
++            }
++        }
++
++        void show(View view, int duration) {
++            mHandler.obtainMessage(SHOW, duration, 0, view).sendToTarget();
++        }
++
++        public void hide() {
++            mHandler.obtainMessage(HIDE).sendToTarget();
++        }
++
++        public void cancel() {
++            mHandler.removeMessages(SHOW);
++            mHandler.obtainMessage(CANCEL).sendToTarget();
++        }
++
++        private void handleShow(int duration) {
++            if (mHandler.hasMessages(CANCEL)) {
++                return;
++            }
++            mHandler.removeMessages(HIDE);
++            if (mView != mNextView) {
++                handleHide();
++                final WindowManager window = mContext.getSystemService(WindowManager.class);
++                if (window == null || mNextView.getParent() != null) {
++                    return;
+                 }
+-            }
+-        }
+-
+-        /**
+-         * schedule handleShow into the right thread
+-         */
+-        @Override
+-        @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+-        public void show(IBinder windowToken) {
+-            if (localLOGV) Log.v(TAG, "SHOW: " + this);
+-            mHandler.obtainMessage(SHOW, windowToken).sendToTarget();
+-        }
+-
+-        /**
+-         * schedule handleHide into the right thread
+-         */
+-        @Override
+-        public void hide() {
+-            if (localLOGV) Log.v(TAG, "HIDE: " + this);
+-            mHandler.obtainMessage(HIDE).sendToTarget();
+-        }
+-
+-        public void cancel() {
+-            if (localLOGV) Log.v(TAG, "CANCEL: " + this);
+-            mHandler.obtainMessage(CANCEL).sendToTarget();
+-        }
+-
+-        public void handleShow(IBinder windowToken) {
+-            if (localLOGV) {
+-                Log.v(TAG, "HANDLE SHOW: " + this + " mView=" + mView
+-                        + " mNextView=" + mNextView);
+-            }
+-            // If a cancel/hide is pending - no need to show - at this point
+-            // the window token is already invalid and no need to do any work.
+-            if (mHandler.hasMessages(CANCEL) || mHandler.hasMessages(HIDE)) {
+-                return;
+-            }
+-            if (mNextView != null && mView != mNextView) {
+-                // remove the old view if necessary
+-                handleHide();
++                // The embedded window manager adds overlays to its decor FrameLayout.
++                final FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(
++                        mParams.width, mParams.height, mGravity);
++                final android.graphics.Rect bounds = window.getCurrentWindowMetrics().getBounds();
++                final int marginX = Math.round(mHorizontalMargin * bounds.width());
++                final int marginY = Math.round(mVerticalMargin * bounds.height());
++                params.leftMargin = marginX + mX;
++                params.rightMargin = marginX - mX;
++                params.topMargin = marginY + mY;
++                params.bottomMargin = marginY + mY;
++                window.addView(mNextView, params);
+                 mView = mNextView;
+-                if (mView != null) {
+-                     mPresenter.show(mView, mToken, windowToken, mDuration, mGravity, mX, mY,
+-                            mHorizontalMargin, mVerticalMargin,
+-                            new CallbackBinder(getCallbacks(), mHandler));
++                mWM = window;
++                for (Callback callback : getCallbacks()) {
++                    callback.onToastShown();
+                 }
+             }
++            mHandler.sendEmptyMessageDelayed(HIDE, duration == LENGTH_LONG ? 3500 : 2000);
+         }
+ 
+         @UnsupportedAppUsage
+         public void handleHide() {
+-            if (localLOGV) Log.v(TAG, "HANDLE HIDE: " + this + " mView=" + mView);
+             if (mView != null) {
+-                checkState(mView == mPresenter.getView(),
+-                        "Trying to hide toast view different than the last one displayed");
+-                mPresenter.hide(new CallbackBinder(getCallbacks(), mHandler));
++                mWM.removeView(mView);
+                 mView = null;
++                mWM = null;
++                for (Callback callback : getCallbacks()) {
++                    callback.onToastHidden();
++                }
+             }
+         }
+ 
+@@ -806,45 +695,4 @@
+         public void onToastHidden() {}
+     }
+ 
+-    private static class CallbackBinder extends ITransientNotificationCallback.Stub {
+-        private final Handler mHandler;
+-
+-        @GuardedBy("mCallbacks")
+-        private final List<Callback> mCallbacks;
+-
+-        /**
+-         * Creates a {@link ITransientNotificationCallback} object.
+-         *
+-         * The parameter {@code callbacks} is not copied and is accessed with itself as its own
+-         * lock.
+-         */
+-        private CallbackBinder(List<Callback> callbacks, Handler handler) {
+-            mCallbacks = callbacks;
+-            mHandler = handler;
+-        }
+-
+-        @Override
+-        public void onToastShown() {
+-            mHandler.post(() -> {
+-                for (Callback callback : getCallbacks()) {
+-                    callback.onToastShown();
+-                }
+-            });
+-        }
+-
+-        @Override
+-        public void onToastHidden() {
+-            mHandler.post(() -> {
+-                for (Callback callback : getCallbacks()) {
+-                    callback.onToastHidden();
+-                }
+-            });
+-        }
+-
+-        private List<Callback> getCallbacks() {
+-            synchronized (mCallbacks) {
+-                return new ArrayList<>(mCallbacks);
+-            }
+-        }
+-    }
+ }
