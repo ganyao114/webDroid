@@ -1,0 +1,520 @@
+diff --git a/packages/apps/Settings/res/xml/display_settings.xml b/packages/apps/Settings/res/xml/display_settings.xml
+--- a/packages/apps/Settings/res/xml/display_settings.xml
++++ b/packages/apps/Settings/res/xml/display_settings.xml
+@@ -26,7 +26,7 @@
+         android:title="@string/category_name_brightness"
+         android:order="-200">
+ 
+-        <com.android.settingslib.RestrictedPreference
++        <Preference
+             android:key="@string/preference_key_brightness_level"
+             android:title="@string/brightness"
+             android:persistent="false"
+@@ -34,7 +34,7 @@
+             settings:useAdminDisabledSummary="true"
+             settings:userRestriction="no_config_brightness"/>
+ 
+-        <com.android.settingslib.PrimarySwitchPreference
++        <Preference
+             android:key="@string/preference_key_auto_brightness"
+             android:title="@string/auto_brightness_title"
+             android:fragment="com.android.settings.display.AutoBrightnessSettings"
+@@ -42,13 +42,6 @@
+             settings:userRestriction="no_config_brightness"
+             settings:controller="com.android.settings.display.AutoBrightnessPreferenceController" />
+ 
+-        <com.android.settingslib.PrimarySwitchPreference
+-            android:fragment="com.android.settings.display.HdrBrightnessSettings"
+-            android:key="hdr_preference"
+-            android:persistent="false"
+-            android:title="@string/hdr_brightness_title"
+-            settings:keywords="@string/keywords_display_hdr_brightness"
+-            settings:controller="com.android.settings.display.HdrBrightnessPreferenceController"/>
+ 
+     </PreferenceCategory>
+ 
+@@ -64,23 +57,9 @@
+             settings:keywords="@string/keywords_ambient_display_screen"
+             settings:controller="com.android.settings.security.screenlock.LockScreenPreferenceController"/>
+ 
+-        <com.android.settingslib.PrimarySwitchPreference
+-            android:key="ambient_display_always_on_screen"
+-            android:title="@string/doze_always_on_title2"
+-            android:summary="@string/doze_always_on_summary"
+-            android:fragment="com.android.settings.display.AmbientPreferenceFragment"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.display.AmbientDisplayAlwaysOnPreferenceScreenController"
+-            settings:userRestriction="no_ambient_display" />
+-
+-        <com.android.settingslib.RestrictedPreference
+-            android:fragment="com.android.settings.display.FoldLockBehaviorSettings"
+-            android:key="fold_lock_behavior"
+-            android:title="@string/fold_lock_behavior_title"
+-            settings:controller="com.android.settings.display.FoldLockBehaviorPreferenceController"
+-            settings:keywords="@string/keywords_fold_lock_behavior" />
+-
+-        <com.android.settingslib.RestrictedPreference
++
++
++        <Preference
+             android:key="screen_timeout"
+             android:title="@string/screen_timeout"
+             android:summary="@string/summary_placeholder"
+@@ -114,7 +93,7 @@
+         android:title="@string/category_name_color"
+         android:order="-170">
+ 
+-        <com.android.settingslib.PrimarySwitchPreference
++        <Preference
+             android:key="night_display"
+             android:title="@string/night_display_title"
+             android:fragment="com.android.settings.display.NightDisplaySettings"
+@@ -146,7 +125,7 @@
+             Standard auto-rotation preference that will be shown when device state based
+             auto-rotation settings are NOT available.
+           -->
+-        <SwitchPreferenceCompat
++        <Preference
+             android:key="auto_rotate"
+             android:title="@string/accelerometer_title"
+             settings:keywords="@string/keywords_auto_rotate"
+@@ -170,19 +149,19 @@
+             settings:keywords="@string/keywords_screen_resolution"
+             settings:controller="com.android.settings.display.ScreenResolutionController"/>
+ 
+-        <SwitchPreferenceCompat
++        <Preference
+             android:key="display_white_balance"
+             android:title="@string/display_white_balance_title"
+             android:summary="@string/display_white_balance_summary"
+             settings:controller="com.android.settings.display.DisplayWhiteBalancePreferenceController"/>
+ 
+-        <SwitchPreferenceCompat
++        <Preference
+             android:key="peak_refresh_rate"
+             android:title="@string/peak_refresh_rate_title"
+             android:summary="@string/peak_refresh_rate_summary"
+             settings:controller="com.android.settings.display.PeakRefreshRatePreferenceController"/>
+ 
+-        <SwitchPreferenceCompat
++        <Preference
+             android:key="show_operator_name"
+             android:title="@string/show_operator_name_title"
+             android:summary="@string/show_operator_name_summary"/>
+@@ -194,21 +173,21 @@
+             settings:keywords="@string/keywords_screensaver"
+             settings:controller="com.android.settings.display.ScreenSaverPreferenceController"/>
+ 
+-        <SwitchPreferenceCompat
++        <Preference
+             android:key="camera_gesture"
+             android:title="@string/camera_gesture_title"
+             android:summary="@string/camera_gesture_desc"/>
+ 
+-        <SwitchPreferenceCompat
++        <Preference
+             android:key="lift_to_wake"
+             android:title="@string/lift_to_wake_title"/>
+ 
+-        <SwitchPreferenceCompat
++        <Preference
+             android:key="tap_to_wake"
+             android:title="@string/tap_to_wake"
+             android:summary="@string/tap_to_wake_summary"/>
+ 
+-        <ListPreference
++        <Preference
+             android:key="theme"
+             android:title="@string/device_theme"
+             android:summary="@string/summary_placeholder"/>
+diff --git a/packages/apps/Settings/res/xml/my_device_info.xml b/packages/apps/Settings/res/xml/my_device_info.xml
+--- a/packages/apps/Settings/res/xml/my_device_info.xml
++++ b/packages/apps/Settings/res/xml/my_device_info.xml
+@@ -21,11 +21,6 @@
+     android:key="my_device_info_pref_screen"
+     android:title="@string/about_settings">
+ 
+-    <com.android.settingslib.widget.LayoutPreference
+-        android:key="my_device_info_header"
+-        android:layout="@layout/settings_entity_header"
+-        android:selectable="false"
+-        settings:isPreferenceVisible="false"/>
+ 
+     <PreferenceCategory
+         android:key="basic_info_category"
+@@ -33,7 +28,7 @@
+         android:title="@string/my_device_info_basic_info_category_title">
+ 
+         <!-- Device name -->
+-        <com.android.settings.widget.ValidatedEditTextPreference
++        <Preference
+             android:key="device_name"
+             android:order="1"
+             android:title="@string/my_device_info_device_name_preference_title"
+@@ -51,14 +46,6 @@
+             settings:controller="com.android.settings.deviceinfo.BrandedAccountPreferenceController"/>
+ 
+         <!-- Phone number -->
+-        <Preference
+-            android:key="phone_number"
+-            android:order="3"
+-            android:title="@string/status_number"
+-            android:summary="@string/summary_placeholder"
+-            settings:isPreferenceVisible="@bool/config_show_sim_info"
+-            settings:controller="com.android.settings.deviceinfo.PhoneNumberPreferenceController"
+-            settings:enableCopying="true"/>
+     </PreferenceCategory>
+ 
+     <PreferenceCategory
+@@ -77,8 +64,6 @@
+             android:key="regulatory_info"
+             android:order="16"
+             android:title="@string/regulatory_labels">
+-            <intent android:action="android.settings.SHOW_REGULATORY_INFO"
+-                    android:targetPackage="${applicationId}"/>
+         </Preference>
+ 
+         <!-- Safety & regulatory manual -->
+@@ -94,14 +79,6 @@
+         android:title="@string/my_device_info_device_details_category_title">
+ 
+         <!-- SIM status -->
+-        <Preference
+-            android:key="sim_status"
+-            android:order="19"
+-            android:title="@string/sim_status_title"
+-            settings:keywords="@string/keywords_sim_status"
+-            android:summary="@string/summary_placeholder"
+-            settings:isPreferenceVisible="@bool/config_show_sim_info"
+-            settings:controller="com.android.settings.deviceinfo.simstatus.SimStatusPreferenceController"/>
+ 
+         <!-- Model & hardware -->
+         <Preference
+@@ -115,26 +92,8 @@
+             settings:controller="com.android.settings.deviceinfo.HardwareInfoPreferenceController"/>
+ 
+         <!-- EID -->
+-        <com.android.settings.deviceinfo.simstatus.SimEidInfoPreference
+-            android:key="eid_info"
+-            android:order="31"
+-            android:title="@string/status_eid"
+-            android:positiveButtonText="@string/dlg_ok"
+-            android:dialogLayout="@layout/dialog_eid_status"
+-            settings:isPreferenceVisible="@bool/config_show_sim_info"
+-            settings:enableCopying="true"
+-            settings:controller="com.android.settings.deviceinfo.simstatus.SimEidPreferenceController"/>
+ 
+         <!-- IMEI -->
+-        <Preference
+-            android:key="imei_info"
+-            android:order="32"
+-            android:title="@string/status_imei"
+-            android:summary="@string/summary_placeholder"
+-            settings:keywords="@string/keywords_imei_info"
+-            settings:enableCopying="true"
+-            settings:isPreferenceVisible="@bool/config_show_sim_info"
+-            settings:controller="com.android.settings.deviceinfo.imei.ImeiInfoPreferenceController"/>
+ 
+         <!-- Android version -->
+         <Preference
+@@ -146,13 +105,6 @@
+             settings:controller="com.android.settings.deviceinfo.firmwareversion.FirmwareVersionPreferenceController"/>
+ 
+         <!-- Battery information -->
+-        <Preference
+-            android:key="battery_info"
+-            android:order="43"
+-            android:title="@string/battery_info"
+-            android:fragment="com.android.settings.deviceinfo.batteryinfo.BatteryInfoFragment"
+-            settings:keywords="@string/keywords_battery_info"
+-            settings:controller="com.android.settings.deviceinfo.batteryinfo.BatteryInfoPreferenceController"/>
+     </PreferenceCategory>
+ 
+     <PreferenceCategory
+@@ -160,40 +112,12 @@
+         android:title="@string/my_device_info_device_identifiers_category_title">
+ 
+         <!--IP address -->
+-        <Preference
+-            android:key="wifi_ip_address"
+-            android:order="44"
+-            android:title="@string/wifi_ip_address"
+-            android:summary="@string/summary_placeholder"
+-            android:selectable="false"
+-            settings:enableCopying="true"/>
+ 
+         <!-- Wi-Fi MAC address -->
+-        <Preference
+-            android:key="saved_accesspoints_wifi_mac_address"
+-            android:order="45"
+-            android:title="@string/status_wifi_mac_address"
+-            android:summary="@string/view_saved_network"
+-            android:fragment="com.android.settings.wifi.savedaccesspoints2.SavedAccessPointsWifiSettings2"
+-            settings:enableCopying="false"/>
+ 
+         <!-- Factory Wi-Fi MAC address -->
+-        <Preference
+-            android:key="wifi_mac_address"
+-            android:order="46"
+-            android:title="@string/status_device_wifi_mac_address"
+-            android:summary="@string/summary_placeholder"
+-            android:selectable="false"
+-            settings:enableCopying="true"/>
+ 
+         <!-- Bluetooth address -->
+-        <Preference
+-            android:key="bt_address"
+-            android:order="47"
+-            android:title="@string/status_bt_address"
+-            android:summary="@string/summary_placeholder"
+-            android:selectable="false"
+-            settings:enableCopying="true"/>
+ 
+         <!-- Device up time -->
+         <Preference
+@@ -208,8 +132,6 @@
+             android:key="manual"
+             android:order="50"
+             android:title="@string/manual">
+-            <intent android:action="android.settings.SHOW_MANUAL"
+-                    android:targetPackage="${applicationId}"/>
+         </Preference>
+ 
+         <!-- Feedback on the device -->
+@@ -220,11 +142,6 @@
+             settings:keywords="@string/keywords_device_feedback"/>
+ 
+         <!-- Device FCC equipment id -->
+-        <Preference
+-            android:key="fcc_equipment_id"
+-            android:order="52"
+-            android:title="@string/fcc_equipment_id"
+-            android:summary="@string/summary_placeholder"/>
+ 
+         <!-- Build number -->
+         <Preference
+diff --git a/packages/apps/Settings/res/xml/system_dashboard_fragment.xml b/packages/apps/Settings/res/xml/system_dashboard_fragment.xml
+--- a/packages/apps/Settings/res/xml/system_dashboard_fragment.xml
++++ b/packages/apps/Settings/res/xml/system_dashboard_fragment.xml
+@@ -30,9 +30,6 @@
+             android:key="additional_system_update_settings"
+             android:title="@string/additional_system_update_settings_list_item_title"
+             settings:controller="com.android.settings.system.AdditionalSystemUpdatePreferenceController">
+-            <intent android:action="android.intent.action.MAIN"
+-                android:targetPackage="@string/additional_system_update"
+-                android:targetClass="@string/additional_system_update_menu"/>
+         </Preference>
+ 
+         <Preference
+@@ -42,7 +39,6 @@
+             android:icon="@drawable/ic_system_update"
+             settings:keywords="@string/keywords_system_update_settings"
+             settings:controller="com.android.settings.system.SystemUpdatePreferenceController">
+-            <intent android:action="android.settings.SYSTEM_UPDATE_SETTINGS"/>
+         </Preference>
+     </PreferenceCategory>
+ 
+@@ -113,7 +109,7 @@
+             android:fragment="com.android.settings.gestures.GestureSettings"
+             settings:controller="com.android.settings.gestures.GesturesSettingPreferenceController" />
+ 
+-        <SwitchPreferenceCompat
++        <Preference
+             android:key="search_gesture_press_hold"
+             android:title="@string/search_gesture_feature_title"
+             android:summary="@string/search_gesture_feature_summary"
+@@ -155,9 +151,6 @@
+         android:order="-350"
+         settings:controller="com.android.settings.widget.SystemAdvancedCategoryController">
+ 
+-        <com.android.settings.spa.preference.ComposePreference
+-            android:key="developer_options"
+-            settings:controller="com.android.settings.system.DeveloperOptionsController"/>
+ 
+     </PreferenceCategory>
+ 
+diff --git a/packages/apps/Settings/res/xml/power_usage_summary.xml b/packages/apps/Settings/res/xml/power_usage_summary.xml
+--- a/packages/apps/Settings/res/xml/power_usage_summary.xml
++++ b/packages/apps/Settings/res/xml/power_usage_summary.xml
+@@ -21,28 +21,15 @@
+     android:title="@string/power_usage_summary_title"
+     settings:keywords="@string/keywords_battery">
+ 
+-    <com.android.settingslib.widget.UsageProgressBarPreference
++    <Preference
+         android:key="battery_header"
+         android:title="@string/summary_placeholder"
+         android:selectable="false"
+         android:paddingBottom="0px"
+         settings:controller="com.android.settings.fuelgauge.BatteryHeaderPreferenceController" />
+ 
+-    <com.android.settings.fuelgauge.BatteryHeaderTextPreference
+-        android:key="battery_header_text"
+-        android:selectable="false"
+-        settings:controller="com.android.settings.fuelgauge.BatteryHeaderTextPreferenceController" />
+ 
+-    <com.android.settingslib.widget.LayoutPreference
+-        android:key="battery_help_message"
+-        android:layout="@layout/preference_battery_error"
+-        android:selectable="false"
+-        settings:searchable="false" />
+ 
+-    <com.android.settingslib.widget.BannerMessagePreference
+-        android:key="battery_tip"
+-        android:title="@string/summary_placeholder"
+-        settings:controller="com.android.settings.fuelgauge.batterytip.BatteryTipPreferenceController" />
+ 
+     <com.android.settingslib.widget.UntitledPreferenceCategory
+         android:key="power_usage_summary_category">
+@@ -70,14 +57,14 @@
+ 
+     <com.android.settingslib.widget.UntitledPreferenceCategory
+         android:key="percentage_category">
+-        <SwitchPreferenceCompat
++        <Preference
+             android:key="status_bar_show_battery_percent"
+             android:title="@string/battery_percentage"
+             android:summary="@string/battery_percentage_description"
+             settings:controller="com.android.settings.display.BatteryPercentagePreferenceController" />
+     </com.android.settingslib.widget.UntitledPreferenceCategory>
+ 
+-    <com.android.settingslib.widget.FooterPreference
++    <Preference
+         android:key="power_usage_footer"
+         android:title="@string/battery_footer_summary"
+         settings:searchable="false" />
+diff --git a/packages/apps/Settings/res/xml/network_provider_internet.xml b/packages/apps/Settings/res/xml/network_provider_internet.xml
+--- a/packages/apps/Settings/res/xml/network_provider_internet.xml
++++ b/packages/apps/Settings/res/xml/network_provider_internet.xml
+@@ -20,7 +20,7 @@
+     android:key="network_provider_and_internet_screen"
+     android:title="@string/network_dashboard_title">
+ 
+-    <com.android.settingslib.RestrictedPreference
++    <Preference
+         android:fragment="com.android.settings.network.NetworkProviderSettings"
+         android:key="internet_settings"
+         android:title="@string/provider_internet_settings"
+@@ -33,30 +33,9 @@
+         settings:userRestriction="no_config_wifi"
+         settings:controller="com.android.settings.network.InternetPreferenceControllerV2" />
+ 
+-    <com.android.settingslib.RestrictedPreference
+-        android:key="calls_and_sms"
+-        android:title="@string/calls_and_sms"
+-        android:icon="@drawable/ic_calls_sms"
+-        android:order="-20"
+-        android:summary="@string/summary_placeholder"
+-        android:fragment="com.android.settings.network.NetworkProviderCallsSmsFragment"
+-        settings:userRestriction="no_config_mobile_networks"
+-        settings:allowDividerBelow="true"
+-        settings:useAdminDisabledSummary="true"
+-        settings:controller="com.android.settings.network.NetworkProviderCallsSmsController" />
+ 
+-    <com.android.settingslib.RestrictedPreference
+-        android:key="mobile_network_list"
+-        android:title="@string/provider_network_settings_title"
+-        android:summary="@string/summary_placeholder"
+-        android:icon="@drawable/ic_sim_card"
+-        android:order="-15"
+-        settings:keywords="@string/keywords_more_mobile_networks"
+-        settings:userRestriction="no_config_mobile_networks"
+-        settings:useAdminDisabledSummary="true"
+-        settings:controller="com.android.settings.network.MobileNetworkSummaryController" />
+ 
+-    <com.android.settingslib.RestrictedSwitchPreference
++    <Preference
+         android:key="airplane_mode_on"
+         android:title="@string/airplane_mode"
+         android:icon="@drawable/ic_airplanemode_active"
+@@ -64,19 +43,8 @@
+         settings:controller="com.android.settings.network.AirplaneModePreferenceController"
+         settings:userRestriction="no_airplane_mode"/>
+ 
+-    <com.android.settingslib.RestrictedPreference
+-        android:fragment="com.android.settings.network.tether.TetherSettings"
+-        android:key="tether_settings"
+-        android:title="@string/tether_settings_title_all"
+-        android:icon="@drawable/ic_wifi_tethering"
+-        android:order="5"
+-        android:summary="@string/summary_placeholder"
+-        settings:controller="com.android.settings.network.TetherPreferenceController"
+-        settings:keywords="@string/keywords_hotspot_tethering"
+-        settings:userRestriction="no_config_tethering"
+-        settings:useAdminDisabledSummary="true" />
+ 
+-    <com.android.settings.datausage.DataSaverPreference
++    <Preference
+         android:key="restrict_background_parent_entry"
+         android:title="@string/data_saver_title"
+         android:icon="@drawable/ic_settings_data_usage"
+@@ -85,7 +53,7 @@
+         settings:isPreferenceVisible="@bool/config_show_data_saver"
+         android:fragment="com.android.settings.datausage.DataSaverSummary"/>
+ 
+-    <com.android.settings.vpn2.VpnInfoPreference
++    <Preference
+         android:fragment="com.android.settings.vpn2.VpnSettings"
+         android:key="vpn_settings"
+         android:title="@string/vpn_settings_title"
+@@ -95,12 +63,11 @@
+         settings:userRestriction="no_config_vpn"
+         settings:useAdminDisabledSummary="true" />
+ 
+-    <com.android.settings.network.PrivateDnsModeDialogPreference
++    <Preference
+         android:key="private_dns_settings"
+         android:title="@string/select_private_dns_configuration_title"
+         android:order="20"
+         android:dialogTitle="@string/select_private_dns_configuration_dialog_title"
+-        android:dialogLayout="@layout/private_dns_mode_dialog"
+         android:positiveButtonText="@string/save"
+         android:negativeButtonText="@android:string/cancel" />
+ 
+@@ -112,10 +79,4 @@
+         android:order="25"
+         settings:controller="com.android.settings.network.AdaptiveConnectivityPreferenceController"/>
+ 
+-    <Preference
+-        android:key="cellular_security_network_internet"
+-        android:title="@string/cellular_security_title"
+-        android:summary="@string/cellular_security_summary"
+-        android:order="30"
+-        settings:controller="com.android.settings.network.CellularSecurityPreferenceController"/>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/apps.xml b/packages/apps/Settings/res/xml/apps.xml
+--- a/packages/apps/Settings/res/xml/apps.xml
++++ b/packages/apps/Settings/res/xml/apps.xml
+@@ -67,12 +67,6 @@
+         android:order="-995"
+         settings:controller="com.android.settings.applications.ClonedAppsPreferenceController"
+         android:fragment="com.android.settings.applications.manageapplications.ManageApplications">
+-        <extra
+-            android:name="classname"
+-            android:value="com.android.settings.Settings$ClonedAppsListActivity"/>
+-        <intent
+-            android:action="android.settings.MANAGE_CLONED_APPS_SETTINGS"
+-            android:targetPackage="${applicationId}"/>
+     </Preference>
+ 
+     <PreferenceCategory
+@@ -104,9 +98,6 @@
+         android:summary="@string/app_battery_usage_summary"
+         settings:controller="com.android.settings.applications.AppBatteryUsagePreferenceController"
+         android:fragment="com.android.settings.applications.manageapplications.ManageApplications">
+-        <extra
+-            android:name="classname"
+-            android:value="com.android.settings.Settings$AppBatteryUsageActivity"/>
+     </Preference>
+ 
+     <Preference
+@@ -128,9 +119,6 @@
+             android:order="22"
+             settings:controller="com.android.settings.applications.appcompat.UserAspectRatioAppsPreferenceController"
+             android:fragment="com.android.settings.applications.manageapplications.ManageApplications">
+-            <extra android:name="classname"
+-                   android:value="com.android.settings.Settings$UserAspectRatioAppListActivity"/>
+-            <intent android:action="android.settings.MANAGE_USER_ASPECT_RATIO_SETTINGS"/>
+         </Preference>
+     </PreferenceCategory>
+ 

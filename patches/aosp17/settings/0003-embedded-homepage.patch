@@ -1,0 +1,1398 @@
+diff --git a/packages/apps/Settings/src/com/android/settings/homepage/SettingsHomepageActivity.java b/packages/apps/Settings/src/com/android/settings/homepage/SettingsHomepageActivity.java
+--- a/packages/apps/Settings/src/com/android/settings/homepage/SettingsHomepageActivity.java
++++ b/packages/apps/Settings/src/com/android/settings/homepage/SettingsHomepageActivity.java
+@@ -16,771 +16,118 @@
+ 
+ package com.android.settings.homepage;
+ 
+-import static android.provider.Settings.ACTION_SETTINGS_EMBED_DEEP_LINK_ACTIVITY;
+-import static android.provider.Settings.EXTRA_SETTINGS_EMBEDDED_DEEP_LINK_HIGHLIGHT_MENU_KEY;
+-import static android.provider.Settings.EXTRA_SETTINGS_EMBEDDED_DEEP_LINK_INTENT_URI;
++import android.app.Activity;
++import android.app.Fragment;
++import android.content.Context;
++import android.os.Bundle;
++import android.view.View;
++import android.view.ViewGroup;
++import android.widget.TextView;
+ 
+-import static com.android.settings.SettingsActivity.EXTRA_IS_DEEPLINK_HOME_STARTED_FROM_SEARCH;
+-import static com.android.settings.SettingsActivity.EXTRA_USER_HANDLE;
++import androidx.preference.Preference;
+ 
+-import android.animation.LayoutTransition;
+-import android.app.ActivityManager;
+-import android.app.settings.SettingsEnums;
+-import android.content.ComponentName;
+-import android.content.Intent;
+-import android.content.pm.ActivityInfo;
+-import android.content.pm.PackageManager;
+-import android.content.pm.PackageManager.ApplicationInfoFlags;
+-import android.content.pm.UserInfo;
+-import android.content.res.Configuration;
+-import android.net.Uri;
+-import android.os.Bundle;
+-import android.os.Process;
+-import android.os.UserHandle;
+-import android.os.UserManager;
+-import android.text.TextUtils;
+-import android.util.ArraySet;
+-import android.util.FeatureFlagUtils;
+-import android.util.Log;
+-import android.view.View;
+-import android.view.Window;
+-import android.view.WindowManager;
+-import android.widget.FrameLayout;
++import com.android.settings.R;
++import com.android.settings.dashboard.DashboardFragment;
+ 
+-import androidx.annotation.VisibleForTesting;
+-import androidx.core.graphics.Insets;
+-import androidx.core.util.Consumer;
+-import androidx.core.view.ViewCompat;
+-import androidx.core.view.WindowCompat;
+-import androidx.core.view.WindowInsetsCompat;
+-import androidx.fragment.app.Fragment;
+-import androidx.fragment.app.FragmentActivity;
+-import androidx.fragment.app.FragmentManager;
+-import androidx.fragment.app.FragmentTransaction;
+-import androidx.window.embedding.SplitController;
+-import androidx.window.embedding.SplitInfo;
+-import androidx.window.embedding.SplitRule;
+-import androidx.window.java.embedding.SplitControllerCallbackAdapter;
+-
+-import com.android.settings.PccAwareUidComparator;
+-import com.android.settings.R;
+-import com.android.settings.Settings;
+-import com.android.settings.SettingsActivity;
+-import com.android.settings.SettingsApplication;
+-import com.android.settings.activityembedding.ActivityEmbeddingRulesController;
+-import com.android.settings.activityembedding.ActivityEmbeddingUtils;
+-import com.android.settings.activityembedding.EmbeddedDeepLinkUtils;
+-import com.android.settings.core.CategoryMixin;
+-import com.android.settings.core.FeatureFlags;
+-import com.android.settings.flags.Flags;
+-import com.android.settings.homepage.contextualcards.ContextualCardsFragment;
+-import com.android.settings.overlay.FeatureFactory;
+-import com.android.settings.safetycenter.SafetyCenterManagerWrapper;
+-import com.android.settingslib.Utils;
+-import com.android.settingslib.core.lifecycle.HideNonSystemOverlayMixin;
+-import com.android.settingslib.widget.SettingsThemeHelper;
+-
+-import com.google.android.setupcompat.util.WizardManagerHelper;
+-
+-import java.net.URISyntaxException;
+-import java.util.List;
+-import java.util.Set;
+-
+-/** Settings homepage activity */
+-public class SettingsHomepageActivity extends FragmentActivity implements
+-        CategoryMixin.CategoryHandler {
+-
+-    private static final String TAG = "SettingsHomepageActivity";
+-
+-    // Additional extra of Settings#ACTION_SETTINGS_LARGE_SCREEN_DEEP_LINK.
+-    // Put true value to the intent when startActivity for a deep link intent from this Activity.
+-    public static final String EXTRA_IS_FROM_SETTINGS_HOMEPAGE = "is_from_settings_homepage";
+-
+-    // Additional extra of Settings#ACTION_SETTINGS_LARGE_SCREEN_DEEP_LINK.
+-    // Set & get Uri of the Intent separately to prevent failure of Intent#ParseUri.
+-    public static final String EXTRA_SETTINGS_LARGE_SCREEN_DEEP_LINK_INTENT_DATA =
+-            "settings_large_screen_deep_link_intent_data";
+-
+-    // The referrer who fires the initial intent to start the homepage
+-    @VisibleForTesting
+-    static final String EXTRA_INITIAL_REFERRER = "initial_referrer";
+-
+-    static final int DEFAULT_HIGHLIGHT_MENU_KEY = R.string.menu_key_network;
+-    private static final long HOMEPAGE_LOADING_TIMEOUT_MS = 300;
+-
++/** Settings homepage activity. */
++public class SettingsHomepageActivity extends Activity {
+     private TopLevelSettings mMainFragment;
++    private DashboardFragment mSubpage;
+     private View mHomepageView;
+-    private View mSuggestionView;
+-    private CategoryMixin mCategoryMixin;
+-    private Set<HomepageLoadedListener> mLoadedListeners;
+-    private boolean mIsEmbeddingActivityEnabled;
+-    private boolean mIsTwoPane;
+-    // A regular layout shows icons on homepage, whereas a simplified layout doesn't.
+-    private boolean mIsRegularLayout = true;
+-
+-    private SplitControllerCallbackAdapter mSplitControllerAdapter;
+-    private SplitInfoCallback mCallback;
+-    private boolean mAllowUpdateSuggestion = true;
+-
+-    /** A listener receiving homepage loaded events. */
+-    public interface HomepageLoadedListener {
+-        /** Called when the homepage is loaded. */
+-        void onHomepageLoaded();
+-    }
++    private TextView mTitle;
++    private View mSearchIcon;
+ 
+     private interface FragmentCreator<T extends Fragment> {
+         T create();
+ 
+-        /** To initialize after {@link #create} */
+         default void init(Fragment fragment) {}
+     }
+ 
+-    /**
+-     * Try to add a {@link HomepageLoadedListener}. If homepage is already loaded, the listener
+-     * will not be notified.
+-     *
+-     * @return Whether the listener is added.
+-     */
+-    public boolean addHomepageLoadedListener(HomepageLoadedListener listener) {
+-        if (mHomepageView == null) {
+-            return false;
+-        } else {
+-            if (!mLoadedListeners.contains(listener)) {
+-                mLoadedListeners.add(listener);
+-            }
+-            return true;
+-        }
+-    }
+-
+-    /**
+-     * Shows the homepage and shows/hides the suggestion together. Only allows to be executed once
+-     * to avoid the flicker caused by the suggestion suddenly appearing/disappearing.
+-     */
+-    public void showHomepageWithSuggestion(boolean showSuggestion) {
+-        if (mAllowUpdateSuggestion) {
+-            Log.i(TAG, "showHomepageWithSuggestion: " + showSuggestion);
+-            mAllowUpdateSuggestion = false;
+-            mSuggestionView.setVisibility(showSuggestion ? View.VISIBLE : View.GONE);
+-        }
+-
+-        if (mHomepageView == null) {
+-            return;
+-        }
+-        final View homepageView = mHomepageView;
+-        mHomepageView = null;
+-        mLoadedListeners.forEach(listener -> listener.onHomepageLoaded());
+-        mLoadedListeners.clear();
+-        homepageView.setVisibility(View.VISIBLE);
+-    }
+-
+-    /** Returns the main content fragment */
++    /** Returns the main content fragment. */
+     public TopLevelSettings getMainFragment() {
+         return mMainFragment;
+-    }
+-
+-    @Override
+-    public CategoryMixin getCategoryMixin() {
+-        return mCategoryMixin;
+     }
+ 
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+ 
+-        if (SettingsThemeHelper.isExpressiveTheme(this)) {
+-            setTheme(R.style.Theme_Settings_Home_Expressive);
+-        }
+-
+-        // Ensure device is provisioned in order to access Settings home
+-        // TODO(b/331254029): This should later be replaced in favor of an allowlist
+-        boolean unprovisioned = android.provider.Settings.Global.getInt(getContentResolver(),
+-                android.provider.Settings.Global.DEVICE_PROVISIONED, 0) == 0;
+-        if (unprovisioned) {
+-            Log.e(TAG, "Device is not provisioned, exiting Settings");
+-            finish();
+-            return;
+-        }
+-
+-        // Settings homepage should be the task root, otherwise there will be UI issues.
+-        boolean isTaskRoot = isTaskRoot();
+-
+-        mIsEmbeddingActivityEnabled = ActivityEmbeddingUtils.isEmbeddingActivityEnabled(this);
+-        if (mIsEmbeddingActivityEnabled) {
+-            final UserManager um = getSystemService(UserManager.class);
+-            final UserInfo userInfo = um.getUserInfo(getUserId());
+-            if (EmbeddedDeepLinkUtils.isSubProfile(userInfo)) {
+-                final Intent intent = new Intent(getIntent())
+-                        .addFlags(Intent.FLAG_ACTIVITY_FORWARD_RESULT)
+-                        .putExtra(EXTRA_USER_HANDLE, getUser())
+-                        .putExtra(EXTRA_INITIAL_REFERRER, getCurrentReferrer());
+-                if (TextUtils.equals(intent.getAction(), ACTION_SETTINGS_EMBED_DEEP_LINK_ACTIVITY)
+-                        && this instanceof DeepLinkHomepageActivity) {
+-                    intent.setClass(this, DeepLinkHomepageActivityInternal.class);
+-                } else {
+-                    intent.setPackage(getPackageName());
+-                }
+-                if (!isTaskRoot) {
+-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-                } else {
+-                    intent.removeFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-                }
+-                startActivityAsUser(intent, um.getProfileParent(userInfo.id).getUserHandle());
+-                finish();
+-                return;
+-            }
+-        }
+-
+-        final boolean isEmbeddedDeepLink = shouldLaunchDeepLinkIntentToRight();
+-        final boolean isDeepLinkStartedFromSearch = getIntent().getBooleanExtra(
+-                EXTRA_IS_DEEPLINK_HOME_STARTED_FROM_SEARCH, false /* defaultValue */);
+-        if (!isTaskRoot && !isDeepLinkStartedFromSearch) {
+-            if ((getIntent().getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
+-                    && !isEmbeddedDeepLink) {
+-                Log.i(TAG, "Activity has been started, finishing");
+-            } else {
+-                Log.i(TAG, "Homepage is not started as the task root, restarting");
+-                Intent intent = new Intent(getIntent())
+-                        .setPackage(getPackageName())
+-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+-                                | Intent.FLAG_ACTIVITY_CLEAR_TASK
+-                                | Intent.FLAG_ACTIVITY_FORWARD_RESULT)
+-                        .putExtra(EXTRA_USER_HANDLE, getUser())
+-                        .putExtra(EXTRA_INITIAL_REFERRER, getCurrentReferrer());
+-                startActivity(intent);
+-            }
+-            finish();
+-            return;
+-        }
+-
+-        setupEdgeToEdge();
++        // The embedded window hosts one pane and owns provisioning and system bars.
++        getTheme().applyStyle(androidx.preference.R.style.PreferenceThemeOverlay, false);
+         setContentView(R.layout.settings_homepage_container);
+-
+-        mIsTwoPane = ActivityEmbeddingUtils.isAlreadyEmbedded(this);
+-
+-        initHomepageContainer();
+-        updateHomepageBackground();
+-        mLoadedListeners = new ArraySet<>();
+-
+-        initSearchBarView();
+-
+-        getLifecycle().addObserver(new HideNonSystemOverlayMixin(this));
+-        mCategoryMixin = new CategoryMixin(this);
+-        getLifecycle().addObserver(mCategoryMixin);
+-
+-        final String highlightMenuKey = getHighlightMenuKey();
+-        // Only allow features on high ram devices.
+-        if (!getSystemService(ActivityManager.class).isLowRamDevice()) {
+-            final boolean scrollNeeded = mIsEmbeddingActivityEnabled
+-                    && !TextUtils.equals(getString(DEFAULT_HIGHLIGHT_MENU_KEY), highlightMenuKey);
+-            showSuggestionFragment(scrollNeeded);
+-            if (!Flags.updatedSuggestionCardAosp()
+-                    && FeatureFlagUtils.isEnabled(this, FeatureFlags.CONTEXTUAL_HOME)) {
+-                showFragment(() -> new ContextualCardsFragment(), R.id.contextual_cards_content);
+-                ((FrameLayout) findViewById(R.id.main_content))
+-                        .getLayoutTransition().enableTransitionType(LayoutTransition.CHANGING);
+-            }
+-        }
+-        mMainFragment = showFragment(() -> {
+-            final TopLevelSettings fragment = new TopLevelSettings();
+-            fragment.getArguments().putString(SettingsActivity.EXTRA_FRAGMENT_ARG_KEY,
+-                    highlightMenuKey);
+-            return fragment;
+-        }, R.id.main_content);
+-
+-        // Launch the intent of the embedded deep link
+-        if (isEmbeddedDeepLink) {
+-            launchDeepLinkIntentToRight();
+-        }
+-
+-        // Settings app may be launched on an existing task. Reset SplitPairRule of SubSettings here
+-        // to prevent SplitPairRule of an existing task applied on a new started Settings app.
+-        if (mIsEmbeddingActivityEnabled
+-                && (getIntent().getFlags() & Intent.FLAG_ACTIVITY_CLEAR_TOP) != 0) {
+-            initSplitPairRules();
+-        }
+-
+-        updateSplitLayout();
+-
+-        enableTaskLocaleOverride();
++        mTitle = findViewById(R.id.search_bar_title);
++        mSearchIcon = findViewById(R.id.imageView);
++        mMainFragment = showFragment(TopLevelSettings::new, R.id.main_content);
++        final ViewGroup content = findViewById(R.id.main_content);
++        mHomepageView = content.getChildAt(0);
+     }
+ 
+-    @VisibleForTesting
+-    void initSplitPairRules() {
+-        new ActivityEmbeddingRulesController(getApplicationContext()).initRules();
++    public boolean onPreferenceStartFragment(DashboardFragment caller, Preference pref) {
++        if (caller != mMainFragment || pref.getFragment() == null || mSubpage != null) {
++            return false;
++        }
++        final DashboardFragment page;
++        try {
++            page = Class.forName(pref.getFragment()).asSubclass(DashboardFragment.class)
++                    .getDeclaredConstructor().newInstance();
++        } catch (ReflectiveOperationException missing) {
++            throw new IllegalStateException(pref.getFragment(), missing);
++        }
++        mSubpage = showFragment(new FragmentCreator<DashboardFragment>() {
++            @Override
++            public DashboardFragment create() {
++                return page;
++            }
++
++            @Override
++            public void init(Fragment fragment) {
++                fragment.setArguments(pref.getExtras());
++            }
++        }, R.id.main_content);
++        mTitle.setText(pref.getTitle());
++        mSearchIcon.setVisibility(View.GONE);
++        return true;
+     }
+ 
+     @Override
+-    protected void onStart() {
+-        ((SettingsApplication) getApplication()).setHomeActivity(this);
+-        super.onStart();
+-        if (mIsEmbeddingActivityEnabled) {
+-            final SplitController splitController = SplitController.getInstance(this);
+-            mSplitControllerAdapter = new SplitControllerCallbackAdapter(splitController);
+-            mCallback = new SplitInfoCallback(this);
+-            mSplitControllerAdapter.addSplitListener(this, Runnable::run, mCallback);
++    public void onBackPressed() {
++        if (mSubpage == null) {
++            super.onBackPressed();
++            return;
+         }
++        final ViewGroup content = findViewById(R.id.main_content);
++        content.removeAllViews();
++        closeFragment(mSubpage);
++        mSubpage = null;
++        content.addView(mHomepageView);
++        mMainFragment.onResume();
++        mTitle.setText(R.string.homepage_search);
++        mSearchIcon.setVisibility(View.VISIBLE);
+     }
+ 
+     @Override
+-    protected void onStop() {
+-        super.onStop();
+-        mAllowUpdateSuggestion = true;
+-        if (mSplitControllerAdapter != null && mCallback != null) {
+-            mSplitControllerAdapter.removeSplitListener(mCallback);
+-            mCallback = null;
+-            mSplitControllerAdapter = null;
+-        }
++    protected void onDestroy() {
++        if (mSubpage != null) closeFragment(mSubpage);
++        if (mMainFragment != null) closeFragment(mMainFragment);
++        super.onDestroy();
+     }
+ 
+-    @Override
+-    protected void onNewIntent(Intent intent) {
+-        super.onNewIntent(intent);
+-
+-        // When it's large screen 2-pane and Settings app is in the background, receiving an Intent
+-        // will not recreate this activity. Update the intent for this case.
+-        setIntent(intent);
+-        reloadHighlightMenuKey();
+-        if (isFinishing()) {
+-            return;
+-        }
+-        // Launch the intent of the embedded deep link.
+-        if (shouldLaunchDeepLinkIntentToRight()) {
+-            launchDeepLinkIntentToRight();
+-        }
+-    }
+-
+-    @Override
+-    public void onConfigurationChanged(Configuration newConfig) {
+-        super.onConfigurationChanged(newConfig);
+-        updateHomepageUI();
+-    }
+-
+-    private void updateSplitLayout() {
+-        if (!mIsEmbeddingActivityEnabled) {
+-            return;
+-        }
+-        if (mIsTwoPane) {
+-            if (mIsRegularLayout == ActivityEmbeddingUtils.isRegularHomepageLayout(this)) {
+-                // Layout unchanged
+-                return;
+-            }
+-        } else if (mIsRegularLayout) {
+-            // One pane mode with the regular layout, not needed to change
+-            return;
+-        }
+-        mIsRegularLayout = !mIsRegularLayout;
+-
+-        // Update search title padding
+-        View searchTitle = findViewById(R.id.search_bar_title);
+-        if (searchTitle != null) {
+-            int paddingStart = getResources().getDimensionPixelSize(
+-                    mIsRegularLayout
+-                            ? R.dimen.search_bar_title_padding_start_regular_two_pane
+-                            : R.dimen.search_bar_title_padding_start);
+-            searchTitle.setPaddingRelative(paddingStart, 0, 0, 0);
+-        }
+-        // Notify fragments
+-        getSupportFragmentManager().getFragments().forEach(fragment -> {
+-            if (fragment instanceof SplitLayoutListener) {
+-                ((SplitLayoutListener) fragment).onSplitLayoutChanged(mIsRegularLayout);
+-            }
+-        });
+-    }
+-
+-    private void setupEdgeToEdge() {
+-        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+-        ViewCompat.setOnApplyWindowInsetsListener(findViewById(android.R.id.content),
+-                (v, windowInsets) -> {
+-                    Insets insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars()
+-                            | WindowInsetsCompat.Type.displayCutout());
+-                    // Apply the insets paddings to the view.
+-                    v.setPadding(insets.left, 0, insets.right, insets.bottom);
+-
+-                    // reset the top padding of search bar container to original top padding
+-                    // plus insets top.
+-                    View container = findViewById(R.id.app_bar_container);
+-                    final int top_padding = getResources().getDimensionPixelSize(
+-                            R.dimen.search_bar_container_top_padding);
+-                    container.setPadding(container.getPaddingLeft(), top_padding + insets.top,
+-                            container.getPaddingRight(), container.getPaddingBottom());
+-
+-                    // Return CONSUMED if you don't want the window insets to keep being
+-                    // passed down to descendant views.
+-                    return WindowInsetsCompat.CONSUMED;
+-                });
+-    }
+-
+-    private void initSearchBarView() {
+-        View toolbar = findViewById(R.id.search_action_bar);
+-        FeatureFactory.getFeatureFactory().getSearchFeatureProvider()
+-                .initSearchToolbar(this /* activity */, toolbar,
+-                        SettingsEnums.SETTINGS_HOMEPAGE);
+-    }
+-
+-    private void updateHomepageUI() {
+-        final boolean newTwoPaneState = ActivityEmbeddingUtils.isAlreadyEmbedded(this);
+-        if (mIsTwoPane != newTwoPaneState) {
+-            mIsTwoPane = newTwoPaneState;
+-            updateHomepageBackground();
+-        }
+-        updateSplitLayout();
+-    }
+-
+-    private void updateHomepageBackground() {
+-        if (!mIsEmbeddingActivityEnabled) {
+-            return;
+-        }
+-
+-        final Window window = getWindow();
+-        final int color = mIsTwoPane
+-                ? getColor(R.color.settings_two_pane_background_color)
+-                : Utils.getColorAttrDefaultColor(this, android.R.attr.colorBackground);
+-
+-        window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+-
+-        // Update content background.
+-        findViewById(android.R.id.content).setBackgroundColor(color);
+-        //Update search bar background
+-        findViewById(R.id.app_bar_container).setBackgroundColor(color);
+-    }
+-
+-    private void showSuggestionFragment(boolean scrollNeeded) {
+-        final Class<? extends Fragment> fragmentClass = FeatureFactory.getFeatureFactory()
+-                .getSuggestionFeatureProvider().getSuggestionFragment();
+-        if (fragmentClass == null) {
+-            return;
+-        }
+-
+-        mSuggestionView = findViewById(R.id.suggestion_content);
+-        mHomepageView = findViewById(R.id.settings_homepage_container);
+-        // Hide the homepage for preparing the suggestion. If scrolling is needed, the list views
+-        // should be initialized in the invisible homepage view to prevent a scroll flicker.
+-        mHomepageView.setVisibility(scrollNeeded ? View.INVISIBLE : View.GONE);
+-        // Schedule a timer to show the homepage and hide the suggestion on timeout.
+-        mHomepageView.postDelayed(() -> showHomepageWithSuggestion(false),
+-                HOMEPAGE_LOADING_TIMEOUT_MS);
+-        showFragment(new SuggestionFragCreator(fragmentClass, true),
+-                R.id.suggestion_content);
++    private void closeFragment(Fragment fragment) {
++        fragment.onDestroyView();
++        fragment.onDestroy();
++        fragment.onDetach();
+     }
+ 
+     private <T extends Fragment> T showFragment(FragmentCreator<T> fragmentCreator, int id) {
+-        final FragmentManager fragmentManager = getSupportFragmentManager();
+-        final FragmentTransaction fragmentTransaction = fragmentManager.beginTransaction();
+-        T showFragment = (T) fragmentManager.findFragmentById(id);
+-
+-        if (showFragment == null) {
+-            showFragment = fragmentCreator.create();
+-            fragmentCreator.init(showFragment);
+-            fragmentTransaction.add(id, showFragment);
+-        } else {
+-            fragmentCreator.init(showFragment);
+-            fragmentTransaction.show(showFragment);
+-        }
+-        fragmentTransaction.commit();
++        final T showFragment = fragmentCreator.create();
++        fragmentCreator.init(showFragment);
++        showFragment.onAttach((Context) this);
++        showFragment.onCreate(null);
++        final ViewGroup container = findViewById(id);
++        final View view = showFragment.onCreateView(getLayoutInflater(), container, null);
++        container.removeAllViews();
++        container.addView(view);
++        showFragment.onResume();
+         return showFragment;
+     }
+-
+-    @VisibleForTesting
+-    boolean shouldLaunchDeepLinkIntentToRight() {
+-        if (!ActivityEmbeddingUtils.isSettingsSplitEnabled(this)
+-                || !FeatureFlagUtils.isEnabled(this,
+-                        FeatureFlagUtils.SETTINGS_SUPPORT_LARGE_SCREEN)) {
+-            return false;
+-        }
+-
+-        Intent intent = getIntent();
+-        return intent != null && TextUtils.equals(intent.getAction(),
+-                ACTION_SETTINGS_EMBED_DEEP_LINK_ACTIVITY);
+-    }
+-
+-    private void launchDeepLinkIntentToRight() {
+-        if (!(this instanceof DeepLinkHomepageActivity
+-                || this instanceof DeepLinkHomepageActivityInternal)) {
+-            Log.e(TAG, "Not a deep link component");
+-            finish();
+-            return;
+-        }
+-
+-        if (!WizardManagerHelper.isUserSetupComplete(this)) {
+-            Log.e(TAG, "Cancel deep link before SUW completed");
+-            finish();
+-            return;
+-        }
+-
+-        final Intent intent = getIntent();
+-        final String intentUriString = intent.getStringExtra(
+-                EXTRA_SETTINGS_EMBEDDED_DEEP_LINK_INTENT_URI);
+-        if (TextUtils.isEmpty(intentUriString)) {
+-            Log.e(TAG, "No EXTRA_SETTINGS_EMBEDDED_DEEP_LINK_INTENT_URI to deep link");
+-            finish();
+-            return;
+-        }
+-
+-        final Intent targetIntent;
+-        try {
+-            targetIntent = Intent.parseUri(intentUriString, Intent.URI_INTENT_SCHEME);
+-        } catch (URISyntaxException e) {
+-            Log.e(TAG, "Failed to parse deep link intent: " + e);
+-            finish();
+-            return;
+-        }
+-
+-        targetIntent.setData(intent.getParcelableExtra(
+-                SettingsHomepageActivity.EXTRA_SETTINGS_LARGE_SCREEN_DEEP_LINK_INTENT_DATA));
+-        final ComponentName targetComponentName = targetIntent.resolveActivity(getPackageManager());
+-        if (targetComponentName == null) {
+-            Log.e(TAG, "No valid target for the deep link intent: " + targetIntent);
+-            finish();
+-            return;
+-        }
+-
+-        ActivityInfo targetActivityInfo;
+-        try {
+-            targetActivityInfo = getPackageManager().getActivityInfo(targetComponentName,
+-                    /* flags= */ 0);
+-        } catch (PackageManager.NameNotFoundException e) {
+-            Log.e(TAG, "Failed to get target ActivityInfo: " + e);
+-            finish();
+-            return;
+-        }
+-
+-        UserHandle user = intent.getParcelableExtra(EXTRA_USER_HANDLE, UserHandle.class);
+-        String caller = getInitialReferrer();
+-        int callerUid = -1;
+-        if (caller != null) {
+-            try {
+-                callerUid = getPackageManager().getApplicationInfoAsUser(caller,
+-                        ApplicationInfoFlags.of(/* flags= */ 0),
+-                        user != null ? user.getIdentifier() : getUserId()).uid;
+-            } catch (PackageManager.NameNotFoundException e) {
+-                Log.e(TAG, "Not able to get callerUid: " + e);
+-                finish();
+-                return;
+-            }
+-        }
+-
+-        if (!hasPrivilegedAccess(caller, callerUid, targetActivityInfo.packageName)) {
+-            if (!targetActivityInfo.exported) {
+-                Log.e(TAG, "Target Activity is not exported");
+-                finish();
+-                return;
+-            }
+-
+-            if (!isCallingAppPermitted(targetActivityInfo.permission, callerUid)) {
+-                Log.e(TAG, "Calling app must have the permission of deep link Activity");
+-                finish();
+-                return;
+-            }
+-        }
+-
+-        // Only allow FLAG_GRANT_READ/WRITE_URI_PERMISSION if calling app has the permission to
+-        // access specified Uri.
+-        int uriPermissionFlags = targetIntent.getFlags()
+-                & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+-        if (targetIntent.getData() != null
+-                && uriPermissionFlags != 0
+-                && checkUriPermission(targetIntent.getData(), /* pid= */ -1, callerUid,
+-                        uriPermissionFlags) == PackageManager.PERMISSION_DENIED) {
+-            Log.e(TAG, "Calling app must have the permission to access Uri and grant permission");
+-            finish();
+-            return;
+-        }
+-
+-        targetIntent.setComponent(targetComponentName);
+-
+-        // To prevent launchDeepLinkIntentToRight again for configuration change.
+-        intent.setAction(null);
+-
+-        targetIntent.removeFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NEW_DOCUMENT);
+-        targetIntent.addFlags(Intent.FLAG_ACTIVITY_FORWARD_RESULT);
+-
+-        // Sender of intent may want to send intent extra data to the destination of targetIntent.
+-        targetIntent.replaceExtras(intent);
+-
+-        targetIntent.putExtra(EXTRA_IS_FROM_SETTINGS_HOMEPAGE, true);
+-        targetIntent.putExtra(SettingsActivity.EXTRA_IS_FROM_SLICE, false);
+-
+-        // Set 2-pane pair rule for the deep link page.
+-        ActivityEmbeddingRulesController.registerTwoPanePairRule(this,
+-                new ComponentName(getApplicationContext(), getClass()),
+-                targetComponentName,
+-                targetIntent.getAction(),
+-                SplitRule.FinishBehavior.ALWAYS,
+-                SplitRule.FinishBehavior.ALWAYS,
+-                true /* clearTop */);
+-        ActivityEmbeddingRulesController.registerTwoPanePairRule(this,
+-                new ComponentName(getApplicationContext(), Settings.class),
+-                targetComponentName,
+-                targetIntent.getAction(),
+-                SplitRule.FinishBehavior.ALWAYS,
+-                SplitRule.FinishBehavior.ALWAYS,
+-                true /* clearTop */);
+-
+-        if (user != null) {
+-            startActivityAsUser(targetIntent, user);
+-        } else {
+-            startActivity(targetIntent);
+-        }
+-    }
+-
+-    // Check if the caller has privileged access to launch the target page.
+-    private boolean hasPrivilegedAccess(String callerPkg, int callerUid, String targetPackage) {
+-        if (TextUtils.equals(callerPkg, getPackageName())) {
+-            return true;
+-        }
+-
+-        int targetUid = -1;
+-        try {
+-            targetUid = getPackageManager().getApplicationInfo(targetPackage,
+-                    ApplicationInfoFlags.of(/* flags= */ 0)).uid;
+-        } catch (PackageManager.NameNotFoundException e) {
+-            Log.e(TAG, "Not able to get targetUid: " + e);
+-            return false;
+-        }
+-
+-        // When activityInfo.exported is false, Activity still can be launched if applications have
+-        // the same user ID.
+-        if (PccAwareUidComparator.isSameApp(this, callerUid, targetUid)) {
+-            return true;
+-        }
+-
+-        // When activityInfo.exported is false, Activity still can be launched if calling app has
+-        // root or system privilege.
+-        int callingAppId = UserHandle.getAppId(callerUid);
+-        if (callingAppId == Process.ROOT_UID || callingAppId == Process.SYSTEM_UID) {
+-            return true;
+-        }
+-
+-        return false;
+-    }
+-
+-    @VisibleForTesting
+-    String getInitialReferrer() {
+-        String referrer = getCurrentReferrer();
+-        if (!TextUtils.equals(referrer, getPackageName())) {
+-            return referrer;
+-        }
+-
+-        String initialReferrer = getIntent().getStringExtra(EXTRA_INITIAL_REFERRER);
+-        return TextUtils.isEmpty(initialReferrer) ? referrer : initialReferrer;
+-    }
+-
+-    @VisibleForTesting
+-    String getCurrentReferrer() {
+-        Intent intent = getIntent();
+-        // Clear extras to get the real referrer
+-        intent.removeExtra(Intent.EXTRA_REFERRER);
+-        intent.removeExtra(Intent.EXTRA_REFERRER_NAME);
+-        Uri referrer = getReferrer();
+-        return referrer != null ? referrer.getHost() : null;
+-    }
+-
+-    @VisibleForTesting
+-    boolean isCallingAppPermitted(String permission, int callerUid) {
+-        return TextUtils.isEmpty(permission)
+-                || checkPermission(permission, /* pid= */ -1, callerUid)
+-                        == PackageManager.PERMISSION_GRANTED;
+-    }
+-
+-    private String getHighlightMenuKey() {
+-        final Intent intent = getIntent();
+-        if (intent != null && TextUtils.equals(intent.getAction(),
+-                ACTION_SETTINGS_EMBED_DEEP_LINK_ACTIVITY)) {
+-            final String menuKey = intent.getStringExtra(
+-                    EXTRA_SETTINGS_EMBEDDED_DEEP_LINK_HIGHLIGHT_MENU_KEY);
+-            if (!TextUtils.isEmpty(menuKey)) {
+-                return maybeRemapMenuKey(menuKey);
+-            }
+-        }
+-        return getString(DEFAULT_HIGHLIGHT_MENU_KEY);
+-    }
+-
+-    private String maybeRemapMenuKey(String menuKey) {
+-        boolean isPrivacyOrSecurityMenuKey =
+-                getString(R.string.menu_key_privacy).equals(menuKey)
+-                        || getString(R.string.menu_key_security).equals(menuKey);
+-        boolean isSafetyCenterMenuKey = getString(R.string.menu_key_safety_center).equals(menuKey);
+-
+-        if (isPrivacyOrSecurityMenuKey && SafetyCenterManagerWrapper.get().isEnabled(this)) {
+-            return getString(R.string.menu_key_safety_center);
+-        }
+-        if (isSafetyCenterMenuKey && !SafetyCenterManagerWrapper.get().isEnabled(this)) {
+-            // We don't know if security or privacy, default to security as it is above.
+-            return getString(R.string.menu_key_security);
+-        }
+-        return menuKey;
+-    }
+-
+-    private void reloadHighlightMenuKey() {
+-        if (mMainFragment == null) {
+-            return;
+-        }
+-        mMainFragment.getArguments().putString(SettingsActivity.EXTRA_FRAGMENT_ARG_KEY,
+-                getHighlightMenuKey());
+-        mMainFragment.reloadHighlightMenuKey();
+-    }
+-
+-    private void initHomepageContainer() {
+-        // Force scroll capture to select the NestedScrollView, instead of the non-scrollable
+-        // RecyclerView which is contained inside it with no height constraint.
+-        final View scrollableContainer = findViewById(R.id.main_content_scrollable_container);
+-        if (scrollableContainer != null) {
+-            scrollableContainer.setScrollCaptureHint(
+-                    View.SCROLL_CAPTURE_HINT_EXCLUDE_DESCENDANTS);
+-        }
+-    }
+-
+-    private static class SuggestionFragCreator implements FragmentCreator {
+-
+-        private final Class<? extends Fragment> mClass;
+-        private final boolean mIsTwoPaneLayout;
+-
+-        SuggestionFragCreator(Class<? extends Fragment> clazz, boolean isTwoPaneLayout) {
+-            mClass = clazz;
+-            mIsTwoPaneLayout = isTwoPaneLayout;
+-        }
+-
+-        @Override
+-        public Fragment create() {
+-            try {
+-                Fragment fragment = mClass.getConstructor().newInstance();
+-                return fragment;
+-            } catch (Exception e) {
+-                Log.w(TAG, "Cannot show fragment", e);
+-            }
+-            return null;
+-        }
+-
+-        @Override
+-        public void init(Fragment fragment) {
+-            if (fragment instanceof SplitLayoutListener) {
+-                ((SplitLayoutListener) fragment).setSplitLayoutSupported(mIsTwoPaneLayout);
+-            }
+-        }
+-    }
+-
+-    /** The callback invoked while AE splitting. */
+-    private static class SplitInfoCallback implements Consumer<List<SplitInfo>> {
+-        private final SettingsHomepageActivity mActivity;
+-
+-        private boolean mIsSplitUpdatedUI = false;
+-
+-        SplitInfoCallback(SettingsHomepageActivity activity) {
+-            mActivity = activity;
+-        }
+-
+-        @Override
+-        public void accept(List<SplitInfo> splitInfoList) {
+-            if (splitInfoList.isEmpty()) {
+-                TopLevelSettings fragment = mActivity.mMainFragment;
+-                if (fragment != null) {
+-                    fragment.setDefaultHighlightIfNeeded();
+-                }
+-            } else if (!mIsSplitUpdatedUI && !mActivity.isFinishing()
+-                    && ActivityEmbeddingUtils.isAlreadyEmbedded(mActivity)) {
+-                mIsSplitUpdatedUI = true;
+-                mActivity.updateHomepageUI();
+-            }
+-        }
+-    }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/homepage/TopLevelSettings.java b/packages/apps/Settings/src/com/android/settings/homepage/TopLevelSettings.java
+--- a/packages/apps/Settings/src/com/android/settings/homepage/TopLevelSettings.java
++++ b/packages/apps/Settings/src/com/android/settings/homepage/TopLevelSettings.java
+@@ -16,85 +16,14 @@
+ 
+ package com.android.settings.homepage;
+ 
+-import static com.android.settings.search.actionbar.SearchMenuController.NEED_SEARCH_ICON_IN_ACTION_BAR;
+-import static com.android.settingslib.search.SearchIndexable.MOBILE;
+-
+-import android.app.ActivityManager;
+-import android.app.settings.SettingsEnums;
+-import android.content.Context;
+-import android.content.res.Configuration;
+-import android.os.Bundle;
+-import android.provider.SearchIndexableResource;
+-import android.text.TextUtils;
+-import android.util.Log;
+-import android.view.LayoutInflater;
+-import android.view.View;
+-import android.view.ViewGroup;
+-import android.view.WindowInsets;
+-
+-import androidx.annotation.NonNull;
+-import androidx.annotation.VisibleForTesting;
+-import androidx.fragment.app.Fragment;
+ import androidx.preference.Preference;
+-import androidx.preference.PreferenceCategory;
+-import androidx.preference.PreferenceFragmentCompat;
+-import androidx.preference.PreferenceGroup;
+-import androidx.preference.PreferenceScreen;
+-import androidx.recyclerview.widget.RecyclerView;
+-import androidx.window.embedding.ActivityEmbeddingController;
+ 
+ import com.android.settings.R;
+-import com.android.settings.activityembedding.ActivityEmbeddingRulesController;
+-import com.android.settings.activityembedding.ActivityEmbeddingUtils;
+-import com.android.settings.core.RoundCornerPreferenceAdapter;
+-import com.android.settings.core.SubSettingLauncher;
+ import com.android.settings.dashboard.DashboardFragment;
+-import com.android.settings.overlay.FeatureFactory;
+-import com.android.settings.search.BaseSearchIndexProvider;
+-import com.android.settings.support.SupportPreferenceController;
+-import com.android.settings.utils.DesktopSettingsUtils;
+-import com.android.settings.widget.HomepagePreference;
+-import com.android.settings.widget.HomepagePreferenceLayoutHelper.HomepagePreferenceLayout;
+-import com.android.settingslib.core.instrumentation.Instrumentable;
+-import com.android.settingslib.drawer.Tile;
+-import com.android.settingslib.search.SearchIndexable;
+-import com.android.settingslib.widget.SettingsThemeHelper;
+ 
+-import java.util.List;
+-
+-@SearchIndexable(forTarget = MOBILE)
+-public class TopLevelSettings extends DashboardFragment implements SplitLayoutListener,
+-        PreferenceFragmentCompat.OnPreferenceStartFragmentCallback {
+-
++/** The top-level Settings dashboard. */
++public class TopLevelSettings extends DashboardFragment {
+     private static final String TAG = "TopLevelSettings";
+-    private static final String SAVED_HIGHLIGHT_MIXIN = "highlight_mixin";
+-    private static final String PREF_KEY_SUPPORT = "top_level_support";
+-
+-    private boolean mIsEmbeddingActivityEnabled;
+-    private TopLevelHighlightMixin mHighlightMixin;
+-    private int mPaddingHorizontal;
+-    private boolean mScrollNeeded = true;
+-    private boolean mFirstStarted = true;
+-    private ActivityEmbeddingController mActivityEmbeddingController;
+-
+-    public TopLevelSettings() {
+-        final Bundle args = new Bundle();
+-        // Disable the search icon because this page uses a full search view in actionbar.
+-        args.putBoolean(NEED_SEARCH_ICON_IN_ACTION_BAR, false);
+-        setArguments(args);
+-    }
+-
+-    /** Dependency injection ctor only for testing. */
+-    @VisibleForTesting
+-    public TopLevelSettings(TopLevelHighlightMixin highlightMixin) {
+-        this();
+-        mHighlightMixin = highlightMixin;
+-    }
+-
+-    @Override
+-    protected int getPreferenceScreenResId() {
+-        return getPreferenceLayoutResId(getContext());
+-    }
+ 
+     @Override
+     protected String getLogTag() {
+@@ -102,310 +31,17 @@
+     }
+ 
+     @Override
+-    public int getMetricsCategory() {
+-        return SettingsEnums.DASHBOARD_SUMMARY;
+-    }
+-
+-    @Override
+-    public void onAttach(Context context) {
+-        super.onAttach(context);
+-        HighlightableMenu.fromXml(context, getPreferenceScreenResId());
+-        use(SupportPreferenceController.class).setActivity(getActivity());
+-    }
+-
+-    @Override
+-    public int getHelpResource() {
+-        // Disable the help icon because this page uses a full search view in actionbar.
+-        return 0;
+-    }
+-
+-    @Override
+-    public Fragment getCallbackFragment() {
+-        return this;
++    protected int getPreferenceScreenResId() {
++        return R.xml.top_level_settings;
+     }
+ 
+     @Override
+     public boolean onPreferenceTreeClick(Preference preference) {
+-        if (isDuplicateClick(preference)) {
+-            return true;
+-        }
+-
+-        // Register SplitPairRule for SubSettings.
+-        ActivityEmbeddingRulesController.registerSubSettingsPairRule(getContext(),
+-                true /* clearTop */);
+-
+-        setHighlightPreferenceKey(preference.getKey());
+-        return super.onPreferenceTreeClick(preference);
++        return super.onPreferenceTreeClick(preference)
++                || onPreferenceStartFragment(this, preference);
+     }
+ 
+-    @Override
+-    public boolean onPreferenceStartFragment(PreferenceFragmentCompat caller, Preference pref) {
+-        new SubSettingLauncher(getActivity())
+-                .setDestination(pref.getFragment())
+-                .setArguments(pref.getExtras())
+-                .setSourceMetricsCategory(caller instanceof Instrumentable
+-                        ? ((Instrumentable) caller).getMetricsCategory()
+-                        : Instrumentable.METRICS_CATEGORY_UNKNOWN)
+-                .setTitleRes(-1)
+-                .setIsSecondLayerPage(true)
+-                .launch();
+-        return true;
++    public boolean onPreferenceStartFragment(DashboardFragment caller, Preference pref) {
++        return ((SettingsHomepageActivity) getActivity()).onPreferenceStartFragment(caller, pref);
+     }
+-
+-    @Override
+-    public void onCreate(Bundle icicle) {
+-        super.onCreate(icicle);
+-        mIsEmbeddingActivityEnabled =
+-                ActivityEmbeddingUtils.isEmbeddingActivityEnabled(getContext());
+-        if (!mIsEmbeddingActivityEnabled) {
+-            return;
+-        }
+-
+-        if (icicle != null) {
+-            mHighlightMixin = icicle.getParcelable(SAVED_HIGHLIGHT_MIXIN);
+-            if (mHighlightMixin != null) {
+-                mScrollNeeded = !mHighlightMixin.isActivityEmbedded() && isActivityEmbedded();
+-            }
+-        }
+-        if (mHighlightMixin == null) {
+-            mHighlightMixin = new TopLevelHighlightMixin();
+-        }
+-    }
+-
+-    /** Wrap ActivityEmbeddingController#isActivityEmbedded for testing. */
+-    @VisibleForTesting
+-    public boolean isActivityEmbedded() {
+-        if (mActivityEmbeddingController == null) {
+-            mActivityEmbeddingController = ActivityEmbeddingController.getInstance(getActivity());
+-        }
+-        return mActivityEmbeddingController.isActivityEmbedded(getActivity());
+-    }
+-
+-    @Override
+-    public void onStart() {
+-        if (mFirstStarted) {
+-            mFirstStarted = false;
+-            FeatureFactory.getFeatureFactory().getSearchFeatureProvider().sendPreIndexIntent(
+-                    getContext());
+-        }
+-        super.onStart();
+-    }
+-
+-    void setDefaultHighlightIfNeeded() {
+-        if (isOnlyOneActivityInTask() && !isActivityEmbedded()) {
+-            // Set default highlight menu key for 1-pane homepage since it will show the placeholder
+-            // page once changing back to 2-pane.
+-            Log.i(TAG, "Set default menu key");
+-            setHighlightMenuKey(getString(SettingsHomepageActivity.DEFAULT_HIGHLIGHT_MENU_KEY),
+-                    /* scrollNeeded= */ false);
+-        }
+-    }
+-
+-    private boolean isOnlyOneActivityInTask() {
+-        final ActivityManager.RunningTaskInfo taskInfo = getSystemService(ActivityManager.class)
+-                .getRunningTasks(1).get(0);
+-        return taskInfo.numActivities == 1;
+-    }
+-
+-    @Override
+-    public void onSaveInstanceState(Bundle outState) {
+-        super.onSaveInstanceState(outState);
+-        if (mHighlightMixin != null) {
+-            mHighlightMixin.setActivityEmbedded(isActivityEmbedded());
+-            outState.putParcelable(SAVED_HIGHLIGHT_MIXIN, mHighlightMixin);
+-        }
+-    }
+-
+-    @Override
+-    public void onConfigurationChanged(Configuration newConfig) {
+-        super.onConfigurationChanged(newConfig);
+-        highlightPreferenceIfNeeded();
+-    }
+-
+-    @Override
+-    public void onSplitLayoutChanged(boolean isRegularLayout) {
+-        iteratePreferences(preference -> {
+-            if (preference instanceof HomepagePreferenceLayout) {
+-                ((HomepagePreferenceLayout) preference).getHelper().setIconVisible(isRegularLayout);
+-            }
+-        });
+-    }
+-
+-    @Override
+-    public void highlightPreferenceIfNeeded() {
+-        if (mHighlightMixin != null) {
+-            mHighlightMixin.highlightPreferenceIfNeeded();
+-        }
+-    }
+-
+-    @Override
+-    public RecyclerView onCreateRecyclerView(LayoutInflater inflater, ViewGroup parent,
+-            Bundle savedInstanceState) {
+-        RecyclerView recyclerView = super.onCreateRecyclerView(inflater, parent,
+-                savedInstanceState);
+-        recyclerView.setVerticalScrollBarEnabled(false);
+-        recyclerView.setHorizontalScrollBarEnabled(false);
+-
+-        recyclerView.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+-            @Override
+-            public void onViewAttachedToWindow(View v) {
+-                setPaddingHorizontal(mPaddingHorizontal);
+-            }
+-
+-            @Override
+-            public void onViewDetachedFromWindow(View v) {
+-            }
+-        });
+-        return recyclerView;
+-    }
+-
+-    /** Sets the horizontal padding */
+-    public void setPaddingHorizontal(int padding) {
+-        mPaddingHorizontal = padding;
+-        RecyclerView recyclerView = getListView();
+-        if (recyclerView != null) {
+-            int paddingBottom = 0;
+-            if (isRunningInFreeformWindow(recyclerView)) {
+-                paddingBottom = getResources().getDimensionPixelSize(
+-                    R.dimen.dashboard_padding_bottom);
+-            }
+-            recyclerView.setPadding(padding, 0, padding, paddingBottom);
+-        }
+-    }
+-
+-    /**
+-     * Returns true if the view is running in a freeform window.
+-     */
+-    @VisibleForTesting
+-    boolean isRunningInFreeformWindow(View view) {
+-        WindowInsets insets = view.getRootWindowInsets();
+-        if (insets != null) {
+-            return insets.isVisible(WindowInsets.Type.captionBar());
+-        }
+-        return false;
+-    }
+-
+-    /** Returns a {@link TopLevelHighlightMixin} that performs highlighting */
+-    public TopLevelHighlightMixin getHighlightMixin() {
+-        return mHighlightMixin;
+-    }
+-
+-    /** Highlight a preference with specified preference key */
+-    public void setHighlightPreferenceKey(String prefKey) {
+-        // Skip Tips & support since it's full screen
+-        if (mHighlightMixin != null && !TextUtils.equals(prefKey, PREF_KEY_SUPPORT)) {
+-            mHighlightMixin.setHighlightPreferenceKey(prefKey);
+-        }
+-    }
+-
+-    /** Returns whether clicking the specified preference is considered as a duplicate click. */
+-    public boolean isDuplicateClick(Preference pref) {
+-        /* Return true if
+-         * 1. the device supports activity embedding, and
+-         * 2. the target preference is highlighted, and
+-         * 3. the current activity is embedded */
+-        return mHighlightMixin != null
+-                && TextUtils.equals(pref.getKey(), mHighlightMixin.getHighlightPreferenceKey())
+-                && isActivityEmbedded();
+-    }
+-
+-    /** Show/hide the highlight on the menu entry for the search page presence */
+-    public void setMenuHighlightShowed(boolean show) {
+-        if (mHighlightMixin != null) {
+-            mHighlightMixin.setMenuHighlightShowed(show);
+-        }
+-    }
+-
+-    /** Highlight and scroll to a preference with specified menu key */
+-    public void setHighlightMenuKey(String menuKey, boolean scrollNeeded) {
+-        if (mHighlightMixin != null) {
+-            mHighlightMixin.setHighlightMenuKey(menuKey, scrollNeeded);
+-        }
+-    }
+-
+-    @Override
+-    protected boolean shouldForceRoundedIcon() {
+-        return getContext().getResources()
+-                .getBoolean(R.bool.config_force_rounded_icon_TopLevelSettings);
+-    }
+-
+-    @Override
+-    protected RecyclerView.Adapter onCreateAdapter(PreferenceScreen preferenceScreen) {
+-        if (mIsEmbeddingActivityEnabled && (getActivity() instanceof SettingsHomepageActivity)) {
+-            return mHighlightMixin.onCreateAdapter(this, preferenceScreen, mScrollNeeded);
+-        }
+-
+-        return new RoundCornerPreferenceAdapter(preferenceScreen);
+-    }
+-
+-    @Override
+-    protected Preference createPreference(Tile tile) {
+-        return new HomepagePreference(getPrefContext());
+-    }
+-
+-    void reloadHighlightMenuKey() {
+-        if (mHighlightMixin != null) {
+-            mHighlightMixin.reloadHighlightMenuKey(getArguments());
+-        }
+-    }
+-
+-    private void iteratePreferences(PreferenceJob job) {
+-        if (job == null || getPreferenceManager() == null) {
+-            return;
+-        }
+-        PreferenceScreen screen = getPreferenceScreen();
+-        if (screen == null) {
+-            return;
+-        }
+-
+-        job.init();
+-        iteratePreferences(screen, job);
+-    }
+-
+-    private void iteratePreferences(PreferenceGroup group, PreferenceJob job) {
+-        int count = group.getPreferenceCount();
+-        for (int i = 0; i < count; i++) {
+-            Preference preference = group.getPreference(i);
+-            job.doForEach(preference);
+-            if (preference instanceof PreferenceCategory) {
+-                iteratePreferences((PreferenceCategory) preference, job);
+-            }
+-        }
+-    }
+-
+-    private interface PreferenceJob {
+-        default void init() {
+-        }
+-
+-        void doForEach(Preference preference);
+-    }
+-
+-    private static int getPreferenceLayoutResId(Context context) {
+-        if (DesktopSettingsUtils.shouldShowTopLevelDeviceCategory(context)) {
+-            return R.xml.top_level_settings_expressive_desktop;
+-        }
+-
+-        return SettingsThemeHelper.isExpressiveTheme(context)
+-                ? R.xml.top_level_settings_expressive
+-                : R.xml.top_level_settings;
+-    }
+-
+-    public static final BaseSearchIndexProvider SEARCH_INDEX_DATA_PROVIDER =
+-            new BaseSearchIndexProvider() {
+-
+-                @Override
+-                @NonNull
+-                public List<SearchIndexableResource> getXmlResourcesToIndex(
+-                        @NonNull Context context, boolean enabled) {
+-                    SearchIndexableResource sir = new SearchIndexableResource(context);
+-                    sir.xmlResId = getPreferenceLayoutResId(context);
+-                    return List.of(sir);
+-                }
+-
+-                @Override
+-                protected boolean isPageSearchEnabled(Context context) {
+-                    // Never searchable, all entries in this page are already indexed elsewhere.
+-                    return false;
+-                }
+-            };
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/widget/HomepagePreference.java b/packages/apps/Settings/src/com/android/settings/widget/HomepagePreference.java
+--- a/packages/apps/Settings/src/com/android/settings/widget/HomepagePreference.java
++++ b/packages/apps/Settings/src/com/android/settings/widget/HomepagePreference.java
+@@ -17,14 +17,10 @@
+ package com.android.settings.widget;
+ 
+ import android.content.Context;
+-import android.os.Bundle;
+ import android.util.AttributeSet;
+ 
+ import androidx.preference.Preference;
+ import androidx.preference.PreferenceViewHolder;
+-
+-import com.android.settings.flags.Flags;
+-import com.android.settingslib.drawer.EntriesProvider;
+ 
+ /** A customized layout for homepage preference. */
+ public class HomepagePreference extends Preference implements
+@@ -64,17 +60,4 @@
+         return mHelper;
+     }
+ 
+-    /**
+-     * Set the alert count to show for this Preference.
+-     */
+-    public void setAlert(int value) {
+-        if (Flags.homepageTileAlert()) {
+-            Bundle extras = getExtras();
+-            int alertValue = extras.getInt(EntriesProvider.EXTRA_ALERT_VALUE, 0);
+-            if (value != alertValue) {
+-                mHelper.setAlert(value);
+-                extras.putInt(EntriesProvider.EXTRA_ALERT_VALUE, value);
+-            }
+-        }
+-    }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/widget/HomepagePreferenceLayoutHelper.java b/packages/apps/Settings/src/com/android/settings/widget/HomepagePreferenceLayoutHelper.java
+--- a/packages/apps/Settings/src/com/android/settings/widget/HomepagePreferenceLayoutHelper.java
++++ b/packages/apps/Settings/src/com/android/settings/widget/HomepagePreferenceLayoutHelper.java
+@@ -17,28 +17,20 @@
+ package com.android.settings.widget;
+ 
+ import android.view.View;
+-import android.widget.TextView;
+ 
+ import androidx.preference.Preference;
+ import androidx.preference.PreferenceViewHolder;
+ 
+ import com.android.settings.R;
+-import com.android.settings.flags.Flags;
+-import com.android.settingslib.widget.SettingsThemeHelper;
+ 
+ /** Helper for homepage preference to manage layout. */
+ public class HomepagePreferenceLayoutHelper {
+ 
+     private View mIcon;
+     private View mText;
+-    private View mAlertFrame;
+-    private View mAlertUnnumbered;
+-    private View mAlertNumberedFrame;
+-    private TextView mAlertNumberText;
+     private boolean mIconVisible = true;
+     private int mIconPaddingStart = -1;
+     private int mTextPaddingStart = -1;
+-    private int mAlertValue = -1;
+ 
+     /** The interface for managing preference layouts on homepage */
+     public interface HomepagePreferenceLayout {
+@@ -47,10 +39,7 @@
+     }
+ 
+     public HomepagePreferenceLayoutHelper(Preference preference) {
+-        preference.setLayoutResource(
+-                SettingsThemeHelper.isExpressiveTheme(preference.getContext())
+-                        ? R.layout.homepage_preference_expressive
+-                        : R.layout.homepage_preference);
++        preference.setLayoutResource(R.layout.homepage_preference);
+     }
+ 
+     /** Sets whether the icon should be visible */
+@@ -79,41 +68,11 @@
+         }
+     }
+ 
+-    /** Sets the alert value and view */
+-    public void setAlert(int value) {
+-        if (Flags.homepageTileAlert()) {
+-            mAlertValue = value;
+-            if (mAlertFrame != null && mAlertUnnumbered != null
+-                    && mAlertNumberedFrame != null && mAlertNumberText != null) {
+-                mAlertFrame.setVisibility((value > 0) ? View.VISIBLE : View.GONE);
+-                // only display number if it's single digit, more than 1
+-                if (value == 1 || value > 9) {
+-                    mAlertNumberedFrame.setVisibility(View.GONE);
+-                    mAlertUnnumbered.setVisibility(View.VISIBLE);
+-                    mAlertFrame.setContentDescription(mAlertFrame.getResources()
+-                            .getString(R.string.homepage_unnumbered_alert_description));
+-                } else if (value > 1) {
+-                    mAlertUnnumbered.setVisibility(View.GONE);
+-                    mAlertNumberedFrame.setVisibility(View.VISIBLE);
+-                    mAlertNumberText.setVisibility(View.VISIBLE);
+-                    mAlertNumberText.setText(String.valueOf(value));
+-                    mAlertFrame.setContentDescription(mAlertFrame.getResources()
+-                            .getString(R.string.homepage_numbered_alert_description, value));
+-                }
+-            }
+-        }
+-    }
+-
+     void onBindViewHolder(PreferenceViewHolder holder) {
+         mIcon = holder.findViewById(R.id.icon_frame);
+         mText = holder.findViewById(R.id.text_frame);
+-        mAlertFrame = holder.findViewById(R.id.alert_frame);
+-        mAlertUnnumbered = holder.findViewById(R.id.alert_unnumbered);
+-        mAlertNumberedFrame = holder.findViewById(R.id.alert_numbered_frame);
+-        mAlertNumberText = (TextView) holder.findViewById(R.id.alert_number_fg);
+         setIconVisible(mIconVisible);
+         setIconPaddingStart(mIconPaddingStart);
+         setTextPaddingStart(mTextPaddingStart);
+-        setAlert(mAlertValue);
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/widget/RestrictedHomepagePreference.java b/packages/apps/Settings/src/com/android/settings/widget/RestrictedHomepagePreference.java
+--- a/packages/apps/Settings/src/com/android/settings/widget/RestrictedHomepagePreference.java
++++ b/packages/apps/Settings/src/com/android/settings/widget/RestrictedHomepagePreference.java
+@@ -21,10 +21,10 @@
+ 
+ import androidx.preference.PreferenceViewHolder;
+ 
+-import com.android.settingslib.RestrictedTopLevelPreference;
++import androidx.preference.Preference;
+ 
+ /** Homepage preference that can be disabled by a device admin using a user restriction. */
+-public class RestrictedHomepagePreference extends RestrictedTopLevelPreference implements
++public class RestrictedHomepagePreference extends Preference implements
+         HomepagePreferenceLayoutHelper.HomepagePreferenceLayout {
+ 
+     private final HomepagePreferenceLayoutHelper mHelper;

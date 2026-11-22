@@ -1,0 +1,333 @@
+diff --git a/packages/apps/Settings/res/values/themes.xml b/packages/apps/Settings/res/values/themes.xml
+--- a/packages/apps/Settings/res/values/themes.xml
++++ b/packages/apps/Settings/res/values/themes.xml
+@@ -28,67 +28,13 @@
+         <item name="android:windowAnimationStyle">@null</item>
+     </style>
+ 
+-    <style name="Theme.Settings" parent="Theme.SettingsBase">
+-        <item name="android:clipToPadding">false</item>
+-        <item name="android:clipChildren">false</item>
+-        <item name="preferenceTheme">@style/SettingsPreferenceTheme</item>
++    <style name="Theme.Settings" parent="@android:style/Theme.Material.Light.NoActionBar">
+         <item name="android:listPreferredItemHeight">72dip</item>
+-        <item name="android:homeAsUpIndicator">@drawable/ic_arrow_back</item>
+-        <item name="android:navigationBarColor">@android:color/transparent</item>
+-        <item name="android:datePickerDialogTheme">@style/PickerDialogTheme.Settings</item>
+-
+-        <item name="fingerprint_layout_theme">@style/FingerprintLayoutTheme</item>
+-        <item name="face_layout_theme">@style/FaceLayoutTheme</item>
+-        <item name="screen_lock_layout_theme">@style/ScreenLockLayoutTheme</item>
+-        <item name="ic_menu_moreoverflow">@*android:drawable/ic_menu_moreoverflow_holo_dark</item>
+-
+-        <!-- For edge-to-edge -->
+-        <item name="android:navigationBarColor">@android:color/transparent</item>
+-        <item name="android:statusBarColor">@android:color/transparent</item>
+-
+-        <!-- For wifi icon -->
+-        <item name="wifi_signal">@drawable/wifi_signal</item>
+-        <item name="wifi_signal_color">?android:attr/colorAccent</item>
+-        <item name="wifi_friction">@drawable/wifi_friction</item>
+-
+-        <item name="side_margin">0dp</item>
+-        <item name="sudListItemIconColor">?android:attr/colorAccent</item>
+-
+-        <!-- Redefine the ActionBar style for contentInsetStart -->
+-        <item name="android:actionBarStyle">@style/Widget.ActionBar</item>
+-
+-        <item name="preferenceBackgroundColor">@drawable/preference_background</item>
+-
+-        <!-- For AndroidX AlertDialog -->
+-        <item name="alertDialogTheme">@style/Theme.AlertDialog</item>
+-
+-        <item name="*android:lockPatternStyle">@style/LockPatternStyle</item>
+-
+-        <!-- For AppBarLayout -->
+-        <item name="colorPrimary">@*android:color/primary_device_default_settings_light</item>
+-        <item name="colorPrimaryVariant">@android:color/white</item>
+-
+-        <!-- For slice view in settings -->
+-        <item name="sliceViewStyle">@style/Widget.SliceView.Settings</item>
+-
+-        <item name="notification_importance_button_background_color_unselected">@android:color/transparent</item>
+-        <item name="notification_importance_button_border_color_unselected">@color/materialColorOutlineVariant</item>
+-        <item name="notification_importance_button_foreground_color_unselected">@color/materialColorOnSurfaceVariant</item>
+-
+-        <item name="notification_importance_button_background_color_selected">@color/materialColorSecondaryContainer</item>
+-        <item name="notification_importance_button_border_color_selected">@color/materialColorOnSecondaryContainer</item>
+-        <item name="notification_importance_button_foreground_color_selected">@color/materialColorOnSecondaryContainer</item>
+-
+-        <!-- For AppCompat widgets, e.g. TextInputLayout -->
+-        <item name="colorAccent">?android:attr/colorAccent</item>
++        <item name="preferenceTheme">@style/PreferenceThemeOverlay</item>
+     </style>
+ 
+     <!-- Variant of the settings theme with no action bar. -->
+-    <style name="Theme.Settings.NoActionBar">
+-        <item name="android:windowActionBar">false</item>
+-        <item name="android:windowNoTitle">true</item>
+-        <item name="colorSurface">@color/settingslib_colorSurface</item>
+-    </style>
++    <style name="Theme.Settings.NoActionBar" />
+ 
+     <style name="Theme.SubSettings.Base" parent="Theme.Settings.NoActionBar">
+         <!-- Redefine the ActionBar style for contentInsetStart -->
+@@ -185,26 +131,11 @@
+     </style>
+ 
+     <style name="Theme.Settings.HomeBase" parent="Theme.Settings.NoActionBar">
+-        <item name="colorPrimary">@*android:color/primary_device_default_settings_light</item>
+-        <item name="colorAccent">@*android:color/accent_device_default_light</item>
+         <item name="android:listPreferredItemPaddingStart">16dp</item>
+-        <item name="preferenceTheme">@style/SettingsPreferenceTheme</item>
+-
+-        <!-- action bar, needed for search bar icon tinting -->
+-        <item name="android:actionBarTheme">@*android:style/ThemeOverlay.DeviceDefault.ActionBar</item>
+-
+-        <!-- Define this color for material design -->
+-        <item name="colorPrimaryVariant">@android:color/white</item>
+     </style>
+ 
+     <style name="Theme.Settings.Home" parent="Theme.Settings.HomeBase">
+-        <item name="colorPrimaryDark">@*android:color/primary_dark_device_default_settings_light</item>
+         <item name="android:windowLightStatusBar">true</item>
+-        <item name="android:navigationBarDividerColor">@*android:color/ripple_material_light</item>
+-        <!-- Homepage should follow device default design, the values is same as device default theme.-->
+-        <item name="android:navigationBarColor">@android:color/white</item>
+-        <item name="android:statusBarColor">?attr/colorPrimaryDark</item>
+-        <item name="android:colorBackground">@color/settingslib_materialColorSurfaceContainerLow</item>
+     </style>
+ 
+     <style name="Theme.Settings.Home.NoAnimation">
+diff --git a/packages/apps/Settings/res/layout/settings_homepage_container.xml b/packages/apps/Settings/res/layout/settings_homepage_container.xml
+--- a/packages/apps/Settings/res/layout/settings_homepage_container.xml
++++ b/packages/apps/Settings/res/layout/settings_homepage_container.xml
+@@ -15,69 +15,31 @@
+      limitations under the License.
+ -->
+ 
+-<androidx.coordinatorlayout.widget.CoordinatorLayout
++<LinearLayout
+     xmlns:android="http://schemas.android.com/apk/res/android"
+-    xmlns:app="http://schemas.android.com/apk/res-auto"
+     android:id="@+id/settings_homepage_container"
++    android:orientation="vertical"
+     android:layout_width="match_parent"
+     android:layout_height="match_parent">
+ 
+-    <androidx.core.widget.NestedScrollView
+-        android:id="@+id/main_content_scrollable_container"
+-        android:layout_width="match_parent"
+-        android:layout_height="match_parent"
+-        app:layout_behavior="com.android.settings.widget.HomepageAppBarScrollingViewBehavior">
+-
+-        <LinearLayout
+-            android:id="@+id/homepage_container"
+-            android:layout_width="match_parent"
+-            android:layout_height="wrap_content"
+-            android:layout_marginTop="-8dp"
+-            android:orientation="vertical">
+-
+-            <FrameLayout
+-                android:id="@+id/suggestion_content"
+-                android:layout_width="match_parent"
+-                android:layout_height="wrap_content"
+-                android:layout_marginStart="?android:attr/listPreferredItemPaddingStart"
+-                android:layout_marginEnd="?android:attr/listPreferredItemPaddingEnd" />
+-
+-            <FrameLayout
+-                android:id="@+id/contextual_cards_content"
+-                android:layout_width="match_parent"
+-                android:layout_height="wrap_content"
+-                android:layout_marginStart="@dimen/contextual_card_side_margin"
+-                android:layout_marginEnd="@dimen/contextual_card_side_margin"/>
+-
+-            <FrameLayout
+-                android:id="@+id/main_content"
+-                android:layout_width="match_parent"
+-                android:layout_height="wrap_content"
+-                android:animateLayoutChanges="true"/>
+-
+-        </LinearLayout>
+-    </androidx.core.widget.NestedScrollView>
+-
+-    <com.google.android.material.appbar.AppBarLayout
+-        android:id="@+id/app_bar"
++    <LinearLayout
++        android:id="@+id/app_bar_container"
+         android:layout_width="match_parent"
+         android:layout_height="wrap_content"
+-        app:elevation="0dp"
+-        android:touchscreenBlocksFocus="false"
+-        android:keyboardNavigationCluster="false">
+-        <LinearLayout
+-            android:id="@+id/app_bar_container"
+-            android:layout_width="match_parent"
+-            android:layout_height="wrap_content"
+-            android:orientation="horizontal"
+-            android:paddingTop="@dimen/search_bar_container_top_padding"
+-            android:paddingBottom="@dimen/settingslib_expressive_space_extrasmall4"
+-            android:paddingStart="?android:attr/listPreferredItemPaddingStart"
+-            android:paddingEnd="?android:attr/listPreferredItemPaddingEnd"
+-            android:background="?android:attr/colorBackground">
++        android:orientation="horizontal"
++        android:paddingTop="@dimen/search_bar_container_top_padding"
++        android:paddingBottom="@dimen/settingslib_expressive_space_extrasmall4"
++        android:paddingStart="?android:attr/listPreferredItemPaddingStart"
++        android:paddingEnd="?android:attr/listPreferredItemPaddingEnd"
++        android:background="?android:attr/colorBackground">
+ 
+-            <include layout="@layout/search_bar"/>
++        <include layout="@layout/search_bar"/>
+ 
+-        </LinearLayout>
+-    </com.google.android.material.appbar.AppBarLayout>
+-</androidx.coordinatorlayout.widget.CoordinatorLayout>
++    </LinearLayout>
++
++    <FrameLayout
++        android:id="@+id/main_content"
++        android:layout_width="match_parent"
++        android:layout_height="0dp"
++        android:layout_weight="1" />
++</LinearLayout>
+diff --git a/packages/apps/Settings/res/layout/search_bar.xml b/packages/apps/Settings/res/layout/search_bar.xml
+--- a/packages/apps/Settings/res/layout/search_bar.xml
++++ b/packages/apps/Settings/res/layout/search_bar.xml
+@@ -15,9 +15,8 @@
+      limitations under the License.
+ -->
+ 
+-<com.google.android.material.card.MaterialCardView
++<FrameLayout
+     xmlns:android="http://schemas.android.com/apk/res/android"
+-    style="@style/SearchBarStyle_v2"
+     android:layout_width="match_parent"
+     android:layout_height="wrap_content">
+ 
+@@ -48,4 +47,4 @@
+             android:paddingEnd="8dp"
+             android:text="@string/homepage_search"/>
+     </LinearLayout>
+-</com.google.android.material.card.MaterialCardView>
++</FrameLayout>
+diff --git a/packages/apps/Settings/res/layout/homepage_preference.xml b/packages/apps/Settings/res/layout/homepage_preference.xml
+--- a/packages/apps/Settings/res/layout/homepage_preference.xml
++++ b/packages/apps/Settings/res/layout/homepage_preference.xml
+@@ -78,10 +78,9 @@
+             android:layout_gravity="start"
+             android:textAlignment="viewStart"
+             android:textAppearance="?android:attr/textAppearanceSmall"
+-            android:textColor="@color/materialColorOnSurfaceVariant"
++            android:textColor="?android:attr/textColorSecondary"
+             android:maxLines="4"
+             android:hyphenationFrequency="normalFast"
+-            android:lineBreakWordStyle="phrase"
+-            style="@style/PreferenceSummaryTextStyle"/>
++            android:lineBreakWordStyle="phrase"/>
+     </RelativeLayout>
+ </LinearLayout>
+diff --git a/packages/apps/Settings/res/drawable/ic_homepage_search.xml b/packages/apps/Settings/res/drawable/ic_homepage_search.xml
+--- a/packages/apps/Settings/res/drawable/ic_homepage_search.xml
++++ b/packages/apps/Settings/res/drawable/ic_homepage_search.xml
+@@ -20,7 +20,7 @@
+         android:height="24dp"
+         android:viewportWidth="24"
+         android:viewportHeight="24"
+-        android:tint="@color/materialColorOnSurfaceVariant">
++        android:tint="?android:attr/textColorSecondary">
+     <path
+         android:fillColor="#FF000000"
+         android:pathData="M20.49,19l-5.73,-5.73C15.53,12.2 16,10.91 16,9.5C16,5.91 13.09,3 9.5,3S3,5.91 3,9.5C3,13.09 5.91,16 9.5,16c1.41,0 2.7,-0.47 3.77,-1.24L19,20.49L20.49,19zM5,9.5C5,7.01 7.01,5 9.5,5S14,7.01 14,9.5S11.99,14 9.5,14S5,11.99 5,9.5z"/>
+diff --git a/packages/apps/Settings/res/values-night/themes.xml b/packages/apps/Settings/res/values-night/themes.xml
+--- a/packages/apps/Settings/res/values-night/themes.xml
++++ b/packages/apps/Settings/res/values-night/themes.xml
+@@ -17,14 +17,7 @@
+ 
+ <resources>
+ 
+-    <style name="Theme.Settings.Home" parent="Theme.Settings.HomeBase">
+-        <item name="colorPrimary">@*android:color/primary_device_default_settings</item>
+-        <item name="colorPrimaryDark">@*android:color/primary_dark_device_default_settings</item>
+-        <item name="android:colorBackground">@android:color/system_surface_container_dark</item>
+-        <!-- Homepage should follow device default design, the values is same as device default theme.-->
+-        <item name="android:navigationBarColor">@android:color/black</item>
+-        <item name="android:statusBarColor">?attr/colorPrimaryDark</item>
+-    </style>
++    <style name="Theme.Settings.Home" parent="Theme.Settings.HomeBase" />
+ 
+     <style name="Theme.SubSettings" parent="Theme.SubSettings.Base"/>
+ 
+diff --git a/packages/apps/Settings/res/layout/preference_list_fragment.xml b/packages/apps/Settings/res/layout/preference_list_fragment.xml
+--- a/packages/apps/Settings/res/layout/preference_list_fragment.xml
++++ b/packages/apps/Settings/res/layout/preference_list_fragment.xml
+@@ -39,7 +39,10 @@
+         android:layout_weight="1"
+         android:layout_width="match_parent">
+ 
+-        <include layout="@layout/loading_container" />
++        <org.wasmandroid.ui.PreferenceGridView
++            android:id="@android:id/list"
++            android:layout_width="match_parent"
++            android:layout_height="match_parent" />
+ 
+     </FrameLayout>
+ 
+@@ -52,27 +55,6 @@
+         android:textAppearance="?android:attr/textAppearanceMedium"
+         android:visibility="gone" />
+ 
+-    <LinearLayout
+-        android:theme="@style/Theme.TabTheme"
+-        android:id="@+id/tab_container"
+-        android:clipToPadding="true"
+-        android:clipChildren="true"
+-        android:layout_width="match_parent"
+-        android:layout_height="match_parent"
+-        android:orientation="vertical"
+-        android:visibility="gone">
+-
+-        <com.google.android.material.tabs.TabLayout
+-            android:id="@+id/tabs"
+-            style="@style/SettingsLibTabsStyle"/>
+-
+-        <androidx.viewpager2.widget.ViewPager2
+-            android:id="@+id/view_pager"
+-            android:layout_width="match_parent"
+-            android:layout_height="match_parent">
+-
+-        </androidx.viewpager2.widget.ViewPager2>
+-    </LinearLayout>
+ 
+ </LinearLayout>
+ 
+diff --git a/packages/apps/Settings/res/layout/preference_widget_switch_compat.xml b/packages/apps/Settings/res/layout/preference_widget_switch_compat.xml
+--- a/packages/apps/Settings/res/layout/preference_widget_switch_compat.xml
++++ b/packages/apps/Settings/res/layout/preference_widget_switch_compat.xml
+@@ -15,12 +15,11 @@
+   ~ limitations under the License.
+   -->
+ 
+-<com.google.android.material.materialswitch.MaterialSwitch
++<androidx.appcompat.widget.SwitchCompat
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     android:id="@+id/switchWidget"
+     android:layout_width="wrap_content"
+     android:layout_height="wrap_content"
+     android:background="@null"
+     android:clickable="false"
+-    android:focusable="false"
+-    android:theme="@style/Theme.Material3.DynamicColors.DayNight" />
++    android:focusable="false" />
+diff --git a/packages/apps/Settings/res/values/styles.xml b/packages/apps/Settings/res/values/styles.xml
+--- a/packages/apps/Settings/res/values/styles.xml
++++ b/packages/apps/Settings/res/values/styles.xml
+@@ -341,7 +341,7 @@
+         <item name="android:layout_gravity">center</item>
+         <item name="android:fontFamily">@*android:string/config_headlineFontFamily</item>
+         <item name="android:textSize">@dimen/search_bar_text_size</item>
+-        <item name="android:textColor">@color/materialColorOnSurfaceVariant</item>
++        <item name="android:textColor">?android:attr/textColorSecondary</item>
+         <item name="android:singleLine">true</item>
+     </style>
+ 
