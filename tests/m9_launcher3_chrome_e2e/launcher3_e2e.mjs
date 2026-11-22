@@ -200,7 +200,8 @@ export async function runLauncher3E2E(options = {}) {
     allApps.addEventListener('click', () => host.openAllApps(), { signal });
     await host.start();
     result.roboto_font_loaded = Boolean(document.fonts?.check(`16px "${aospRobotoFamily}"`) &&
-      [...document.fonts].some(face => face.family === aospRobotoFamily && face.status === 'loaded'));
+      [...document.fonts].some(face => face.family.replace(/^["']|["']$/g, '') === aospRobotoFamily &&
+        face.status === 'loaded'));
     requireMatch(result.roboto_font_loaded, 'The staged AOSP Roboto font did not load');
     await waitFrames(24);
     const initial = host.state();
