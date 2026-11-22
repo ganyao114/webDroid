@@ -1,5 +1,7 @@
 package android.graphics;
 
+import java.util.Arrays;
+
 public class Path {
     public enum Direction { CW, CCW }
     public enum FillType { WINDING, EVEN_ODD, INVERSE_WINDING, INVERSE_EVEN_ODD }
@@ -108,27 +110,53 @@ public class Path {
     }
     public void addRoundRect(float l, float t, float r, float b, float rx, float ry, Direction direction) {
         if (l >= r || t >= b) return;
-        boolean solitary = size == 0;
         rx = Math.max(0, Math.min(rx, (r - l) * 0.5f));
         ry = Math.max(0, Math.min(ry, (b - t) * 0.5f));
-        float kx = rx * (1 - KAPPA), ky = ry * (1 - KAPPA);
-        moveTo(l + rx, t);
+        appendRoundRect(l, t, r, b, new float[] {rx, ry, rx, ry, rx, ry, rx, ry}, direction);
+    }
+    public void addRoundRect(RectF rect, float[] radii, Direction direction) {
+        addRoundRect(rect.left, rect.top, rect.right, rect.bottom, radii, direction);
+    }
+    public void addRoundRect(float l, float t, float r, float b, float[] radii, Direction direction) {
+        if (radii.length < 8) throw new ArrayIndexOutOfBoundsException("Eight corner radii are required");
+        if (l >= r || t >= b) return;
+        float[] corners = Arrays.copyOf(radii, 8);
+        for (int i = 0; i < corners.length; i += 2) {
+            if (!(corners[i] > 0 && corners[i + 1] > 0
+                    && Float.isFinite(corners[i]) && Float.isFinite(corners[i + 1]))) {
+                corners[i] = corners[i + 1] = 0;
+            }
+        }
+        float scale = 1;
+        scale = Math.min(scale, (r - l) / (corners[0] + corners[2]));
+        scale = Math.min(scale, (r - l) / (corners[4] + corners[6]));
+        scale = Math.min(scale, (b - t) / (corners[1] + corners[7]));
+        scale = Math.min(scale, (b - t) / (corners[3] + corners[5]));
+        if (scale < 1) for (int i = 0; i < corners.length; i++) corners[i] *= scale;
+        appendRoundRect(l, t, r, b, corners, direction);
+    }
+    private void appendRoundRect(float l, float t, float r, float b, float[] corners, Direction direction) {
+        boolean solitary = size == 0;
+        float tlX = corners[0], tlY = corners[1], trX = corners[2], trY = corners[3];
+        float brX = corners[4], brY = corners[5], blX = corners[6], blY = corners[7];
+        float tangent = 1 - KAPPA;
+        moveTo(l + tlX, t);
         if (direction == Direction.CW) {
-            lineTo(r - rx, t); cubicTo(r - kx, t, r, t + ky, r, t + ry);
-            lineTo(r, b - ry); cubicTo(r, b - ky, r - kx, b, r - rx, b);
-            lineTo(l + rx, b); cubicTo(l + kx, b, l, b - ky, l, b - ry);
-            lineTo(l, t + ry); cubicTo(l, t + ky, l + kx, t, l + rx, t);
+            lineTo(r - trX, t); cubicTo(r - trX * tangent, t, r, t + trY * tangent, r, t + trY);
+            lineTo(r, b - brY); cubicTo(r, b - brY * tangent, r - brX * tangent, b, r - brX, b);
+            lineTo(l + blX, b); cubicTo(l + blX * tangent, b, l, b - blY * tangent, l, b - blY);
+            lineTo(l, t + tlY); cubicTo(l, t + tlY * tangent, l + tlX * tangent, t, l + tlX, t);
         } else {
-            cubicTo(l + kx, t, l, t + ky, l, t + ry); lineTo(l, b - ry);
-            cubicTo(l, b - ky, l + kx, b, l + rx, b); lineTo(r - rx, b);
-            cubicTo(r - kx, b, r, b - ky, r, b - ry); lineTo(r, t + ry);
-            cubicTo(r, t + ky, r - kx, t, r - rx, t); lineTo(l + rx, t);
+            cubicTo(l + tlX * tangent, t, l, t + tlY * tangent, l, t + tlY); lineTo(l, b - blY);
+            cubicTo(l, b - blY * tangent, l + blX * tangent, b, l + blX, b); lineTo(r - brX, b);
+            cubicTo(r - brX * tangent, b, r, b - brY * tangent, r, b - brY); lineTo(r, t + trY);
+            cubicTo(r, t + trY * tangent, r - trX * tangent, t, r - trX, t); lineTo(l + tlX, t);
         }
         close();
-        if (solitary) {
+        if (solitary && tlX == trX && tlX == brX && tlX == blX && tlY == trY && tlY == brY && tlY == blY) {
             roundClip = new RectF(l, t, r, b);
-            clipRx = rx;
-            clipRy = ry;
+            clipRx = tlX;
+            clipRy = tlY;
         }
     }
     boolean clip(Canvas canvas) {
@@ -137,6 +165,33 @@ public class Path {
         return canvas.clipRoundRect(roundClip.left, roundClip.top, roundClip.right, roundClip.bottom, clipRx, clipRy);
     }
     public void addPath(Path path) { addPath(path, 0, 0); }
+    public void addPath(Path path, Matrix matrix) {
+        float[] points = new float[6];
+        int end = path.size * STRIDE;
+        for (int at = 0; at < end; at += STRIDE) {
+            int verb = (int) path.verbs[at];
+            int count = verb == CUBIC ? 3 : verb == QUAD ? 2 : verb == CLOSE ? 0 : 1;
+            if (count != 0) {
+                System.arraycopy(path.verbs, at + 1, points, 0, 2 * count);
+                matrix.mapPoints(points, 0, points, 0, count);
+            }
+            switch (verb) {
+                case MOVE: moveTo(points[0], points[1]); break;
+                case LINE: lineTo(points[0], points[1]); break;
+                case QUAD: quadTo(points[0], points[1], points[2], points[3]); break;
+                case CUBIC: cubicTo(points[0], points[1], points[2], points[3], points[4], points[5]); break;
+                case CLOSE: close(); break;
+            }
+        }
+    }
+    public void transform(Matrix matrix) { transform(matrix, this); }
+    public void transform(Matrix matrix, Path dst) {
+        if (dst == null) dst = this;
+        Path source = dst == this ? new Path(this) : this;
+        dst.rewind();
+        dst.fillType = fillType;
+        dst.addPath(source, matrix);
+    }
     public void addPath(Path path, float dx, float dy) {
         int count = path.size;
         for (int index = 0; index < count; index++) {

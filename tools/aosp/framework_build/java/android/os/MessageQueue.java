@@ -9,6 +9,7 @@ public final class MessageQueue {
     private boolean quitting;
 
     MessageQueue() {}
+    boolean isFinished() { return quitting && messages.isEmpty(); }
     public boolean isIdle() { return messages.isEmpty() || messages.get(0).when > SystemClock.uptimeMillis(); }
     public void addIdleHandler(IdleHandler handler) { if (handler == null) throw new NullPointerException(); idleHandlers.add(handler); }
     public void removeIdleHandler(IdleHandler handler) { idleHandlers.remove(handler); }

@@ -10,6 +10,8 @@ import android.os.Looper;
 import android.os.UserHandle;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.Executor;
 
 public class LauncherApps {
     private final PackageManager packages;
@@ -31,7 +33,53 @@ public class LauncherApps {
         public abstract void onPackagesUnavailable(String[] names, UserHandle user, boolean replacing);
     }
 
+    public static class ShortcutQuery {
+        public static final int FLAG_MATCH_DYNAMIC = 1, FLAG_MATCH_PINNED = 2, FLAG_MATCH_MANIFEST = 8;
+        private int flags;
+        private String packageName;
+        private List<String> shortcutIds;
+        private ComponentName activity;
+
+        public ShortcutQuery setQueryFlags(int flags) { this.flags = flags; return this; }
+        public ShortcutQuery setPackage(String name) { packageName = name; return this; }
+        public ShortcutQuery setShortcutIds(List<String> ids) { shortcutIds = ids; return this; }
+        public ShortcutQuery setActivity(ComponentName component) { activity = component; return this; }
+        public int getQueryFlags() { return flags; }
+        public String getPackage() { return packageName; }
+        public List<String> getShortcutIds() { return shortcutIds; }
+        public ComponentName getActivity() { return activity; }
+    }
+
     public LauncherApps(Context context) { packages = context.getPackageManager(); }
+    public LauncherUserInfo getLauncherUserInfo(UserHandle user) {
+        return UserHandle.SYSTEM.equals(user)
+                ? new LauncherUserInfo.Builder("android.os.usertype.full.SYSTEM", 0).build() : null;
+    }
+    public List<String> getPreInstalledSystemPackages(UserHandle user) {
+        return java.util.Collections.emptyList();
+    }
+    public boolean hasShortcutHostPermission() { return false; }
+
+    public List<ShortcutInfo> getShortcuts(ShortcutQuery query, UserHandle user) {
+        if (query.getShortcutIds() != null && query.getPackage() == null) {
+            throw new IllegalArgumentException("Shortcut IDs require a package");
+        }
+        Objects.requireNonNull(user);
+        // The host catalog has launchable APK activities and no pinned or dynamic shortcuts.
+        return java.util.Collections.emptyList();
+    }
+    public List<PackageInstaller.SessionInfo> getAllPackageInstallerSessions() {
+        return packages.getPackageInstaller().getAllSessions();
+    }
+    public void registerPackageInstallerSessionCallback(Executor executor,
+            PackageInstaller.SessionCallback callback) {
+        Objects.requireNonNull(executor);
+        // APK publication is atomic in the host and produces no guest session events.
+        packages.getPackageInstaller().registerSessionCallback(callback, null);
+    }
+    public void unregisterPackageInstallerSessionCallback(PackageInstaller.SessionCallback callback) {
+        packages.getPackageInstaller().unregisterSessionCallback(callback);
+    }
     public void registerCallback(Callback callback) { registerCallback(callback, null); }
     public void registerCallback(Callback callback, Handler handler) {
         if (callback == null) throw new NullPointerException("callback");
@@ -53,7 +101,12 @@ public class LauncherApps {
         }
     }
     public List<LauncherActivityInfo> getActivityList(String packageName, UserHandle user) {
-        Intent intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        return queryActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), packageName, user);
+    }
+    public List<LauncherActivityInfo> getShortcutConfigActivityList(String packageName, UserHandle user) {
+        return queryActivities(new Intent(Intent.ACTION_CREATE_SHORTCUT), packageName, user);
+    }
+    private List<LauncherActivityInfo> queryActivities(Intent intent, String packageName, UserHandle user) {
         if (packageName != null) intent.setPackage(packageName);
         List<ResolveInfo> matches = packages.queryIntentActivitiesAsUser(intent, 0, user.getIdentifier());
         ArrayList<LauncherActivityInfo> result = new ArrayList<>(matches.size());

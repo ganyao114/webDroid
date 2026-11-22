@@ -1,0 +1,47 @@
+--- a/frameworks/libs/systemui/iconloaderlib/src/com/android/launcher3/icons/DotRenderer.java
++++ b/frameworks/libs/systemui/iconloaderlib/src/com/android/launcher3/icons/DotRenderer.java
+@@ -27,7 +27,6 @@
+ import android.graphics.Color;
+ import android.graphics.Paint;
+ import android.graphics.Path;
+-import android.graphics.PathMeasure;
+ import android.graphics.PointF;
+ import android.graphics.RadialGradient;
+ import android.graphics.Rect;
+@@ -98,21 +97,21 @@
+     }
+ 
+     private static PointF getPathPoint(Path path, float size, float direction) {
+-        float halfSize = size / 2;
+-        // Small delta so that we don't get a zero size triangle
+-        float delta = 1;
+-
+-        float x = halfSize + direction * halfSize;
+-        Path trianglePath = new Path();
+-        trianglePath.moveTo(halfSize, halfSize);
+-        trianglePath.lineTo(x + delta * direction, 0);
+-        trianglePath.lineTo(x, -delta);
+-        trianglePath.close();
+-
+-        trianglePath.op(path, Path.Op.INTERSECT);
+-        float[] pos = new float[2];
+-        new PathMeasure(trianglePath, false).getPosTan(0, pos, null);
+-        return new PointF(pos[0] / size, pos[1] / size);
++        // Find the mask boundary along the diagonal used by the original clipping triangle.
++        float center = size / 2;
++        float distance = 0;
++        float[] points = path.approximate(0.125f);
++        for (int i = 3; i < points.length; i += 3) {
++            if (points[i - 3] == points[i]) continue; // A contour move.
++            float x = points[i - 2] - center;
++            float nextX = points[i + 1] - center;
++            float side = points[i - 1] - center + direction * x;
++            float nextSide = points[i + 2] - center + direction * nextX;
++            if ((side < 0) == (nextSide < 0) || side == nextSide) continue;
++            float t = side / (side - nextSide);
++            distance = Math.max(distance, direction * (x + t * (nextX - x)));
++        }
++        return new PointF((center + direction * distance) / size, (center - distance) / size);
+     }
+ 
+     /**

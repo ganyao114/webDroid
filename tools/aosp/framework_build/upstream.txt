@@ -1,5 +1,8 @@
 # Sources compiled directly from the read-only AOSP 17 checkout.
 frameworks/base/core/java/android/animation/TimeInterpolator.java
+frameworks/base/core/java/android/animation/TypeEvaluator.java
+frameworks/base/core/java/android/animation/PointFEvaluator.java
+frameworks/base/core/java/android/animation/RectEvaluator.java
 frameworks/base/core/java/android/content/res/ApkAssets.java
 frameworks/base/core/java/android/content/res/XmlBlock.java
 frameworks/base/core/java/android/content/res/XmlResourceParser.java
@@ -11,6 +14,11 @@ frameworks/base/core/java/android/util/EmptyArray.java
 frameworks/base/core/java/android/util/MapCollections.java
 frameworks/base/core/java/android/util/Pair.java
 frameworks/base/core/java/android/util/SparseArray.java
+frameworks/base/core/java/android/util/SparseBooleanArray.java
+frameworks/base/core/java/android/util/SparseIntArray.java
+frameworks/base/core/java/android/util/SparseLongArray.java
+frameworks/base/core/java/android/util/LongSparseArray.java
+frameworks/base/core/java/com/android/internal/util/function/LongObjPredicate.java
 frameworks/base/core/java/android/util/TypedValue.java
 frameworks/base/core/java/android/view/Gravity.java
 frameworks/base/core/java/android/view/animation/BaseInterpolator.java
@@ -25,12 +33,124 @@ frameworks/base/core/java/android/view/animation/OvershootInterpolator.java
 frameworks/base/core/java/android/view/animation/PathInterpolator.java
 frameworks/base/core/java/android/widget/OverScroller.java
 frameworks/base/core/java/android/widget/Scroller.java
+frameworks/base/core/java/android/widget/Advanceable.java
 frameworks/base/core/java/android/util/UtilConfig.java
 libcore/ojluni/src/main/java/java/lang/Runnable.java
+libcore/ojluni/src/main/java/java/lang/Void.java
+libcore/ojluni/src/main/java/java/io/ByteArrayOutputStream.java
+libcore/ojluni/src/main/java/java/io/Flushable.java
+libcore/ojluni/src/main/java/java/io/OutputStream.java
 libcore/ojluni/src/main/java/java/util/concurrent/Callable.java
 libcore/ojluni/src/main/java/java/util/function/BiConsumer.java
 libcore/ojluni/src/main/java/java/util/function/BiFunction.java
 libcore/ojluni/src/main/java/java/util/function/IntConsumer.java
+libcore/ojluni/src/main/java/java/util/function/IntBinaryOperator.java
+libcore/ojluni/src/main/java/java/util/function/IntFunction.java
+libcore/ojluni/src/main/java/java/util/function/LongFunction.java
 libcore/ojluni/src/main/java/java/util/function/IntPredicate.java
 libcore/ojluni/src/main/java/java/util/function/IntUnaryOperator.java
 frameworks/base/core/java/android/os/LocaleList.java
+frameworks/base/core/java/android/app/Application.java
+frameworks/base/core/java/android/content/ComponentCallbacks.java
+frameworks/base/core/java/android/content/ComponentCallbacks2.java
+frameworks/base/core/java/android/content/ComponentCallbacksController.java
+frameworks/base/core/java/android/content/SharedPreferences.java
+frameworks/base/core/java/android/os/HandlerExecutor.java
+frameworks/base/core/java/android/os/HandlerThread.java
+frameworks/base/core/java/android/os/Trace.java
+frameworks/base/core/java/android/content/BroadcastReceiver.java
+frameworks/base/core/java/android/app/Person.java
+frameworks/base/core/java/android/os/Parcelable.java
+libcore/ojluni/src/main/java/java/util/AbstractMap.java
+libcore/ojluni/src/main/java/java/util/AbstractCollection.java
+libcore/ojluni/src/main/java/java/util/AbstractSet.java
+libcore/ojluni/src/main/java/java/util/WeakHashMap.java
+frameworks/base/core/java/android/content/res/ResourceId.java
+frameworks/base/core/java/android/util/Pools.java
+frameworks/base/core/java/android/view/RemotableViewMethod.java
+frameworks/base/core/java/android/widget/RelativeLayout.java
+libcore/ojluni/src/main/java/java/util/ArrayDeque.java
+libcore/ojluni/src/main/java/java/util/Deque.java
+libcore/ojluni/src/main/java/java/util/Queue.java
+libcore/ojluni/src/main/java/java/util/SequencedCollection.java
+libcore/ojluni/src/main/java/java/util/ReverseOrderDequeView.java
+frameworks/base/core/java/android/os/CancellationSignal.java
+frameworks/base/core/java/android/os/OperationCanceledException.java
+frameworks/base/core/java/android/view/ViewTreeObserver.java
+frameworks/base/core/java/android/view/GestureDetector.java
+frameworks/base/core/java/android/view/accessibility/AccessibilityNodeProvider.java
+frameworks/base/graphics/java/android/graphics/Matrix.java
+
+# Exact patches applied to staged copies of entries above.
+@patch 0001-cooperative-handler-thread.patch
+@patch 0002-embedded-application.patch
+@patch 0003-handler-executor-sdk.patch
+@patch 0004-trace-ravenwood.patch
+@patch 0005-local-broadcast-receiver.patch
+@patch 0006-relative-layout.patch
+@patch 0007-weak-hash-map-jdk17.patch
+@patch 0008-reverse-deque-jdk17.patch
+@patch 0009-local-cancellation-signal.patch
+@patch 0010-view-tree-observer-sdk.patch
+@patch 0011-matrix-ui-jni.patch
+libcore/ojluni/src/main/java/java/util/OptionalInt.java
+libcore/ojluni/src/main/java/java/util/PrimitiveIterator.java
+libcore/ojluni/src/main/java/java/util/Spliterator.java
+libcore/ojluni/src/main/java/java/util/Spliterators.java
+frameworks/base/core/java/android/content/pm/InstallSourceInfo.java
+frameworks/base/core/java/android/view/WindowInsetsAnimation.java
+libcore/ojluni/src/main/java/java/util/function/ToIntFunction.java
+frameworks/base/core/java/android/content/ContentValues.java
+frameworks/base/core/java/android/database/AbstractCursor.java
+frameworks/base/core/java/android/database/CharArrayBuffer.java
+frameworks/base/core/java/android/database/ContentObservable.java
+frameworks/base/core/java/android/database/Cursor.java
+frameworks/base/core/java/android/database/CursorWrapper.java
+frameworks/base/core/java/android/database/CursorIndexOutOfBoundsException.java
+frameworks/base/core/java/android/database/DataSetObservable.java
+frameworks/base/core/java/android/database/DatabaseErrorHandler.java
+frameworks/base/core/java/android/database/MatrixCursor.java
+frameworks/base/core/java/android/database/Observable.java
+frameworks/base/core/java/android/database/SQLException.java
+frameworks/base/core/java/android/database/sqlite/SQLiteException.java
+frameworks/base/core/java/android/database/sqlite/SQLiteFullException.java
+frameworks/base/core/java/android/database/sqlite/SQLiteOpenHelper.java
+@patch 0012-content-values-sdk.patch
+@patch 0013-local-cursor.patch
+@patch 0014-embedded-sqlite-open-helper.patch
+@patch 0015-local-gesture-detector.patch
+frameworks/base/core/java/android/text/GetChars.java
+frameworks/base/core/java/android/text/Editable.java
+frameworks/base/core/java/android/text/InputFilter.java
+frameworks/base/core/java/android/text/NoCopySpan.java
+frameworks/base/core/java/android/text/SpanWatcher.java
+frameworks/base/core/java/android/text/Selection.java
+frameworks/base/core/java/android/text/Spannable.java
+frameworks/base/core/java/android/text/SpannableString.java
+frameworks/base/core/java/android/text/SpannableStringBuilder.java
+frameworks/base/core/java/android/text/SpannableStringInternal.java
+frameworks/base/core/java/android/text/Spanned.java
+frameworks/base/core/java/android/text/SpannedString.java
+frameworks/base/core/java/android/text/TextPaint.java
+frameworks/base/core/java/android/text/style/CharacterStyle.java
+frameworks/base/core/java/android/text/style/DynamicDrawableSpan.java
+frameworks/base/core/java/android/text/style/ImageSpan.java
+frameworks/base/core/java/android/text/style/MetricAffectingSpan.java
+frameworks/base/core/java/android/text/style/ReplacementSpan.java
+frameworks/base/core/java/android/text/style/UpdateLayout.java
+frameworks/base/core/java/android/text/style/UpdateAppearance.java
+@patch 0016-local-text-spans.patch
+@patch 0017-local-spannable-builder.patch
+libcore/ojluni/src/main/java/java/util/IdentityHashMap.java
+libcore/ojluni/src/main/java/java/util/Optional.java
+libcore/ojluni/src/main/java/java/util/AbstractList.java
+libcore/ojluni/src/main/java/java/util/AbstractSequentialList.java
+libcore/ojluni/src/main/java/java/util/LinkedList.java
+libcore/ojluni/src/main/java/java/math/RoundingMode.java
+libcore/ojluni/src/main/java/java/util/StringJoiner.java
+@patch 0018-linked-list-jdk17.patch
+frameworks/base/core/java/android/content/pm/LauncherUserInfo.java
+@patch 0019-local-launcher-user-info.patch
+@patch 0020-local-long-sparse-array.patch
+libcore/ojluni/src/main/java/java/util/concurrent/CompletionException.java
+libcore/ojluni/src/main/java/java/util/concurrent/CopyOnWriteArraySet.java

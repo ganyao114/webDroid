@@ -1,0 +1,485 @@
+--- a/frameworks/base/core/java/android/widget/RelativeLayout.java
++++ b/frameworks/base/core/java/android/widget/RelativeLayout.java
+@@ -33,15 +33,13 @@
+ import android.view.View;
+ import android.view.ViewDebug;
+ import android.view.ViewGroup;
+-import android.view.ViewHierarchyEncoder;
+ import android.view.accessibility.AccessibilityEvent;
+-import android.view.inspector.InspectableProperty;
+ import android.view.inspector.InspectionCompanion;
+ import android.view.inspector.PropertyMapper;
+ import android.view.inspector.PropertyReader;
+ import android.widget.RemoteViews.RemoteView;
+ 
+-import com.android.internal.R;
++import android.R;
+ 
+ import java.util.ArrayDeque;
+ import java.util.ArrayList;
+@@ -88,6 +86,64 @@
+  */
+ @RemoteView
+ public class RelativeLayout extends ViewGroup {
++    // Public attribute IDs from the RelativeLayout declarations in framework attrs.xml.
++    private static final class Styleable {
++        private static final int[] RelativeLayout = {
++                R.attr.gravity,
++                R.attr.ignoreGravity,
++        };
++        private static final int RelativeLayout_gravity = 0;
++        private static final int RelativeLayout_ignoreGravity = 1;
++        private static final int[] RelativeLayout_Layout = {
++                R.attr.layout_toLeftOf,
++                R.attr.layout_toRightOf,
++                R.attr.layout_above,
++                R.attr.layout_below,
++                R.attr.layout_alignBaseline,
++                R.attr.layout_alignLeft,
++                R.attr.layout_alignTop,
++                R.attr.layout_alignRight,
++                R.attr.layout_alignBottom,
++                R.attr.layout_alignParentLeft,
++                R.attr.layout_alignParentTop,
++                R.attr.layout_alignParentRight,
++                R.attr.layout_alignParentBottom,
++                R.attr.layout_centerInParent,
++                R.attr.layout_centerHorizontal,
++                R.attr.layout_centerVertical,
++                R.attr.layout_alignWithParentIfMissing,
++                R.attr.layout_toStartOf,
++                R.attr.layout_toEndOf,
++                R.attr.layout_alignStart,
++                R.attr.layout_alignEnd,
++                R.attr.layout_alignParentStart,
++                R.attr.layout_alignParentEnd,
++        };
++        private static final int RelativeLayout_Layout_layout_toLeftOf = 0;
++        private static final int RelativeLayout_Layout_layout_toRightOf = 1;
++        private static final int RelativeLayout_Layout_layout_above = 2;
++        private static final int RelativeLayout_Layout_layout_below = 3;
++        private static final int RelativeLayout_Layout_layout_alignBaseline = 4;
++        private static final int RelativeLayout_Layout_layout_alignLeft = 5;
++        private static final int RelativeLayout_Layout_layout_alignTop = 6;
++        private static final int RelativeLayout_Layout_layout_alignRight = 7;
++        private static final int RelativeLayout_Layout_layout_alignBottom = 8;
++        private static final int RelativeLayout_Layout_layout_alignParentLeft = 9;
++        private static final int RelativeLayout_Layout_layout_alignParentTop = 10;
++        private static final int RelativeLayout_Layout_layout_alignParentRight = 11;
++        private static final int RelativeLayout_Layout_layout_alignParentBottom = 12;
++        private static final int RelativeLayout_Layout_layout_centerInParent = 13;
++        private static final int RelativeLayout_Layout_layout_centerHorizontal = 14;
++        private static final int RelativeLayout_Layout_layout_centerVertical = 15;
++        private static final int RelativeLayout_Layout_layout_alignWithParentIfMissing = 16;
++        private static final int RelativeLayout_Layout_layout_toStartOf = 17;
++        private static final int RelativeLayout_Layout_layout_toEndOf = 18;
++        private static final int RelativeLayout_Layout_layout_alignStart = 19;
++        private static final int RelativeLayout_Layout_layout_alignEnd = 20;
++        private static final int RelativeLayout_Layout_layout_alignParentStart = 21;
++        private static final int RelativeLayout_Layout_layout_alignParentEnd = 22;
++    }
++
+     public static final int TRUE = -1;
+ 
+     /**
+@@ -260,11 +316,9 @@
+     private void initFromAttributes(
+             Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
+         final TypedArray a = context.obtainStyledAttributes(
+-                attrs, R.styleable.RelativeLayout, defStyleAttr, defStyleRes);
+-        saveAttributeDataForStyleable(context, R.styleable.RelativeLayout,
+-                attrs, a, defStyleAttr, defStyleRes);
+-        mIgnoreGravity = a.getResourceId(R.styleable.RelativeLayout_ignoreGravity, View.NO_ID);
+-        mGravity = a.getInt(R.styleable.RelativeLayout_gravity, mGravity);
++                attrs, Styleable.RelativeLayout, defStyleAttr, defStyleRes);
++        mIgnoreGravity = a.getResourceId(Styleable.RelativeLayout_ignoreGravity, View.NO_ID);
++        mGravity = a.getInt(Styleable.RelativeLayout_gravity, mGravity);
+         a.recycle();
+     }
+ 
+@@ -300,7 +354,6 @@
+      *
+      * @attr ref android.R.styleable#RelativeLayout_ignoreGravity
+      */
+-    @InspectableProperty
+     public int getIgnoreGravity() {
+         return mIgnoreGravity;
+     }
+@@ -315,7 +368,6 @@
+      *
+      * @attr ref android.R.styleable#RelativeLayout_gravity
+      */
+-    @InspectableProperty(valueType = InspectableProperty.ValueType.GRAVITY)
+     public int getGravity() {
+         return mGravity;
+     }
+@@ -404,6 +456,7 @@
+ 
+     @Override
+     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
++        ViewGroup.LayoutParams ownParams = getLayoutParams();
+         if (mDirtyHierarchy) {
+             mDirtyHierarchy = false;
+             sortChildren();
+@@ -557,10 +610,10 @@
+         if (isWrapContentWidth) {
+             // Width already has left padding in it since it was calculated by looking at
+             // the right of each child view
+-            width += mPaddingRight;
+-
+-            if (mLayoutParams != null && mLayoutParams.width >= 0) {
+-                width = Math.max(width, mLayoutParams.width);
++            width += getPaddingRight();
++
++            if (ownParams != null && ownParams.width >= 0) {
++                width = Math.max(width, ownParams.width);
+             }
+ 
+             width = Math.max(width, getSuggestedMinimumWidth());
+@@ -576,7 +629,7 @@
+                             centerHorizontal(child, params, width);
+                         } else if (rules[ALIGN_PARENT_RIGHT] != 0) {
+                             final int childWidth = child.getMeasuredWidth();
+-                            params.mLeft = width - mPaddingRight - childWidth;
++                            params.mLeft = width - getPaddingRight() - childWidth;
+                             params.mRight = params.mLeft + childWidth;
+                         }
+                     }
+@@ -587,10 +640,10 @@
+         if (isWrapContentHeight) {
+             // Height already has top padding in it since it was calculated by looking at
+             // the bottom of each child view
+-            height += mPaddingBottom;
+-
+-            if (mLayoutParams != null && mLayoutParams.height >= 0) {
+-                height = Math.max(height, mLayoutParams.height);
++            height += getPaddingBottom();
++
++            if (ownParams != null && ownParams.height >= 0) {
++                height = Math.max(height, ownParams.height);
+             }
+ 
+             height = Math.max(height, getSuggestedMinimumHeight());
+@@ -606,7 +659,7 @@
+                             centerVertical(child, params, height);
+                         } else if (rules[ALIGN_PARENT_BOTTOM] != 0) {
+                             final int childHeight = child.getMeasuredHeight();
+-                            params.mTop = height - mPaddingBottom - childHeight;
++                            params.mTop = height - getPaddingBottom() - childHeight;
+                             params.mBottom = params.mTop + childHeight;
+                         }
+                     }
+@@ -616,8 +669,8 @@
+ 
+         if (horizontalGravity || verticalGravity) {
+             final Rect selfBounds = mSelfBounds;
+-            selfBounds.set(mPaddingLeft, mPaddingTop, width - mPaddingRight,
+-                    height - mPaddingBottom);
++            selfBounds.set(getPaddingLeft(), getPaddingTop(), width - getPaddingRight(),
++                    height - getPaddingBottom());
+ 
+             final Rect contentBounds = mContentBounds;
+             Gravity.apply(mGravity, right - left, bottom - top, selfBounds, contentBounds,
+@@ -686,12 +739,12 @@
+         int childWidthMeasureSpec = getChildMeasureSpec(params.mLeft,
+                 params.mRight, params.width,
+                 params.leftMargin, params.rightMargin,
+-                mPaddingLeft, mPaddingRight,
++                getPaddingLeft(), getPaddingRight(),
+                 myWidth);
+         int childHeightMeasureSpec = getChildMeasureSpec(params.mTop,
+                 params.mBottom, params.height,
+                 params.topMargin, params.bottomMargin,
+-                mPaddingTop, mPaddingBottom,
++                getPaddingTop(), getPaddingBottom(),
+                 myHeight);
+         child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
+     }
+@@ -699,7 +752,7 @@
+     private void measureChildHorizontal(
+             View child, LayoutParams params, int myWidth, int myHeight) {
+         final int childWidthMeasureSpec = getChildMeasureSpec(params.mLeft, params.mRight,
+-                params.width, params.leftMargin, params.rightMargin, mPaddingLeft, mPaddingRight,
++                params.width, params.leftMargin, params.rightMargin, getPaddingLeft(), getPaddingRight(),
+                 myWidth);
+ 
+         final int childHeightMeasureSpec;
+@@ -717,7 +770,7 @@
+         } else {
+             final int maxHeight;
+             if (mMeasureVerticalWithPaddingMargin) {
+-                maxHeight = Math.max(0, myHeight - mPaddingTop - mPaddingBottom
++                maxHeight = Math.max(0, myHeight - getPaddingTop() - getPaddingBottom()
+                         - params.topMargin - params.bottomMargin);
+             } else {
+                 maxHeight = Math.max(0, myHeight);
+@@ -746,8 +799,8 @@
+      *        the child's layout params)
+      * @param startMargin The left or top margin
+      * @param endMargin The right or bottom margin
+-     * @param startPadding mPaddingLeft or mPaddingTop
+-     * @param endPadding mPaddingRight or mPaddingBottom
++     * @param startPadding getPaddingLeft() or getPaddingTop()
++     * @param endPadding getPaddingRight() or getPaddingBottom()
+      * @param mySize The width or height of this view (the RelativeLayout)
+      * @return MeasureSpec for the child
+      */
+@@ -867,10 +920,10 @@
+ 
+     private void positionAtEdge(View child, LayoutParams params, int myWidth) {
+         if (isLayoutRtl()) {
+-            params.mRight = myWidth - mPaddingRight - params.rightMargin;
++            params.mRight = myWidth - getPaddingRight() - params.rightMargin;
+             params.mLeft = params.mRight - child.getMeasuredWidth();
+         } else {
+-            params.mLeft = mPaddingLeft + params.leftMargin;
++            params.mLeft = getPaddingLeft() + params.leftMargin;
+             params.mRight = params.mLeft + child.getMeasuredWidth();
+         }
+     }
+@@ -892,12 +945,12 @@
+                 if (!wrapContent) {
+                     centerVertical(child, params, myHeight);
+                 } else {
+-                    params.mTop = mPaddingTop + params.topMargin;
++                    params.mTop = getPaddingTop() + params.topMargin;
+                     params.mBottom = params.mTop + child.getMeasuredHeight();
+                 }
+                 return true;
+             } else {
+-                params.mTop = mPaddingTop + params.topMargin;
++                params.mTop = getPaddingTop() + params.topMargin;
+                 params.mBottom = params.mTop + child.getMeasuredHeight();
+             }
+         }
+@@ -922,7 +975,7 @@
+                     childParams.rightMargin);
+         } else if (childParams.alignWithParent && rules[LEFT_OF] != 0) {
+             if (myWidth >= 0) {
+-                childParams.mRight = myWidth - mPaddingRight - childParams.rightMargin;
++                childParams.mRight = myWidth - getPaddingRight() - childParams.rightMargin;
+             }
+         }
+ 
+@@ -931,14 +984,14 @@
+             childParams.mLeft = anchorParams.mRight + (anchorParams.rightMargin +
+                     childParams.leftMargin);
+         } else if (childParams.alignWithParent && rules[RIGHT_OF] != 0) {
+-            childParams.mLeft = mPaddingLeft + childParams.leftMargin;
++            childParams.mLeft = getPaddingLeft() + childParams.leftMargin;
+         }
+ 
+         anchorParams = getRelatedViewParams(rules, ALIGN_LEFT);
+         if (anchorParams != null) {
+             childParams.mLeft = anchorParams.mLeft + childParams.leftMargin;
+         } else if (childParams.alignWithParent && rules[ALIGN_LEFT] != 0) {
+-            childParams.mLeft = mPaddingLeft + childParams.leftMargin;
++            childParams.mLeft = getPaddingLeft() + childParams.leftMargin;
+         }
+ 
+         anchorParams = getRelatedViewParams(rules, ALIGN_RIGHT);
+@@ -946,17 +999,17 @@
+             childParams.mRight = anchorParams.mRight - childParams.rightMargin;
+         } else if (childParams.alignWithParent && rules[ALIGN_RIGHT] != 0) {
+             if (myWidth >= 0) {
+-                childParams.mRight = myWidth - mPaddingRight - childParams.rightMargin;
++                childParams.mRight = myWidth - getPaddingRight() - childParams.rightMargin;
+             }
+         }
+ 
+         if (0 != rules[ALIGN_PARENT_LEFT]) {
+-            childParams.mLeft = mPaddingLeft + childParams.leftMargin;
++            childParams.mLeft = getPaddingLeft() + childParams.leftMargin;
+         }
+ 
+         if (0 != rules[ALIGN_PARENT_RIGHT]) {
+             if (myWidth >= 0) {
+-                childParams.mRight = myWidth - mPaddingRight - childParams.rightMargin;
++                childParams.mRight = myWidth - getPaddingRight() - childParams.rightMargin;
+             }
+         }
+     }
+@@ -986,7 +1039,7 @@
+                     childParams.bottomMargin);
+         } else if (childParams.alignWithParent && rules[ABOVE] != 0) {
+             if (myHeight >= 0) {
+-                childParams.mBottom = myHeight - mPaddingBottom - childParams.bottomMargin;
++                childParams.mBottom = myHeight - getPaddingBottom() - childParams.bottomMargin;
+             }
+         }
+ 
+@@ -995,14 +1048,14 @@
+             childParams.mTop = anchorParams.mBottom + (anchorParams.bottomMargin +
+                     childParams.topMargin);
+         } else if (childParams.alignWithParent && rules[BELOW] != 0) {
+-            childParams.mTop = mPaddingTop + childParams.topMargin;
++            childParams.mTop = getPaddingTop() + childParams.topMargin;
+         }
+ 
+         anchorParams = getRelatedViewParams(rules, ALIGN_TOP);
+         if (anchorParams != null) {
+             childParams.mTop = anchorParams.mTop + childParams.topMargin;
+         } else if (childParams.alignWithParent && rules[ALIGN_TOP] != 0) {
+-            childParams.mTop = mPaddingTop + childParams.topMargin;
++            childParams.mTop = getPaddingTop() + childParams.topMargin;
+         }
+ 
+         anchorParams = getRelatedViewParams(rules, ALIGN_BOTTOM);
+@@ -1010,17 +1063,17 @@
+             childParams.mBottom = anchorParams.mBottom - childParams.bottomMargin;
+         } else if (childParams.alignWithParent && rules[ALIGN_BOTTOM] != 0) {
+             if (myHeight >= 0) {
+-                childParams.mBottom = myHeight - mPaddingBottom - childParams.bottomMargin;
++                childParams.mBottom = myHeight - getPaddingBottom() - childParams.bottomMargin;
+             }
+         }
+ 
+         if (0 != rules[ALIGN_PARENT_TOP]) {
+-            childParams.mTop = mPaddingTop + childParams.topMargin;
++            childParams.mTop = getPaddingTop() + childParams.topMargin;
+         }
+ 
+         if (0 != rules[ALIGN_PARENT_BOTTOM]) {
+             if (myHeight >= 0) {
+-                childParams.mBottom = myHeight - mPaddingBottom - childParams.bottomMargin;
++                childParams.mBottom = myHeight - getPaddingBottom() - childParams.bottomMargin;
+             }
+         }
+     }
+@@ -1128,12 +1181,10 @@
+ 
+     @Override
+     protected ViewGroup.LayoutParams generateLayoutParams(ViewGroup.LayoutParams lp) {
+-        if (sPreserveMarginParamsInLayoutParamConversion) {
+-            if (lp instanceof LayoutParams) {
+-                return new LayoutParams((LayoutParams) lp);
+-            } else if (lp instanceof MarginLayoutParams) {
+-                return new LayoutParams((MarginLayoutParams) lp);
+-            }
++        if (lp instanceof LayoutParams) {
++            return new LayoutParams((LayoutParams) lp);
++        } else if (lp instanceof MarginLayoutParams) {
++            return new LayoutParams((MarginLayoutParams) lp);
+         }
+         return new LayoutParams(lp);
+     }
+@@ -1296,7 +1347,7 @@
+             super(c, attrs);
+ 
+             TypedArray a = c.obtainStyledAttributes(attrs,
+-                    com.android.internal.R.styleable.RelativeLayout_Layout);
++                    Styleable.RelativeLayout_Layout);
+ 
+             final int targetSdkVersion = c.getApplicationInfo().targetSdkVersion;
+             mIsRtlCompatibilityMode = (targetSdkVersion < JELLY_BEAN_MR1 ||
+@@ -1310,73 +1361,73 @@
+             for (int i = 0; i < N; i++) {
+                 int attr = a.getIndex(i);
+                 switch (attr) {
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignWithParentIfMissing:
++                    case Styleable.RelativeLayout_Layout_layout_alignWithParentIfMissing:
+                         alignWithParent = a.getBoolean(attr, false);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_toLeftOf:
++                    case Styleable.RelativeLayout_Layout_layout_toLeftOf:
+                         rules[LEFT_OF] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_toRightOf:
++                    case Styleable.RelativeLayout_Layout_layout_toRightOf:
+                         rules[RIGHT_OF] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_above:
++                    case Styleable.RelativeLayout_Layout_layout_above:
+                         rules[ABOVE] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_below:
++                    case Styleable.RelativeLayout_Layout_layout_below:
+                         rules[BELOW] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignBaseline:
++                    case Styleable.RelativeLayout_Layout_layout_alignBaseline:
+                         rules[ALIGN_BASELINE] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignLeft:
++                    case Styleable.RelativeLayout_Layout_layout_alignLeft:
+                         rules[ALIGN_LEFT] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignTop:
++                    case Styleable.RelativeLayout_Layout_layout_alignTop:
+                         rules[ALIGN_TOP] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignRight:
++                    case Styleable.RelativeLayout_Layout_layout_alignRight:
+                         rules[ALIGN_RIGHT] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignBottom:
++                    case Styleable.RelativeLayout_Layout_layout_alignBottom:
+                         rules[ALIGN_BOTTOM] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignParentLeft:
++                    case Styleable.RelativeLayout_Layout_layout_alignParentLeft:
+                         rules[ALIGN_PARENT_LEFT] = a.getBoolean(attr, false) ? TRUE : 0;
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignParentTop:
++                    case Styleable.RelativeLayout_Layout_layout_alignParentTop:
+                         rules[ALIGN_PARENT_TOP] = a.getBoolean(attr, false) ? TRUE : 0;
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignParentRight:
++                    case Styleable.RelativeLayout_Layout_layout_alignParentRight:
+                         rules[ALIGN_PARENT_RIGHT] = a.getBoolean(attr, false) ? TRUE : 0;
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignParentBottom:
++                    case Styleable.RelativeLayout_Layout_layout_alignParentBottom:
+                         rules[ALIGN_PARENT_BOTTOM] = a.getBoolean(attr, false) ? TRUE : 0;
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_centerInParent:
++                    case Styleable.RelativeLayout_Layout_layout_centerInParent:
+                         rules[CENTER_IN_PARENT] = a.getBoolean(attr, false) ? TRUE : 0;
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_centerHorizontal:
++                    case Styleable.RelativeLayout_Layout_layout_centerHorizontal:
+                         rules[CENTER_HORIZONTAL] = a.getBoolean(attr, false) ? TRUE : 0;
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_centerVertical:
++                    case Styleable.RelativeLayout_Layout_layout_centerVertical:
+                         rules[CENTER_VERTICAL] = a.getBoolean(attr, false) ? TRUE : 0;
+                        break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_toStartOf:
++                    case Styleable.RelativeLayout_Layout_layout_toStartOf:
+                         rules[START_OF] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_toEndOf:
++                    case Styleable.RelativeLayout_Layout_layout_toEndOf:
+                         rules[END_OF] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignStart:
++                    case Styleable.RelativeLayout_Layout_layout_alignStart:
+                         rules[ALIGN_START] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignEnd:
++                    case Styleable.RelativeLayout_Layout_layout_alignEnd:
+                         rules[ALIGN_END] = a.getResourceId(attr, 0);
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignParentStart:
++                    case Styleable.RelativeLayout_Layout_layout_alignParentStart:
+                         rules[ALIGN_PARENT_START] = a.getBoolean(attr, false) ? TRUE : 0;
+                         break;
+-                    case com.android.internal.R.styleable.RelativeLayout_Layout_layout_alignParentEnd:
++                    case Styleable.RelativeLayout_Layout_layout_alignParentEnd:
+                         rules[ALIGN_PARENT_END] = a.getBoolean(attr, false) ? TRUE : 0;
+                         break;
+                 }
+@@ -1721,13 +1772,6 @@
+         }
+ 
+         /** @hide */
+-        @Override
+-        protected void encodeProperties(@NonNull ViewHierarchyEncoder encoder) {
+-            super.encodeProperties(encoder);
+-            encoder.addProperty("layout:alignWithParent", alignWithParent);
+-        }
+-
+-        /** @hide */
+         public static final class InspectionCompanion
+                 implements android.view.inspector.InspectionCompanion<LayoutParams> {
+             private boolean mPropertiesMapped;

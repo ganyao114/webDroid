@@ -1,8 +1,14 @@
 package android.graphics;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.Objects;
+import org.wasmandroid.ui.SoftwareRaster;
+
 public final class Bitmap {
     public static final int DENSITY_NONE = 0;
     public enum Config { ALPHA_8, RGB_565, ARGB_4444, ARGB_8888, RGBA_F16, HARDWARE, RGBA_1010102 }
+    public enum CompressFormat { JPEG, PNG, WEBP, WEBP_LOSSY, WEBP_LOSSLESS }
 
     final int width, height;
     final long identity = nextIdentity++;
@@ -45,6 +51,34 @@ public final class Bitmap {
         if (!source.mutable) return source;
         return source.copy(source.config, false);
     }
+    public static Bitmap createBitmap(Bitmap source, int x, int y, int width, int height) {
+        source.checkRect(x, y, width, height);
+        if (x == 0 && y == 0 && width == source.width && height == source.height) return createBitmap(source);
+        Bitmap cropped = createBitmap(width, height, source.config, source.hasAlpha);
+        source.getPixels(cropped.pixels, 0, width, x, y, width, height);
+        cropped.density = source.density;
+        return new Bitmap(width, height, cropped.config, cropped.pixels, false).withDensity(source.density, source.hasAlpha);
+    }
+    private Bitmap withDensity(int density, boolean alpha) {
+        this.density = density;
+        hasAlpha = alpha;
+        return this;
+    }
+    public Bitmap extractAlpha() { return extractAlpha(null, null); }
+    public Bitmap extractAlpha(Paint paint, int[] offsetXY) {
+        BlurMaskFilter filter = paint != null && paint.getMaskFilter() instanceof BlurMaskFilter blur ? blur : null;
+        int radius = filter == null ? 0 : (int) Math.ceil(filter.radius);
+        if (radius > (Integer.MAX_VALUE - Math.max(width, height)) / 2) {
+            throw new IllegalArgumentException("Alpha bitmap dimensions overflow");
+        }
+        Bitmap alpha = createBitmap(width + 2 * radius, height + 2 * radius, Config.ALPHA_8);
+        org.wasmandroid.ui.SoftwareRaster.extractAlpha(requirePixels(), width, height, alpha.pixels, radius);
+        if (offsetXY != null) {
+            offsetXY[0] = -radius;
+            offsetXY[1] = -radius;
+        }
+        return alpha.withDensity(density, true);
+    }
     public Bitmap copy(Config config, boolean mutable) {
         Bitmap copy = createBitmap(width, height, config, hasAlpha);
         copy.setPixels(requirePixels(), 0, width, 0, 0, width, height);
@@ -52,6 +86,21 @@ public final class Bitmap {
         result.density = density;
         result.hasAlpha = copy.hasAlpha;
         return result;
+    }
+    public boolean compress(CompressFormat format, int quality, OutputStream stream) {
+        Objects.requireNonNull(format);
+        Objects.requireNonNull(stream);
+        if (quality < 0 || quality > 100) throw new IllegalArgumentException("Quality must be between 0 and 100");
+        int[] data = requirePixels();
+        if (format != CompressFormat.PNG) return false;
+        byte[] png = SoftwareRaster.encodePng(data, width, height, hasAlpha);
+        if (png == null) return false;
+        try {
+            stream.write(png);
+            return true;
+        } catch (IOException error) {
+            return false;
+        }
     }
     public static Bitmap createScaledBitmap(Bitmap source, int width, int height, boolean filter) {
         if (width == source.width && height == source.height) return source;

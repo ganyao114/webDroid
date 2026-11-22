@@ -29,7 +29,7 @@ public class GridView extends AbsListView {
         touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
     }
 
-    public void setAdapter(ListAdapter value) {
+    @Override public void setAdapter(ListAdapter value) {
         if (adapter != null) adapter.unregisterDataSetObserver(observer);
         adapter = value;
         selected = 0;
@@ -38,7 +38,7 @@ public class GridView extends AbsListView {
         if (adapter != null) adapter.registerDataSetObserver(observer);
         refresh();
     }
-    public ListAdapter getAdapter() { return adapter; }
+    @Override public ListAdapter getAdapter() { return adapter; }
     public void setEmptyView(View value) { empty = value; refresh(); }
     public View getEmptyView() { return empty; }
     public void setNumColumns(int columns) {
@@ -52,12 +52,16 @@ public class GridView extends AbsListView {
     public void setStretchMode(int mode) {
         if (mode < NO_STRETCH || mode > STRETCH_SPACING_UNIFORM) throw new IllegalArgumentException("stretch mode");
     }
-    public void setSelection(int position) {
+    @Override public void setSelection(int position) {
         selected = Math.max(0, Math.min(position, count() - 1));
         if (rowHeight > 0) scrollTo(0, Math.min(maxScroll(getHeight()), selected / columns * rowHeight));
         requestLayout();
     }
-    public int getSelectedItemPosition() { return selected; }
+    @Override public int getSelectedItemPosition() { return selected; }
+    @Override public View getSelectedView() {
+        int child = selected - firstPosition;
+        return child < 0 || child >= getChildCount() ? null : getChildAt(child);
+    }
 
     private int count() { return adapter == null ? 0 : adapter.getCount(); }
     private void refresh() {

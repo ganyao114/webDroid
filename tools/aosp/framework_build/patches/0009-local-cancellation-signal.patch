@@ -1,0 +1,146 @@
+--- a/frameworks/base/core/java/android/os/CancellationSignal.java
++++ b/frameworks/base/core/java/android/os/CancellationSignal.java
+@@ -27,10 +27,6 @@
+     private boolean mIsCanceled;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+     private OnCancelListener mOnCancelListener;
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+-    private ICancellationSignal mRemote;
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+-    private boolean mCancelInProgress;
+ 
+     /**
+      * Creates a cancellation signal, initially not canceled.
+@@ -66,33 +62,15 @@
+      */
+     public void cancel() {
+         final OnCancelListener listener;
+-        final ICancellationSignal remote;
+         synchronized (this) {
+             if (mIsCanceled) {
+                 return;
+             }
+             mIsCanceled = true;
+-            mCancelInProgress = true;
+             listener = mOnCancelListener;
+-            remote = mRemote;
+         }
+ 
+-        try {
+-            if (listener != null) {
+-                listener.onCancel();
+-            }
+-            if (remote != null) {
+-                try {
+-                    remote.cancel();
+-                } catch (RemoteException ex) {
+-                }
+-            }
+-        } finally {
+-            synchronized (this) {
+-                mCancelInProgress = false;
+-                notifyAll();
+-            }
+-        }
++        if (listener != null) listener.onCancel();
+     }
+ 
+     /**
+@@ -113,8 +91,6 @@
+      */
+     public void setOnCancelListener(OnCancelListener listener) {
+         synchronized (this) {
+-            waitForCancelFinishedLocked();
+-
+             if (mOnCancelListener == listener) {
+                 return;
+             }
+@@ -127,74 +103,6 @@
+     }
+ 
+     /**
+-     * Sets the remote transport.
+-     *
+-     * If {@link CancellationSignal#cancel} has already been called, then the provided
+-     * remote transport is canceled immediately.
+-     *
+-     * This method is guaranteed that the remote transport will not be called after it
+-     * has been removed.
+-     *
+-     * @param remote The remote transport, or null to remove.
+-     *
+-     * @hide
+-     */
+-    public void setRemote(ICancellationSignal remote) {
+-        synchronized (this) {
+-            waitForCancelFinishedLocked();
+-
+-            if (mRemote == remote) {
+-                return;
+-            }
+-            mRemote = remote;
+-            if (!mIsCanceled || remote == null) {
+-                return;
+-            }
+-        }
+-        try {
+-            remote.cancel();
+-        } catch (RemoteException ex) {
+-        }
+-    }
+-
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+-    private void waitForCancelFinishedLocked() {
+-        while (mCancelInProgress) {
+-            try {
+-                wait();
+-            } catch (InterruptedException ex) {
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Creates a transport that can be returned back to the caller of
+-     * a Binder function and subsequently used to dispatch a cancellation signal.
+-     *
+-     * @return The new cancellation signal transport.
+-     *
+-     * @hide
+-     */
+-    public static ICancellationSignal createTransport() {
+-        return new Transport();
+-    }
+-
+-    /**
+-     * Given a locally created transport, returns its associated cancellation signal.
+-     *
+-     * @param transport The locally created transport, or null if none.
+-     * @return The associated cancellation signal, or null if none.
+-     *
+-     * @hide
+-     */
+-    public static CancellationSignal fromTransport(ICancellationSignal transport) {
+-        if (transport instanceof Transport) {
+-            return ((Transport)transport).mCancellationSignal;
+-        }
+-        return null;
+-    }
+-
+-    /**
+      * Listens for cancellation.
+      */
+     public interface OnCancelListener {
+@@ -203,13 +111,4 @@
+          */
+         void onCancel();
+     }
+-
+-    private static final class Transport extends ICancellationSignal.Stub {
+-        final CancellationSignal mCancellationSignal = new CancellationSignal();
+-
+-        @Override
+-        public void cancel() throws RemoteException {
+-            mCancellationSignal.cancel();
+-        }
+-    }
+ }

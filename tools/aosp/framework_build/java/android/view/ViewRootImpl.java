@@ -9,7 +9,9 @@ public final class ViewRootImpl implements ViewParent {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final View decor;
     private final android.os.IBinder windowToken = new android.os.IBinder() {};
+    private final WindowId windowId = new WindowId(windowToken);
     private final Window window;
+    private final ViewTreeObserver treeObserver;
     private boolean requested = true;
     private boolean insetsRequested = true;
     private boolean drawRequested = true;
@@ -23,13 +25,22 @@ public final class ViewRootImpl implements ViewParent {
     public ViewRootImpl(View decor, Window window) {
         this.decor = decor;
         this.window = window;
+        treeObserver = new ViewTreeObserver(decor.getContext());
         decor.assignParent(this);
         decor.attach(this);
     }
 
     public View getView() { return decor; }
     public Handler getHandler() { return handler; }
+    ViewTreeObserver getTreeObserver() { return treeObserver; }
     android.os.IBinder getWindowToken() { return windowToken; }
+    WindowId getWindowId() { return windowId; }
+    WindowInsets getRootWindowInsets() { return window == null ? null : window.makeInsets(); }
+    WindowInsetsController getWindowInsetsController() { return window == null ? null : window.getInsetsController(); }
+    void onSystemUiVisibilityChanged(View view) {
+        if (window != null && view == decor) window.applyLegacySystemBarAppearance(view.getSystemUiVisibility());
+        requestApplyInsets();
+    }
     public void detach() {
         decor.detach();
         decor.assignParent(null);
@@ -52,11 +63,14 @@ public final class ViewRootImpl implements ViewParent {
             requested = false;
             performMeasure();
             performLayout();
+            treeObserver.dispatchOnGlobalLayout();
             drawRequested = true;
         }
         if (!drawRequested && !forceDraw) return false;
+        if (treeObserver.dispatchOnPreDraw()) return false;
         drawRequested = false;
         nativeBeginDraw();
+        treeObserver.dispatchOnDraw();
         performDraw(canvas);
         return true;
     }

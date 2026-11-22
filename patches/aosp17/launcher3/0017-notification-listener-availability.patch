@@ -1,0 +1,26 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/ModelInitializer.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/ModelInitializer.kt
+@@ -151,11 +151,22 @@
+             }
+         )
+ 
++        // Embedded processes may run without a notification-listener service.
++        val hasNotificationListener = try {
++            Class.forName(
++                "android.service.notification.NotificationListenerService",
++                false,
++                context.classLoader,
++            )
++            true
++        } catch (_: ClassNotFoundException) {
++            false
++        }
+         // Notification dots changes
+         lifeCycle.addCloseable(
+             settingsCache.getListenableRef(NOTIFICATION_BADGING_URI).forEach(MAIN_EXECUTOR) {
+                 dotsEnabled ->
+-                if (dotsEnabled)
++                if (dotsEnabled && hasNotificationListener)
+                     NotificationListener.requestRebind(
+                         ComponentName(context, NotificationListener::class.java)
+                     )

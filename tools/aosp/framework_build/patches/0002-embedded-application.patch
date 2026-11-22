@@ -1,0 +1,182 @@
+--- a/frameworks/base/core/java/android/app/Application.java
++++ b/frameworks/base/core/java/android/app/Application.java
+@@ -16,8 +16,6 @@
+ 
+ package android.app;
+ 
+-import android.annotation.CallSuper;
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+@@ -30,8 +28,6 @@
+ import android.content.res.Configuration;
+ import android.os.Build;
+ import android.os.Bundle;
+-import android.util.Log;
+-import android.view.autofill.AutofillManager;
+ 
+ import java.util.ArrayList;
+ 
+@@ -54,8 +50,6 @@
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class Application extends ContextWrapper implements ComponentCallbacks2 {
+-    private static final String TAG = "Application";
+-
+     @UnsupportedAppUsage
+     private ArrayList<ActivityLifecycleCallbacks> mActivityLifecycleCallbacks =
+             new ArrayList<ActivityLifecycleCallbacks>();
+@@ -65,11 +59,6 @@
+     private final ComponentCallbacksController mCallbacksController =
+             new ComponentCallbacksController();
+ 
+-    /** @hide */
+-    @UnsupportedAppUsage
+-    @android.ravenwood.annotation.RavenwoodRemove(blockedBy = LoadedApk.class)
+-    public LoadedApk mLoadedApk;
+-
+     public interface ActivityLifecycleCallbacks {
+ 
+         /**
+@@ -220,7 +209,6 @@
+         /**
+          * Called when the Activity calls {@link Activity#onRestart super.onRestart()}
+          */
+-        @FlaggedApi(Flags.FLAG_ON_RESTART_ACTIVITY_LIFECYCLE_CALLBACK)
+         default void onActivityRestarted(@NonNull Activity activity) {
+         }
+     }
+@@ -242,13 +230,6 @@
+ 
+     public Application() {
+         super(null);
+-    }
+-
+-    private String getLoadedApkInfo() {
+-        if (mLoadedApk == null) {
+-            return "null";
+-        }
+-        return mLoadedApk + "/pkg=" + mLoadedApk.mPackageName;
+     }
+ 
+     /**
+@@ -270,7 +251,6 @@
+      * disabled until user unlock happens, especially when component callback
+      * order matters.</p>
+      */
+-    @CallSuper
+     public void onCreate() {
+     }
+ 
+@@ -280,21 +260,17 @@
+      * removed by simply killing them; no user code (including this callback)
+      * is executed when doing so.
+      */
+-    @CallSuper
+     public void onTerminate() {
+     }
+ 
+-    @CallSuper
+     public void onConfigurationChanged(@NonNull Configuration newConfig) {
+         mCallbacksController.dispatchConfigurationChanged(newConfig);
+     }
+ 
+-    @CallSuper
+     public void onLowMemory() {
+         mCallbacksController.dispatchLowMemory();
+     }
+ 
+-    @CallSuper
+     public void onTrimMemory(int level) {
+         mCallbacksController.dispatchTrimMemory(level);
+     }
+@@ -343,7 +319,7 @@
+      * attribute within AndroidManifest.xml.
+      */
+     public static String getProcessName() {
+-        return ActivityThread.currentProcessName();
++        return UiRuntime.currentProcessName();
+     }
+ 
+     // ------------------ Internal API ------------------
+@@ -354,12 +330,6 @@
+     @UnsupportedAppUsage
+     /* package */ final void attach(Context context) {
+         attachBaseContext(context);
+-        setLoadedApk(context);
+-    }
+-
+-    @android.ravenwood.annotation.RavenwoodIgnore(blockedBy = LoadedApk.class)
+-    private void setLoadedApk(Context context) {
+-        mLoadedApk = ContextImpl.getImpl(context).mPackageInfo;
+     }
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+@@ -594,7 +564,6 @@
+         }
+     }
+ 
+-    @FlaggedApi(Flags.FLAG_ON_RESTART_ACTIVITY_LIFECYCLE_CALLBACK)
+     void dispatchActivityRestarted(@NonNull Activity activity) {
+         Object[] callbacks = collectActivityLifecycleCallbacks();
+         if (callbacks != null) {
+@@ -629,58 +598,4 @@
+             }
+         }
+     }
+-
+-    /** @hide */
+-    @Override
+-    @android.ravenwood.annotation.RavenwoodIgnore(blockedBy = AutofillManager.class)
+-    public AutofillManager.AutofillClient getAutofillClient() {
+-        final AutofillManager.AutofillClient client = super.getAutofillClient();
+-        if (client != null) {
+-            return client;
+-        }
+-        if (android.view.autofill.Helper.sVerbose) {
+-            Log.v(TAG, "getAutofillClient(): null on super, trying to find activity thread");
+-        }
+-        // Okay, ppl use the application context when they should not. This breaks
+-        // autofill among other things. Below is a mitigation to find the top resumed
+-        // activity.
+-        final ActivityThread activityThread = ActivityThread.currentActivityThread();
+-        if (activityThread == null) {
+-            return null;
+-        }
+-        final int activityCount = activityThread.mActivities.size();
+-        for (int i = 0; i < activityCount; i++) {
+-            final ActivityThread.ActivityClientRecord record =
+-                    activityThread.mActivities.valueAt(i);
+-            if (record == null) {
+-                continue;
+-            }
+-            final Activity activity = record.activity;
+-            if (activity == null) {
+-                continue;
+-            }
+-            if (record.isTopResumedActivity) {
+-                if (android.view.autofill.Helper.sVerbose) {
+-                    Log.v(TAG, "getAutofillClient(): found top resumed activity for " + this +
+-                            ": " + activity);
+-                }
+-                return activity.getAutofillClient();
+-            }
+-            // As a back up option, we pick the focused activity since autofill interacts only
+-            // with the currently focused activity and we need the fill client only if a call
+-            // comes from the focused activity.
+-            if (activity.getWindow().getDecorView().hasFocus()) {
+-                if (android.view.autofill.Helper.sVerbose) {
+-                    Log.v(TAG, "getAutofillClient(): found focused activity for " + this +
+-                            ": " + activity);
+-                }
+-                return activity.getAutofillClient();
+-            }
+-        }
+-        if (android.view.autofill.Helper.sVerbose) {
+-            Log.v(TAG, "getAutofillClient(): none of the " + activityCount + " activities on "
+-                    + this + " are top resumed nor have focus");
+-        }
+-        return null;
+-    }
+ }

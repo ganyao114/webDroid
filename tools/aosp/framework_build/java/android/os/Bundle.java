@@ -5,8 +5,14 @@ import java.util.Set;
 
 public final class Bundle implements Cloneable {
     private final ArrayMap<String, Object> values = new ArrayMap<>();
+    private ClassLoader classLoader;
     public Bundle() {}
-    public Bundle(Bundle other) { putAll(other); }
+    public Bundle(Bundle other) {
+        putAll(other);
+        if (other != null) classLoader = other.classLoader;
+    }
+    public void setClassLoader(ClassLoader loader) { classLoader = loader; }
+    public ClassLoader getClassLoader() { return classLoader; }
     public void putAll(Bundle other) {
         if (other != null) for (int i = 0; i < other.values.size(); ++i) {
             values.put(other.values.keyAt(i), other.values.valueAt(i));

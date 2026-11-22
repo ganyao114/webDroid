@@ -11,6 +11,7 @@ import org.xmlpull.v1.XmlPullParserException;
 
 public class AdaptiveIconDrawable extends Drawable implements Drawable.Callback {
     private final Drawable background, foreground, monochrome;
+    private int sourceDrawableResId;
     public AdaptiveIconDrawable(Drawable background, Drawable foreground) { this(background, foreground, null); }
     public AdaptiveIconDrawable(Drawable background, Drawable foreground, Drawable monochrome) {
         this.background = background; this.foreground = foreground; this.monochrome = monochrome;
@@ -21,6 +22,8 @@ public class AdaptiveIconDrawable extends Drawable implements Drawable.Callback 
     public Drawable getBackground() { return background; }
     public Drawable getForeground() { return foreground; }
     public Drawable getMonochrome() { return monochrome; }
+    public int getSourceDrawableResId() { return sourceDrawableResId; }
+    public void setSourceDrawableResId(int id) { sourceDrawableResId = id; }
     public static float getExtraInsetFraction() { return 0.25f; }
     public Path getIconMask() {
         Rect b = getBounds();
@@ -42,10 +45,13 @@ public class AdaptiveIconDrawable extends Drawable implements Drawable.Callback 
         ConstantState mono = monochrome == null ? null : monochrome.getConstantState();
         if (background != null && back == null || foreground != null && front == null
                 || monochrome != null && mono == null) return null;
+        int id = sourceDrawableResId;
         return new ConstantState() {
             @Override public Drawable newDrawable() {
-                return new AdaptiveIconDrawable(back == null ? null : back.newDrawable(),
+                AdaptiveIconDrawable icon = new AdaptiveIconDrawable(back == null ? null : back.newDrawable(),
                         front == null ? null : front.newDrawable(), mono == null ? null : mono.newDrawable());
+                icon.setSourceDrawableResId(id);
+                return icon;
             }
             @Override public int getChangingConfigurations() { return 0; }
         };

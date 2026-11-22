@@ -1,0 +1,88 @@
+--- a/frameworks/base/core/java/android/content/pm/LauncherUserInfo.java
++++ b/frameworks/base/core/java/android/content/pm/LauncherUserInfo.java
+@@ -16,10 +16,8 @@
+ 
+ package android.content.pm;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.os.Bundle;
+-import android.os.Flags;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.os.UserHandle;
+@@ -29,7 +27,6 @@
+  * The LauncherUserInfo object holds information about an Android user that is required to display
+  * the Launcher related UI elements specific to the user (like badges).
+  */
+-@FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+ public final class LauncherUserInfo implements Parcelable {
+ 
+     /**
+@@ -37,7 +34,6 @@
+      *
+      * @see #getUserConfig
+      */
+-    @FlaggedApi(android.multiuser.Flags.FLAG_ADD_LAUNCHER_USER_CONFIG)
+     public static final String PRIVATE_SPACE_ENTRYPOINT_HIDDEN =
+             "private_space_entrypoint_hidden";
+ 
+@@ -58,7 +54,6 @@
+      *
+      * @return the userType for the user whose LauncherUserInfo this is
+      */
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     @NonNull
+     public String getUserType() {
+         return mUserType;
+@@ -69,7 +64,6 @@
+      *
+      * @see #PRIVATE_SPACE_ENTRYPOINT_HIDDEN
+      */
+-    @FlaggedApi(android.multiuser.Flags.FLAG_ADD_LAUNCHER_USER_CONFIG)
+     @NonNull
+     public Bundle getUserConfig() {
+         return mUserConfig;
+@@ -81,32 +75,28 @@
+      *
+      * @return the serial number associated with the user
+      */
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     public int getUserSerialNumber() {
+         return mUserSerialNumber;
+     }
+ 
+     private LauncherUserInfo(@NonNull Parcel in) {
+-        mUserType = in.readString16NoHelper();
++        mUserType = in.readString();
+         mUserSerialNumber = in.readInt();
+         mUserConfig = in.readBundle(Bundle.class.getClassLoader());
+     }
+ 
+     @Override
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     public void writeToParcel(@NonNull Parcel dest, int flags) {
+-        dest.writeString16NoHelper(mUserType);
++        dest.writeString(mUserType);
+         dest.writeInt(mUserSerialNumber);
+         dest.writeBundle(mUserConfig);
+     }
+ 
+     @Override
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     public int describeContents() {
+         return 0;
+     }
+ 
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     public static final @android.annotation.NonNull Creator<LauncherUserInfo> CREATOR =
+             new Creator<LauncherUserInfo>() {
+                 @Override
+@@ -130,7 +120,6 @@
+         private final Bundle mUserConfig;
+ 
+ 
+-        @FlaggedApi(android.multiuser.Flags.FLAG_ADD_LAUNCHER_USER_CONFIG)
+         public Builder(@NonNull String userType, int userSerialNumber, @NonNull Bundle config) {
+             this.mUserType = userType;
+             this.mUserSerialNumber = userSerialNumber;

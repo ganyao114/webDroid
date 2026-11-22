@@ -161,10 +161,12 @@ struct Object {
     Field* reflected_field;
   };
   Object* weak_referent = nullptr;
+  Object* weak_queue = nullptr;
   Object* next_free = nullptr;
   bool marked = false;
   bool dex_literal = false;
   bool read_only = false;
+  bool stack_at_construction = false;
   unsigned monitor_depth = 0;
   uint32_t modifications = 0;
   std::vector<Value> fields;
@@ -193,6 +195,7 @@ class ClassLinker {
   Method& AddMethod(Class& cls, std::string_view name, std::string_view signature, uint32_t flags,
                     Builtin builtin = {}, std::string_view shorty = {});
   Class& Resolve(std::string_view descriptor);
+  const Class* FindLinkedClass(std::string_view descriptor) const;
   bool HasClass(std::string_view descriptor) const;
   void Initialize(Class& cls);
   Method& FindMethod(Class& cls, std::string_view name, std::string_view signature, bool is_static);
@@ -303,6 +306,7 @@ struct Runtime {
   Value& ArrayElement(Object& array, int32_t index);
   void StoreArrayElement(Object& array, int32_t index, Value value);
   Object* MakeException(std::string_view type, std::string_view message);
+  void CaptureThrowableStack(Object& throwable);
   void AppendExceptionFrame(const Method& method, uint32_t pc);
   [[noreturn]] void Fail(std::string_view type, std::string_view message = {}, Object* cause = nullptr);
   [[noreturn]] void Throw(Object* exception);
@@ -322,6 +326,12 @@ struct Runtime {
   size_t register_top = 0;
   std::array<uint8_t, 256> executed_opcodes{};
   size_t call_depth = 0;
+  struct ActiveTraceFrame {
+    const Method* method;
+    const uint32_t* dex_pc;
+    ActiveTraceFrame* caller;
+  };
+  ActiveTraceFrame* active_trace = nullptr;
   bool gc_paused = false;
   bool inline_caches = true;
 };

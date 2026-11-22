@@ -1,0 +1,35 @@
+--- a/libcore/ojluni/src/main/java/java/util/ReverseOrderDequeView.java
++++ b/libcore/ojluni/src/main/java/java/util/ReverseOrderDequeView.java
+@@ -29,12 +29,11 @@
+ import java.util.function.IntFunction;
+ import java.util.stream.Stream;
+ import java.util.stream.StreamSupport;
+-import jdk.internal.util.ArraysSupport;
+ 
+ /**
+  * Provides a reverse-ordered view of any Deque. Not serializable.
+  */
+-class ReverseOrderDequeView<E> implements Deque<E> {
++class ReverseOrderDequeView<E> extends AbstractCollection<E> implements Deque<E> {
+     final Deque<E> base;
+ 
+     private ReverseOrderDequeView(Deque<E> deque) {
+@@ -158,15 +157,15 @@
+     }
+ 
+     public Object[] toArray() {
+-        return ArraysSupport.reverse(base.toArray());
++        return super.toArray();
+     }
+ 
+     public <T> T[] toArray(T[] a) {
+-        return ArraysSupport.toArrayReversed(base, a);
++        return super.toArray(a);
+     }
+ 
+     public <T> T[] toArray(IntFunction<T[]> generator) {
+-        return ArraysSupport.reverse(base.toArray(generator));
++        return toArray(generator.apply(0));
+     }
+ 
+     // copied from AbstractCollection

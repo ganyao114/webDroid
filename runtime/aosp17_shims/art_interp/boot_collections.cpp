@@ -1,6 +1,7 @@
 #include "boot.h"
 
 #include <algorithm>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <limits>
@@ -68,6 +69,15 @@ Interfaces DeclareInterfaces(ClassLinker& cl) {
         auto* cursor = CallVirtual(vm, self, "iterator", "()Ljava/util/Iterator;").ref();
         return CallVirtual(vm, cursor, "forEachRemaining", "(Ljava/util/function/Consumer;)V", a);
       });
+  cl.AddMethod(iterable, "spliterator", "()Ljava/util/Spliterator;", 0,
+      [](Runtime& vm, Object* self, Values) {
+        RootScope roots(vm);
+        auto* cursor = roots.Hold(CallVirtual(vm, self, "iterator", "()Ljava/util/Iterator;").ref());
+        auto& spliterators = vm.linker.Resolve("Ljava/util/Spliterators;");
+        auto& factory = vm.linker.FindMethod(spliterators, "spliteratorUnknownSize",
+            "(Ljava/util/Iterator;I)Ljava/util/Spliterator;", true);
+        return vm.Invoke(factory, nullptr, std::array{Value::Ref(cursor), Value::Int(0)});
+      });
   auto& collection = cl.Define(kCollection, kObject, kInterface, {"Ljava/lang/Iterable;"});
   cl.AddMethod(collection, "stream", "()Ljava/util/stream/Stream;", 0,
       [](Runtime& vm, Object* self, Values) {
@@ -88,14 +98,54 @@ Interfaces DeclareInterfaces(ClassLinker& cl) {
       {"listIterator", "()Ljava/util/ListIterator;"}, {"listIterator", "(I)Ljava/util/ListIterator;"},
       {"addAll", "(ILjava/util/Collection;)Z"}});
   cl.Define(kSet, kObject, kInterface, {kCollection});
-  Abstract(cl, cl.Define(kMap, kObject, kInterface), {
+  auto& map = cl.Define(kMap, kObject, kInterface);
+  Abstract(cl, map, {
       {"size", "()I"}, {"isEmpty", "()Z"}, {"clear", "()V"},
       {"get", "(Ljava/lang/Object;)Ljava/lang/Object;"}, {"containsKey", "(Ljava/lang/Object;)Z"},
-      {"containsValue", "(Ljava/lang/Object;)Z"}, {"getOrDefault", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"},
+      {"containsValue", "(Ljava/lang/Object;)Z"},
       {"put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"},
-      {"putIfAbsent", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;"}, {"putAll", "(Ljava/util/Map;)V"},
+      {"putAll", "(Ljava/util/Map;)V"},
       {"remove", "(Ljava/lang/Object;)Ljava/lang/Object;"}, {"remove", "(Ljava/lang/Object;Ljava/lang/Object;)Z"},
       {"keySet", "()Ljava/util/Set;"}, {"values", "()Ljava/util/Collection;"}, {"entrySet", "()Ljava/util/Set;"}});
+  cl.AddMethod(map, "getOrDefault", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        const auto value = CallVirtual(vm, self, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", a.first(1));
+        return value.ref() || CallVirtual(vm, self, "containsKey", "(Ljava/lang/Object;)Z", a.first(1)).i()
+            ? value : a[1];
+      });
+  cl.AddMethod(map, "putIfAbsent", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        const auto value = CallVirtual(vm, self, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", a.first(1));
+        return value.ref() ? value
+            : CallVirtual(vm, self, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", a);
+      });
+  cl.AddMethod(map, "computeIfAbsent", "(Ljava/lang/Object;Ljava/util/function/Function;)Ljava/lang/Object;", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        auto* mapping = &vm.NonNull(a[1].ref());
+        const auto value = CallVirtual(vm, self, "get", "(Ljava/lang/Object;)Ljava/lang/Object;", a.first(1));
+        if (value.ref()) return value;
+        const auto computed = CallVirtual(vm, mapping, "apply", "(Ljava/lang/Object;)Ljava/lang/Object;", a.first(1));
+        if (computed.ref()) {
+          CallVirtual(vm, self, "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+                      std::array{a[0], computed});
+        }
+        return computed;
+      });
+  cl.AddMethod(map, "forEach", "(Ljava/util/function/BiConsumer;)V", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        auto* action = &vm.NonNull(a[0].ref());
+        RootScope roots(vm);
+        auto* entries = roots.Hold(CallVirtual(vm, self, "entrySet", "()Ljava/util/Set;", {}).ref());
+        auto* cursor = roots.Hold(CallVirtual(vm, entries, "iterator", "()Ljava/util/Iterator;", {}).ref());
+        while (CallVirtual(vm, cursor, "hasNext", "()Z", {}).i()) {
+          RootScope row_roots(vm);
+          auto* entry = row_roots.Hold(CallVirtual(vm, cursor, "next", "()Ljava/lang/Object;", {}).ref());
+          const auto key = row_roots.Hold(CallVirtual(vm, entry, "getKey", "()Ljava/lang/Object;", {}));
+          const auto value = CallVirtual(vm, entry, "getValue", "()Ljava/lang/Object;", {});
+          CallVirtual(vm, action, "accept", "(Ljava/lang/Object;Ljava/lang/Object;)V", std::array{key, value});
+        }
+        return Value{};
+      });
   Abstract(cl, cl.Define(kEntry, kObject, kInterface), {
       {"getKey", "()Ljava/lang/Object;"}, {"getValue", "()Ljava/lang/Object;"},
       {"setValue", "(Ljava/lang/Object;)Ljava/lang/Object;"}});
@@ -697,9 +747,14 @@ void InstallMaps(ClassLinker& cl) {
   InstallMapCursor(cl);
   InstallMapViews(cl);
   auto& map = cl.Define(kHashMap, kObject, 0, {kMap, "Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
+  cl.AddMethod(map, "tableSizeFor", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    const auto capacity = static_cast<uint32_t>(std::clamp(a[0].i(), 1, 1 << 30));
+    return Value::Int(std::bit_ceil(capacity));
+  });
   auto& ordered = cl.Define("Ljava/util/LinkedHashMap;", map.descriptor);
   auto& set = cl.Define(kHashSet, kObject, 0, {kSet, "Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
-  for (Class* type : {&map, &ordered, &set}) {
+  auto& ordered_set = cl.Define("Ljava/util/LinkedHashSet;", set.descriptor);
+  for (Class* type : {&map, &ordered, &set, &ordered_set}) {
     cl.AddMethod(*type, "<init>", "()V", 0, NoOp);
     const Builtin capacity = [](Runtime& vm, Object* self, Values a) {
       if (a[0].i() < 0) vm.Fail("Ljava/lang/IllegalArgumentException;", "Negative capacity");
@@ -714,7 +769,7 @@ void InstallMaps(ClassLinker& cl) {
     cl.AddMethod(*type, "<init>", "(I)V", 0, capacity);
     cl.AddMethod(*type, "<init>", "(IF)V", 0, capacity);
     if (type == &ordered) cl.AddMethod(*type, "<init>", "(IFZ)V", 0, capacity);
-    if (type == &set) {
+    if (type == &set || type == &ordered_set) {
       cl.AddMethod(*type, "<init>", "(Ljava/util/Collection;)V", 0,
           [](Runtime& vm, Object* self, Values a) { CopySet(vm, *self, a[0].ref()); return Value{}; });
     } else {
@@ -873,6 +928,12 @@ void InstallArrays(ClassLinker& cl) {
   const auto add = [&](auto name, auto sig, Builtin fn) {
     cl.AddMethod(arrays, name, sig, art::kAccStatic, std::move(fn));
   };
+  add("stream", "([Ljava/lang/Object;)Ljava/util/stream/Stream;", [](Runtime& vm, Object*, Values a) {
+    auto& stream = vm.linker.Resolve("Ljava/util/stream/Stream;");
+    auto& from_array = vm.linker.FindMethod(stream, "fromArray",
+        "([Ljava/lang/Object;)Ljava/util/stream/Stream;", true);
+    return vm.Invoke(from_array, nullptr, a);
+  });
   add("asList", "([Ljava/lang/Object;)Ljava/util/List;", [](Runtime& vm, Object*, Values a) {
     vm.NonNull(a[0].ref());
     auto* list = vm.heap.Allocate(vm, vm.linker.Resolve(kArrayList));
@@ -1115,6 +1176,35 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
                        {"peek", "()Ljava/lang/Object;"}});
   auto& blocking = cl.Define(kBlockingQueue, kObject, kInterface, {kQueue});
   Abstract(cl, blocking, {{"remainingCapacity", "()I"}});
+  auto& concurrent = cl.Define("Ljava/util/concurrent/ConcurrentLinkedQueue;", kObject, 0,
+      {kQueue, "Ljava/io/Serializable;"});
+  cl.AddMethod(concurrent, "<init>", "()V", 0, NoOp);
+  const Builtin enqueue = [](Runtime& vm, Object* self, Values a) {
+    vm.NonNull(a[0].ref());
+    self->elements.push_back(a[0]);
+    return Value::Int(1);
+  };
+  cl.AddMethod(concurrent, "add", "(Ljava/lang/Object;)Z", 0, enqueue);
+  cl.AddMethod(concurrent, "offer", "(Ljava/lang/Object;)Z", 0, enqueue);
+  cl.AddMethod(concurrent, "peek", "()Ljava/lang/Object;", 0, [](Runtime&, Object* self, Values) {
+    return self->elements.empty() ? Value{} : self->elements.front();
+  });
+  cl.AddMethod(concurrent, "poll", "()Ljava/lang/Object;", 0, [](Runtime&, Object* self, Values) {
+    if (self->elements.empty()) return Value{};
+    Value first = self->elements.front();
+    self->elements.erase(self->elements.begin());
+    return first;
+  });
+  cl.AddMethod(concurrent, "size", "()I", 0, [](Runtime&, Object* self, Values) {
+    return Value::Int(self->elements.size());
+  });
+  cl.AddMethod(concurrent, "isEmpty", "()Z", 0, [](Runtime&, Object* self, Values) {
+    return Value::Int(self->elements.empty());
+  });
+  cl.AddMethod(concurrent, "clear", "()V", 0, [](Runtime&, Object* self, Values) {
+    self->elements.clear();
+    return Value{};
+  });
   auto& node = cl.Define(kNode, kObject, art::kAccFinal);
   auto& item = cl.AddField(node, "item", kObject, false);
   auto& next = cl.AddField(node, "next", kNode, false);
@@ -1182,9 +1272,11 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
   auto& core_size = cl.AddField(pool, "corePoolSize", "I", false);
   auto& max_size = cl.AddField(pool, "maximumPoolSize", "I", false);
   auto& keep_alive = cl.AddField(pool, "keepAliveTime", "J", false);
+  auto& thread_factory = cl.AddField(pool, "threadFactory", factory.descriptor, false);
+  auto& running = cl.AddField(pool, "running", "Z", false);
   // Executors create workers on demand. Initialization only needs the queue and configuration.
-  cl.AddMethod(pool, "<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V", 0,
-      [&work_queue, &core_size, &max_size, &keep_alive](Runtime& vm, Object* self, Values a) {
+  const Builtin init_pool =
+      [&work_queue, &core_size, &max_size, &keep_alive, &thread_factory](Runtime& vm, Object* self, Values a) {
         if (a[0].i() < 0 || a[1].i() <= 0 || a[1].i() < a[0].i() || a[2].j() < 0) {
           vm.Fail("Ljava/lang/IllegalArgumentException;", "Invalid executor size or keep-alive time");
         }
@@ -1193,6 +1285,31 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
         self->fields[core_size.slot] = a[0];
         self->fields[max_size.slot] = a[1];
         self->fields[work_queue.slot] = a[4];
+        if (a.size() == 6) self->fields[thread_factory.slot] = Value::Ref(&vm.NonNull(a[5].ref()));
+        return Value{};
+      };
+  cl.AddMethod(pool, "<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V",
+               0, init_pool);
+  cl.AddMethod(pool, "<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;"
+               "Ljava/util/concurrent/ThreadFactory;)V", 0, init_pool);
+  cl.AddMethod(pool, "execute", "(Ljava/lang/Runnable;)V", 0,
+      [&work_queue, &running](Runtime& vm, Object* self, Values a) {
+        vm.NonNull(a[0].ref());
+        auto* queue = self->fields[work_queue.slot].ref();
+        if (!CallVirtual(vm, queue, "offer", "(Ljava/lang/Object;)Z", a).i()) {
+          vm.Fail("Ljava/util/concurrent/RejectedExecutionException;", "Executor queue is full");
+        }
+        if (self->fields[running.slot].i()) return Value{};
+        self->fields[running.slot] = Value::Int(1);
+        try {
+          while (auto* task = CallVirtual(vm, queue, "poll", "()Ljava/lang/Object;", {}).ref()) {
+            CallVirtual(vm, task, "run", "()V", {});
+          }
+        } catch (...) {
+          self->fields[running.slot] = {};
+          throw;
+        }
+        self->fields[running.slot] = {};
         return Value{};
       });
   cl.AddMethod(pool, "getQueue", "()Ljava/util/concurrent/BlockingQueue;", 0,
@@ -1209,10 +1326,19 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
         return CallVirtual(vm, a[0].ref(), "convert", "(JLjava/util/concurrent/TimeUnit;)J",
                            std::array{self->fields[keep_alive.slot], nanos});
       });
+
 }
 
 void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
   auto& objects = cl.Define("Ljava/util/Objects;", kObject, art::kAccFinal);
+  cl.AddMethod(objects, "checkFromIndexSize", "(III)I", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        const int from = a[0].i(), size = a[1].i(), length = a[2].i();
+        if (from < 0 || size < 0 || length < 0 || from > length - size) {
+          vm.Fail("Ljava/lang/IndexOutOfBoundsException;", "Range exceeds bounds");
+        }
+        return a[0];
+      });
   cl.AddMethod(objects, "equals", "(Ljava/lang/Object;Ljava/lang/Object;)Z", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) { return Value::Int(JavaEquals(vm, a[0].ref(), a[1].ref())); });
   const Builtin non_null = [](Runtime& vm, Object*, Values a) {
@@ -1224,11 +1350,46 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
   cl.AddMethod(objects, "requireNonNull", "(Ljava/lang/Object;Ljava/lang/String;)Ljava/lang/Object;", art::kAccStatic, non_null);
   cl.AddMethod(objects, "hashCode", "(Ljava/lang/Object;)I", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) { return Value::Int(JavaHash(vm, a[0].ref())); });
+  cl.AddMethod(objects, "hash", "([Ljava/lang/Object;)I", art::kAccStatic, [](Runtime& vm, Object*, Values a) {
+    if (!a[0].ref()) return Value::Int(0);
+    uint32_t result = 1;
+    for (Value item : a[0].ref()->elements) result = 31 * result + JavaHash(vm, item.ref());
+    return Value::Int(static_cast<int32_t>(result));
+  });
 
   InstallArrays(cl);
   InstallUnmodifiableList(cl);
   auto& collections = cl.Define("Ljava/util/Collections;", kObject, art::kAccFinal);
   InstallUnmodifiableMap(cl, collections);
+  cl.AddMethod(collections, "unmodifiableSet", "(Ljava/util/Set;)Ljava/util/Set;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) { return WrapReadOnly(vm, "Lwa/runtime/UnmodifiableSet;", a[0]); });
+  auto& map_set = cl.Define("Ljava/util/Collections$SetFromMap;", kObject, art::kAccFinal,
+      {kSet, "Ljava/io/Serializable;"});
+  auto& set_map = cl.AddField(map_set, "m", kMap, false);
+  ForwardReadOnly(cl, map_set, {
+      {"size", "()I"}, {"isEmpty", "()Z"}, {"clear", "()V"}, {"iterator", "()Ljava/util/Iterator;"},
+      {"contains", "(Ljava/lang/Object;)Z"}, {"remove", "(Ljava/lang/Object;)Z"},
+      {"toArray", "()[Ljava/lang/Object;"}, {"toArray", "([Ljava/lang/Object;)[Ljava/lang/Object;"},
+      {"equals", "(Ljava/lang/Object;)Z"}, {"hashCode", "()I"}, {"toString", "()Ljava/lang/String;"}});
+  cl.AddMethod(map_set, "add", "(Ljava/lang/Object;)Z", 0, [&set_map](Runtime& vm, Object* self, Values a) {
+    auto& boolean = vm.linker.Resolve("Ljava/lang/Boolean;");
+    auto& value_of = vm.linker.FindMethod(boolean, "valueOf", "(Z)Ljava/lang/Boolean;", true);
+    const auto yes = vm.Invoke(value_of, nullptr, std::array{Value::Int(1)});
+    const auto previous = CallVirtual(vm, self->fields[set_map.slot].ref(), "put",
+        "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", std::array{a[0], yes});
+    return Value::Int(previous.ref() == nullptr);
+  });
+  cl.AddMethod(collections, "newSetFromMap", "(Ljava/util/Map;)Ljava/util/Set;", art::kAccStatic,
+      [&map_set, &set_map](Runtime& vm, Object*, Values a) {
+        if (!CallVirtual(vm, a[0].ref(), "isEmpty", "()Z").i()) {
+          vm.Fail("Ljava/lang/IllegalArgumentException;", "Map is non-empty");
+        }
+        RootScope roots(vm);
+        auto* set = roots.Hold(vm.heap.Allocate(vm, vm.linker.Resolve(map_set.descriptor)));
+        set->fields[set_map.slot] = a[0];
+        set->payload = CallVirtual(vm, a[0].ref(), "keySet", "()Ljava/util/Set;");
+        return Value::Ref(set);
+      });
   for (auto [name, iface, implementation] : {std::tuple{"List", kList, kArrayList},
         {"Map", kMap, kHashMap}, {"Set", kSet, kHashSet}}) {
     std::string upper = name;
@@ -1248,6 +1409,13 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
   });
   cl.AddMethod(collections, "singletonList", "(Ljava/lang/Object;)Ljava/util/List;", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) { return MakeList(vm, a, true); });
+  cl.AddMethod(collections, "singletonMap", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;",
+      art::kAccStatic, [](Runtime& vm, Object*, Values a) {
+        RootScope roots(vm);
+        auto* map = roots.Hold(vm.heap.Allocate(vm, vm.linker.Resolve(kHashMap)));
+        InsertEntry(vm, *map, JavaHash(vm, a[0].ref()), a[0], a[1]);
+        return WrapReadOnly(vm, kReadOnlyMap, Value::Ref(map));
+      });
   cl.AddMethod(collections, "unmodifiableList", "(Ljava/util/List;)Ljava/util/List;", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) {
         vm.NonNull(a[0].ref());
@@ -1323,6 +1491,21 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
       art::kAccStatic, comparing);
   cl.AddMethod(interfaces.comparator, "comparing",
       "(Ljava/util/function/Function;Ljava/util/Comparator;)Ljava/util/Comparator;", art::kAccStatic, comparing);
+  auto& int_keys = cl.Define("Lwa/runtime/IntKeyComparator;", kObject, art::kAccFinal, {kComparator});
+  cl.AddMethod(int_keys, "compare", compare_signature, 0, [](Runtime& vm, Object* self, Values a) {
+    auto* extractor = self->elements[0].ref();
+    constexpr auto apply_signature = "(Ljava/lang/Object;)I";
+    const int left = CallVirtual(vm, extractor, "applyAsInt", apply_signature, a.first(1)).i();
+    const int right = CallVirtual(vm, extractor, "applyAsInt", apply_signature, a.last(1)).i();
+    return Value::Int((left > right) - (left < right));
+  });
+  cl.AddMethod(interfaces.comparator, "comparingInt", "(Ljava/util/function/ToIntFunction;)Ljava/util/Comparator;",
+      art::kAccStatic, [&int_keys](Runtime& vm, Object*, Values a) {
+        vm.NonNull(a[0].ref());
+        auto* object = vm.heap.Allocate(vm, vm.linker.Resolve(int_keys.descriptor));
+        object->elements = {a[0]};
+        return Value::Ref(object);
+      });
   auto& paired = cl.Define("Lwa/runtime/ChainedComparator;", kObject, art::kAccFinal, {kComparator});
   cl.AddMethod(paired, "compare", compare_signature, 0, [](Runtime& vm, Object* self, Values a) {
     const auto first = CallVirtual(vm, self->elements[0].ref(), "compare", "(Ljava/lang/Object;Ljava/lang/Object;)I", a);
@@ -1340,6 +1523,21 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
 }
 
 void InstallCollectionDefaults(ClassLinker& cl, Class& iface) {
+  cl.AddMethod(iface, "removeIf", "(Ljava/util/function/Predicate;)Z", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        auto* predicate = &vm.NonNull(a[0].ref());
+        RootScope roots(vm);
+        auto* cursor = roots.Hold(CallVirtual(vm, self, "iterator", "()Ljava/util/Iterator;").ref());
+        bool changed = false;
+        while (CallVirtual(vm, cursor, "hasNext", "()Z").i()) {
+          const auto item = CallVirtual(vm, cursor, "next", "()Ljava/lang/Object;");
+          if (CallVirtual(vm, predicate, "test", "(Ljava/lang/Object;)Z", std::array{item}).i()) {
+            CallVirtual(vm, cursor, "remove", "()V");
+            changed = true;
+          }
+        }
+        return Value::Int(changed);
+      });
   for (bool contains : {false, true}) {
     cl.AddMethod(iface, contains ? "containsAll" : "addAll", "(Ljava/util/Collection;)Z", 0,
         [contains](Runtime& vm, Object* self, Values a) {

@@ -15,6 +15,11 @@
 #include "ziparchive/zip_error.h"
 
 namespace wa::interp {
+
+const Class* ClassLinker::FindLinkedClass(std::string_view descriptor) const {
+  auto it = classes_.find(descriptor);
+  return it != classes_.end() && it->second.link_state == LinkState::Linked ? &it->second : nullptr;
+}
 namespace {
 
 std::unique_ptr<const art::DexFile> OpenDex(art::ArtDexFileLoader& loader,

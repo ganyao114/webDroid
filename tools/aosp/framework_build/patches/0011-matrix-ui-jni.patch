@@ -1,0 +1,145 @@
+--- a/frameworks/base/graphics/java/android/graphics/Matrix.java
++++ b/frameworks/base/graphics/java/android/graphics/Matrix.java
+@@ -21,7 +21,6 @@
+ import dalvik.annotation.optimization.CriticalNative;
+ import dalvik.annotation.optimization.FastNative;
+ 
+-import libcore.util.NativeAllocationRegistry;
+ 
+ import java.io.PrintWriter;
+ 
+@@ -227,11 +226,8 @@
+         }
+     };
+ 
+-    private static class NoImagePreloadHolder {
+-        public static final NativeAllocationRegistry sRegistry =
+-                NativeAllocationRegistry.createMalloced(
+-                Matrix.class.getClassLoader(), ExtraNatives.nGetNativeFinalizer());
+-    }
++    // The UI JNI bridge owns the native handle for the lifetime of this peer.
++    private static native void nRegisterNativeAllocation(Matrix matrix, long handle);
+ 
+     private final long native_instance;
+ 
+@@ -240,7 +236,7 @@
+      */
+     public Matrix() {
+         native_instance = ExtraNatives.nCreate(0);
+-        NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, native_instance);
++        nRegisterNativeAllocation(this, native_instance);
+     }
+ 
+     /**
+@@ -250,7 +246,7 @@
+      */
+     public Matrix(Matrix src) {
+         native_instance = ExtraNatives.nCreate(src != null ? src.native_instance : 0);
+-        NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, native_instance);
++        nRegisterNativeAllocation(this, native_instance);
+     }
+ 
+     /**
+@@ -326,12 +322,12 @@
+      * coordinate that should remain unchanged by the specified transformation.
+      */
+     public void setScale(float sx, float sy, float px, float py) {
+-        nSetScale(native_instance, sx, sy, px, py);
++        setValues(new float[]{sx, 0, px - sx * px, 0, sy, py - sy * py, 0, 0, 1});
+     }
+ 
+     /** Set the matrix to scale by sx and sy. */
+     public void setScale(float sx, float sy) {
+-        nSetScale(native_instance, sx, sy);
++        setValues(new float[]{sx, 0, 0, 0, sy, 0, 0, 0, 1});
+     }
+ 
+     /**
+@@ -390,7 +386,16 @@
+      * </p>
+      */
+     public boolean setConcat(Matrix a, Matrix b) {
+-        nSetConcat(native_instance, a.native_instance, b.native_instance);
++        float[] left = new float[9], right = new float[9], values = new float[9];
++        a.getValues(left);
++        b.getValues(right);
++        for (int row = 0; row < 9; row += 3) {
++            for (int column = 0; column < 3; column++) {
++                values[row + column] = left[row] * right[column]
++                        + left[row + 1] * right[3 + column] + left[row + 2] * right[6 + column];
++            }
++        }
++        setValues(values);
+         return true;
+     }
+ 
+@@ -398,7 +403,12 @@
+      * Preconcats the matrix with the specified translation. M' = M * T(dx, dy)
+      */
+     public boolean preTranslate(float dx, float dy) {
+-        nPreTranslate(native_instance, dx, dy);
++        float[] values = new float[9];
++        getValues(values);
++        for (int row = 0; row < 9; row += 3) {
++            values[row + 2] += values[row] * dx + values[row + 1] * dy;
++        }
++        setValues(values);
+         return true;
+     }
+ 
+@@ -454,15 +464,20 @@
+      * Preconcats the matrix with the specified matrix. M' = M * other
+      */
+     public boolean preConcat(Matrix other) {
+-        nPreConcat(native_instance, other.native_instance);
+-        return true;
++        return setConcat(this, other);
+     }
+ 
+     /**
+      * Postconcats the matrix with the specified translation. M' = T(dx, dy) * M
+      */
+     public boolean postTranslate(float dx, float dy) {
+-        nPostTranslate(native_instance, dx, dy);
++        float[] values = new float[9];
++        getValues(values);
++        for (int col = 0; col < 3; col++) {
++            values[col] += dx * values[col + 6];
++            values[col + 3] += dy * values[col + 6];
++        }
++        setValues(values);
+         return true;
+     }
+ 
+@@ -518,8 +533,7 @@
+      * Postconcats the matrix with the specified matrix. M' = other * M
+      */
+     public boolean postConcat(Matrix other) {
+-        nPostConcat(native_instance, other.native_instance);
+-        return true;
++        return setConcat(other, this);
+     }
+ 
+     /**
+@@ -571,7 +585,20 @@
+         if (dst == null || src == null) {
+             throw new NullPointerException();
+         }
+-        return nSetRectToRect(native_instance, src, dst, stf.nativeInt);
++        if (src.isEmpty()) {
++            reset();
++            return false;
++        }
++        float sx = dst.width() / src.width(), sy = dst.height() / src.height();
++        float x = dst.left, y = dst.top;
++        if (stf != ScaleToFit.FILL) {
++            sx = sy = Math.min(sx, sy);
++            float align = stf == ScaleToFit.START ? 0 : stf == ScaleToFit.CENTER ? 0.5f : 1;
++            x += align * (dst.width() - sx * src.width());
++            y += align * (dst.height() - sy * src.height());
++        }
++        setValues(new float[]{sx, 0, x - sx * src.left, 0, sy, y - sy * src.top, 0, 0, 1});
++        return true;
+     }
+ 
+     // private helper to perform range checks on arrays of "points"

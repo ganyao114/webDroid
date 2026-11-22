@@ -1,0 +1,46 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/ItemInstallQueue.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/ItemInstallQueue.java
+@@ -113,17 +113,23 @@
+             ensureQueueLoaded();
+             if (!mItems.contains(info)) {
+                 mItems.add(info);
+-                mStorage.write(mContext, mItems);
++                if (hasPersistentFiles()) mStorage.write(mContext, mItems);
+             }
+         });
+         flushInstallQueue();
+     }
+ 
++    private boolean hasPersistentFiles() {
++        return mContext.getFilesDir().isDirectory();
++    }
++
+     @WorkerThread
+     private void ensureQueueLoaded() {
+         Preconditions.assertWorkerThread();
+         if (mItems == null) {
+-            mItems = mStorage.read(mContext, SerializedItemItem::new);
++            mItems = hasPersistentFiles()
++                    ? mStorage.read(mContext, SerializedItemItem::new)
++                    : new ArrayList<>();
+         }
+     }
+ 
+@@ -149,7 +155,7 @@
+ 
+             MODEL_EXECUTOR.execute(() -> {
+                 mItems.clear();
+-                mStorage.getFile(mContext).delete();
++                if (hasPersistentFiles()) mStorage.getFile(mContext).delete();
+                 mModelProvider.get().enqueueModelUpdateTask(
+                         new AddWorkspaceItemsTask(itemSuppliers, mSpaceFinderProvider.get()));
+             });
+@@ -167,7 +173,7 @@
+         ensureQueueLoaded();
+         if (mItems.removeIf(item ->
+                 item.user.equals(user) && packageNames.contains(item.getTargetPackage()))) {
+-            mStorage.write(mContext, mItems);
++            if (hasPersistentFiles()) mStorage.write(mContext, mItems);
+         }
+     }
+ 

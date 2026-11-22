@@ -3,6 +3,8 @@ package android.view;
 import android.util.SparseArray;
 
 public final class VelocityTracker {
+    public static final int VELOCITY_TRACKER_STRATEGY_DEFAULT = -1;
+    public @interface VelocityTrackerStrategy {}
     private static final int CAPACITY = 20;
     private static final int HORIZON_MS = 100;
     private static final int STOP_MS = 40;
@@ -50,6 +52,7 @@ public final class VelocityTracker {
 
     private VelocityTracker() {}
     public static VelocityTracker obtain() { return new VelocityTracker(); }
+    public static VelocityTracker obtain(int strategy) { return obtain(); }
     public void recycle() { clear(); }
     public void clear() { pointers.clear(); activeId = -1; previousTime = 0; }
     public void addMovement(MotionEvent event) {

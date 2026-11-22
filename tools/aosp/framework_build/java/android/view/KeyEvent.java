@@ -6,6 +6,7 @@ public class KeyEvent extends InputEvent {
             KEYCODE_DPAD_UP = 19, KEYCODE_DPAD_DOWN = 20;
     public static final int KEYCODE_DPAD_LEFT = 21, KEYCODE_DPAD_RIGHT = 22, KEYCODE_DPAD_CENTER = 23;
     public static final int KEYCODE_SPACE = 62, KEYCODE_ENTER = 66, KEYCODE_DEL = 67, KEYCODE_ESCAPE = 111;
+    public static final int KEYCODE_SEARCH = 84;
     public static final int META_SHIFT_ON = 1, META_ALT_ON = 2, META_CTRL_ON = 0x1000, META_META_ON = 0x10000;
     public static final int FLAG_CANCELED = 0x20, FLAG_LONG_PRESS = 0x80;
     private final int action, code, repeat, meta, device, scan, flags;

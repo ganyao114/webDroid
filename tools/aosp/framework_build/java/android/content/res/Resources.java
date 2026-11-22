@@ -12,12 +12,16 @@ import java.util.ArrayList;
 
 public class Resources implements AutoCloseable {
     public static final int ID_NULL = 0;
+    private static Resources systemResources;
+    private static Resources emptySystemResources;
     private final AssetManager assets;
     private final DisplayMetrics metrics = new DisplayMetrics();
     private final Configuration configuration = new Configuration();
     private final ArrayList<Theme> themes = new ArrayList<>();
     private final ArrayList<Integer> loadingDrawables = new ArrayList<>();
     private final ApkAssets[] ownedAssets;
+    private final boolean ownsManager;
+    private Resources ownedSystemResources;
     private boolean closed;
 
     public static class NotFoundException extends RuntimeException {
@@ -27,13 +31,14 @@ public class Resources implements AutoCloseable {
     }
 
     public Resources(AssetManager assets, DisplayMetrics metrics, Configuration configuration) {
-        this(assets, metrics, configuration, null);
+        this(assets, metrics, configuration, null, false);
     }
 
     private Resources(AssetManager assets, DisplayMetrics metrics, Configuration configuration,
-                      ApkAssets[] ownedAssets) {
+                      ApkAssets[] ownedAssets, boolean ownsManager) {
         this.assets = assets;
         this.ownedAssets = ownedAssets;
+        this.ownsManager = ownsManager;
         updateConfiguration(configuration, metrics);
     }
 
@@ -51,17 +56,59 @@ public class Resources implements AutoCloseable {
             Configuration config = new Configuration();
             config.setLocaleTag(locale);
             config.densityDpi = dpi;
-            return new Resources(assets, new DisplayMetrics(), config, apks);
-        } catch (IOException | RuntimeException error) {
+            Resources resources = new Resources(assets, new DisplayMetrics(), config, apks, true);
+            if (apks.length > 1 && "android".equals(assets.resourcePackageName(android.R.string.ok))) {
+                resources.ownedSystemResources = resourcesForFramework(apks[0], config);
+                systemResources = resources.ownedSystemResources;
+            }
+            return resources;
+        } catch (IOException | RuntimeException | Error error) {
             assets.close();
             for (ApkAssets apk : apks) if (apk != null) apk.close();
             throw error;
         }
     }
 
+    private static Resources resourcesForFramework(ApkAssets apk, Configuration config) {
+        AssetManager manager = new AssetManager();
+        try {
+            manager.setApkAssets(new ApkAssets[]{apk});
+            return new Resources(manager, new DisplayMetrics(), config, null, true);
+        } catch (RuntimeException | Error error) {
+            manager.close();
+            throw error;
+        }
+    }
+
+    public static Resources getSystem() {
+        if (systemResources != null) return systemResources;
+        if (emptySystemResources == null) {
+            emptySystemResources = new Resources(new AssetManager(), new DisplayMetrics(), new Configuration(), null, true);
+        }
+        return emptySystemResources;
+    }
+
     public AssetManager getAssets() { return assets; }
     public DisplayMetrics getDisplayMetrics() { return metrics; }
     public Configuration getConfiguration() { return configuration; }
+
+    public Resources withConfiguration(Configuration override) {
+        Configuration config = new Configuration(configuration);
+        if (override.smallestScreenWidthDp != 0) config.smallestScreenWidthDp = override.smallestScreenWidthDp;
+        if (override.screenWidthDp != 0) config.screenWidthDp = override.screenWidthDp;
+        if (override.screenHeightDp != 0) config.screenHeightDp = override.screenHeightDp;
+        if (override.densityDpi != 0) config.densityDpi = override.densityDpi;
+        if (override.orientation != 0) config.orientation = override.orientation;
+        if (override.uiMode != 0) config.uiMode = override.uiMode;
+        AssetManager manager = new AssetManager();
+        try {
+            manager.setApkAssets(assets.getApkAssets());
+            return new Resources(manager, metrics, config, null, true);
+        } catch (RuntimeException | Error error) {
+            manager.close();
+            throw error;
+        }
+    }
 
     public void updateConfiguration(Configuration config, DisplayMetrics display) {
         if (config != null) configuration.setTo(config);
@@ -214,6 +261,9 @@ public class Resources implements AutoCloseable {
     public Drawable getDrawable(int id) { return getDrawable(id, null); }
 
     public Drawable getDrawable(int id, Theme theme) { return getDrawableForDensity(id, 0, theme); }
+    @Deprecated public Drawable getDrawableForDensity(int id, int density) {
+        return getDrawableForDensity(id, density, null);
+    }
 
     public Drawable getDrawableForDensity(int id, int density, Theme theme) {
         TypedValue value = new TypedValue();
@@ -239,7 +289,11 @@ public class Resources implements AutoCloseable {
         try {
             if (path.endsWith(".xml")) {
                 try (XmlResourceParser parser = openXml(id, value)) {
-                    return Drawable.createFromXml(this, parser, theme);
+                    Drawable drawable = Drawable.createFromXml(this, parser, theme);
+                    if (drawable instanceof android.graphics.drawable.AdaptiveIconDrawable icon) {
+                        icon.setSourceDrawableResId(id);
+                    }
+                    return drawable;
                 }
             }
             byte[] bytes = assets.readNonAsset(value.assetCookie, path);
@@ -384,12 +438,15 @@ public class Resources implements AutoCloseable {
     @Override public void close() {
         if (closed) return;
         closed = true;
+        if (ownedSystemResources != null) {
+            if (systemResources == ownedSystemResources) systemResources = null;
+            ownedSystemResources.close();
+            ownedSystemResources = null;
+        }
         for (Theme theme : themes) theme.release();
         themes.clear();
-        if (ownedAssets != null) {
-            assets.close();
-            for (ApkAssets apk : ownedAssets) apk.close();
-        }
+        if (ownsManager) assets.close();
+        if (ownedAssets != null) for (ApkAssets apk : ownedAssets) apk.close();
     }
 
     private static NotFoundException missing(int id, String type) {

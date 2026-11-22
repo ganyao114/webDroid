@@ -163,6 +163,17 @@ Object* Runtime::MakeException(std::string_view type, std::string_view message) 
   return object;
 }
 
+void Runtime::CaptureThrowableStack(Object& throwable) {
+  if (!active_trace) return;
+  throwable.exception_stack = std::make_unique<std::vector<Object::TraceFrame>>();
+  throwable.stack_at_construction = true;
+  auto* frame = active_trace;
+  while (frame && frame->method->name == "<init>") frame = frame->caller;
+  for (; frame; frame = frame->caller) {
+    throwable.exception_stack->push_back({frame->method, *frame->dex_pc});
+  }
+}
+
 void Runtime::AppendExceptionFrame(const Method& method, uint32_t pc) {
   if (!exception) return;
   if (!exception->exception_stack) {
@@ -182,6 +193,10 @@ void Runtime::Throw(Object* object) {
   Object& thrown = NonNull(object);
   if (!linker.IsAssignable(linker.Resolve("Ljava/lang/Throwable;"), *thrown.type)) {
     Fail("Ljava/lang/VerifyError;", "Expected a Throwable");
+  }
+  if (thrown.stack_at_construction) {
+    thrown.exception_stack.reset();
+    thrown.stack_at_construction = false;
   }
   exception = &thrown;
   throw ManagedException{};

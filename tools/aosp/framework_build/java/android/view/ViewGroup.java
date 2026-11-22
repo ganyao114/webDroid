@@ -8,12 +8,34 @@ import android.util.AttributeSet;
 import java.util.ArrayList;
 
 public abstract class ViewGroup extends View implements ViewParent {
+    public static final int FOCUS_BEFORE_DESCENDANTS = 0x20000, FOCUS_AFTER_DESCENDANTS = 0x40000,
+            FOCUS_BLOCK_DESCENDANTS = 0x60000;
+    private int descendantFocusability = FOCUS_BEFORE_DESCENDANTS;
     private android.animation.LayoutTransition layoutTransition;
     public android.animation.LayoutTransition getLayoutTransition() { return layoutTransition; }
     public void setLayoutTransition(android.animation.LayoutTransition value) { layoutTransition = value; }
     private final ArrayList<View> children = new ArrayList<>();
     private View touchTarget, focusedChild;
     private boolean disallowIntercept, clipChildren = true, clipToPadding = true;
+    private boolean splitMotionEvents, childrenDrawingOrderEnabled, alwaysDrawnWithCache = true;
+
+    public void setMotionEventSplittingEnabled(boolean split) { splitMotionEvents = split; }
+    public boolean isMotionEventSplittingEnabled() { return splitMotionEvents; }
+    @Deprecated public void setAlwaysDrawnWithCacheEnabled(boolean enabled) { alwaysDrawnWithCache = enabled; }
+    @Deprecated public boolean isAlwaysDrawnWithCacheEnabled() { return alwaysDrawnWithCache; }
+
+    protected boolean isChildrenDrawingOrderEnabled() { return childrenDrawingOrderEnabled; }
+    protected void setChildrenDrawingOrderEnabled(boolean enabled) {
+        if (childrenDrawingOrderEnabled != enabled) {
+            childrenDrawingOrderEnabled = enabled;
+            invalidate();
+        }
+    }
+    protected int getChildDrawingOrder(int childCount, int position) { return position; }
+    public final int getChildDrawingOrder(int position) { return getChildDrawingOrder(getChildCount(), position); }
+    private View childInDrawingOrder(int position) {
+        return children.get(childrenDrawingOrderEnabled ? getChildDrawingOrder(position) : position);
+    }
 
     public interface OnHierarchyChangeListener {
         void onChildViewAdded(View parent, View child);
@@ -26,6 +48,13 @@ public abstract class ViewGroup extends View implements ViewParent {
         public int width, height;
         public LayoutParams(int width, int height) { this.width = width; this.height = height; }
         public LayoutParams(LayoutParams params) { this(params.width, params.height); }
+        public String debug(String prefix) { return prefix + "{width=" + sizeToString(width)
+                + ", height=" + sizeToString(height) + "}"; }
+        protected static String sizeToString(int size) {
+            if (size == MATCH_PARENT) return "match-parent";
+            if (size == WRAP_CONTENT) return "wrap-content";
+            return Integer.toString(size);
+        }
         public LayoutParams(Context context, AttributeSet attrs) {
             try (TypedArray a = context.obtainStyledAttributes(attrs,
                     new int[] {android.R.attr.layout_width, android.R.attr.layout_height})) {
@@ -102,19 +131,26 @@ public abstract class ViewGroup extends View implements ViewParent {
     }
 
     @Override void attach(ViewRootImpl root) {
+        if (attachment == root) return;
         attachment = root;
         super.attach(root);
-        for (View child : children) child.attach(root);
+        for (View child : new ArrayList<>(children)) {
+            if (child.getParent() == this) child.attach(root);
+        }
     }
 
     @Override void detach() {
-        for (View child : children) child.detach();
+        if (attachment == null) return;
+        for (View child : new ArrayList<>(children)) {
+            if (child.getParent() == this) child.detach();
+        }
         attachment = null;
         super.detach();
     }
 
     public void setOnHierarchyChangeListener(OnHierarchyChangeListener listener) { hierarchyListener = listener; }
     public int getChildCount() { return children.size(); }
+    public boolean shouldDelayChildPressedState() { return true; }
     public View getChildAt(int index) { return index < 0 || index >= children.size() ? null : children.get(index); }
     public int indexOfChild(View child) { return children.indexOf(child); }
     public void addView(View child) { addView(child, -1); }
@@ -207,7 +243,7 @@ public abstract class ViewGroup extends View implements ViewParent {
             }
             long time = android.os.SystemClock.uptimeMillis();
             for (int i = 0; i < children.size(); i++) {
-                View child = children.get(i);
+                View child = childInDrawingOrder(i);
                 if (child.getVisibility() == VISIBLE) drawChild(canvas, child, time);
             }
         } finally {
@@ -255,7 +291,7 @@ public abstract class ViewGroup extends View implements ViewParent {
         if (!intercepted && action == MotionEvent.ACTION_DOWN) {
             float x = event.getX() + getScrollX(), y = event.getY() + getScrollY();
             for (int i = children.size() - 1; i >= 0; i--) {
-                View child = children.get(i);
+                View child = childInDrawingOrder(i);
                 if (!hits(child, x, y)) continue;
                 if (child.dispatchTouchEvent(localEvent(event, child))) {
                     touchTarget = child;
@@ -296,7 +332,7 @@ public abstract class ViewGroup extends View implements ViewParent {
     @Override public boolean dispatchGenericMotionEvent(MotionEvent event) {
         float x = event.getX() + getScrollX(), y = event.getY() + getScrollY();
         for (int i = children.size() - 1; i >= 0; --i) {
-            View child = children.get(i);
+            View child = childInDrawingOrder(i);
             if (hits(child, x, y) && child.dispatchGenericMotionEvent(localEvent(event, child))) return true;
         }
         return super.dispatchGenericMotionEvent(event);
@@ -316,13 +352,51 @@ public abstract class ViewGroup extends View implements ViewParent {
     public View getFocusedChild() { return focusedChild; }
     @Override public View findFocus() { return focusedChild == null ? super.findFocus() : focusedChild.findFocus(); }
     @Override public boolean hasFocus() { return focusedChild != null || super.hasFocus(); }
+    @Override public boolean hasFocusable() {
+        if (getVisibility() != VISIBLE) return false;
+        if (isFocusable()) return true;
+        if (descendantFocusability != FOCUS_BLOCK_DESCENDANTS) {
+            for (View child : children) if (child.hasFocusable()) return true;
+        }
+        return false;
+    }
     @Override public void clearFocus() { if (focusedChild != null) focusedChild.clearFocus(); else super.clearFocus(); }
+    @Override public boolean restoreDefaultFocus() {
+        if (descendantFocusability != FOCUS_BLOCK_DESCENDANTS) {
+            View preferred = findDefaultFocus();
+            if (preferred != null && preferred.requestFocus(FOCUS_FORWARD)) return true;
+        }
+        return super.restoreDefaultFocus();
+    }
+    private View findDefaultFocus() {
+        for (View child : children) {
+            if (child.getVisibility() != VISIBLE) continue;
+            if (child.isFocusedByDefault()) return child;
+            if (child instanceof ViewGroup) {
+                View preferred = ((ViewGroup) child).findDefaultFocus();
+                if (preferred != null) return preferred;
+            }
+        }
+        return null;
+    }
+    public int getDescendantFocusability() { return descendantFocusability; }
+    public void setDescendantFocusability(int focusability) {
+        if (focusability != FOCUS_BEFORE_DESCENDANTS && focusability != FOCUS_AFTER_DESCENDANTS
+                && focusability != FOCUS_BLOCK_DESCENDANTS) throw new IllegalArgumentException("Descendant focusability");
+        descendantFocusability = focusability;
+    }
     @Override public boolean requestFocus(int direction, Rect oldRect) {
+        if (descendantFocusability == FOCUS_AFTER_DESCENDANTS && onRequestFocusInDescendants(direction, oldRect)) {
+            return true;
+        }
         if (super.requestFocus(direction, oldRect)) {
             if (focusedChild != null) focusedChild.clearFocus();
             return true;
         }
-        for (View child : children) if (child.requestFocus(direction, oldRect)) return true;
+        return descendantFocusability == FOCUS_BEFORE_DESCENDANTS && onRequestFocusInDescendants(direction, oldRect);
+    }
+    protected boolean onRequestFocusInDescendants(int direction, Rect previous) {
+        for (View child : children) if (child.requestFocus(direction, previous)) return true;
         return false;
     }
     @Override public boolean dispatchKeyEvent(KeyEvent event) {

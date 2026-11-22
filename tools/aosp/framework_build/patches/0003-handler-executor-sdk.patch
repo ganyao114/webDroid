@@ -1,0 +1,20 @@
+--- a/frameworks/base/core/java/android/os/HandlerExecutor.java
++++ b/frameworks/base/core/java/android/os/HandlerExecutor.java
+@@ -18,7 +18,7 @@
+ 
+ import android.annotation.NonNull;
+ 
+-import com.android.internal.util.Preconditions;
++import java.util.Objects;
+ 
+ import java.util.concurrent.Executor;
+ import java.util.concurrent.RejectedExecutionException;
+@@ -34,7 +34,7 @@
+     private final Handler mHandler;
+ 
+     public HandlerExecutor(@NonNull Handler handler) {
+-        mHandler = Preconditions.checkNotNull(handler);
++        mHandler = Objects.requireNonNull(handler);
+     }
+ 
+     @Override

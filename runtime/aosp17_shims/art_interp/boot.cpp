@@ -2,6 +2,7 @@
 #include "unicode_data.h"
 
 #include <algorithm>
+#include <bit>
 #include <charconv>
 #include <cmath>
 #include <cstdlib>
@@ -168,7 +169,7 @@ bool IsPublic(const Method& method) {
          (!method.owner->dex && !(method.flags & (art::kAccPrivate | art::kAccProtected)));
 }
 
-void CheckConstructorAccess(Runtime& vm, const Method& method) {
+void CheckReflectiveAccess(Runtime& vm, const Method& method) {
   const Class& owner = *method.owner;
   if (IsPublic(method) && (!owner.dex || (owner.flags & art::kAccPublic))) return;
   for (const RootScope* scope = vm.roots; scope; scope = scope->previous) {
@@ -211,6 +212,33 @@ Value ReflectArgument(Runtime& vm, Value argument, Class& type) {
   return Value::Int(value.i());
 }
 
+std::vector<Value> ReflectArguments(Runtime& vm, const Method& method, Object* array) {
+  const Values supplied = array ? Values(array->elements) : Values{};
+  if (supplied.size() + 1 != method.shorty.size()) vm.Fail("Ljava/lang/IllegalArgumentException;");
+  std::vector<Value> arguments;
+  arguments.reserve(supplied.size());
+  size_t first = 1;
+  for (Value value : supplied) {
+    size_t end = first;
+    while (method.signature[end] == '[') ++end;
+    if (method.signature[end] == 'L') end = method.signature.find(';', end);
+    Class& parameter = vm.linker.Resolve(std::string_view(method.signature).substr(first, end - first + 1));
+    arguments.push_back(ReflectArgument(vm, value, parameter));
+    first = end + 1;
+  }
+  return arguments;
+}
+
+std::string ReflectParameters(Runtime& vm, Object* array) {
+  std::string signature = "(";
+  if (array) {
+    for (Value parameter : array->elements) {
+      signature += vm.NonNull(parameter.ref()).represented_class->descriptor;
+    }
+  }
+  return signature + ")";
+}
+
 Value EnumConstants(Runtime& vm, Class& type) {
   if (!(type.flags & art::kAccEnum) || !type.super || type.super->descriptor != "Ljava/lang/Enum;") return {};
   return vm.Invoke(vm.linker.FindMethod(type, "values", "()[" + type.descriptor, true), nullptr, {});
@@ -238,6 +266,15 @@ void InstallReflection(Runtime& vm, Class& cls) {
   };
   cl.AddMethod(cls, "forName", "(Ljava/lang/String;)Ljava/lang/Class;", art::kAccStatic, for_name);
   cl.AddMethod(cls, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;", art::kAccStatic, for_name);
+  cl.AddMethod(cls, "getPrimitiveClass", "(Ljava/lang/String;)Ljava/lang/Class;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        const auto name = EncodeUtf8(vm.NonNull(a[0].ref()).text);
+        for (const char& descriptor : std::string_view("ZBSCIJFDV")) {
+          auto& type = vm.linker.Resolve(std::string_view(&descriptor, 1));
+          if (ClassName(type) == name) return Value::Ref(vm.ClassObject(type));
+        }
+        vm.Fail("Ljava/lang/ClassNotFoundException;", name);
+      });
   cl.AddMethod(cls, "getSimpleName", "()Ljava/lang/String;", 0,
       [](Runtime& vm, Object* self, Values) { return StringValue(vm, SimpleClassName(*self->represented_class)); });
   cl.AddMethod(cls, "getSuperclass", "()Ljava/lang/Class;", 0, [](Runtime& vm, Object* self, Values) {
@@ -281,7 +318,7 @@ void InstallReflection(Runtime& vm, Class& cls) {
     if (constructor == type.methods.end() || (type.flags & art::kAccAbstract)) {
       vm.Fail("Ljava/lang/InstantiationException;", type.descriptor);
     }
-    CheckConstructorAccess(vm, constructor->second);
+    CheckReflectiveAccess(vm, constructor->second);
     return Value::Ref(vm.NewObject(type, constructor->second, {}));
   });
 
@@ -296,13 +333,7 @@ void InstallReflection(Runtime& vm, Class& cls) {
         "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;", 0,
         [declared, &constructor](Runtime& vm, Object* self, Values a) {
           Class& type = *self->represented_class;
-          std::string signature = "(";
-          if (a[0].ref()) {
-            for (Value parameter : a[0].ref()->elements) {
-              signature += vm.NonNull(parameter.ref()).represented_class->descriptor;
-            }
-          }
-          signature += ")V";
+          auto signature = ReflectParameters(vm, a[0].ref()) + "V";
           const auto method = type.methods.find(MemberKey("<init>", signature));
           if (method == type.methods.end() || (!declared && !IsPublic(method->second))) {
             vm.Fail("Ljava/lang/NoSuchMethodException;", type.descriptor + signature);
@@ -316,22 +347,10 @@ void InstallReflection(Runtime& vm, Class& cls) {
       [](Runtime& vm, Object* self, Values a) {
         Method& method = *self->reflected_method;
         Class& type = *method.owner;
-        if (!self->payload.i()) CheckConstructorAccess(vm, method);
+        if (!self->payload.i()) CheckReflectiveAccess(vm, method);
         if (type.flags & art::kAccAbstract) vm.Fail("Ljava/lang/InstantiationException;", type.descriptor);
         if (type.flags & art::kAccEnum) vm.Fail("Ljava/lang/IllegalArgumentException;", type.descriptor);
-        const Values supplied = a[0].ref() ? Values(a[0].ref()->elements) : Values{};
-        if (supplied.size() + 1 != method.shorty.size()) vm.Fail("Ljava/lang/IllegalArgumentException;");
-        std::vector<Value> arguments;
-        arguments.reserve(supplied.size());
-        size_t first = 1;
-        for (Value value : supplied) {
-          size_t end = first;
-          while (method.signature[end] == '[') ++end;
-          if (method.signature[end] == 'L') end = method.signature.find(';', end);
-          Class& parameter = vm.linker.Resolve(std::string_view(method.signature).substr(first, end - first + 1));
-          arguments.push_back(ReflectArgument(vm, value, parameter));
-          first = end + 1;
-        }
+        const auto arguments = ReflectArguments(vm, method, a[0].ref());
         vm.linker.Initialize(type);
         try {
           return Value::Ref(vm.NewObject(type, method, arguments));
@@ -345,6 +364,56 @@ void InstallReflection(Runtime& vm, Class& cls) {
   cl.AddMethod(constructor, "getDeclaringClass", "()Ljava/lang/Class;", 0, [](Runtime& vm, Object* self, Values) {
     return Value::Ref(vm.ClassObject(*self->reflected_method->owner));
   });
+
+  auto& method_type = cl.Define("Ljava/lang/reflect/Method;", accessible.descriptor, art::kAccFinal);
+  cl.AddMethod(cls, "getDeclaredMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;", 0,
+      [&method_type](Runtime& vm, Object* self, Values a) {
+        Class& type = *self->represented_class;
+        const auto name = EncodeUtf8(vm.NonNull(a[0].ref()).text);
+        const auto parameters = ReflectParameters(vm, a[1].ref());
+        Method* match = nullptr;
+        if (!name.starts_with('<')) {
+          for (auto& [key, method] : type.methods) {
+            if (method.name != name || !method.signature.starts_with(parameters)) continue;
+            match = &method;
+            if (!(method.flags & art::kAccBridge)) break;
+          }
+        }
+        if (!match) vm.Fail("Ljava/lang/NoSuchMethodException;", type.descriptor + "->" + name + parameters);
+        auto* result = vm.heap.Allocate(vm, vm.linker.Resolve(method_type.descriptor));
+        result->reflected_method = match;
+        return Value::Ref(result);
+      });
+  cl.AddMethod(method_type, "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        auto& method = *self->reflected_method;
+        if (!self->payload.i()) CheckReflectiveAccess(vm, method);
+        Object* receiver = method.IsStatic() ? nullptr : &vm.NonNull(a[0].ref());
+        if (receiver && !vm.linker.IsAssignable(*method.owner, *receiver->type)) {
+          vm.Fail("Ljava/lang/IllegalArgumentException;", "Receiver is not an instance of the declaring class");
+        }
+        const auto arguments = ReflectArguments(vm, method, a[1].ref());
+        Method& target = receiver ? vm.linker.VirtualMethod(*receiver->type, method) : method;
+        if (method.IsStatic()) vm.linker.Initialize(*method.owner);
+        Value result;
+        try {
+          result = vm.Invoke(target, receiver, arguments);
+        } catch (const ManagedException&) {
+          Object* cause = vm.exception;
+          vm.exception = vm.MakeException("Ljava/lang/reflect/InvocationTargetException;", {});
+          vm.exception->payload = Value::Ref(cause);
+          throw;
+        }
+        const char type = method.shorty.front();
+        if (type == 'V') return Value{};
+        if (type == 'L') return result;
+        constexpr std::string_view primitives = "ZBCSIJFD";
+        constexpr std::array wrappers{"Ljava/lang/Boolean;", "Ljava/lang/Byte;", "Ljava/lang/Character;",
+            "Ljava/lang/Short;", "Ljava/lang/Integer;", "Ljava/lang/Long;", "Ljava/lang/Float;", "Ljava/lang/Double;"};
+        Class& boxed = vm.linker.Resolve(wrappers[primitives.find(type)]);
+        auto& value_of = vm.linker.FindMethod(boxed, "valueOf", std::string("(") + type + ")" + boxed.descriptor, true);
+        return vm.Invoke(value_of, nullptr, std::array{result});
+      });
 }
 
 void InstallObject(Runtime& vm) {
@@ -419,22 +488,28 @@ void InstallThrowable(Runtime& vm) {
   auto& cl = vm.linker;
   const auto define = [&](std::string_view name, std::string_view parent) -> Class& {
     Class& cls = cl.Define(name, parent);
-    cl.AddMethod(cls, "<init>", "()V", 0, Void);
+    cl.AddMethod(cls, "<init>", "()V", 0, [](Runtime& vm, Object* self, Values) {
+      vm.CaptureThrowableStack(*self);
+      return Value{};
+    });
     cl.AddMethod(cls, "<init>", "(Ljava/lang/String;)V", 0,
-        [](Runtime&, Object* self, Values args) {
+        [](Runtime& vm, Object* self, Values args) {
           if (args[0].ref()) self->text = args[0].ref()->text;
+          vm.CaptureThrowableStack(*self);
           return Value{};
         });
     cl.AddMethod(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V", 0,
-        [](Runtime&, Object* self, Values args) {
+        [](Runtime& vm, Object* self, Values args) {
           if (args[0].ref()) self->text = args[0].ref()->text;
           self->payload = args[1];
+          vm.CaptureThrowableStack(*self);
           return Value{};
         });
     cl.AddMethod(cls, "<init>", "(Ljava/lang/Throwable;)V", 0,
         [](Runtime& vm, Object* self, Values args) {
           if (args[0].ref()) self->text = JavaText(vm, args[0].ref());
           self->payload = args[0];
+          vm.CaptureThrowableStack(*self);
           return Value{};
         });
     return cls;
@@ -469,6 +544,7 @@ void InstallThrowable(Runtime& vm) {
   define("Ljava/io/FileNotFoundException;", "Ljava/io/IOException;");
   define("Ljava/io/UnsupportedEncodingException;", "Ljava/io/IOException;");
   define("Ljava/lang/InterruptedException;", exception);
+  define("Ljava/lang/IllegalThreadStateException;", bad_argument);
   define("Ljava/util/concurrent/ExecutionException;", exception);
   define("Ljava/util/concurrent/TimeoutException;", exception);
   define("Ljava/util/concurrent/RejectedExecutionException;", runtime);
@@ -493,6 +569,7 @@ void InstallThrowable(Runtime& vm) {
       });
   for (auto type : {"Ljava/lang/ArithmeticException;", "Ljava/lang/NullPointerException;",
       "Ljava/lang/ClassCastException;", "Ljava/lang/ArrayStoreException;", "Ljava/lang/SecurityException;",
+      "Ljava/security/ProviderException;",
       "Ljava/lang/IllegalStateException;", "Ljava/lang/IllegalMonitorStateException;",
       "Ljava/lang/UnsupportedOperationException;", "Ljava/lang/NegativeArraySizeException;",
       "Ljava/util/NoSuchElementException;", "Ljava/util/ConcurrentModificationException;"}) define(type, runtime);
@@ -692,6 +769,74 @@ std::u16string PrimitiveText(char type, Value value) {
   }
 }
 
+std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern) {
+  std::wstring translated;
+  bool in_class = false;
+  for (size_t i = 0; i < pattern.size(); ++i) {
+    const char16_t ch = pattern[i];
+    if (ch == u'\\' && i + 1 < pattern.size()) {
+      const char16_t escaped = pattern[++i];
+      if (escaped == u'h') {
+        if (!in_class) translated += L'[';
+        translated += L" \t\u00a0\u1680\u180e\u2000-\u200a\u202f\u205f\u3000";
+        if (!in_class) translated += L']';
+      } else {
+        translated += L'\\';
+        translated += escaped;
+      }
+    } else {
+      if (ch == u'[') in_class = true;
+      if (ch == u']') in_class = false;
+      translated += ch;
+    }
+  }
+  try {
+    return std::wregex(translated);
+  } catch (const std::regex_error&) {
+    vm.Fail("Ljava/util/regex/PatternSyntaxException;", EncodeUtf8(pattern));
+  }
+}
+
+Value ReplaceRegex(Runtime& vm, Object* self, Values args) {
+  const auto& replacement = vm.NonNull(args[1].ref()).text;
+  const auto regex = CompileRegex(vm, vm.NonNull(args[0].ref()).text);
+  const std::wstring wide(self->text.begin(), self->text.end());
+  const auto end = std::wsregex_iterator();
+  auto match = std::wsregex_iterator(wide.begin(), wide.end(), regex);
+  if (match == end) return Value::Ref(self);
+  std::u16string result;
+  size_t cursor = 0;
+  for (; match != end; ++match) {
+    const size_t start = match->position();
+    result.append(self->text, cursor, start - cursor);
+    cursor = start + match->length();
+    for (size_t i = 0; i < replacement.size(); ++i) {
+      const auto ch = replacement[i];
+      if (ch == u'\\') {
+        if (++i == replacement.size()) vm.Fail("Ljava/lang/IllegalArgumentException;", "Missing escaped character");
+        result += replacement[i];
+      } else if (ch == u'$') {
+        if (++i == replacement.size() || replacement[i] < u'0' || replacement[i] > u'9') {
+          vm.Fail("Ljava/lang/IllegalArgumentException;", "Invalid regex group reference");
+        }
+        size_t group = replacement[i] - u'0';
+        if (group >= match->size()) vm.Fail("Ljava/lang/IndexOutOfBoundsException;", "Regex group does not exist");
+        while (i + 1 < replacement.size() && replacement[i + 1] >= u'0' && replacement[i + 1] <= u'9') {
+          const size_t next = group * 10 + (replacement[i + 1] - u'0');
+          if (next >= match->size()) break;
+          group = next;
+          ++i;
+        }
+        if ((*match)[group].matched) result.append(self->text, match->position(group), match->length(group));
+      } else {
+        result += ch;
+      }
+    }
+  }
+  result.append(self->text, cursor, self->text.size() - cursor);
+  return StringValue(vm, std::move(result));
+}
+
 Value Split(Runtime& vm, Object* self, Values args) {
   const auto& pattern = vm.NonNull(args[0].ref()).text;
   const int32_t limit = args.size() > 1 ? args[1].i() : 0;
@@ -714,14 +859,10 @@ Value Split(Runtime& vm, Object* self, Values args) {
     for (size_t next = text.find(literal); next != text.npos && add_match(next, literal.size());
          next = text.find(literal, cursor)) {}
   } else {
-    try {
-      const std::wregex regex(std::wstring(pattern.begin(), pattern.end()));
-      const std::wstring wide(text.begin(), text.end());
-      for (auto it = std::wsregex_iterator(wide.begin(), wide.end(), regex); it != std::wsregex_iterator(); ++it) {
-        if (!add_match(it->position(), it->length())) break;
-      }
-    } catch (const std::regex_error&) {
-      vm.Fail("Ljava/util/regex/PatternSyntaxException;", EncodeUtf8(pattern));
+    const auto regex = CompileRegex(vm, pattern);
+    const std::wstring wide(text.begin(), text.end());
+    for (auto it = std::wsregex_iterator(wide.begin(), wide.end(), regex); it != std::wsregex_iterator(); ++it) {
+      if (!add_match(it->position(), it->length())) break;
     }
   }
   const bool matched = !parts.empty();
@@ -1103,10 +1244,27 @@ void InstallStrings(Runtime& vm) {
       });
   add("split", "(Ljava/lang/String;)[Ljava/lang/String;", Split);
   add("split", "(Ljava/lang/String;I)[Ljava/lang/String;", Split);
+  add("replaceAll", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", ReplaceRegex);
   add("toCharArray", "()[C", [](Runtime& vm, Object* self, Values) {
     auto* array = vm.NewArray(vm.linker.Resolve("[C"), self->text.size());
     for (size_t i = 0; i < self->text.size(); ++i) array->elements[i] = Value::Int(self->text[i]);
     return Value::Ref(array);
+  });
+  add("getChars", "(II[CI)V", [](Runtime& vm, Object* self, Values a) {
+    const int start = a[0].i();
+    const int end = a[1].i();
+    if (start < 0 || end < start || static_cast<size_t>(end) > self->text.size()) {
+      vm.Fail("Ljava/lang/StringIndexOutOfBoundsException;");
+    }
+    auto& dest = vm.NonNull(a[2].ref());
+    const int offset = a[3].i();
+    const auto length = static_cast<size_t>(end - start);
+    if (offset < 0 || static_cast<size_t>(offset) > dest.elements.size() ||
+        length > dest.elements.size() - static_cast<size_t>(offset)) {
+      vm.Fail("Ljava/lang/ArrayIndexOutOfBoundsException;");
+    }
+    for (size_t i = 0; i < length; ++i) dest.elements[offset + i] = Value::Int(self->text[start + i]);
+    return Value{};
   });
   const Builtin bytes = [](Runtime& vm, Object* self, Values a) {
     Encoding encoding = Encoding::Utf8;
@@ -1561,13 +1719,17 @@ void InstallNumbers(Runtime& vm) {
       if (type == 'D' && std::isnan(self->payload.d()) && std::isnan(other->payload.d())) return Value::Int(1);
       return Value::Int(self->payload.bits() == other->payload.bits());
     });
-    cl.AddMethod(cls, "hashCode", "()I", 0, [type](Runtime&, Object* self, Values) {
-      uint64_t bits = self->payload.bits();
+    const auto hash = [type](Value value) {
+      uint64_t bits = value.bits();
       if (type == 'Z') return Value::Int(bits ? 1231 : 1237);
-      if (type == 'F' && std::isnan(self->payload.f())) bits = 0x7fc00000u;
-      if (type == 'D' && std::isnan(self->payload.d())) bits = 0x7ff8000000000000ull;
+      if (type == 'F' && std::isnan(value.f())) bits = 0x7fc00000u;
+      if (type == 'D' && std::isnan(value.d())) bits = 0x7ff8000000000000ull;
       return Value::Int(static_cast<uint32_t>(bits ^ (bits >> 32)));
-    });
+    };
+    cl.AddMethod(cls, "hashCode", "()I", 0,
+        [hash](Runtime&, Object* self, Values) { return hash(self->payload); });
+    cl.AddMethod(cls, "hashCode", arg + "I", art::kAccStatic,
+        [hash](Runtime&, Object*, Values a) { return hash(a[0]); });
     auto& primitive = cl.AddField(cls, "TYPE", "Ljava/lang/Class;", true);
     auto& cache = cl.AddField(cls, "cache", "[Ljava/lang/Object;", true);
     Field* canonical_false = type == 'Z' ? &cl.AddField(cls, "FALSE", box.type, true) : nullptr;
@@ -1620,7 +1782,24 @@ void InstallNumbers(Runtime& vm) {
     }
   }
   auto& integer = *classes['I'];
+  cl.AddMethod(integer, "highestOneBit", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    return Value::Int(std::bit_cast<int32_t>(std::bit_floor(static_cast<uint32_t>(a[0].i()))));
+  });
+  cl.AddMethod(integer, "numberOfLeadingZeros", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    return Value::Int(std::countl_zero(static_cast<uint32_t>(a[0].i())));
+  });
+  cl.AddMethod(integer, "numberOfTrailingZeros", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    return Value::Int(std::countr_zero(static_cast<uint32_t>(a[0].i())));
+  });
+  cl.AddMethod(integer, "rotateLeft", "(II)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    return Value::Int(std::bit_cast<int32_t>(std::rotl(static_cast<uint32_t>(a[0].i()), a[1].i())));
+  });
+  cl.AddMethod(integer, "rotateRight", "(II)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    return Value::Int(std::bit_cast<int32_t>(std::rotr(static_cast<uint32_t>(a[0].i()), a[1].i())));
+  });
   auto& lng = *classes['J'];
+  cl.AddMethod(lng, "bitCount", "(J)I", art::kAccStatic,
+      [](Runtime&, Object*, Values a) { return Value::Int(std::popcount(static_cast<uint64_t>(a[0].j()))); });
   const Builtin parse_int = [](Runtime& vm, Object*, Values a) {
     return Value::Int(ParseInteger<int32_t>(vm, a[0].ref(), a.size() > 1 ? a[1].i() : 10));
   };
@@ -1694,6 +1873,12 @@ void InstallNumbers(Runtime& vm) {
         [](Runtime&, Object*, Values a) { return Value::Int(IsWhitespace(a[0].i())); });
     cl.AddMethod(character, "isDigit", sig, art::kAccStatic,
         [](Runtime&, Object*, Values a) { return Value::Int(DecimalDigit(a[0].i()) >= 0); });
+    cl.AddMethod(character, "isLetterOrDigit", sig, art::kAccStatic, [](Runtime&, Object*, Values a) {
+      const auto code_point = static_cast<uint32_t>(a[0].i());
+      const auto* letter = std::ranges::lower_bound(unicode::kLetters, code_point, {}, &unicode::CodePointRange::last);
+      return Value::Int((letter != std::end(unicode::kLetters) && letter->first <= code_point) ||
+                        DecimalDigit(code_point) >= 0);
+    });
   }
   for (auto sig : {"(CI)I", "(II)I"}) {
     cl.AddMethod(character, "digit", sig, art::kAccStatic, [](Runtime&, Object*, Values a) {
@@ -1708,6 +1893,8 @@ void InstallNumbers(Runtime& vm) {
     }
   }
   auto& flt = *classes['F'];
+  cl.AddMethod(flt, "sum", "(FF)F", art::kAccStatic,
+      [](Runtime&, Object*, Values a) { return Value::Float(a[0].f() + a[1].f()); });
   cl.AddMethod(flt, "parseFloat", "(Ljava/lang/String;)F", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) { return Value::Float(ParseReal<float>(vm, a[0].ref())); });
   cl.AddMethod(flt, "intBitsToFloat", "(I)F", art::kAccStatic,
@@ -1726,6 +1913,10 @@ void InstallNumbers(Runtime& vm) {
   cl.AddMethod(dbl, "doubleToLongBits", "(D)J", art::kAccStatic,
       [](Runtime&, Object*, Values a) { return std::isnan(a[0].d()) ? Value::Bits(0x7ff8000000000000ull) : a[0]; });
   for (char type : std::string_view("FD")) {
+    cl.AddMethod(*classes[type], "isFinite", std::string("(") + type + ")Z", art::kAccStatic,
+        [type](Runtime&, Object*, Values a) {
+          return Value::Int(std::isfinite(type == 'D' ? a[0].d() : a[0].f()));
+        });
     for (bool nan : {false, true}) {
       const Builtin test = [type, nan](Runtime&, Object* self, Values a) {
         const Value value = self ? self->payload : a[0];
@@ -1789,10 +1980,17 @@ void InstallEnumAndReferences(Runtime& vm) {
       });
   auto& queue = cl.Define("Ljava/lang/ref/ReferenceQueue;", kObject);
   cl.AddMethod(queue, "<init>", "()V", 0, Void);
+  cl.AddMethod(queue, "poll", "()Ljava/lang/ref/Reference;", 0, [](Runtime&, Object* self, Values) {
+    if (self->elements.empty()) return Value{};
+    const auto reference = self->elements.front();
+    self->elements.erase(self->elements.begin());
+    return reference;
+  });
   auto& reference = cl.Define("Ljava/lang/ref/Reference;", kObject, art::kAccAbstract);
   auto& weak = cl.Define("Ljava/lang/ref/WeakReference;", reference.descriptor);
   const Builtin init = [](Runtime&, Object* self, Values a) {
     self->weak_referent = a[0].ref();
+    if (a.size() > 1) self->weak_queue = a[1].ref();
     return Value{};
   };
   for (auto sig : {"(Ljava/lang/Object;)V", "(Ljava/lang/Object;Ljava/lang/ref/ReferenceQueue;)V"}) {

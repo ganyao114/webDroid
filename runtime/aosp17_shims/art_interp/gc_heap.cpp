@@ -66,13 +66,20 @@ GcStats GcHeap::Collect(Runtime& runtime) {
     for (Value field : object->fields) mark(field.ref());
     for (Value element : object->elements) mark(element.ref());
     mark(object->payload.ref());
+    mark(object->weak_queue);
     if (object->table) {
       for (Object* entry : object->table->order) mark(entry);
     }
   }
 
   for (Object* object : worklist_) {
-    if (object->weak_referent && !object->weak_referent->marked) object->weak_referent = nullptr;
+    if (object->weak_referent && !object->weak_referent->marked) {
+      object->weak_referent = nullptr;
+      if (object->weak_queue) {
+        object->weak_queue->elements.push_back(Value::Ref(object));
+        object->weak_queue = nullptr;
+      }
+    }
   }
   runtime.jni->SweepNativePeers();
   std::erase_if(runtime.interned, [](const auto& entry) { return !entry.second->marked; });

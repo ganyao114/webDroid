@@ -28,6 +28,7 @@ public abstract class Animator {
     public abstract void start();
     public abstract void cancel();
     public abstract void end();
+    public void setTarget(Object target) {}
     public abstract boolean isRunning();
     public boolean isStarted() { return isRunning(); }
     public abstract long getDuration();

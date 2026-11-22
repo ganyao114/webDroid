@@ -1,6 +1,7 @@
 #include "boot.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -10,11 +11,14 @@
 #include <numbers>
 #include <thread>
 #include <tuple>
+#include <unordered_set>
+#include <sys/random.h>
 #include <unistd.h>
 
 #include <android-base/properties.h>
 
 #include "interpreter/safe_math.h"
+#include "software_raster.h"
 
 namespace wa::interp {
 namespace {
@@ -261,7 +265,7 @@ void InstallSystem(Runtime& vm) {
       });
 }
 
-void InstallThread(Runtime& vm) {
+const Field& InstallThread(Runtime& vm) {
   auto& cl = vm.linker;
   constexpr auto kThread = "Ljava/lang/Thread;";
   constexpr auto kHandler = "Ljava/lang/Thread$UncaughtExceptionHandler;";
@@ -270,6 +274,7 @@ void InstallThread(Runtime& vm) {
   cl.AddMethod(handler, "uncaughtException", "(Ljava/lang/Thread;Ljava/lang/Throwable;)V", art::kAccAbstract);
   auto& thread = cl.Define(kThread, kObject, 0, {"Ljava/lang/Runnable;"});
   auto& main = cl.AddField(thread, "mainThread", kThread, true);
+  auto& current = cl.AddField(thread, "currentThread", kThread, true);
   auto& next_id = cl.AddField(thread, "nextThreadId", "J", true, Value::Long(2));
   auto& name = cl.AddField(thread, "name", kString, false);
   auto& id = cl.AddField(thread, "tid", "J", false);
@@ -278,9 +283,9 @@ void InstallThread(Runtime& vm) {
   auto& exception_handler = cl.AddField(thread, "uncaughtExceptionHandler", kHandler, false);
   auto& default_handler = cl.AddField(thread, "defaultUncaughtExceptionHandler", kHandler, true);
   auto& loader = cl.AddField(thread, "contextClassLoader", "Ljava/lang/ClassLoader;", false);
-  cl.AddMethod(thread, "<clinit>", "()V", art::kAccStatic, [&thread, &main, &name, &id](Runtime& vm, Object*, Values) {
+  cl.AddMethod(thread, "<clinit>", "()V", art::kAccStatic, [&thread, &main, &current, &name, &id](Runtime& vm, Object*, Values) {
     auto* object = vm.heap.Allocate(vm, thread);
-    main.value = Value::Ref(object);
+    current.value = main.value = Value::Ref(object);
     object->fields[name.slot] = StringValue(vm, "main");
     object->fields[id.slot] = Value::Long(1);
     return Value{};
@@ -298,8 +303,17 @@ void InstallThread(Runtime& vm) {
   for (const auto sig : {"()V", "(Ljava/lang/Runnable;)V", "(Ljava/lang/Runnable;Ljava/lang/String;)V"}) {
     cl.AddMethod(thread, "<init>", sig, 0, ctor);
   }
+  cl.AddMethod(thread, "<init>", "(Ljava/lang/String;)V", 0,
+      [ctor](Runtime& vm, Object* self, Values a) { return ctor(vm, self, std::array{Value{}, a[0]}); });
   cl.AddMethod(thread, "currentThread", "()Ljava/lang/Thread;", art::kAccStatic,
-      [&main](Runtime&, Object*, Values) { return main.value; });
+      [&current](Runtime&, Object*, Values) { return current.value; });
+  auto& context = cl.Define("Lorg/wasmandroid/ui/ThreadContext;", kObject, art::kAccFinal);
+  cl.AddMethod(context, "swap", "(Ljava/lang/Thread;)Ljava/lang/Thread;", art::kAccStatic,
+      [&thread, &current](Runtime& vm, Object*, Values a) {
+        vm.linker.Initialize(thread);
+        vm.NonNull(a[0].ref());
+        return std::exchange(current.value, a[0]);
+      });
   cl.AddMethod(thread, "getName", "()Ljava/lang/String;", 0,
       [&name](Runtime&, Object* self, Values) { return self->fields[name.slot]; });
   cl.AddMethod(thread, "setName", "(Ljava/lang/String;)V", 0, [&name](Runtime& vm, Object* self, Values a) {
@@ -309,12 +323,12 @@ void InstallThread(Runtime& vm) {
   cl.AddMethod(thread, "getId", "()J", 0, [&id](Runtime&, Object* self, Values) { return self->fields[id.slot]; });
   cl.AddMethod(thread, "isInterrupted", "()Z", 0,
       [&interrupted](Runtime&, Object* self, Values) { return self->fields[interrupted.slot]; });
-  cl.AddMethod(thread, "interrupt", "()V", 0, [&main, &interrupted](Runtime&, Object* self, Values) {
-    if (self == main.value.ref()) self->fields[interrupted.slot] = Value::Int(1);
+  cl.AddMethod(thread, "interrupt", "()V", 0, [&main, &current, &interrupted](Runtime&, Object* self, Values) {
+    if (self == main.value.ref() || self == current.value.ref()) self->fields[interrupted.slot] = Value::Int(1);
     return Value{};
   });
-  const auto clear_interrupt = [&main, &interrupted](Runtime&, Object*, Values) {
-    return std::exchange(main.value.ref()->fields[interrupted.slot], Value{});
+  const auto clear_interrupt = [&current, &interrupted](Runtime&, Object*, Values) {
+    return std::exchange(current.value.ref()->fields[interrupted.slot], Value{});
   };
   cl.AddMethod(thread, "interrupted", "()Z", art::kAccStatic, clear_interrupt);
   cl.AddMethod(thread, "yield", "()V", art::kAccStatic, [](Runtime&, Object*, Values) {
@@ -366,16 +380,91 @@ void InstallThread(Runtime& vm) {
                  default_handler.value = a[0];
                  return Value{};
                });
+  return current;
 }
 
-void InstallThreadLocal(ClassLinker& cl) {
-  // There is one interpreter thread per VM, so the current thread's slot can
-  // live in the ThreadLocal itself. An initialized slot may contain null.
+void InstallRandom(ClassLinker& cl) {
+  constexpr uint64_t multiplier = 0x5deece66dULL;
+  constexpr uint64_t mask = (1ULL << 48) - 1;
+  auto& random = cl.Define("Ljava/util/Random;", kObject, 0, {"Ljava/io/Serializable;"});
+  const auto& seed = cl.AddField(random, "seed", "J", false);
+  const Builtin set_seed = [&seed](Runtime&, Object* self, Values a) {
+    self->fields[seed.slot] = Value::Long((static_cast<uint64_t>(a[0].j()) ^ multiplier) & mask);
+    return Value{};
+  };
+  cl.AddMethod(random, "setSeed", "(J)V", 0, set_seed);
+  cl.AddMethod(random, "<init>", "(J)V", 0, set_seed);
+  cl.AddMethod(random, "<init>", "()V", 0, [set_seed](Runtime& vm, Object* self, Values) {
+    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    return set_seed(vm, self, std::array{Value::Long(now)});
+  });
+  cl.AddMethod(random, "next", "(I)I", art::kAccProtected, [&seed](Runtime& vm, Object* self, Values a) {
+    const int32_t bits = a[0].i();
+    if (bits < 1 || bits > 32) vm.Fail("Ljava/lang/IllegalArgumentException;", "Invalid bit count");
+    const uint64_t next = (static_cast<uint64_t>(self->fields[seed.slot].j()) * multiplier + 11) & mask;
+    self->fields[seed.slot] = Value::Long(next);
+    return Value::Int(static_cast<int32_t>(next >> (48 - bits)));
+  });
+  const auto bits = [](Runtime& vm, Object* self, int count) {
+    return CallVirtual(vm, self, "next", "(I)I", std::array{Value::Int(count)}).i();
+  };
+  cl.AddMethod(random, "nextInt", "()I", 0,
+      [bits](Runtime& vm, Object* self, Values) { return Value::Int(bits(vm, self, 32)); });
+  cl.AddMethod(random, "nextInt", "(I)I", 0, [bits](Runtime& vm, Object* self, Values a) {
+    const int32_t bound = a[0].i();
+    if (bound <= 0) vm.Fail("Ljava/lang/IllegalArgumentException;", "Bound must be positive");
+    int32_t sample = bits(vm, self, 31);
+    if ((bound & (bound - 1)) == 0) {
+      return Value::Int(static_cast<int32_t>((static_cast<int64_t>(bound) * sample) >> 31));
+    }
+    int32_t result = sample % bound;
+    while (static_cast<int64_t>(sample - result) + bound - 1 > INT32_MAX) {
+      sample = bits(vm, self, 31);
+      result = sample % bound;
+    }
+    return Value::Int(result);
+  });
+  cl.AddMethod(random, "nextFloat", "()F", 0,
+      [bits](Runtime& vm, Object* self, Values) { return Value::Float(bits(vm, self, 24) / 16777216.f); });
+  cl.AddMethod(random, "nextLong", "()J", 0, [bits](Runtime& vm, Object* self, Values) {
+    const uint64_t high = static_cast<uint32_t>(bits(vm, self, 32));
+    const int64_t low = bits(vm, self, 32);
+    return Value::Long(static_cast<int64_t>((high << 32) + low));
+  });
+  auto& secure = cl.Define("Ljava/security/SecureRandom;", random.descriptor);
+  cl.AddMethod(secure, "<init>", "()V", 0, [](Runtime&, Object*, Values) { return Value{}; });
+  const auto fill_entropy = [](Runtime& vm, void* data, size_t size) {
+    // WASI supplies the same entropy API through the host's cryptographic RNG.
+    while (::getentropy(data, size) != 0) {
+      if (errno != EINTR) vm.Fail("Ljava/security/ProviderException;", "Host entropy unavailable");
+    }
+  };
+  cl.AddMethod(secure, "next", "(I)I", art::kAccProtected | art::kAccFinal,
+      [fill_entropy](Runtime& vm, Object*, Values a) {
+        const auto count = a[0].i();
+        if (count < 1 || count > 32) vm.Fail("Ljava/lang/IllegalArgumentException;", "Invalid bit count");
+        uint32_t random_bits;
+        fill_entropy(vm, &random_bits, sizeof(random_bits));
+        return Value::Int(static_cast<int32_t>(random_bits >> (32 - count)));
+      });
+  cl.AddMethod(secure, "nextBytes", "([B)V", 0, [fill_entropy](Runtime& vm, Object*, Values a) {
+    auto& bytes = vm.NonNull(a[0].ref()).elements;
+    int8_t buffer[256];
+    for (size_t start = 0; start < bytes.size();) {
+      const auto count = std::min(sizeof(buffer), bytes.size() - start);
+      fill_entropy(vm, buffer, count);
+      for (size_t i = 0; i < count; ++i) bytes[start + i] = Value::Int(buffer[i]);
+      start += count;
+    }
+    return Value{};
+  });
+}
+
+void InstallThreadLocal(ClassLinker& cl, const Field& current) {
   constexpr auto kLocal = "Ljava/lang/ThreadLocal;";
   constexpr auto kSupplied = "Ljava/lang/ThreadLocal$SuppliedThreadLocal;";
   auto& local = cl.Define(kLocal, kObject);
-  auto& initialized = cl.AddField(local, "initialized", "Z", false);
-  auto& value = cl.AddField(local, "value", kObject, false);
+  auto& entry = cl.Define("Ljava/lang/ThreadLocal$ThreadLocalMap$Entry;", kObject, art::kAccFinal);
   auto& supplied = cl.Define(kSupplied, kLocal, art::kAccFinal);
   auto& supplier = cl.AddField(supplied, "supplier", "Ljava/util/function/Supplier;", false);
   const Builtin nothing = [](Runtime&, Object*, Values) { return Value{}; };
@@ -392,22 +481,40 @@ void InstallThreadLocal(ClassLinker& cl) {
         wrapper->fields[supplier.slot] = a[0];
         return Value::Ref(wrapper);
       });
-  cl.AddMethod(local, "get", "()Ljava/lang/Object;", 0,
-      [&initialized, &value](Runtime& vm, Object* self, Values) {
-        if (!self->fields[initialized.slot].i()) {
-          self->fields[value.slot] = CallVirtual(vm, self, "initialValue", "()Ljava/lang/Object;");
-          self->fields[initialized.slot] = Value::Int(1);
-        }
-        return self->fields[value.slot];
-      });
-  cl.AddMethod(local, "set", "(Ljava/lang/Object;)V", 0,
-      [&initialized, &value](Runtime&, Object* self, Values a) {
-        self->fields[value.slot] = a[0];
-        self->fields[initialized.slot] = Value::Int(1);
-        return Value{};
-      });
-  cl.AddMethod(local, "remove", "()V", 0, [&initialized, &value](Runtime&, Object* self, Values) {
-    self->fields[value.slot] = self->fields[initialized.slot] = {};
+  const auto slots = [&current](Runtime& vm) -> std::vector<Value>& {
+    vm.linker.Initialize(*current.owner);
+    auto& items = current.value.ref()->elements;
+    std::erase_if(items, [](Value slot) { return slot.ref()->weak_referent == nullptr; });
+    return items;
+  };
+  const auto match = [](const Object* key) { return [key](Value slot) { return slot.ref()->weak_referent == key; }; };
+  const auto assign = [&entry, slots, match](Runtime& vm, Object* key, Value value) {
+    auto& items = slots(vm);
+    auto found = std::ranges::find_if(items, match(key));
+    if (found == items.end()) {
+      RootScope roots(vm);
+      roots.Hold(value);
+      auto* item = vm.heap.Allocate(vm, vm.linker.Resolve(entry.descriptor));
+      item->weak_referent = key;
+      item->payload = value;
+      items.push_back(Value::Ref(item));
+    } else {
+      found->ref()->payload = value;
+    }
+    return value;
+  };
+  cl.AddMethod(local, "get", "()Ljava/lang/Object;", 0, [slots, match, assign](Runtime& vm, Object* self, Values) {
+    const auto& items = slots(vm);
+    auto found = std::ranges::find_if(items, match(self));
+    if (found != items.end()) return found->ref()->payload;
+    return assign(vm, self, CallVirtual(vm, self, "initialValue", "()Ljava/lang/Object;"));
+  });
+  cl.AddMethod(local, "set", "(Ljava/lang/Object;)V", 0, [assign](Runtime& vm, Object* self, Values a) {
+    assign(vm, self, a[0]);
+    return Value{};
+  });
+  cl.AddMethod(local, "remove", "()V", 0, [slots, match](Runtime& vm, Object* self, Values) {
+    std::erase_if(slots(vm), match(self));
     return Value{};
   });
 }
@@ -642,19 +749,49 @@ void InstallFiles(Runtime& vm) {
 
 void InstallAndroid(Runtime& vm) {
   auto& cl = vm.linker;
+  const Builtin print = [](Runtime& vm, Object*, Values a) {
+    const auto tag = EncodeUtf8(JavaText(vm, a[0].ref()), false);
+    const auto msg = EncodeUtf8(JavaText(vm, a[1].ref()), false);
+    std::fprintf(stderr, "%s: %s\n", tag.c_str(), msg.c_str());
+    if (a.size() == 3 && a[2].ref()) {
+      const auto err = EncodeUtf8(JavaText(vm, a[2].ref()), false);
+      std::fprintf(stderr, "%s\n", err.c_str());
+    }
+    return Value::Int(msg.size());
+  };
   for (const auto name : {"Landroid/util/Log;", "Landroid/util/Slog;"}) {
     auto& log = cl.Define(name, kObject, art::kAccFinal);
+    cl.AddMethod(log, "getStackTraceString", "(Ljava/lang/Throwable;)Ljava/lang/String;", art::kAccStatic,
+        [](Runtime& vm, Object*, Values a) {
+          std::u16string result;
+          std::unordered_set<Object*> seen;
+          for (auto* error = a[0].ref(); error && seen.insert(error).second; error = error->payload.ref()) {
+            if (error->type->descriptor == "Ljava/net/UnknownHostException;") return StringValue(vm, "");
+            if (!result.empty()) result += u"Caused by: ";
+            result += JavaText(vm, error);
+            result += u'\n';
+            if (!error->exception_stack) continue;
+            for (const auto& [method, pc] : *error->exception_stack) {
+              result += DecodeUtf8("\tat " + method->QualifiedName() + " (dex pc " + std::to_string(pc) + ")\n");
+            }
+          }
+          return StringValue(vm, result);
+        });
+    cl.AddMethod(log, "isLoggable", "(Ljava/lang/String;I)Z", art::kAccStatic,
+        [](Runtime& vm, Object*, Values a) {
+          const auto tag = EncodeUtf8(vm.NonNull(a[0].ref()).text, false);
+          const auto& properties = vm.options.system_properties;
+          auto entry = properties.find("log.tag." + tag);
+          if (entry == properties.end()) entry = properties.find("log.tag");
+          constexpr std::string_view levels = "VDIWEAS";
+          const auto level = entry != properties.end() && !entry->second.empty()
+              ? levels.find(entry->second[0]) : levels.npos;
+          const auto threshold = level == levels.npos ? 4 : static_cast<int>(level) + 2;
+          return Value::Int(threshold < 8 && a[1].i() >= threshold);
+        });
+    cl.AddMethod(log, "println", "(ILjava/lang/String;Ljava/lang/String;)I", art::kAccStatic,
+        [print](Runtime& vm, Object*, Values a) { return print(vm, nullptr, a.subspan(1)); });
     for (const auto level : {"v", "d", "i", "w", "e", "wtf"}) {
-      const Builtin print = [](Runtime& vm, Object*, Values a) {
-        const auto tag = EncodeUtf8(JavaText(vm, a[0].ref()), false);
-        const auto msg = EncodeUtf8(JavaText(vm, a[1].ref()), false);
-        std::fprintf(stderr, "%s: %s\n", tag.c_str(), msg.c_str());
-        if (a.size() == 3 && a[2].ref()) {
-          const auto err = EncodeUtf8(JavaText(vm, a[2].ref()), false);
-          std::fprintf(stderr, "%s\n", err.c_str());
-        }
-        return Value::Int(msg.size());
-      };
       cl.AddMethod(log, level, "(Ljava/lang/String;Ljava/lang/String;)I", art::kAccStatic, print);
       cl.AddMethod(log, level, "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I", art::kAccStatic, print);
     }
@@ -688,10 +825,12 @@ void InstallAndroid(Runtime& vm) {
 
 void InstallPlatform(Runtime& vm) {
   InstallSystem(vm);
-  InstallThread(vm);
-  InstallThreadLocal(vm.linker);
+  const auto& current = InstallThread(vm);
+  InstallRandom(vm.linker);
+  InstallThreadLocal(vm.linker, current);
   InstallAtomicUpdaters(vm.linker);
   InstallFiles(vm);
+  software_raster::Install(vm.linker);
   InstallAndroid(vm);
 }
 

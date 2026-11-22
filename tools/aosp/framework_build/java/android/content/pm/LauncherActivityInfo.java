@@ -21,6 +21,8 @@ public final class LauncherActivityInfo {
         return result == null ? pm.getDefaultActivityIcon() : result;
     }
     public Drawable getBadgedIcon(int density) { return getIcon(density); }
+    /** Registered APKs are fully published before they appear in the activity list. */
+    public float getLoadingProgress() { return 1.0f; }
     public ApplicationInfo getApplicationInfo() { return activity.applicationInfo; }
     public ActivityInfo getActivityInfo() { return activity; }
     public String getName() { return activity.name; }

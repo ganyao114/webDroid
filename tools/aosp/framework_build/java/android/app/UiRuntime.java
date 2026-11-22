@@ -1,22 +1,37 @@
 package android.app;
 
+import android.appwidget.AppWidgetManager;
 import android.content.ComponentName;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.ContextWrapper;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
+import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
+import android.hardware.display.DisplayManager;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.Looper;
 import android.os.LocaleList;
 import android.os.UserHandle;
+import android.os.UserManager;
 import android.view.Choreographer;
+import android.view.Display;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowManager;
+import android.view.WindowMetrics;
 import java.io.IOException;
 import java.util.ArrayList;
 import org.xmlpull.v1.XmlPullParser;
@@ -38,13 +53,33 @@ public final class UiRuntime {
         Pointer(int id, float x, float y) { this.id = id; this.x = x; this.y = y; }
     }
     private static final class AppContext extends Context {
+        private static final android.util.ArrayMap<String, android.util.ArrayMap<String, SharedPreferences>>
+                packagePreferences = new android.util.ArrayMap<>();
         final Resources resources;
         final ApplicationInfo info;
+        Application application;
+        private final DisplayManager displays;
+        private final WindowManager windows;
+        private final UserManager users = new UserManager();
+        private final AppWidgetManager widgets = new AppWidgetManager();
+        private final ArrayList<Resources> configuredResources = new ArrayList<>();
+        private static final class ReceiverRegistration {
+            final BroadcastReceiver receiver;
+            final IntentFilter filter;
+            final Handler handler;
+            ReceiverRegistration(BroadcastReceiver receiver, IntentFilter filter, Handler handler) {
+                this.receiver = receiver;
+                this.filter = filter;
+                this.handler = handler;
+            }
+        }
+        private final ArrayList<ReceiverRegistration> receivers = new ArrayList<>();
         final PackageManager packages;
         final android.content.ContentResolver resolver = new android.content.ContentResolver();
         private LayoutInflater inflater;
         private LauncherApps launcher;
         private WallpaperManager wallpaper;
+        private SearchManager search;
         private android.view.inputmethod.InputMethodManager inputMethod;
         private android.view.accessibility.AccessibilityManager accessibility;
         private Resources.Theme theme;
@@ -52,10 +87,95 @@ public final class UiRuntime {
         AppContext(Resources resources, ApplicationInfo info) {
             this.resources = resources; this.info = info;
             packages = new PackageManager(this);
+            displays = new DisplayManager(new Display(resources));
+            windows = new WindowManager() {
+                @Override public Display getDefaultDisplay() { return getDisplay(); }
+                @Override public WindowMetrics getCurrentWindowMetrics() { return Window.displayMetrics(AppContext.this); }
+                @Override public WindowMetrics getMaximumWindowMetrics() { return getCurrentWindowMetrics(); }
+                @Override public void addView(View view, ViewGroup.LayoutParams params) {
+                    throw new IllegalStateException("Window is required to add a view");
+                }
+                @Override public void updateViewLayout(View view, ViewGroup.LayoutParams params) {
+                    throw new IllegalStateException("Window is required to update a view");
+                }
+                @Override public void removeView(View view) {
+                    throw new IllegalStateException("Window is required to remove a view");
+                }
+            };
         }
         @Override public AssetManager getAssets() { return resources.getAssets(); }
         @Override public Resources getResources() { return resources; }
         @Override public String getPackageName() { return info.packageName; }
+        @Override public Context getApplicationContext() { return application == null ? this : application; }
+        @Override public Context createConfigurationContext(Configuration override) {
+            Resources configured = resources.withConfiguration(override);
+            configuredResources.add(configured);
+            return new ContextWrapper(this) {
+                private Resources.Theme theme;
+                @Override public Resources getResources() { return configured; }
+                @Override public AssetManager getAssets() { return configured.getAssets(); }
+                @Override public Resources.Theme getTheme() {
+                    if (theme == null) {
+                        theme = configured.newTheme();
+                        theme.setTo(AppContext.this.getTheme());
+                    }
+                    return theme;
+                }
+                @Override public void setTheme(int id) { getTheme().applyStyle(id, true); }
+            };
+        }
+        void closeResources() {
+            receivers.clear();
+            for (Resources configured : configuredResources) configured.close();
+            configuredResources.clear();
+            packages.closePackageResources();
+            resources.close();
+        }
+        @Override public SharedPreferences getSharedPreferences(String name, int mode) {
+            synchronized (packagePreferences) {
+                return packagePreferences.computeIfAbsent(info.packageName, key -> new android.util.ArrayMap<>())
+                        .computeIfAbsent(name, key -> new MemorySharedPreferences(info.targetSdkVersion >= 30));
+            }
+        }
+        @Override public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter, String permission,
+                                                 Handler handler, int flags) {
+            if (receiver != null && (permission == null || permission.isEmpty())) {
+                receivers.add(new ReceiverRegistration(receiver, filter, handler == null ? new Handler(getMainLooper()) : handler));
+            }
+            return null;
+        }
+        @Override public void unregisterReceiver(BroadcastReceiver receiver) {
+            boolean removed = false;
+            for (int i = receivers.size() - 1; i >= 0; i--) {
+                if (receivers.get(i).receiver == receiver) {
+                    receivers.remove(i);
+                    removed = true;
+                }
+            }
+            if (!removed) super.unregisterReceiver(receiver);
+        }
+        @Override public void sendBroadcast(Intent intent) {
+            if (intent.getPackage() != null && !intent.getPackage().equals(getPackageName())) return;
+            var data = intent.getData();
+            String scheme = data == null ? null : data.getScheme();
+            for (ReceiverRegistration registration : receivers) {
+                if (registration.filter.match(intent.getAction(), intent.getType(), scheme,
+                        data, intent.getCategories(), "BroadcastReceiver") < 0) continue;
+                registration.handler.post(() -> {
+                    if (!receivers.contains(registration)) return;
+                    BroadcastReceiver receiver = registration.receiver;
+                    var result = new BroadcastReceiver.PendingResult(0, null, null,
+                            BroadcastReceiver.PendingResult.TYPE_REGISTERED, false, false, null, 0, 0);
+                    receiver.setPendingResult(result);
+                    try {
+                        receiver.onReceive(getApplicationContext(), intent);
+                    } finally {
+                        if (receiver.getPendingResult() == result) result.finish();
+                        receiver.setPendingResult(null);
+                    }
+                });
+            }
+        }
         @Override public ApplicationInfo getApplicationInfo() { return info; }
         @Override public PackageManager getPackageManager() { return packages; }
         @Override public android.content.ContentResolver getContentResolver() { return resolver; }
@@ -70,6 +190,14 @@ public final class UiRuntime {
         @Override public void startActivity(Intent intent) { startActivity(intent, null); }
         @Override public void startActivity(Intent intent, Bundle options) { packages.launch(intent, UserHandle.SYSTEM, options); }
         @Override public Object getSystemService(String name) {
+            if (DISPLAY_SERVICE.equals(name)) return displays;
+            if (WINDOW_SERVICE.equals(name)) return windows;
+            if (USER_SERVICE.equals(name)) return users;
+            if (APPWIDGET_SERVICE.equals(name)) return widgets;
+            if (SEARCH_SERVICE.equals(name)) {
+                if (search == null) search = new SearchManager(this);
+                return search;
+            }
             if (LAYOUT_INFLATER_SERVICE.equals(name)) {
                 if (inflater == null) inflater = new LayoutInflater(this);
                 return inflater;
@@ -95,6 +223,7 @@ public final class UiRuntime {
     }
     private static final class Manifest {
         final ApplicationInfo info = new ApplicationInfo();
+        String application;
         String activity;
         int theme;
     }
@@ -112,20 +241,40 @@ public final class UiRuntime {
             if (!locales.isEmpty()) LocaleList.setDefault(locales);
             if (width > 0 && height > 0) resources.updateDisplay(width, height, density);
             Manifest manifest = readManifest(resources, apkPath, requested, withFramework ? 1 : 0);
-            Activity activity = nativeCreateActivity(manifest.activity);
             AppContext app = new AppContext(resources, manifest.info);
+            context = app;
+            app.application = createApplication(app, manifest.application);
+            app.application.onCreate();
+            Activity activity = nativeCreateActivity(manifest.activity);
             ComponentName component = new ComponentName(manifest.info.packageName, manifest.activity);
             activity.attach(app, Intent.makeMainActivity(component), manifest.theme);
             current = activity;
-            context = app;
             activity.performCreate(null);
             finishIfRequested();
         } catch (IOException | XmlPullParserException | RuntimeException | Error error) {
-            if (current != null) destroy();
-            else resources.close();
+            try {
+                if (context != null) destroy();
+                else resources.close();
+            } catch (RuntimeException | Error cleanup) {
+                if (cleanup != error) error.addSuppressed(cleanup);
+            }
             throw error;
         }
     }
+
+    private static Application createApplication(AppContext context, String name) {
+        Application application;
+        try {
+            application = name == null ? new Application()
+                    : (Application) Class.forName(name).getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("Cannot instantiate application " + name, error);
+        }
+        application.attach(context);
+        return application;
+    }
+
+    static String currentProcessName() { return context == null ? null : context.getPackageName(); }
 
     private static Manifest readManifest(Resources res, String path, String requested, int baseIndex)
             throws IOException, XmlPullParserException {
@@ -142,7 +291,12 @@ public final class UiRuntime {
             for (int event = xml.next(); event != XmlPullParser.END_DOCUMENT; event = xml.next()) {
                 if (event != XmlPullParser.START_TAG) continue;
                 if (xml.getDepth() == 2 && "application".equals(xml.getName())) {
+                    String application = xml.getAttributeValue(XmlValues.ANDROID, "name");
+                    if (application != null) result.application = fullName(result.info.packageName, application);
                     result.info.icon = xml.getAttributeResourceValue(XmlValues.ANDROID, "icon", 0);
+                    if (xml.getAttributeBooleanValue(XmlValues.ANDROID, "supportsRtl", false)) {
+                        result.info.flags |= ApplicationInfo.FLAG_SUPPORTS_RTL;
+                    }
                     result.info.theme = xml.getAttributeResourceValue(XmlValues.ANDROID, "theme", 0);
                     result.info.labelRes = xml.getAttributeResourceValue(XmlValues.ANDROID, "label", 0);
                     if (result.info.labelRes == 0) result.info.nonLocalizedLabel = xml.getAttributeValue(XmlValues.ANDROID, "label");
@@ -201,7 +355,7 @@ public final class UiRuntime {
         if (current != null) current.onNewIntent(Intent.makeMainActivity(current.getComponentName())
                 .addCategory(Intent.CATEGORY_HOME));
     }
-    public static void sendBack() { if (current != null) current.onBackPressed(); }
+    public static void sendBack() { if (current != null) current.performBackPressed(); }
     public static void packageChanged(String name, boolean replaced) {
         if (context != null && context.launcher != null) context.launcher.dispatchPackageChanged(name, replaced);
     }
@@ -217,7 +371,7 @@ public final class UiRuntime {
         try {
             if (old != null) old.performDestroy();
         } finally {
-            if (app != null) app.resources.close();
+            if (app != null) app.closeResources();
         }
     }
     private static void finishIfRequested() { if (current != null && current.isFinishing()) destroy(); }
@@ -237,10 +391,12 @@ public final class UiRuntime {
             var display = context.resources.getDisplayMetrics();
             if (width != display.widthPixels || height != display.heightPixels || dpi != display.densityDpi) {
                 context.resources.updateDisplay(width, height, dpi);
+                context.application.onConfigurationChanged(context.resources.getConfiguration());
+                context.displays.dispatchDisplayChanged();
                 current.onConfigurationChanged(context.resources.getConfiguration());
             }
         }
-        looper.dispatchDueMessages(nanos / 1_000_000);
+        Looper.dispatchAllDueMessages(nanos / 1_000_000);
         boolean draw = current != null && current.isResumed() && !current.isFinishing();
         frameWidth = width;
         frameHeight = height;

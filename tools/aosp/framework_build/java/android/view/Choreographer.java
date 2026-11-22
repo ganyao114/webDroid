@@ -98,5 +98,5 @@ public final class Choreographer {
             else record.runnable.run();
         }
     }
-    private static native long frameIntervalNanos();
+    static native long frameIntervalNanos();
 }

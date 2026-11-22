@@ -129,7 +129,7 @@ public final class TypedArray implements AutoCloseable {
         if (data[at] == TypedValue.TYPE_NULL) return fallback;
         if (data[at] == TypedValue.TYPE_FLOAT) return Float.intBitsToFloat(data[at + 1]);
         if (isInteger(data[at])) return data[at + 1];
-        if (data[at] == TypedValue.TYPE_STRING) return org.wasmandroid.ui.NativeMath.parseFloat(getString(index));
+        if (data[at] == TypedValue.TYPE_STRING) return Float.parseFloat(getString(index));
         throw wrongType(index, "float");
     }
 

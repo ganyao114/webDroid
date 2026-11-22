@@ -3,28 +3,51 @@ package java.util.concurrent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import org.wasmandroid.ui.ThreadContext;
 
 /** A serial executor whose tasks are drained by the owning interpreter thread. */
 public final class Executors {
     private Executors() {}
 
-    public static ExecutorService newSingleThreadExecutor() { return new SerialExecutor(); }
+    public static ExecutorService newSingleThreadExecutor() { return new SerialExecutor(null); }
+    public static ExecutorService newSingleThreadExecutor(ThreadFactory factory) {
+        return new SerialExecutor(Objects.requireNonNull(factory));
+    }
+    public static ExecutorService newFixedThreadPool(int threads, ThreadFactory factory) {
+        return new ThreadPoolExecutor(threads, threads, 0, TimeUnit.MILLISECONDS,
+                new LinkedBlockingQueue<>(), factory);
+    }
 
     private static final class SerialExecutor implements ExecutorService {
         private final ArrayList<Runnable> queue = new ArrayList<>();
+        private final ThreadFactory factory;
+        private Thread worker;
         private boolean shutdown, running;
+
+        SerialExecutor(ThreadFactory factory) { this.factory = factory; }
 
         @Override public void execute(Runnable task) {
             Objects.requireNonNull(task);
             if (shutdown) throw new RejectedExecutionException("Executor is shut down");
+            if (factory != null && worker == null) {
+                worker = factory.newThread(this::drain);
+                if (worker == null) throw new RejectedExecutionException("Thread factory returned null");
+            }
             queue.add(task);
             if (running) return;
             running = true;
+            Thread previous = worker == null ? null : ThreadContext.swap(worker);
             try {
-                while (!queue.isEmpty()) queue.remove(0).run();
+                if (worker == null) drain();
+                else worker.run();
             } finally {
+                if (previous != null) ThreadContext.swap(previous);
                 running = false;
             }
+        }
+
+        private void drain() {
+            while (!queue.isEmpty()) queue.remove(0).run();
         }
 
         @Override public <T> Future<T> submit(Callable<T> task) {
