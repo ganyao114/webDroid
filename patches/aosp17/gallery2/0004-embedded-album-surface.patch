@@ -1,0 +1,472 @@
+--- a/res/layout/main.xml
++++ b/res/layout/main.xml
+@@ -4,7 +4,10 @@
+         android:orientation="vertical"
+         android:layout_width="match_parent"
+         android:layout_height="match_parent">
+-    <include layout="@layout/gl_root_group"/>
++    <FrameLayout
++            android:id="@+id/gallery_surface"
++            android:layout_width="match_parent"
++            android:layout_height="match_parent" />
+     <FrameLayout android:id="@+id/header"
+             android:visibility="gone"
+             android:layout_alignParentTop="true"
+--- a/src/com/android/gallery3d/app/GalleryAppImpl.java
++++ b/src/com/android/gallery3d/app/GalleryAppImpl.java
+@@ -34,6 +34,8 @@
+ 
+ public class GalleryAppImpl extends Application implements GalleryApp {
+ 
++    static final boolean EMBEDDED = "true".equals(System.getProperty("org.wasmandroid.foreground"));
++
+     private static final String DOWNLOAD_FOLDER = "download";
+     private static final long DOWNLOAD_CAPACITY = 64 * 1024 * 1024; // 64M
+ 
+@@ -46,10 +48,12 @@
+     @Override
+     public void onCreate() {
+         super.onCreate();
+-        initializeAsyncTask();
+-        GalleryUtils.initialize(this);
+-        WidgetUtils.initialize(this);
+-        PicasaSource.initialize(this);
++        if (!EMBEDDED) {
++            initializeAsyncTask();
++            GalleryUtils.initialize(this);
++            WidgetUtils.initialize(this);
++            PicasaSource.initialize(this);
++        }
+         UsageStatistics.initialize(this);
+     }
+ 
+--- a/src/com/android/gallery3d/app/AbstractGalleryActivity.java
++++ b/src/com/android/gallery3d/app/AbstractGalleryActivity.java
+@@ -37,6 +37,7 @@
+ import android.view.MenuItem;
+ import android.view.Window;
+ import android.view.WindowManager;
++import android.widget.FrameLayout;
+ 
+ import com.android.gallery3d.R;
+ import com.android.gallery3d.common.ApiHelper;
+@@ -73,6 +74,7 @@
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        if (GalleryAppImpl.EMBEDDED) return;
+         mOrientationManager = new OrientationManager(this);
+         toggleStatusBarByOrientation();
+         getWindow().setBackgroundDrawable(null);
+@@ -96,6 +98,7 @@
+     public void onConfigurationChanged(Configuration config) {
+         super.onConfigurationChanged(config);
+         mStateManager.onConfigurationChange(config);
++        if (GalleryAppImpl.EMBEDDED) return;
+         getGalleryActionBar().onConfigurationChanged();
+         invalidateOptionsMenu();
+         toggleStatusBarByOrientation();
+@@ -140,6 +143,11 @@
+     @Override
+     public void setContentView(int resId) {
+         super.setContentView(resId);
++        if (GalleryAppImpl.EMBEDDED) return;
++        FrameLayout surface = findViewById(R.id.gallery_surface);
++        if (surface != null) {
++            getLayoutInflater().inflate(R.layout.gl_root_group, surface, true);
++        }
+         mGLRootView = (GLRootView) findViewById(R.id.gl_root_view);
+     }
+ 
+@@ -154,6 +162,7 @@
+     @Override
+     protected void onStart() {
+         super.onStart();
++        if (GalleryAppImpl.EMBEDDED) return;
+         if (getExternalCacheDir() == null) {
+             OnCancelListener onCancel = new OnCancelListener() {
+                 @Override
+@@ -192,6 +201,7 @@
+     @Override
+     protected void onStop() {
+         super.onStop();
++        if (GalleryAppImpl.EMBEDDED) return;
+         if (mAlertDialog != null) {
+             unregisterReceiver(mMountReceiver);
+             mAlertDialog.dismiss();
+@@ -203,6 +213,10 @@
+     @Override
+     protected void onResume() {
+         super.onResume();
++        if (GalleryAppImpl.EMBEDDED) {
++            getStateManager().resume();
++            return;
++        }
+         mGLRootView.lockRenderThread();
+         try {
+             getStateManager().resume();
+@@ -217,6 +231,10 @@
+     @Override
+     protected void onPause() {
+         super.onPause();
++        if (GalleryAppImpl.EMBEDDED) {
++            getStateManager().pause();
++            return;
++        }
+         mOrientationManager.pause();
+         mGLRootView.onPause();
+         mGLRootView.lockRenderThread();
+@@ -233,6 +251,10 @@
+     @Override
+     protected void onDestroy() {
+         super.onDestroy();
++        if (GalleryAppImpl.EMBEDDED) {
++            getStateManager().destroy();
++            return;
++        }
+         mGLRootView.lockRenderThread();
+         try {
+             getStateManager().destroy();
+@@ -256,6 +278,10 @@
+     @Override
+     public void onBackPressed() {
+         // send the back event to the top sub-state
++        if (GalleryAppImpl.EMBEDDED) {
++            getStateManager().onBackPressed();
++            return;
++        }
+         GLRoot root = getGLRoot();
+         root.lockRenderThread();
+         try {
+@@ -314,19 +340,20 @@
+ 
+     private BatchService mBatchService;
+     private boolean mBatchServiceIsBound = false;
+-    private ServiceConnection mBatchServiceConnection = new ServiceConnection() {
+-        @Override
+-        public void onServiceConnected(ComponentName className, IBinder service) {
+-            mBatchService = ((BatchService.LocalBinder)service).getService();
+-        }
+-
+-        @Override
+-        public void onServiceDisconnected(ComponentName className) {
+-            mBatchService = null;
+-        }
+-    };
++    private ServiceConnection mBatchServiceConnection;
+ 
+     private void doBindBatchService() {
++        mBatchServiceConnection = new ServiceConnection() {
++            @Override
++            public void onServiceConnected(ComponentName className, IBinder service) {
++                mBatchService = ((BatchService.LocalBinder) service).getService();
++            }
++
++            @Override
++            public void onServiceDisconnected(ComponentName className) {
++                mBatchService = null;
++            }
++        };
+         bindService(new Intent(this, BatchService.class), mBatchServiceConnection, Context.BIND_AUTO_CREATE);
+         mBatchServiceIsBound = true;
+     }
+--- a/src/com/android/gallery3d/app/GalleryActivity.java
++++ b/src/com/android/gallery3d/app/GalleryActivity.java
+@@ -19,7 +19,6 @@
+ import android.app.Dialog;
+ import android.content.ContentResolver;
+ import android.content.DialogInterface;
+-import android.content.DialogInterface.OnCancelListener;
+ import android.content.Intent;
+ import android.net.Uri;
+ import android.os.Bundle;
+@@ -39,7 +38,7 @@
+ import com.android.gallery3d.picasasource.PicasaSource;
+ import com.android.gallery3d.util.GalleryUtils;
+ 
+-public final class GalleryActivity extends AbstractGalleryActivity implements OnCancelListener {
++public final class GalleryActivity extends AbstractGalleryActivity {
+     public static final String EXTRA_SLIDESHOW = "slideshow";
+     public static final String EXTRA_DREAM = "dream";
+     public static final String EXTRA_CROP = "crop";
+@@ -100,6 +99,10 @@
+     }
+ 
+     public void startDefaultPage() {
++        if (GalleryAppImpl.EMBEDDED) {
++            getStateManager().startState(AlbumSetPage.class, new Bundle());
++            return;
++        }
+         PicasaSource.showSignInReminder(this);
+         Bundle data = new Bundle();
+         data.putString(AlbumSetPage.KEY_MEDIA_PATH,
+@@ -107,7 +110,7 @@
+         getStateManager().startState(AlbumSetPage.class, data);
+         mVersionCheckDialog = PicasaSource.getVersionCheckDialog(this);
+         if (mVersionCheckDialog != null) {
+-            mVersionCheckDialog.setOnCancelListener(this);
++            mVersionCheckDialog.setOnCancelListener(this::onCancel);
+         }
+     }
+ 
+@@ -245,8 +248,7 @@
+         }
+     }
+ 
+-    @Override
+-    public void onCancel(DialogInterface dialog) {
++    private void onCancel(DialogInterface dialog) {
+         if (dialog == mVersionCheckDialog) {
+             mVersionCheckDialog = null;
+         }
+--- a/src/com/android/gallery3d/app/StateManager.java
++++ b/src/com/android/gallery3d/app/StateManager.java
+@@ -28,7 +28,7 @@
+ import com.android.gallery3d.common.Utils;
+ import com.android.gallery3d.util.UsageStatistics;
+ 
+-import java.util.Stack;
++import java.util.ArrayDeque;
+ 
+ public class StateManager {
+     @SuppressWarnings("unused")
+@@ -41,7 +41,7 @@
+     private static final String KEY_CLASS = "class";
+ 
+     private AbstractGalleryActivity mActivity;
+-    private Stack<StateEntry> mStack = new Stack<StateEntry>();
++    private final ArrayDeque<StateEntry> mStack = new ArrayDeque<>();
+     private ActivityState.ResultEntry mResult;
+ 
+     public StateManager(AbstractGalleryActivity activity) {
+@@ -69,7 +69,7 @@
+                 klass.getSimpleName());
+         state.initialize(mActivity, data);
+ 
+-        mStack.push(new StateEntry(data, state));
++        mStack.addLast(new StateEntry(data, state));
+         state.onCreate(data, null);
+         if (mIsResumed) state.resume();
+     }
+@@ -98,7 +98,7 @@
+         }
+         UsageStatistics.onContentViewChanged(UsageStatistics.COMPONENT_GALLERY,
+                 klass.getSimpleName());
+-        mStack.push(new StateEntry(data, state));
++        mStack.addLast(new StateEntry(data, state));
+         state.onCreate(data, null);
+         if (mIsResumed) state.resume();
+     }
+@@ -169,7 +169,7 @@
+     public void clearTasks() {
+         // Remove all the states that are on top of the bottom PhotoPage state
+         while (mStack.size() > 1) {
+-            mStack.pop().activityState.onDestroy();
++            mStack.removeLast().activityState.onDestroy();
+         }
+     }
+ 
+@@ -190,21 +190,21 @@
+         }
+ 
+         Log.v(TAG, "finishState " + state);
+-        if (state != mStack.peek().activityState) {
++        if (state != mStack.getLast().activityState) {
+             if (state.isDestroyed()) {
+                 Log.d(TAG, "The state is already destroyed");
+                 return;
+             } else {
+                 throw new IllegalArgumentException("The stateview to be finished"
+                         + " is not at the top of the stack: " + state + ", "
+-                        + mStack.peek().activityState);
++                        + mStack.getLast().activityState);
+             }
+         }
+ 
+         // Remove the top state.
+-        mStack.pop();
++        mStack.removeLast();
+         state.mIsFinishing = true;
+-        ActivityState top = !mStack.isEmpty() ? mStack.peek().activityState : null;
++        ActivityState top = !mStack.isEmpty() ? mStack.getLast().activityState : null;
+         if (mIsResumed && fireOnPause) {
+             if (top != null) {
+                 state.transitionOnNextPause(state.getClass(), top.getClass(),
+@@ -212,7 +212,7 @@
+             }
+             state.onPause();
+         }
+-        mActivity.getGLRoot().setContentPane(null);
++        if (mActivity.getGLRoot() != null) mActivity.getGLRoot().setContentPane(null);
+         state.onDestroy();
+ 
+         if (top != null && mIsResumed) top.resume();
+@@ -225,13 +225,13 @@
+     public void switchState(ActivityState oldState,
+             Class<? extends ActivityState> klass, Bundle data) {
+         Log.v(TAG, "switchState " + oldState + ", " + klass);
+-        if (oldState != mStack.peek().activityState) {
++        if (oldState != mStack.getLast().activityState) {
+             throw new IllegalArgumentException("The stateview to be finished"
+                     + " is not at the top of the stack: " + oldState + ", "
+-                    + mStack.peek().activityState);
++                    + mStack.getLast().activityState);
+         }
+         // Remove the top state.
+-        mStack.pop();
++        mStack.removeLast();
+         if (!data.containsKey(PhotoPage.KEY_APP_BRIDGE)) {
+             // Do not do the fade out stuff when we are switching camera modes
+             oldState.transitionOnNextPause(oldState.getClass(), klass,
+@@ -248,7 +248,7 @@
+             throw new AssertionError(e);
+         }
+         state.initialize(mActivity, data);
+-        mStack.push(new StateEntry(data, state));
++        mStack.addLast(new StateEntry(data, state));
+         state.onCreate(data, null);
+         if (mIsResumed) state.resume();
+         UsageStatistics.onContentViewChanged(UsageStatistics.COMPONENT_GALLERY,
+@@ -258,7 +258,7 @@
+     public void destroy() {
+         Log.v(TAG, "destroy");
+         while (!mStack.isEmpty()) {
+-            mStack.pop().activityState.onDestroy();
++            mStack.removeLast().activityState.onDestroy();
+         }
+         mStack.clear();
+     }
+@@ -285,7 +285,7 @@
+             }
+             activityState.initialize(mActivity, data);
+             activityState.onCreate(data, state);
+-            mStack.push(new StateEntry(data, activityState));
++            mStack.addLast(new StateEntry(data, activityState));
+             topState = activityState;
+         }
+         if (topState != null) {
+@@ -323,7 +323,7 @@
+ 
+     public ActivityState getTopState() {
+         Utils.assertTrue(!mStack.isEmpty());
+-        return mStack.peek().activityState;
++        return mStack.getLast().activityState;
+     }
+ 
+     private static class StateEntry {
+--- a/src/com/android/gallery3d/app/ActivityState.java
++++ b/src/com/android/gallery3d/app/ActivityState.java
+@@ -196,6 +196,10 @@
+ 
+     // should only be called by StateManager
+     void resume() {
++        if (GalleryAppImpl.EMBEDDED) {
++            onResume();
++            return;
++        }
+         AbstractGalleryActivity activity = mActivity;
+         ActionBar actionBar = activity.getActionBar();
+         if (actionBar != null) {
+--- a/src/com/android/gallery3d/app/AlbumSetPage.java
++++ b/src/com/android/gallery3d/app/AlbumSetPage.java
+@@ -23,6 +23,7 @@
+ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.Message;
++import android.view.Gravity;
+ import android.view.HapticFeedbackConstants;
+ import android.view.Menu;
+ import android.view.MenuInflater;
+@@ -30,7 +31,9 @@
+ import android.view.View;
+ import android.view.View.OnClickListener;
+ import android.widget.Button;
++import android.widget.FrameLayout;
+ import android.widget.RelativeLayout;
++import android.widget.TextView;
+ import android.widget.Toast;
+ 
+ import com.android.gallery3d.R;
+@@ -170,7 +173,7 @@
+     public void onBackPressed() {
+         if (mShowDetails) {
+             hideDetails();
+-        } else if (mSelectionManager.inSelectionMode()) {
++        } else if (mSelectionManager != null && mSelectionManager.inSelectionMode()) {
+             mSelectionManager.leaveSelectionMode();
+         } else {
+             super.onBackPressed();
+@@ -319,6 +322,10 @@
+     @Override
+     public void onCreate(Bundle data, Bundle restoreState) {
+         super.onCreate(data, restoreState);
++        if (GalleryAppImpl.EMBEDDED) {
++            showEmptyAlbumSet();
++            return;
++        }
+         initializeViews();
+         initializeData(data);
+         Context context = mActivity.getAndroidContext();
+@@ -346,11 +353,33 @@
+         };
+     }
+ 
++    // The foreground host has no MediaStore or EGL window. Render the album set's
++    // existing empty state and themed title as ordinary Android views.
++    private void showEmptyAlbumSet() {
++        FrameLayout header = mActivity.findViewById(R.id.header);
++        TextView title = (TextView) mActivity.getLayoutInflater()
++                .inflate(R.layout.action_bar_text, header, false);
++        title.setText(R.string.albums);
++        header.setBackgroundResource(R.drawable.actionbar_translucent);
++        header.addView(title);
++        header.setVisibility(View.VISIBLE);
++
++        FrameLayout surface = mActivity.findViewById(R.id.gallery_surface);
++        surface.setBackgroundResource(getBackgroundColorId());
++        TextView empty = (TextView) mActivity.getLayoutInflater()
++                .inflate(R.layout.action_bar_text, surface, false);
++        empty.setText(R.string.empty_album);
++        empty.setGravity(Gravity.CENTER);
++        surface.addView(empty, new FrameLayout.LayoutParams(
++                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
++                Gravity.CENTER));
++    }
++
+     @Override
+     public void onDestroy() {
+         super.onDestroy();
+         cleanupCameraButton();
+-        mActionModeHandler.destroy();
++        if (mActionModeHandler != null) mActionModeHandler.destroy();
+     }
+ 
+     private boolean setupCameraButton() {
+@@ -434,6 +463,7 @@
+     @Override
+     public void onPause() {
+         super.onPause();
++        if (GalleryAppImpl.EMBEDDED) return;
+         mIsActive = false;
+         mAlbumSetDataAdapter.pause();
+         mAlbumSetView.pause();
+@@ -453,6 +483,7 @@
+ 
+     @Override
+     public void onResume() {
++        if (GalleryAppImpl.EMBEDDED) return;
+         super.onResume();
+         mIsActive = true;
+         setContentPane(mRootPane);
+--- a/gallerycommon/src/com/android/gallery3d/common/Utils.java
++++ b/gallerycommon/src/com/android/gallery3d/common/Utils.java
+@@ -39,7 +39,8 @@
+     private static long[] sCrcTable = new long[256];
+ 
+     private static final boolean IS_DEBUG_BUILD =
+-            Build.TYPE.equals("eng") || Build.TYPE.equals("userdebug");
++            !"true".equals(System.getProperty("org.wasmandroid.foreground"))
++                    && (Build.TYPE.equals("eng") || Build.TYPE.equals("userdebug"));
+ 
+     private static final String MASK_STRING = "********************************";
+ 

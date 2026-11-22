@@ -1,0 +1,326 @@
+--- a/src/org/chromium/webview_shell/WebViewBrowserActivity.java
++++ b/src/org/chromium/webview_shell/WebViewBrowserActivity.java
+@@ -40,17 +40,14 @@
+ import android.webkit.PermissionRequest;
+ import android.webkit.TracingConfig;
+ import android.webkit.TracingController;
+-import android.webkit.WebChromeClient;
+ import android.webkit.WebSettings;
+ import android.webkit.WebView;
+ import android.webkit.WebViewClient;
+ import android.widget.EditText;
+-import android.widget.FrameLayout;
+ import android.widget.PopupMenu;
+ import android.widget.TextView;
+ import android.widget.Toast;
+ 
+-import java.io.File;
+ import java.io.FileNotFoundException;
+ import java.io.FileOutputStream;
+ import java.io.IOException;
+@@ -61,15 +58,13 @@
+ import java.util.List;
+ import java.util.Locale;
+ import java.util.concurrent.Executors;
+-import java.util.regex.Matcher;
+-import java.util.regex.Pattern;
+ 
+ /**
+  * This activity is designed for starting a "mini-browser" for manual testing of WebView.
+  * It takes an optional URL as an argument, and displays the page. There is a URL bar
+  * on top of the webview for manually specifying URLs to load.
+  */
+-public class WebViewBrowserActivity extends Activity implements PopupMenu.OnMenuItemClickListener {
++public class WebViewBrowserActivity extends Activity {
+     private static final String TAG = "WebViewShell";
+ 
+     // Our imaginary Android permission to associate with the WebKit geo permission
+@@ -79,11 +74,8 @@
+     // WebKit permissions with no corresponding Android permission can always be granted
+     private static final String NO_ANDROID_PERMISSION = "NO_ANDROID_PERMISSION";
+ 
+-    // TODO(timav): Remove these variables after http://crbug.com/626202 is fixed.
+     // The Bundle key for WebView serialized state
+     private static final String SAVE_RESTORE_STATE_KEY = "WEBVIEW_CHROMIUM_STATE";
+-    // Maximal size of this state.
+-    private static final int MAX_STATE_LENGTH = 300 * 1024;
+ 
+     // Map from WebKit permissions to Android permissions
+     private static final HashMap<String, String> sPermissions;
+@@ -99,12 +91,8 @@
+                 Manifest.permission.CAMERA);
+     }
+ 
+-    private static final Pattern WEBVIEW_VERSION_PATTERN =
+-            Pattern.compile("(Chrome/)([\\d\\.]+)\\s");
+-
+     private EditText mUrlBar;
+     private WebView mWebView;
+-    private View mFullscreenView;
+     private String mWebViewVersion;
+     private boolean mEnableTracing;
+ 
+@@ -227,9 +215,11 @@
+     @Override
+     public void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
+-        WebView.setWebContentsDebuggingEnabled(true);
+         setContentView(R.layout.activity_webview_browser);
+         mUrlBar = (EditText) findViewById(R.id.url_field);
++        mUrlBar.setOnFocusChangeListener((view, focused) -> {
++            if (focused) mUrlBar.setSelection(0, mUrlBar.getText().length());
++        });
+         mUrlBar.setOnKeyListener(new OnKeyListener() {
+             @Override
+             public boolean onKey(View view, int keyCode, KeyEvent event) {
+@@ -241,47 +231,13 @@
+             }
+         });
+ 
+-        StrictMode.setThreadPolicy(new StrictMode.ThreadPolicy.Builder()
+-                .detectAll()
+-                .penaltyLog()
+-                .penaltyDeath()
+-                .build());
+-        // Conspicuously omitted: detectCleartextNetwork() and detectFileUriExposure() to permit
+-        // http:// and file:// origins.
+-        StrictMode.setVmPolicy(new StrictMode.VmPolicy.Builder()
+-                .detectActivityLeaks()
+-                .detectLeakedClosableObjects()
+-                .detectLeakedRegistrationObjects()
+-                .detectLeakedSqlLiteObjects()
+-                .penaltyLog()
+-                .penaltyDeath()
+-                .build());
+-
+         createAndInitializeWebView();
+ 
+         String url = getUrlFromIntent(getIntent());
+-        if (url == null) {
+-            mWebView.restoreState(savedInstanceState);
+-            url = mWebView.getUrl();
+-            if (url != null) {
+-                // If we have restored state, and that state includes
+-                // a loaded URL, we reload. This allows us to keep the
+-                // scroll offset, and also doesn't add an additional
+-                // navigation history entry.
+-                setUrlBarText(url);
+-                // The immediately previous loadUrlFromurlbar must
+-                // have got as far as calling loadUrl, so there is no
+-                // URI parsing error at this point.
+-                setUrlFail(false);
+-                hideKeyboard(mUrlBar);
+-                mWebView.reload();
+-                mWebView.requestFocus();
+-                return;
+-            }
+-            // Make sure to load a blank page to make it immediately inspectable with
+-            // chrome://inspect.
+-            url = "about:blank";
+-        }
++        if (url == null && savedInstanceState != null) {
++            url = savedInstanceState.getString(SAVE_RESTORE_STATE_KEY);
++        }
++        if (url == null) url = "about:blank";
+         setUrlBarText(url);
+         setUrlFail(false);
+         loadUrlFromUrlBar(mUrlBar);
+@@ -289,19 +245,14 @@
+ 
+     @Override
+     public void onSaveInstanceState(Bundle savedInstanceState) {
+-        // Deliberately don't catch TransactionTooLargeException here.
+-        mWebView.saveState(savedInstanceState);
+-
+-        // TODO(timav): Remove this hack after http://crbug.com/626202 is fixed.
+-        // Drop the saved state of it is too long since Android N and above
+-        // can't handle large states without a crash.
+-        byte[] webViewState = savedInstanceState.getByteArray(SAVE_RESTORE_STATE_KEY);
+-        if (webViewState != null && webViewState.length > MAX_STATE_LENGTH) {
+-            savedInstanceState.remove(SAVE_RESTORE_STATE_KEY);
+-            String message = String.format(
+-                    Locale.US, "Can't save state: %dkb is too long", webViewState.length / 1024);
+-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+-        }
++        super.onSaveInstanceState(savedInstanceState);
++        savedInstanceState.putString(SAVE_RESTORE_STATE_KEY, mWebView.getUrl());
++    }
++
++    @Override
++    protected void onDestroy() {
++        if (mWebView != null) mWebView.destroy();
++        super.onDestroy();
+     }
+ 
+     @Override
+@@ -322,12 +273,11 @@
+         WebSettings settings = webview.getSettings();
+         initializeSettings(settings);
+ 
+-        Matcher matcher = WEBVIEW_VERSION_PATTERN.matcher(settings.getUserAgentString());
+-        if (matcher.find()) {
+-            mWebViewVersion = matcher.group(2);
+-        } else {
+-            mWebViewVersion = "-";
+-        }
++        String agent = settings.getUserAgentString();
++        int version = agent.indexOf("Chrome/");
++        int end = version < 0 ? -1 : agent.indexOf(' ', version);
++        mWebViewVersion = version < 0 ? "-" : agent.substring(version + 7,
++                end < 0 ? agent.length() : end);
+         setTitle(getResources().getString(R.string.title_activity_browser) + " " + mWebViewVersion);
+ 
+         webview.setWebViewClient(new WebViewClient() {
+@@ -360,57 +310,9 @@
+             }
+         });
+ 
+-        webview.setWebChromeClient(new WebChromeClient() {
+-            @Override
+-            public Bitmap getDefaultVideoPoster() {
+-                return Bitmap.createBitmap(
+-                        new int[] {Color.TRANSPARENT}, 1, 1, Bitmap.Config.ARGB_8888);
+-            }
+-
+-            @Override
+-            public void onGeolocationPermissionsShowPrompt(String origin,
+-                    GeolocationPermissions.Callback callback) {
+-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+-                    // Pre Lollipop versions (< api level 21) do not have PermissionRequest,
+-                    // hence grant here immediately.
+-                    callback.invoke(origin, true, false);
+-                    return;
+-                }
+-
+-                onPermissionRequest(new GeoPermissionRequest(origin, callback));
+-            }
+-
+-            @Override
+-            public void onPermissionRequest(PermissionRequest request) {
+-                WebViewBrowserActivity.this.requestPermissionsForPage(request);
+-            }
+-
+-            @Override
+-            public void onShowCustomView(View view, WebChromeClient.CustomViewCallback callback) {
+-                if (mFullscreenView != null) {
+-                    ((ViewGroup) mFullscreenView.getParent()).removeView(mFullscreenView);
+-                }
+-                mFullscreenView = view;
+-                getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+-                getWindow().addContentView(mFullscreenView,
+-                        new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+-                                ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+-            }
+-
+-            @Override
+-            public void onHideCustomView() {
+-                if (mFullscreenView == null) {
+-                    return;
+-                }
+-                getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+-                ((ViewGroup) mFullscreenView.getParent()).removeView(mFullscreenView);
+-                mFullscreenView = null;
+-            }
+-        });
+-
+         mWebView = webview;
+         getContainer().addView(
+-                webview, new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
++                webview, new android.widget.LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f));
+         setUrlBarText("");
+     }
+ 
+@@ -493,7 +395,8 @@
+         // Parse with android.net.Uri instead of java.net.URI because Uri does no validation. Rather
+         // than failing in the browser, let WebView handle weird URLs. WebView will escape illegal
+         // characters and display error pages for bad URLs like "blah://example.com".
+-        if (Uri.parse(url).getScheme() == null) url = "http://" + url;
++        if (url.isEmpty()) url = "about:blank";
++        if (Uri.parse(url).getScheme() == null) url = "https://" + url;
+         setUrlBarText(url);
+         setUrlFail(false);
+         loadUrl(url);
+@@ -502,13 +405,12 @@
+ 
+     public void showPopup(View v) {
+         PopupMenu popup = new PopupMenu(this, v);
+-        popup.setOnMenuItemClickListener(this);
++        popup.setOnMenuItemClickListener(this::onMenuItemClick);
+         popup.inflate(R.menu.main_menu);
+         popup.getMenu().findItem(R.id.menu_enable_tracing).setChecked(mEnableTracing);
+         popup.show();
+     }
+ 
+-    @Override
+     @SuppressLint("NewApi") // TracingController related methods require API level 28.
+     public boolean onMenuItemClick(MenuItem item) {
+         switch(item.getItemId()) {
+@@ -566,29 +468,8 @@
+         }
+     }
+ 
+-    // setGeolocationDatabasePath deprecated in api level 24,
+-    // but we still use it because we support api level 19 and up.
+-    @SuppressWarnings("deprecation")
+     private void initializeSettings(WebSettings settings) {
+-        File geolocation = null;
+-
+-        StrictMode.ThreadPolicy oldPolicy = StrictMode.allowThreadDiskWrites();
+-        geolocation = getDir("geolocation", 0);
+-        StrictMode.setThreadPolicy(oldPolicy);
+-
+         settings.setJavaScriptEnabled(true);
+-
+-        // configure local storage apis and their database paths.
+-        settings.setGeolocationDatabasePath(geolocation.getPath());
+-
+-        settings.setGeolocationEnabled(true);
+-        settings.setDatabaseEnabled(true);
+-        settings.setDomStorageEnabled(true);
+-
+-        // Default layout behavior for chrome on android.
+-        settings.setUseWideViewPort(true);
+-        settings.setLoadWithOverviewMode(true);
+-        settings.setLayoutAlgorithm(WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING);
+     }
+ 
+     private void about() {
+@@ -659,13 +540,11 @@
+         return intent != null ? intent.getDataString() : null;
+     }
+ 
+-    static final Pattern BROWSER_URI_SCHEMA = Pattern.compile(
+-            "(?i)"   // switch on case insensitive matching
+-            + "("    // begin group for schema
+-            + "(?:http|https|file):\\/\\/"
+-            + "|(?:inline|data|about|chrome|javascript):"
+-            + ")"
+-            + "(.*)");
++    private static boolean isWebScheme(String url) {
++        String scheme = Uri.parse(url).getScheme();
++        return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)
++                || "about".equalsIgnoreCase(scheme);
++    }
+ 
+     private static boolean startBrowsingIntent(Context context, String url) {
+         Intent intent;
+@@ -679,8 +558,7 @@
+         // Check for regular URIs that WebView supports by itself, but also
+         // check if there is a specialized app that had registered itself
+         // for this kind of an intent.
+-        Matcher m = BROWSER_URI_SCHEMA.matcher(url);
+-        if (m.matches() && !isSpecializedHandlerAvailable(context, intent)) {
++        if (isWebScheme(url) && !isSpecializedHandlerAvailable(context, intent)) {
+             return false;
+         }
+         // Sanitize the Intent, ensuring web pages can not bypass browser
+--- a/res/layout/activity_webview_browser.xml
++++ b/res/layout/activity_webview_browser.xml
+@@ -36,6 +36,7 @@
+             android:layout_height="match_parent"
+             android:src="@drawable/item_more_black"
+             android:contentDescription="@string/menu_about"
++            android:visibility="gone"
+             android:onClick="showPopup" />
+     </LinearLayout>
+ </LinearLayout>

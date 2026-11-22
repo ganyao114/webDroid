@@ -42,6 +42,33 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
         COMMENT "Compiling the window adapter for the upstream SystemUI APK"
         VERBATIM)
     set(wa_launcher_runtime_sources art_sf_entry.cpp launcher_session_entry.cpp "${wa_systemui_host_dex}")
+    add_library(wa_android_system_foreground STATIC foreground_activity_entry.cpp)
+    target_include_directories(wa_android_system_foreground PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
+    target_link_libraries(wa_android_system_foreground PUBLIC wa_hal_surfaceflinger
+        PRIVATE wa_android_system_apk aosp17_ui_jni aosp17_libandroidfw)
+
+    set(WA_BUILTIN_APPS_DIR "${CMAKE_CURRENT_BINARY_DIR}/upstream-apps")
+    set(wa_builtin_outputs "${WA_BUILTIN_APPS_DIR}/upstream_apps_provenance.json")
+    foreach(name IN ITEMS DeskClock Browser2 Music Gallery2)
+        list(APPEND wa_builtin_outputs "${WA_BUILTIN_APPS_DIR}/${name}-upstream.apk")
+    endforeach()
+    file(GLOB wa_builtin_patches CONFIGURE_DEPENDS
+        "../../patches/aosp17/deskclock/*.patch" "../../patches/aosp17/browser2/*.patch"
+        "../../patches/aosp17/music/*.patch" "../../patches/aosp17/gallery2/*.patch")
+    set(wa_builtin_driver "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/aosp/build_upstream_apps.py")
+    add_custom_command(OUTPUT ${wa_builtin_outputs}
+        COMMAND "${Python3_EXECUTABLE}" -B "${wa_builtin_driver}"
+            --aosp-root "${AOSP17_SOURCE_DIR}" --deps "${WA_SYSTEMUI_DEPS_DIR}"
+            --sdk "${WA_ANDROID_SDK}" --java "${WA_JAVA_EXECUTABLE}" --javac "${WA_JAVAC_EXECUTABLE}"
+            --out-dir "${WA_BUILTIN_APPS_DIR}" --depfile "${WA_BUILTIN_APPS_DIR}/apps.d"
+        DEPENDS "${wa_builtin_driver}" ${wa_builtin_patches}
+        DEPFILE "${WA_BUILTIN_APPS_DIR}/apps.d"
+        COMMENT "Compiling and signing the AOSP 17 built-in APKs"
+        VERBATIM)
+    add_custom_target(wa_upstream_builtin_apps DEPENDS ${wa_builtin_outputs})
+    add_custom_target(wa_foreground_framework_assets
+        DEPENDS "${WA_LAUNCHER_FRAMEWORK_DEX}" "${WA_LAUNCHER_FRAMEWORK_RES}")
+    add_dependencies(wa_foreground_framework_assets aosp17_framework_core)
 endif()
 
 if(EMSCRIPTEN)
@@ -71,7 +98,8 @@ if(EMSCRIPTEN)
         _wa_jit_registry_publish
     )
     if(TARGET wa_android_system_apk)
-        target_link_libraries(android_system PRIVATE wa_android_system_apk wa_android_system_binder)
+        target_link_libraries(android_system PRIVATE wa_android_system_apk wa_android_system_binder
+            wa_android_system_foreground)
         add_dependencies(android_system wa_upstream_launcher_assets)
         target_sources(android_system PRIVATE ${wa_launcher_runtime_sources})
         target_include_directories(android_system PRIVATE "${wa_systemui_host}")
@@ -114,6 +142,11 @@ if(EMSCRIPTEN)
             _wa_system_launcher_send_home _wa_system_launcher_send_back _wa_system_launcher_state_json
             _wa_system_launcher_open_all_apps
             _wa_system_launcher_consume_launch _wa_system_launcher_last_error
+            _wa_system_app_create _wa_system_app_destroy _wa_system_app_sf_ctx
+            _wa_system_app_load_framework_dex _wa_system_app_load_framework_fallback_dex
+            _wa_system_app_set_framework_res_apk _wa_system_app_install_package_catalog_apk
+            _wa_system_app_boot_apk _wa_system_app_tick _wa_system_app_resize
+            _wa_system_app_send_back _wa_system_app_state_json _wa_system_app_last_error
             _wa_system_sf_init _wa_system_sf_ctx _wa_system_sf_destroy
             _wa_sf_create _wa_sf_destroy _wa_sf_begin _wa_sf_set_layer _wa_sf_remove_layer
             _wa_sf_commit _wa_sf_abort _wa_sf_frame_acquire _wa_sf_frame_release
@@ -134,7 +167,8 @@ else()
     target_link_libraries(wa_android_system PUBLIC wa_libkern wa_linker_ffi
         PRIVATE wa_hal_browser svm_wasm svm_arm32_numeric svm_arm64_numeric)
     if(TARGET wa_android_system_apk)
-        target_link_libraries(wa_android_system PRIVATE wa_android_system_apk wa_android_system_binder)
+        target_link_libraries(wa_android_system PRIVATE wa_android_system_apk wa_android_system_binder
+            wa_android_system_foreground)
         target_sources(wa_android_system PRIVATE ${wa_launcher_runtime_sources})
         target_include_directories(wa_android_system PRIVATE "${wa_systemui_host}")
         target_compile_definitions(wa_android_system PRIVATE WA_VERIFY_LAUNCHER_DEX=$<BOOL:${WA_VERIFY_LAUNCHER_DEX}>)
@@ -155,4 +189,5 @@ if(BUILD_TESTING AND TARGET wa_android_system_apk)
         add_subdirectory(../../tests/m8_aosp17_launcher3_apk "${CMAKE_BINARY_DIR}/tests/m8_aosp17_launcher3_apk")
     endif()
     add_subdirectory(../../tests/m9_aosp17_launcher3_boot "${CMAKE_BINARY_DIR}/tests/m9_aosp17_launcher3_boot")
+    add_subdirectory(../../tests/m14_upstream_apps "${CMAKE_BINARY_DIR}/tests/m14_upstream_apps")
 endif()

@@ -1,0 +1,13 @@
+--- a/src/com/android/deskclock/LogUtils.kt
++++ b/src/com/android/deskclock/LogUtils.kt
+@@ -154,7 +154,8 @@
+ 
+         companion object {
+             /** Log everything for debug builds or if running on a dev device. */
+-            val DEBUG = (BuildConfig.DEBUG || "eng" == Build.TYPE || "userdebug" == Build.TYPE)
++            val DEBUG = BuildConfig.DEBUG || (!DeskClockApplication.isEmbedded &&
++                    ("eng" == Build.TYPE || "userdebug" == Build.TYPE))
+         }
+     }
+ }
+\ No newline at end of file

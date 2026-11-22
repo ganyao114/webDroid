@@ -1,0 +1,33 @@
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -251,7 +251,7 @@
+ 
+         <provider
+             android:name="androidx.core.content.FileProvider"
+-            android:authorities="${applicationId}.provider"
++            android:authorities="com.android.gallery3d.fileprovider"
+             android:exported="false"
+             android:grantUriPermissions="true">
+             <meta-data
+--- a/src/com/android/gallery3d/app/TrimVideo.java
++++ b/src/com/android/gallery3d/app/TrimVideo.java
+@@ -266,7 +266,7 @@
+                             Uri videoUri = FileProvider.getUriForFile(
+                                     TrimVideo.this,
+                                     getApplicationContext().getPackageName()
+-                                            + ".provider", mDstFileInfo.mFile);
++                                            + ".fileprovider", mDstFileInfo.mFile);
+                             intent.setDataAndType(videoUri, "video/*");
+                             intent.putExtra(MediaStore.EXTRA_FINISH_ON_COMPLETION, false);
+                             startActivity(intent);
+--- a/src/com/android/gallery3d/app/MuteVideo.java
++++ b/src/com/android/gallery3d/app/MuteVideo.java
+@@ -88,7 +88,7 @@
+                             Uri videoUri = FileProvider.getUriForFile(
+                                     mActivity,
+                                     mActivity.getApplicationContext().getPackageName()
+-                                            + ".provider", mDstFileInfo.mFile);
++                                            + ".fileprovider", mDstFileInfo.mFile);
+                             intent.setDataAndType(videoUri, "video/*");
+                             intent.putExtra(MediaStore.EXTRA_FINISH_ON_COMPLETION, false);
+                             mActivity.startActivity(intent);

@@ -1,0 +1,62 @@
+--- a/AndroidManifest.xml
++++ b/AndroidManifest.xml
+@@ -32,10 +32,18 @@
+     <!-- App Declaration -->
+     <application
+             android:allowBackup="true"
++            android:icon="@drawable/app_music"
+             android:label="@string/app_name"
+             android:supportsRtl="true"
+             android:launchMode="singleTop"
+             android:requestLegacyExternalStorage="true">
++
++        <activity android:name=".MusicBrowserActivity" android:exported="true">
++            <intent-filter>
++                <action android:name="android.intent.action.MAIN" />
++                <category android:name="android.intent.category.LAUNCHER" />
++            </intent-filter>
++        </activity>
+ 
+         <activity android:name="AudioPreview" android:theme="@android:style/Theme.Dialog"
+                   android:taskAffinity=""
+--- a/src/com/android/music/MusicBrowserActivity.java
++++ b/src/com/android/music/MusicBrowserActivity.java
+@@ -18,20 +18,29 @@
+ 
+ import android.app.Activity;
+ import android.os.Bundle;
++import android.view.LayoutInflater;
++import android.view.View;
++import android.widget.TextView;
+ 
+ /**
+- * A skeleton class that provides empty implementations for Activity class.
++ * Launcher entry for the audio preview when no track was supplied.
+  */
+ public class MusicBrowserActivity extends Activity {
+     public MusicBrowserActivity() {}
+ 
+     @Override
+-    public void onCreate(Bundle icicle) {}
+-
+-    @Override
+-    public void onDestroy() {}
+-
+-    @Override
+-    public void onRequestPermissionsResult(
+-            int requestCode, String permissions[], int[] grantResults) {}
++    public void onCreate(Bundle icicle) {
++        super.onCreate(icicle);
++        LayoutInflater inflater = LayoutInflater.from(this).cloneInContext(this);
++        inflater.setFactory((name, context, attrs) -> {
++            // These playback controls stay hidden until a track is provided.
++            if ("ProgressBar".equals(name) || "SeekBar".equals(name)) return new View(context, attrs);
++            return null;
++        });
++        View content = inflater.inflate(R.layout.audiopreview, null);
++        content.findViewById(R.id.spinner).setVisibility(View.GONE);
++        TextView message = content.findViewById(R.id.loading);
++        message.setText(R.string.no_tracks_title);
++        setContentView(content);
++    }
+ }

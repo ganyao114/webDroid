@@ -1,0 +1,17 @@
+--- a/res/values-v22/drawable.xml
++++ b/res/values-v22/drawable.xml
+@@ -17,10 +17,10 @@
+ <!-- Post v22 the tab icons animate on change. -->
+ <resources>
+ 
+-    <item name="ic_tab_alarm" type="drawable">@drawable/ic_tab_alarm_animated</item>
+-    <item name="ic_tab_clock" type="drawable">@drawable/ic_tab_clock_animated</item>
+-    <item name="ic_tab_timer" type="drawable">@drawable/ic_tab_timer_animated</item>
+-    <item name="ic_tab_stopwatch" type="drawable">@drawable/ic_tab_stopwatch_animated</item>
++    <item name="ic_tab_alarm" type="drawable">@drawable/ic_tab_alarm_static</item>
++    <item name="ic_tab_clock" type="drawable">@drawable/ic_tab_clock_static</item>
++    <item name="ic_tab_timer" type="drawable">@drawable/ic_tab_timer_static</item>
++    <item name="ic_tab_stopwatch" type="drawable">@drawable/ic_tab_stopwatch_static</item>
+     <item name="ic_ringtone_active" type="drawable">@drawable/ic_ringtone_active_animated</item>
+ 
+     <item name="ic_caret_up" type="drawable">@drawable/ic_caret_up_animation</item>

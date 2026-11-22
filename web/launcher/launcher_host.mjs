@@ -60,7 +60,8 @@ export class LauncherHost {
     this.onRecents = onRecents;
     this.onError = onError;
     canvas.ownerDocument.addEventListener('keydown', event => {
-      if (!this.#active || event.isComposing || !['Home', 'Escape', 'BrowserBack'].includes(event.key)) return;
+      if (!this.#active || (event.defaultPrevented && event.key !== 'Home') || event.isComposing ||
+          !['Home', 'Escape', 'BrowserBack'].includes(event.key)) return;
       event.preventDefault();
       this.navigate(event.key === 'Home' ? 'home' : 'back');
     }, { signal: this.#abort.signal });
@@ -308,7 +309,7 @@ export class LauncherHost {
         this.#session.input.blurIME();
         this.onRecents?.(this);
       } else if (this.#active) {
-        this.#returnHome();
+        if (action !== 'back' || !this.#active.foreground.sendBack()) this.#returnHome();
       } else if (this.#phase === 'launcher') {
         this.#session.input.blurIME();
         if (action === 'back') this.#session.abi.back();
@@ -331,18 +332,26 @@ export class LauncherHost {
       if (!bytes) throw new Error(`The APK for ${launch.package} is unavailable (${launch.apkName})`);
       const { top, bottom } = abi.state().systemUiInsets;
       const height = this.#session.size.height;
+      const contentFraction = (height - top - bottom) / height;
       this.appSurface.style.inset = `${100 * top / height}% 0 ${100 * bottom / height}%`;
       abi.pause();
       this.#stopLoop();
       input.blurIME();
       const foreground = new ForegroundApk({
         surface: this.appSurface, launch, audio: this.#audio,
+        launcherModule: this.#module, loadSystem: this.loadSystem, assets: this.#assets,
+        packages: this.#apks, locale: this.locale, backend: this.backend,
+        viewport: () => {
+          const size = this.size();
+          return { ...size, height: Math.max(1, Math.round(size.height * contentFraction)) };
+        },
         onReady: () => {
           if (active !== this.#active) return;
           this.recent = launch;
           this.#setPhase('app');
         },
         onError: error => this.#launchFailed(active, error),
+        onFinish: () => { if (active === this.#active) this.#returnHome(); },
       });
       active = this.#active = { launch, foreground };
       this.#setPhase('opening-app');
