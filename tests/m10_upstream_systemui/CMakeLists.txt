@@ -26,12 +26,17 @@ file(GLOB_RECURSE resource_files CONFIGURE_DEPENDS LIST_DIRECTORIES false
     "${AOSP17_SOURCE_DIR}/frameworks/base/packages/SystemUI/res/*"
     "${AOSP17_SOURCE_DIR}/frameworks/base/packages/SystemUI/res-keyguard/*"
     "${AOSP17_SOURCE_DIR}/frameworks/base/packages/SystemUI/res-product/*"
+    "${AOSP17_SOURCE_DIR}/frameworks/base/packages/SettingsLib/res/*"
+    "${AOSP17_SOURCE_DIR}/frameworks/base/core/res/res/values*/config.xml"
+    "${AOSP17_SOURCE_DIR}/frameworks/base/core/res/res/values*/dimens.xml"
     "${AOSP17_SOURCE_DIR}/frameworks/libs/systemui/dynamiccolors/res/*")
 file(GLOB kotlin_compiler_files CONFIGURE_DEPENDS "${WA_SYSTEMUI_DEPS_DIR}/kotlinc/*.jar")
 
 set(output "${CMAKE_CURRENT_BINARY_DIR}/apk")
 set(apk "${output}/SystemUI-upstream.apk")
 set(provenance "${output}/systemui_provenance.json")
+get_target_property(framework_dex aosp17_framework_core WA_FRAMEWORK_DEX)
+get_target_property(framework_jar aosp17_framework_core WA_FRAMEWORK_CLASSES)
 set(build_command
     "${Python3_EXECUTABLE}" "${builder}" --aosp-root "${AOSP17_SOURCE_DIR}"
     --deps-dir "${WA_SYSTEMUI_DEPS_DIR}" --out-dir "${output}"
@@ -44,12 +49,10 @@ add_custom_command(OUTPUT "${apk}" "${provenance}"
     DEPENDS "${builder}" "${patches}/sources.txt" "${patches}/resources.txt"
         ${patch_files} ${resource_files} ${kotlin_compiler_files}
     DEPFILE "${output}/systemui.d"
-    COMMENT "Compiling and signing the upstream SystemUI phone-bar components"
+    COMMENT "Compiling and signing the upstream SystemUI phone bars"
     VERBATIM)
 add_custom_target(aosp17_systemui_apk ALL DEPENDS "${apk}" "${provenance}")
 
-get_target_property(framework_dex aosp17_framework_core WA_FRAMEWORK_DEX)
-get_target_property(framework_jar aosp17_framework_core WA_FRAMEWORK_CLASSES)
 cmake_path(CONVERT "${framework_jar};${WA_ANDROID_JAR}" TO_NATIVE_PATH_LIST fixture_classpath)
 set(fixture "${CMAKE_CURRENT_BINARY_DIR}/render-fixture")
 set(fixture_apk "${fixture}/RenderProbe.apk")
@@ -101,3 +104,4 @@ add_test(NAME m10_systemui_resources COMMAND ${run_systemui_test} resources "${a
 add_test(NAME m10_systemui_dex COMMAND ${run_systemui_test} dex "${apk}")
 add_test(NAME m10_systemui_runtime COMMAND ${run_systemui_test} runtime "${apk}" "${framework_dex}"
     "${WA_ANDROID_JAR}" "${fixture_apk}" "${fixture_dex}")
+set_tests_properties(m10_systemui_runtime PROPERTIES RUN_SERIAL TRUE)

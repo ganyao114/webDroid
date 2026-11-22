@@ -25,7 +25,10 @@ TOOLS = Path(__file__).resolve().parent
 REPO = TOOLS.parent.parent
 INPUTS = REPO / "patches/aosp17/systemui"
 SYSTEMUI = Path("frameworks/base/packages/SystemUI")
+SETTINGSLIB = Path("frameworks/base/packages/SettingsLib")
+FRAMEWORK_RES = Path("frameworks/base/core/res/res")
 SYSTEMUI_LIBS = Path("frameworks/libs/systemui")
+SOURCE_ROOTS = (SYSTEMUI, SETTINGSLIB, SYSTEMUI_LIBS)
 AOSP_TAG = "android-17.0.0_r1"
 APK = "SystemUI-upstream.apk"
 REPORT = "systemui_provenance.json"
@@ -37,6 +40,25 @@ FEATURE_FLAGS = {
     "com.android.systemui.dream_overlay_updated_ui": False,
 }
 RESOURCE_DIRS = ("res", "res-keyguard", "res-product")
+FRAMEWORK_VALUES = {
+    "config.xml": {
+        "bool/config_batterymeterDualTone",
+        "bool/config_battery_percentage_setting_available",
+        "bool/config_defaultBatteryPercentageSetting",
+        "integer/config_criticalBatteryWarningLevel",
+        "integer/config_navBarInteractionMode",
+        "string/config_batterymeterBoltPath",
+        "string/config_batterymeterErrorPerimeterPath",
+        "string/config_batterymeterFillMask",
+        "string/config_batterymeterPerimeterPath",
+        "string/config_batterymeterPowersavePath",
+    },
+    "dimens.xml": {
+        "dimen/navigation_bar_height",
+        "dimen/navigation_bar_height_landscape",
+        "dimen/status_bar_height_default",
+    },
+}
 AAR_NAMES = (
     "core-1.15.0", "appcompat-resources-1.7.0", "appcompat-1.7.0",
     "constraintlayout-2.2.0", "material-1.12.0",
@@ -51,7 +73,7 @@ RESOURCE_REF = re.compile(
     r"(?<!\\)([@?])(\+)?\*?(?:([\w.]+):)?([\w-]+)/([\w.]+)"
 )
 ATTRIBUTE_REF = re.compile(r"\?(?:\*?([\w.]+):)?([\w.]+)\Z")
-JAVA_REF = re.compile(r"(?<![\w.])R\.(\w+)\.(\w+)")
+JAVA_REF = re.compile(r"(?<![\w.])(?:com\.android\.settingslib\.)?R\.(\w+)\.(\w+)")
 
 
 def run(*arguments, **kwargs):
@@ -85,6 +107,7 @@ class ResourceFile:
     path: PurePosixPath
     data: bytes
     upstream: bool
+    names: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -172,7 +195,8 @@ def declarations(files):
         if kind == "values":
             for child, element in enumerate(ET.fromstring(origin.data)):
                 name = value_name(element)
-                if name is None or element.tag in ("java-symbol", "public"):
+                if (name is None or element.tag in ("java-symbol", "public")
+                        or origin.names is not None and name not in origin.names):
                     continue
                 refs, names = resource_mentions(element)
                 names.add(name)
@@ -275,7 +299,7 @@ def patch_sources(upstream, work, copied, inputs):
         for item in stats.rstrip(b"\x00").split(b"\x00"):
             added, removed, path = item.decode("utf-8").split("\t", 2)
             relative = Path(path)
-            if (not relative.is_relative_to(SYSTEMUI) and not relative.is_relative_to(SYSTEMUI_LIBS)
+            if (not any(relative.is_relative_to(root) for root in SOURCE_ROOTS)
                     or ".." in relative.parts or not (upstream / relative).is_file()):
                 raise ValueError(f"Patch must modify an existing upstream file: {patch.name}: {path}")
             if relative not in copied:
@@ -306,7 +330,7 @@ def collect_resources(args, work, copied, inputs):
                 path = PurePosixPath(name)
                 if len(path.parts) == 3 and path.parts[0] == "res" and not name.endswith("/"):
                     files.append(ResourceFile(archive.name, path, aar.read(name), False))
-    resource_dirs = (SYSTEMUI_LIBS / "dynamiccolors/res",
+    resource_dirs = (SYSTEMUI_LIBS / "dynamiccolors/res", SETTINGSLIB / "res",
                      *(SYSTEMUI / directory for directory in RESOURCE_DIRS))
     for directory in resource_dirs:
         for path in sorted((args.aosp_root / directory).glob("*/*")):
@@ -316,6 +340,14 @@ def collect_resources(args, work, copied, inputs):
             inputs.add(path)
             source = work / relative if relative in copied else path
             files.append(ResourceFile(str(directory), PurePosixPath(relative), source.read_bytes(), True))
+    # Link only the private framework values used by the embedded views, under the
+    # APK package so they do not depend on private IDs in the SDK 36 resource table.
+    for filename, names in FRAMEWORK_VALUES.items():
+        for path in sorted((args.aosp_root / FRAMEWORK_RES).glob(f"values*/{filename}")):
+            inputs.add(path)
+            relative = path.relative_to(args.aosp_root)
+            files.append(ResourceFile(str(FRAMEWORK_RES), PurePosixPath(relative), path.read_bytes(),
+                                      True, frozenset(names)))
     return files
 
 
@@ -368,6 +400,7 @@ def link_resources(args, stage, work, copied, source_names, inputs):
     resource_apk = stage / "resources.apk"
     run(args.aapt2, "link", "-I", args.android_jar, "--manifest", work / MANIFEST,
         "--java", generated, "--custom-package", PACKAGE + ".res",
+        "--extra-packages", "com.android.settingslib",
         "--min-sdk-version", "26", "--target-sdk-version", "36",
         "--auto-add-overlay", "--feature-flags", flags, "-o", resource_apk, *compiled)
     return resource_apk, generated, provenance
@@ -459,10 +492,10 @@ def build(args, stage):
     references = [Path(path) for path in lines(INPUTS / "sources.txt")]
     if (len(references) != len(set(references)) or any(
         path.suffix not in (".java", ".kt") or ".." in path.parts
-        or not (path.is_relative_to(SYSTEMUI) or path.is_relative_to(SYSTEMUI_LIBS))
+        or not any(path.is_relative_to(root) for root in SOURCE_ROOTS)
         for path in references
     )):
-        raise ValueError("sources.txt must list unique AOSP SystemUI Java and Kotlin files")
+        raise ValueError("sources.txt must list unique upstream Java and Kotlin files")
     copied = {*references, MANIFEST}
     work = stage / "upstream"
     for relative in sorted(copied):
@@ -482,12 +515,13 @@ def build(args, stage):
     for path in sorted({*references, MANIFEST}):
         source_records.append({"path": str(path), "sha256": file_digest(upstream / path),
                                "compiled_sha256": file_digest(work / path)})
-    counts = Counter(path.suffix[1:] for path in references if path.is_relative_to(SYSTEMUI))
-    counts["xml"] = 1 + sum(record["upstream"] and Path(record["path"]).is_relative_to(SYSTEMUI)
-                            and record["path"].endswith(".xml") for record in resource_records)
-    library_counts = Counter(path.suffix[1:] for path in references if path.is_relative_to(SYSTEMUI_LIBS))
-    library_counts["xml"] = sum(record["upstream"] and Path(record["path"]).is_relative_to(SYSTEMUI_LIBS)
-                                and record["path"].endswith(".xml") for record in resource_records)
+    upstream_files = [Path(record["path"]) for record in (*source_records, *resource_records)
+                      if record.get("upstream", True)]
+    counts = {
+        root: dict(sorted(Counter(path.suffix[1:] for path in upstream_files
+                                  if path.is_relative_to(root)).items()))
+        for root in (*SOURCE_ROOTS, FRAMEWORK_RES)
+    }
     patch_totals = Counter()
     for patch in patches:
         for change in patch["files"]:
@@ -497,10 +531,12 @@ def build(args, stage):
         "upstream_tag": AOSP_TAG,
         "upstream_revisions": revisions,
         "package": PACKAGE,
-        "profile": "phone-bar component build",
+        "profile": "embedded phone bars",
         "manifest": str(MANIFEST),
-        "upstream_input_counts": dict(sorted(counts.items())),
-        "upstream_library_input_counts": dict(sorted(library_counts.items())),
+        "upstream_input_counts": counts[SYSTEMUI],
+        "upstream_settingslib_input_counts": counts[SETTINGSLIB],
+        "upstream_library_input_counts": counts[SYSTEMUI_LIBS],
+        "upstream_framework_resource_counts": counts[FRAMEWORK_RES],
         "upstream_sources": source_records,
         "resource_inputs": resource_records,
         "feature_flags": FEATURE_FLAGS,
@@ -561,8 +597,8 @@ def main():
                 args.depfile.parent.mkdir(parents=True, exist_ok=True)
                 write_depfile(args.depfile, args.out_dir / APK, inputs)
         verb = "Verified" if args.check else "Built"
-        print(f"{verb} {args.out_dir / APK} ({counts['java']} Java, "
-              f"{counts['kt']} Kotlin, {counts['xml']} upstream XML inputs)")
+        print(f"{verb} {args.out_dir / APK} "
+              f"(SystemUI {counts[SYSTEMUI]}, SettingsLib {counts[SETTINGSLIB]})")
     except subprocess.CalledProcessError as error:
         parser.exit(1, f"{parser.prog}: {Path(error.cmd[0]).name} exited with status {error.returncode}\n")
     except (ET.ParseError, OSError, ValueError, zipfile.BadZipFile) as error:

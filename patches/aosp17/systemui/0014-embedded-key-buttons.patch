@@ -1,0 +1,921 @@
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ButtonDispatcher.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ButtonDispatcher.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ButtonDispatcher.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ButtonDispatcher.java
+@@ -21,11 +21,12 @@
+ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
+ import android.animation.ValueAnimator;
++import android.view.KeyEvent;
+ import android.view.View;
+-import android.view.View.AccessibilityDelegate;
+ import android.view.ViewGroup;
+ 
+ import java.util.ArrayList;
++import java.util.function.Consumer;
+ 
+ /**
+  * Dispatches common view calls to multiple views.  This is used to handle
+@@ -42,7 +43,6 @@
+     private View.OnClickListener mClickListener;
+     private View.OnTouchListener mTouchListener;
+     private View.OnLongClickListener mLongClickListener;
+-    private View.OnHoverListener mOnHoverListener;
+     private Boolean mLongClickable;
+     private Float mAlpha;
+     private Float mDarkIntensity;
+@@ -52,8 +52,7 @@
+     private View mCurrentView;
+     private boolean mVertical;
+     private ValueAnimator mFadeAnimator;
+-    private AccessibilityDelegate mAccessibilityDelegate;
+-    private NavBarButtonClickLogger mNavBarButtonClickLogger;
++    private Consumer<KeyEvent> mKeyEventListener;
+ 
+     private final ValueAnimator.AnimatorUpdateListener mAlphaListener = animation ->
+             setAlpha(
+@@ -79,10 +78,10 @@
+ 
+     public void addView(View view) {
+         mViews.add(view);
++        setKeyEventListenerForViewChildren(view);
+         view.setOnClickListener(mClickListener);
+         view.setOnTouchListener(mTouchListener);
+         view.setOnLongClickListener(mLongClickListener);
+-        view.setOnHoverListener(mOnHoverListener);
+         if (mLongClickable != null) {
+             view.setLongClickable(mLongClickable);
+         }
+@@ -91,9 +90,6 @@
+         }
+         if (mVisibility != null) {
+             view.setVisibility(mVisibility);
+-        }
+-        if (mAccessibilityDelegate != null) {
+-            view.setAccessibilityDelegate(mAccessibilityDelegate);
+         }
+         if (view instanceof ButtonInterface) {
+             final ButtonInterface button = (ButtonInterface) view;
+@@ -273,22 +269,6 @@
+         }
+     }
+ 
+-    public void setOnHoverListener(View.OnHoverListener hoverListener) {
+-        mOnHoverListener = hoverListener;
+-        final int N = mViews.size();
+-        for (int i = 0; i < N; i++) {
+-            mViews.get(i).setOnHoverListener(mOnHoverListener);
+-        }
+-    }
+-
+-    public void setAccessibilityDelegate(AccessibilityDelegate delegate) {
+-        mAccessibilityDelegate = delegate;
+-        final int N = mViews.size();
+-        for (int i = 0; i < N; i++) {
+-            mViews.get(i).setAccessibilityDelegate(delegate);
+-        }
+-    }
+-
+     public void setClickable(boolean clickable) {
+         abortCurrentGesture();
+         final int N = mViews.size();
+@@ -303,7 +283,6 @@
+             final View view = mViews.get(i);
+             view.setTranslationX(x);
+             view.setTranslationY(y);
+-            view.setTranslationZ(z);
+         }
+     }
+ 
+@@ -323,7 +302,6 @@
+         if (mCurrentView != null) {
+             mCurrentView.setTranslationX(0);
+             mCurrentView.setTranslationY(0);
+-            mCurrentView.setTranslationZ(0);
+         }
+     }
+ 
+@@ -345,33 +323,29 @@
+     }
+ 
+     /**
+-     * Sets the NavBarButtonClickLogger for all the KeyButtonViews respectively.
++     * Installs the host's key destination on the inflated button views.
+      */
+-    public void setNavBarButtonClickLogger(NavBarButtonClickLogger navBarButtonClickLogger) {
+-        if (navBarButtonClickLogger != null) {
+-            mNavBarButtonClickLogger = navBarButtonClickLogger;
+-            final int size = mViews.size();
+-            for (int i = 0; i < size; i++) {
+-                final View v = mViews.get(i);
+-                setNavBarButtonClickLoggerForViewChildren(v);
+-            }
++    public void setKeyEventListener(Consumer<KeyEvent> keyEventListener) {
++        mKeyEventListener = keyEventListener;
++        for (int i = 0; i < mViews.size(); i++) {
++            setKeyEventListenerForViewChildren(mViews.get(i));
+         }
+     }
+ 
+     /**
+      * Recursively explores view hierarchy until the children of provided view are of type
+-     * KeyButtonView, so the NavBarButtonClickLogger can be set on them.
++     * KeyButtonView, so the key destination is set on each button.
+      */
+-    private void setNavBarButtonClickLoggerForViewChildren(View v) {
++    private void setKeyEventListenerForViewChildren(View v) {
+         if (v instanceof KeyButtonView) {
+-            ((KeyButtonView) v).setNavBarButtonClickLogger(mNavBarButtonClickLogger);
++            ((KeyButtonView) v).setKeyEventListener(mKeyEventListener);
+             return;
+         }
+ 
+         if (v instanceof ViewGroup viewGroup) {
+             final int childrenCount = viewGroup.getChildCount();
+             for (int i = 0; i < childrenCount; i++) {
+-                setNavBarButtonClickLoggerForViewChildren(viewGroup.getChildAt(i));
++                setKeyEventListenerForViewChildren(viewGroup.getChildAt(i));
+             }
+         }
+     }
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/KeyButtonView.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/KeyButtonView.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/KeyButtonView.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/KeyButtonView.java
+@@ -16,119 +16,46 @@
+ 
+ package com.android.systemui.navigationbar.views.buttons;
+ 
+-import static android.view.Display.INVALID_DISPLAY;
+ import static android.view.KeyEvent.KEYCODE_UNKNOWN;
+-import static android.view.accessibility.AccessibilityNodeInfo.ACTION_CLICK;
+-import static android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK;
+-
+-import android.annotation.Nullable;
+-import android.app.ActivityManager;
++
+ import android.content.Context;
+-import android.content.res.Configuration;
+ import android.content.res.TypedArray;
+ import android.graphics.Canvas;
+ import android.graphics.Paint;
+ import android.graphics.drawable.Drawable;
+-import android.graphics.drawable.Icon;
+-import android.hardware.input.InputManager;
+-import android.hardware.input.InputManagerGlobal;
+-import android.media.AudioManager;
+-import android.metrics.LogMaker;
+-import android.os.AsyncTask;
+-import android.os.Bundle;
+ import android.os.SystemClock;
+ import android.util.AttributeSet;
+-import android.util.Log;
+-import android.util.TypedValue;
+-import android.view.HapticFeedbackConstants;
+ import android.view.InputDevice;
+ import android.view.KeyCharacterMap;
+ import android.view.KeyEvent;
+ import android.view.MotionEvent;
+-import android.view.SoundEffectConstants;
+ import android.view.View;
+ import android.view.ViewConfiguration;
+ import android.view.accessibility.AccessibilityEvent;
+-import android.view.accessibility.AccessibilityNodeInfo;
+ import android.widget.ImageView;
+ 
+-import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.logging.MetricsLogger;
+-import com.android.internal.logging.UiEvent;
+-import com.android.internal.logging.UiEventLogger;
+-import com.android.internal.logging.UiEventLoggerImpl;
+-import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
+-import com.android.systemui.Dependency;
+-import com.android.systemui.LauncherProxyService;
+-import com.android.systemui.assist.AssistManager;
+ import com.android.systemui.res.R;
+ import com.android.systemui.shared.navigationbar.KeyButtonRipple;
+-import com.android.systemui.shared.system.QuickStepContract;
++
++import java.util.function.Consumer;
+ 
+ public class KeyButtonView extends ImageView implements ButtonInterface {
+-    private static final String TAG = KeyButtonView.class.getSimpleName();
+-
+-    private final boolean mPlaySounds;
+-    private final UiEventLogger mUiEventLogger;
+-    private int mContentDescriptionRes;
++
+     private long mDownTime;
+     private int mCode;
+     private int mTouchDownX;
+     private int mTouchDownY;
+     private boolean mIsVertical;
+-    private AudioManager mAudioManager;
+     private boolean mGestureAborted;
+-    @VisibleForTesting boolean mLongClicked;
++    boolean mLongClicked;
+     private OnClickListener mOnClickListener;
+     private final KeyButtonRipple mRipple;
+-    private final LauncherProxyService mLauncherProxyService;
+-    private final MetricsLogger mMetricsLogger = Dependency.get(MetricsLogger.class);
+-    private final InputManagerGlobal mInputManagerGlobal;
+     private final Paint mOvalBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+     private float mDarkIntensity;
+     private boolean mHasOvalBg = false;
+-    private NavBarButtonClickLogger mNavBarButtonClickLogger;
+-
+-    @VisibleForTesting
+-    public enum NavBarButtonEvent implements UiEventLogger.UiEventEnum {
+-
+-        @UiEvent(doc = "The home button was pressed in the navigation bar.")
+-        NAVBAR_HOME_BUTTON_TAP(533),
+-
+-        @UiEvent(doc = "The back button was pressed in the navigation bar.")
+-        NAVBAR_BACK_BUTTON_TAP(534),
+-
+-        @UiEvent(doc = "The overview button was pressed in the navigation bar.")
+-        NAVBAR_OVERVIEW_BUTTON_TAP(535),
+-
+-        @UiEvent(doc = "The ime switcher button was pressed in the navigation bar.")
+-        NAVBAR_IME_SWITCHER_BUTTON_TAP(923),
+-
+-        @UiEvent(doc = "The home button was long-pressed in the navigation bar.")
+-        NAVBAR_HOME_BUTTON_LONGPRESS(536),
+-
+-        @UiEvent(doc = "The back button was long-pressed in the navigation bar.")
+-        NAVBAR_BACK_BUTTON_LONGPRESS(537),
+-
+-        @UiEvent(doc = "The overview button was long-pressed in the navigation bar.")
+-        NAVBAR_OVERVIEW_BUTTON_LONGPRESS(538),
+-
+-        @UiEvent(doc = "The ime switcher button was long-pressed in the navigation bar.")
+-        NAVBAR_IME_SWITCHER_BUTTON_LONGPRESS(1799),
+-
+-        NONE(0);  // an event we should not log
+-
+-        private final int mId;
+-
+-        NavBarButtonEvent(int id) {
+-            mId = id;
+-        }
+-
+-        @Override
+-        public int getId() {
+-            return mId;
+-        }
+-    }
++
++    private Consumer<KeyEvent> mKeyEventListener;
++
+     private final Runnable mCheckLongPress = new Runnable() {
+         public void run() {
+             if (isPressed()) {
+@@ -140,7 +67,7 @@
+                 } else {
+                     if (mCode != KEYCODE_UNKNOWN) {
+                         sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.FLAG_LONG_PRESS);
+-                        sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_LONG_CLICKED);
++                        sendAccessibilityEventUnchecked(AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_LONG_CLICKED));
+                     }
+                     mLongClicked = true;
+                 }
+@@ -153,38 +80,20 @@
+     }
+ 
+     public KeyButtonView(Context context, AttributeSet attrs, int defStyle) {
+-        this(context, attrs, defStyle, InputManagerGlobal.getInstance(), new UiEventLoggerImpl());
+-    }
+-
+-    @VisibleForTesting
+-    public KeyButtonView(Context context, AttributeSet attrs, int defStyle,
+-            InputManagerGlobal manager, UiEventLogger uiEventLogger) {
+         super(context, attrs);
+-        mUiEventLogger = uiEventLogger;
+ 
+         TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.KeyButtonView,
+                 defStyle, 0);
+ 
+         mCode = a.getInteger(R.styleable.KeyButtonView_keyCode, KEYCODE_UNKNOWN);
+ 
+-        mPlaySounds = a.getBoolean(R.styleable.KeyButtonView_playSound, true);
+-
+-        TypedValue value = new TypedValue();
+-        if (a.getValue(R.styleable.KeyButtonView_android_contentDescription, value)) {
+-            mContentDescriptionRes = value.resourceId;
+-        }
+-
+         a.recycle();
+ 
+         setClickable(true);
+-        mAudioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+ 
+         mRipple = new KeyButtonRipple(context, this, R.dimen.key_button_ripple_max_width);
+-        mLauncherProxyService = Dependency.get(LauncherProxyService.class);
+-        mInputManagerGlobal = manager;
+         setBackground(mRipple);
+         setWillNotDraw(false);
+-        forceHasOverlappingRendering(false);
+     }
+ 
+     @Override
+@@ -202,86 +111,12 @@
+         mOnClickListener = onClickListener;
+     }
+ 
+-    public void setNavBarButtonClickLogger(NavBarButtonClickLogger navBarButtonClickLogger) {
+-        mNavBarButtonClickLogger = navBarButtonClickLogger;
+-    }
+-
+-    public void loadAsync(Icon icon) {
+-        new AsyncTask<Icon, Void, Drawable>() {
+-            @Override
+-            protected Drawable doInBackground(Icon... params) {
+-                return params[0].loadDrawable(mContext);
+-            }
+-
+-            @Override
+-            protected void onPostExecute(Drawable drawable) {
+-                setImageDrawable(drawable);
+-            }
+-        }.execute(icon);
+-    }
+-
+-    @Override
+-    protected void onConfigurationChanged(Configuration newConfig) {
+-        super.onConfigurationChanged(newConfig);
+-
+-        if (mContentDescriptionRes != 0) {
+-            setContentDescription(mContext.getString(mContentDescriptionRes));
+-        }
+-    }
+-
+-    @Override
+-    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
+-        super.onInitializeAccessibilityNodeInfo(info);
+-        if (isClickable()) {
+-            info.addAction(new AccessibilityNodeInfo.AccessibilityAction(ACTION_CLICK, null));
+-            if (isLongClickable()) {
+-                info.addAction(
+-                        new AccessibilityNodeInfo.AccessibilityAction(ACTION_LONG_CLICK,
+-                                getAccessibilityLongClickActionLabel()));
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Gets the accessibility long click action label for the button, or {@code null} for no label.
+-     */
+-    @Nullable
+-    private CharSequence getAccessibilityLongClickActionLabel() {
+-        if (getId() == R.id.ime_switcher) {
+-            return getContext().getText(
+-                    com.android.internal.R.string.input_method_ime_switch_long_click_action_desc);
+-        }
+-        return null;
+-    }
+-
+-    @Override
+-    protected void onWindowVisibilityChanged(int visibility) {
+-        super.onWindowVisibilityChanged(visibility);
+-        if (visibility != View.VISIBLE) {
+-            jumpDrawablesToCurrentState();
+-        }
+-    }
+-
+-    @Override
+-    public boolean performAccessibilityActionInternal(int action, Bundle arguments) {
+-        if (action == ACTION_CLICK && mCode != KEYCODE_UNKNOWN) {
+-            sendEvent(KeyEvent.ACTION_DOWN, 0, SystemClock.uptimeMillis());
+-            sendEvent(KeyEvent.ACTION_UP, 0);
+-            sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_CLICKED);
+-            playSoundEffect(SoundEffectConstants.CLICK);
+-            return true;
+-        } else if (action == ACTION_LONG_CLICK && mCode != KEYCODE_UNKNOWN) {
+-            sendEvent(KeyEvent.ACTION_DOWN, KeyEvent.FLAG_LONG_PRESS);
+-            sendEvent(KeyEvent.ACTION_UP, 0);
+-            sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_LONG_CLICKED);
+-            return true;
+-        }
+-        return super.performAccessibilityActionInternal(action, arguments);
++    public void setKeyEventListener(Consumer<KeyEvent> listener) {
++        mKeyEventListener = listener;
+     }
+ 
+     @Override
+     public boolean onTouchEvent(MotionEvent ev) {
+-        final boolean showSwipeUI = mLauncherProxyService.shouldShowSwipeUpUI();
+         final int action = ev.getAction();
+         int x, y;
+         if (action == MotionEvent.ACTION_DOWN) {
+@@ -302,12 +137,6 @@
+                 mTouchDownY = (int) ev.getY();
+                 if (mCode != KEYCODE_UNKNOWN) {
+                     sendEvent(KeyEvent.ACTION_DOWN, 0, mDownTime);
+-                } else {
+-                    // Provide the same haptic feedback that the system offers for virtual keys.
+-                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+-                }
+-                if (!showSwipeUI) {
+-                    playSoundEffect(SoundEffectConstants.CLICK);
+                 }
+                 removeCallbacks(mCheckLongPress);
+                 postDelayed(mCheckLongPress, ViewConfiguration.getLongPressTimeout());
+@@ -316,7 +145,7 @@
+                 x = (int) ev.getX();
+                 y = (int) ev.getY();
+ 
+-                float slop = QuickStepContract.getQuickStepTouchSlopPx(getContext());
++                float slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
+                 if (Math.abs(x - mTouchDownX) > slop || Math.abs(y - mTouchDownY) > slop) {
+                     // When quick step is enabled, prevent animating the ripple triggered by
+                     // setPressed and decide to run it on touch up
+@@ -334,22 +163,10 @@
+             case MotionEvent.ACTION_UP:
+                 final boolean doIt = isPressed() && !mLongClicked;
+                 setPressed(false);
+-                final boolean doHapticFeedback = (SystemClock.uptimeMillis() - mDownTime) > 150;
+-                if (showSwipeUI) {
+-                    if (doIt) {
+-                        // Apply haptic feedback on touch up since there is none on touch down
+-                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+-                        playSoundEffect(SoundEffectConstants.CLICK);
+-                    }
+-                } else if (doHapticFeedback && !mLongClicked) {
+-                    // Always send a release ourselves because it doesn't seem to be sent elsewhere
+-                    // and it feels weird to sometimes get a release haptic and other times not.
+-                    performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY_RELEASE);
+-                }
+                 if (mCode != KEYCODE_UNKNOWN) {
+                     if (doIt) {
+                         sendEvent(KeyEvent.ACTION_UP, 0);
+-                        sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_CLICKED);
++                        sendAccessibilityEventUnchecked(AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_CLICKED));
+                     } else {
+                         sendEvent(KeyEvent.ACTION_UP, KeyEvent.FLAG_CANCELED);
+                     }
+@@ -357,7 +174,7 @@
+                     // no key code, just a regular ImageView
+                     if (doIt && mOnClickListener != null) {
+                         mOnClickListener.onClick(this);
+-                        sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_CLICKED);
++                        sendAccessibilityEventUnchecked(AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_CLICKED));
+                     }
+                 }
+                 removeCallbacks(mCheckLongPress);
+@@ -384,98 +201,25 @@
+                 : KeyButtonRipple.Type.ROUNDED_RECT);
+     }
+ 
+-    public void playSoundEffect(int soundConstant) {
+-        if (!mPlaySounds) return;
+-        mAudioManager.playSoundEffect(soundConstant, ActivityManager.getCurrentUser());
+-    }
+-
+     public void sendEvent(int action, int flags) {
+         sendEvent(action, flags, SystemClock.uptimeMillis());
+     }
+ 
+-    private void logSomePresses(int action, int flags) {
+-        boolean longPressSet = (flags & KeyEvent.FLAG_LONG_PRESS) != 0;
+-        NavBarButtonEvent uiEvent = NavBarButtonEvent.NONE;
+-        if (action == MotionEvent.ACTION_UP && mLongClicked) {
+-            return;  // don't log the up after a long press
+-        }
+-        if (action == MotionEvent.ACTION_DOWN && !longPressSet) {
+-            return;  // don't log a down unless it is also the long press marker
+-        }
+-        if ((flags & KeyEvent.FLAG_CANCELED) != 0
+-                || (flags & KeyEvent.FLAG_CANCELED_LONG_PRESS) != 0) {
+-            return;  // don't log various cancels
+-        }
+-        switch(mCode) {
+-            case KeyEvent.KEYCODE_BACK:
+-                uiEvent = longPressSet
+-                        ? NavBarButtonEvent.NAVBAR_BACK_BUTTON_LONGPRESS
+-                        : NavBarButtonEvent.NAVBAR_BACK_BUTTON_TAP;
+-
+-                if (mNavBarButtonClickLogger != null) {
+-                    mNavBarButtonClickLogger.logBackButtonClick();
+-                }
+-                break;
+-            case KeyEvent.KEYCODE_HOME:
+-                uiEvent = longPressSet
+-                        ? NavBarButtonEvent.NAVBAR_HOME_BUTTON_LONGPRESS
+-                        : NavBarButtonEvent.NAVBAR_HOME_BUTTON_TAP;
+-
+-                if (mNavBarButtonClickLogger != null) {
+-                    mNavBarButtonClickLogger.logHomeButtonClick();
+-                }
+-                break;
+-            case KeyEvent.KEYCODE_APP_SWITCH:
+-                uiEvent = longPressSet
+-                        ? NavBarButtonEvent.NAVBAR_OVERVIEW_BUTTON_LONGPRESS
+-                        : NavBarButtonEvent.NAVBAR_OVERVIEW_BUTTON_TAP;
+-                break;
+-        }
+-        if (uiEvent != NavBarButtonEvent.NONE) {
+-            mUiEventLogger.log(uiEvent);
+-        }
+-    }
+-
+     private void sendEvent(int action, int flags, long when) {
+-        mMetricsLogger.write(new LogMaker(MetricsEvent.ACTION_NAV_BUTTON_EVENT)
+-                .setType(MetricsEvent.TYPE_ACTION)
+-                .setSubtype(mCode)
+-                .addTaggedData(MetricsEvent.FIELD_NAV_ACTION, action)
+-                .addTaggedData(MetricsEvent.FIELD_FLAGS, flags));
+-        logSomePresses(action, flags);
+-        if (mCode == KeyEvent.KEYCODE_BACK && flags != KeyEvent.FLAG_LONG_PRESS) {
+-            Log.i(TAG, "Back button event: " + KeyEvent.actionToString(action));
+-        }
+         final int repeatCount = (flags & KeyEvent.FLAG_LONG_PRESS) != 0 ? 1 : 0;
+         final KeyEvent ev = new KeyEvent(mDownTime, when, action, mCode, repeatCount,
+                 0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
+                 flags | KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_VIRTUAL_HARD_KEY,
+                 InputDevice.SOURCE_KEYBOARD);
+-
+-        int displayId = INVALID_DISPLAY;
+-
+-        // Make KeyEvent work on multi-display environment
+-        if (getDisplay() != null) {
+-            displayId = getDisplay().getDisplayId();
+-        }
+-        if (displayId != INVALID_DISPLAY) {
+-            ev.setDisplayId(displayId);
+-        }
+-        mInputManagerGlobal.injectInputEvent(ev,
+-                InputManager.INJECT_INPUT_EVENT_MODE_ASYNC);
++        if (mKeyEventListener != null) {
++            mKeyEventListener.accept(ev);
++        }
+     }
+ 
+     @Override
+     public void abortCurrentGesture() {
+-        Log.d("b/63783866", "KeyButtonView.abortCurrentGesture");
+         if (mCode != KeyEvent.KEYCODE_UNKNOWN) {
+             sendEvent(KeyEvent.ACTION_UP, KeyEvent.FLAG_CANCELED);
+-        }
+-        // When aborting long-press home and Launcher has requested to override it, fade out the
+-        // ripple more quickly.
+-        if (mCode == KeyEvent.KEYCODE_HOME && Dependency.get(AssistManager.class)
+-                .shouldOverrideAssist(AssistManager.INVOCATION_TYPE_HOME_BUTTON_LONG_PRESS)) {
+-            mRipple.speedUpNextFade();
+         }
+         setPressed(false);
+         mRipple.abortDelayedRipple();
+diff --git a/frameworks/base/packages/SystemUI/shared/src/com/android/systemui/shared/navigationbar/KeyButtonRipple.java b/frameworks/base/packages/SystemUI/shared/src/com/android/systemui/shared/navigationbar/KeyButtonRipple.java
+--- a/frameworks/base/packages/SystemUI/shared/src/com/android/systemui/shared/navigationbar/KeyButtonRipple.java
++++ b/frameworks/base/packages/SystemUI/shared/src/com/android/systemui/shared/navigationbar/KeyButtonRipple.java
+@@ -18,20 +18,15 @@
+ 
+ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
+-import android.animation.ObjectAnimator;
+-import android.companion.virtualdevice.flags.Flags;
++import android.animation.ValueAnimator;
+ import android.content.Context;
+ import android.graphics.Canvas;
+-import android.graphics.CanvasProperty;
+ import android.graphics.ColorFilter;
+ import android.graphics.Paint;
+ import android.graphics.PixelFormat;
+-import android.graphics.RecordingCanvas;
+ import android.graphics.drawable.Drawable;
+ import android.os.Handler;
+ import android.os.Looper;
+-import android.os.Trace;
+-import android.view.RenderNodeAnimator;
+ import android.view.View;
+ import android.view.ViewConfiguration;
+ import android.view.animation.Interpolator;
+@@ -58,18 +53,10 @@
+     private final int mMaxWidthResource;
+ 
+     private Paint mRipplePaint;
+-    private CanvasProperty<Float> mLeftProp;
+-    private CanvasProperty<Float> mTopProp;
+-    private CanvasProperty<Float> mRightProp;
+-    private CanvasProperty<Float> mBottomProp;
+-    private CanvasProperty<Float> mRxProp;
+-    private CanvasProperty<Float> mRyProp;
+-    private CanvasProperty<Paint> mPaintProp;
+     private float mGlowAlpha = 0f;
+     private float mGlowScale = 1f;
+     private boolean mPressed;
+     private boolean mVisible;
+-    private boolean mDrawingHardwareGlow;
+     private int mMaxWidth;
+     private boolean mLastDark;
+     private boolean mDark;
+@@ -79,18 +66,12 @@
+     private Runnable mOnInvisibleRunnable;
+ 
+     private final Interpolator mInterpolator = new LogInterpolator();
+-    private boolean mSupportHardware;
+     private final View mTargetView;
+     private final int mTapTimeoutMillis;
+     private final Handler mHandler = new Handler();
+ 
+     private final HashSet<Animator> mRunningAnimations = new HashSet<>();
+     private final ArrayList<Animator> mTmpArray = new ArrayList<>();
+-
+-    private final TraceAnimatorListener mExitHwTraceAnimator =
+-            new TraceAnimatorListener("exitHardware");
+-    private final TraceAnimatorListener mEnterHwTraceAnimator =
+-            new TraceAnimatorListener("enterHardware");
+ 
+     public enum Type {
+         OVAL,
+@@ -103,9 +84,7 @@
+         mMaxWidthResource = maxWidthResource;
+         mMaxWidth = ctx.getResources().getDimensionPixelSize(maxWidthResource);
+         mTargetView = targetView;
+-        mTapTimeoutMillis = Flags.viewconfigurationApis()
+-                ? ViewConfiguration.get(mTargetView.getContext()).getTapTimeoutMillis()
+-                : ViewConfiguration.getTapTimeout();
++        mTapTimeoutMillis = ViewConfiguration.getTapTimeout();
+     }
+ 
+     public void updateResources() {
+@@ -177,12 +156,7 @@
+ 
+     @Override
+     public void draw(Canvas canvas) {
+-        mSupportHardware = canvas.isHardwareAccelerated();
+-        if (mSupportHardware) {
+-            drawHardware((RecordingCanvas) canvas);
+-        } else {
+-            drawSoftware(canvas);
+-        }
++        drawSoftware(canvas);
+ 
+         if (!mPressed && !mVisible && mOnInvisibleRunnable != null) {
+             new Handler(Looper.getMainLooper()).post(mOnInvisibleRunnable);
+@@ -207,21 +181,6 @@
+ 
+     private boolean isHorizontal() {
+         return getBounds().width() > getBounds().height();
+-    }
+-
+-    private void drawHardware(RecordingCanvas c) {
+-        if (mDrawingHardwareGlow) {
+-            if (mType == Type.ROUNDED_RECT) {
+-                c.drawRoundRect(mLeftProp, mTopProp, mRightProp, mBottomProp, mRxProp, mRyProp,
+-                        mPaintProp);
+-            } else {
+-                CanvasProperty<Float> cx = CanvasProperty.createFloat(getBounds().width() / 2);
+-                CanvasProperty<Float> cy = CanvasProperty.createFloat(getBounds().height() / 2);
+-                int d = Math.min(getBounds().width(), getBounds().height());
+-                CanvasProperty<Float> r = CanvasProperty.createFloat(1.0f * d / 2);
+-                c.drawCircle(cx, cy, r, mPaintProp);
+-            }
+-        }
+     }
+ 
+     /** Gets the glow alpha, used by {@link android.animation.ObjectAnimator} via reflection. */
+@@ -282,18 +241,12 @@
+         return changed;
+     }
+ 
+-    @Override
+     public void jumpToCurrentState() {
+         endAnimations("jumpToCurrentState", false /* cancel */);
+     }
+ 
+     @Override
+     public boolean isStateful() {
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean hasFocusStateSpecified() {
+         return true;
+     }
+ 
+@@ -302,11 +255,7 @@
+             mRipplePaint = null;
+             mLastDark = mDark;
+         }
+-        if (mSupportHardware) {
+-            setPressedHardware(pressed);
+-        } else {
+-            setPressedSoftware(pressed);
+-        }
++        setPressedSoftware(pressed);
+     }
+ 
+     /**
+@@ -318,10 +267,6 @@
+     }
+ 
+     private void endAnimations(String reason, boolean cancel) {
+-        if (Trace.isEnabled()) {
+-            Trace.instant(Trace.TRACE_TAG_APP,
+-                    "KeyButtonRipple.endAnim: reason=" + reason + " cancel=" + cancel);
+-        }
+         mVisible = false;
+         mTmpArray.addAll(mRunningAnimations);
+         int size = mTmpArray.size();
+@@ -359,8 +304,8 @@
+         endAnimations("enterSoftware", true /* cancel */);
+         mVisible = true;
+         mGlowAlpha = getMaxGlowAlpha();
+-        ObjectAnimator scaleAnimator = ObjectAnimator.ofFloat(this, "glowScale",
+-                0f, GLOW_MAX_SCALE_FACTOR);
++        ValueAnimator scaleAnimator = ValueAnimator.ofFloat(0f, GLOW_MAX_SCALE_FACTOR);
++        scaleAnimator.addUpdateListener(animation -> setGlowScale((float) animation.getAnimatedValue()));
+         scaleAnimator.setInterpolator(mInterpolator);
+         scaleAnimator.setDuration(ANIMATION_DURATION_SCALE);
+         scaleAnimator.addListener(mAnimatorListener);
+@@ -375,7 +320,8 @@
+     }
+ 
+     private void exitSoftware() {
+-        ObjectAnimator alphaAnimator = ObjectAnimator.ofFloat(this, "glowAlpha", mGlowAlpha, 0f);
++        ValueAnimator alphaAnimator = ValueAnimator.ofFloat(mGlowAlpha, 0f);
++        alphaAnimator.addUpdateListener(animation -> setGlowAlpha((float) animation.getAnimatedValue()));
+         alphaAnimator.setInterpolator(ALPHA_OUT_INTERPOLATOR);
+         alphaAnimator.setDuration(getFadeDuration());
+         alphaAnimator.addListener(mAnimatorListener);
+@@ -383,54 +329,15 @@
+         mRunningAnimations.add(alphaAnimator);
+     }
+ 
+-    private void setPressedHardware(boolean pressed) {
+-        if (pressed) {
+-            if (mDelayTouchFeedback) {
+-                if (mRunningAnimations.isEmpty()) {
+-                    mHandler.removeCallbacksAndMessages(null);
+-                    mHandler.postDelayed(this::enterHardware, mTapTimeoutMillis);
+-                } else if (mVisible) {
+-                    enterHardware();
+-                }
+-            } else {
+-                enterHardware();
+-            }
+-        } else {
+-            exitHardware();
+-        }
+-    }
+-
+     /**
+      * Sets the left/top property for the round rect to {@code prop} depending on whether we are
+      * horizontal or vertical mode.
+      */
+-    private void setExtendStart(CanvasProperty<Float> prop) {
+-        if (isHorizontal()) {
+-            mLeftProp = prop;
+-        } else {
+-            mTopProp = prop;
+-        }
+-    }
+-
+-    private CanvasProperty<Float> getExtendStart() {
+-        return isHorizontal() ? mLeftProp : mTopProp;
+-    }
+ 
+     /**
+      * Sets the right/bottom property for the round rect to {@code prop} depending on whether we are
+      * horizontal or vertical mode.
+      */
+-    private void setExtendEnd(CanvasProperty<Float> prop) {
+-        if (isHorizontal()) {
+-            mRightProp = prop;
+-        } else {
+-            mBottomProp = prop;
+-        }
+-    }
+-
+-    private CanvasProperty<Float> getExtendEnd() {
+-        return isHorizontal() ? mRightProp : mBottomProp;
+-    }
+ 
+     private int getExtendSize() {
+         return isHorizontal() ? getBounds().width() : getBounds().height();
+@@ -445,75 +352,6 @@
+         int duration = mSpeedUpNextFade ? ANIMATION_DURATION_FADE_FAST : ANIMATION_DURATION_FADE;
+         mSpeedUpNextFade = false;
+         return duration;
+-    }
+-
+-    private void enterHardware() {
+-        endAnimations("enterHardware", true /* cancel */);
+-        mVisible = true;
+-        mDrawingHardwareGlow = true;
+-        setExtendStart(CanvasProperty.createFloat(getExtendSize() / 2));
+-        final RenderNodeAnimator startAnim = new RenderNodeAnimator(getExtendStart(),
+-                getExtendSize()/2 - GLOW_MAX_SCALE_FACTOR * getRippleSize()/2);
+-        startAnim.setDuration(ANIMATION_DURATION_SCALE);
+-        startAnim.setInterpolator(mInterpolator);
+-        startAnim.addListener(mAnimatorListener);
+-        startAnim.setTarget(mTargetView);
+-
+-        setExtendEnd(CanvasProperty.createFloat(getExtendSize() / 2));
+-        final RenderNodeAnimator endAnim = new RenderNodeAnimator(getExtendEnd(),
+-                getExtendSize()/2 + GLOW_MAX_SCALE_FACTOR * getRippleSize()/2);
+-        endAnim.setDuration(ANIMATION_DURATION_SCALE);
+-        endAnim.setInterpolator(mInterpolator);
+-        endAnim.addListener(mAnimatorListener);
+-        endAnim.addListener(mEnterHwTraceAnimator);
+-        endAnim.setTarget(mTargetView);
+-
+-        if (isHorizontal()) {
+-            mTopProp = CanvasProperty.createFloat(0f);
+-            mBottomProp = CanvasProperty.createFloat(getBounds().height());
+-            mRxProp = CanvasProperty.createFloat(getBounds().height()/2);
+-            mRyProp = CanvasProperty.createFloat(getBounds().height()/2);
+-        } else {
+-            mLeftProp = CanvasProperty.createFloat(0f);
+-            mRightProp = CanvasProperty.createFloat(getBounds().width());
+-            mRxProp = CanvasProperty.createFloat(getBounds().width()/2);
+-            mRyProp = CanvasProperty.createFloat(getBounds().width()/2);
+-        }
+-
+-        mGlowScale = GLOW_MAX_SCALE_FACTOR;
+-        mGlowAlpha = getMaxGlowAlpha();
+-        mRipplePaint = getRipplePaint();
+-        mRipplePaint.setAlpha((int) (mGlowAlpha * 255));
+-        mPaintProp = CanvasProperty.createPaint(mRipplePaint);
+-
+-        startAnim.start();
+-        endAnim.start();
+-        mRunningAnimations.add(startAnim);
+-        mRunningAnimations.add(endAnim);
+-
+-        invalidateSelf();
+-
+-        // With the delay, it could eventually animate the enter animation with no pressed state,
+-        // then immediately show the exit animation. If this is skipped there will be no ripple.
+-        if (mDelayTouchFeedback && !mPressed) {
+-            exitHardware();
+-        }
+-    }
+-
+-    private void exitHardware() {
+-        mPaintProp = CanvasProperty.createPaint(getRipplePaint());
+-        final RenderNodeAnimator opacityAnim = new RenderNodeAnimator(mPaintProp,
+-                RenderNodeAnimator.PAINT_ALPHA, 0);
+-        opacityAnim.setDuration(getFadeDuration());
+-        opacityAnim.setInterpolator(ALPHA_OUT_INTERPOLATOR);
+-        opacityAnim.addListener(mAnimatorListener);
+-        opacityAnim.addListener(mExitHwTraceAnimator);
+-        opacityAnim.setTarget(mTargetView);
+-
+-        opacityAnim.start();
+-        mRunningAnimations.add(opacityAnim);
+-
+-        invalidateSelf();
+     }
+ 
+     private final AnimatorListenerAdapter mAnimatorListener =
+@@ -523,40 +361,11 @@
+                     mRunningAnimations.remove(animation);
+                     if (mRunningAnimations.isEmpty() && !mPressed) {
+                         mVisible = false;
+-                        mDrawingHardwareGlow = false;
+                         invalidateSelf();
+                     }
+                 }
+             };
+ 
+-    private static final class TraceAnimatorListener extends AnimatorListenerAdapter {
+-        private final String mName;
+-        TraceAnimatorListener(String name) {
+-            mName = name;
+-        }
+-
+-        @Override
+-        public void onAnimationStart(Animator animation) {
+-            if (Trace.isEnabled()) {
+-                Trace.instant(Trace.TRACE_TAG_APP, "KeyButtonRipple.start." + mName);
+-            }
+-        }
+-
+-        @Override
+-        public void onAnimationCancel(Animator animation) {
+-            if (Trace.isEnabled()) {
+-                Trace.instant(Trace.TRACE_TAG_APP, "KeyButtonRipple.cancel." + mName);
+-            }
+-        }
+-
+-        @Override
+-        public void onAnimationEnd(Animator animation) {
+-            if (Trace.isEnabled()) {
+-                Trace.instant(Trace.TRACE_TAG_APP, "KeyButtonRipple.end." + mName);
+-            }
+-        }
+-    }
+-
+     /**
+      * Interpolator with a smooth log deceleration
+      */
+diff --git a/frameworks/base/packages/SystemUI/res/layout/recent_apps.xml b/frameworks/base/packages/SystemUI/res/layout/recent_apps.xml
+--- a/frameworks/base/packages/SystemUI/res/layout/recent_apps.xml
++++ b/frameworks/base/packages/SystemUI/res/layout/recent_apps.xml
+@@ -18,6 +18,7 @@
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:systemui="http://schemas.android.com/apk/res-auto"
+     android:id="@+id/recent_apps"
++    systemui:keyCode="187"
+     android:layout_width="@dimen/navigation_key_width"
+     android:layout_height="match_parent"
+     android:layout_weight="0"

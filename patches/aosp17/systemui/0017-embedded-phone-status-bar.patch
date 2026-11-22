@@ -1,0 +1,709 @@
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/PhoneStatusBarView.java
+@@ -16,63 +16,113 @@
+ 
+ package com.android.systemui.statusbar.phone;
+ 
+-import static com.android.systemui.Flags.edtNotAllowedOnStatusBar;
+-
+-import android.annotation.Nullable;
+ import android.content.Context;
+ import android.content.res.Configuration;
+ import android.graphics.Insets;
+ import android.graphics.Rect;
+-import android.graphics.Region;
+ import android.util.AttributeSet;
+-import android.util.Log;
+-import android.view.DisplayCutout;
++import android.view.Gravity;
++import android.view.KeyEvent;
++import android.view.LayoutInflater;
+ import android.view.MotionEvent;
+ import android.view.View;
+ import android.view.ViewGroup;
+ import android.view.WindowInsets;
+-import android.view.accessibility.AccessibilityEvent;
+-import android.view.flags.Flags;
+ import android.widget.FrameLayout;
++import android.widget.ImageView;
+ import android.widget.LinearLayout;
+ 
+ import androidx.annotation.NonNull;
+ 
+-import com.android.internal.policy.SystemBarUtils;
+ import com.android.systemui.Gefingerpoken;
++import com.android.systemui.battery.BatteryMeterView;
++import com.android.systemui.navigationbar.views.NavigationBarView;
++import com.android.systemui.plugins.DarkIconDispatcher;
+ import com.android.systemui.res.R;
+-import com.android.systemui.statusbar.gesture.StatusBarLongPressGestureDetector;
+-import com.android.systemui.statusbar.phone.userswitcher.StatusBarUserSwitcherContainer;
+-import com.android.systemui.user.ui.binder.StatusBarUserChipViewBinder;
+-import com.android.systemui.user.ui.viewmodel.StatusBarUserChipViewModel;
+-import com.android.systemui.util.leak.RotationUtils;
+-
+-import java.util.Objects;
++import com.android.systemui.statusbar.policy.Clock;
++
+ import java.util.function.BooleanSupplier;
++import java.util.function.Consumer;
+ 
+ public class PhoneStatusBarView extends FrameLayout {
+-    private static final String TAG = "PhoneStatusBarView";
+-
+-    private int mRotationOrientation = -1;
+-    @Nullable
++
+     private View mCutoutSpace;
+-    @Nullable
+-    private DisplayCutout mDisplayCutout;
+-    @Nullable
+-    private Rect mDisplaySize;
++    private Rect mDisplayCutout;
++    private int mWaterfallTopInset;
+     private int mStatusBarHeight;
+-    @Nullable
+     private Gefingerpoken mTouchEventHandler;
+-    @Nullable
+     private BooleanSupplier mIsStatusBarInteractiveSupplier;
+-    @Nullable
+     private HasCornerCutoutFetcher mHasCornerCutoutFetcher;
+-    @Nullable
+     private InsetsFetcher mInsetsFetcher;
+     private int mDensity;
+     private float mFontScale;
+-    private StatusBarLongPressGestureDetector mStatusBarLongPressGestureDetector;
+-    private final Region mTouchableRegion = Region.obtain();
++    private final Rect mTouchableRegion = new Rect();
++
++    private NavigationBarView mNavigationBar;
++    private View mWifiGroup;
++    private View mMobileGroup;
++
++    // The SettingsLib Wi-Fi catalog has four images for five reported signal levels.
++    private static final int[] WIFI_ICONS = {
++            R.drawable.ic_wifi_0, R.drawable.ic_wifi_1, R.drawable.ic_wifi_2,
++            R.drawable.ic_wifi_2, R.drawable.ic_wifi_3
++    };
++    private static final int[] MOBILE_ICONS = {
++            R.drawable.ic_mobile_0_4_bar, R.drawable.ic_mobile_1_4_bar,
++            R.drawable.ic_mobile_2_4_bar, R.drawable.ic_mobile_3_4_bar,
++            R.drawable.ic_mobile_4_4_bar
++    };
++
++    /** Mounts the upstream phone bars using a context with SystemUI APK resources. */
++    public static PhoneStatusBarView inflatePhoneBars(FrameLayout host, Context systemUiContext,
++            Consumer<KeyEvent> keyEventListener) {
++        LayoutInflater inflater = LayoutInflater.from(systemUiContext);
++        PhoneStatusBarView status = (PhoneStatusBarView) inflater.inflate(R.layout.status_bar, host, false);
++        NavigationBarView nav = (NavigationBarView) inflater.inflate(R.layout.navigation_bar, host, false);
++        nav.setKeyEventListener(keyEventListener);
++        status.mNavigationBar = nav;
++        host.addView(status);
++        host.addView(nav, new FrameLayout.LayoutParams(
++                ViewGroup.LayoutParams.MATCH_PARENT, nav.getNavBarHeight(), Gravity.BOTTOM));
++        return status;
++    }
++
++    public Clock getClock() {
++        return findViewById(R.id.clock);
++    }
++
++    public BatteryMeterView getBatteryMeter() {
++        return findViewById(R.id.battery);
++    }
++
++    public NavigationBarView getNavigationBar() {
++        return mNavigationBar;
++    }
++
++    /** Negative levels hide the corresponding icon. */
++    public void setNetworkSignalLevels(int wifiLevel, int mobileLevel) {
++        updateSignal(mWifiGroup, R.id.wifi_signal, WIFI_ICONS, wifiLevel);
++        updateSignal(mMobileGroup, R.id.mobile_signal, MOBILE_ICONS, mobileLevel);
++    }
++
++    private void updateSignal(View group, int id, int[] icons, int level) {
++        group.setVisibility(level < 0 ? GONE : VISIBLE);
++        if (level >= 0) {
++            ImageView signal = group.findViewById(id);
++            int icon = icons[Math.min(level, icons.length - 1)];
++            if (signal.getTag() == null || ((Integer) signal.getTag()) != icon) {
++                signal.setImageResource(icon);
++                signal.getDrawable().setTint(DarkIconDispatcher.DEFAULT_ICON_TINT);
++                signal.setTag(icon);
++            }
++        }
++    }
++
++    public void setDisplayCutout(Rect cutout, int waterfallTopInset) {
++        mDisplayCutout = cutout == null ? null : new Rect(cutout);
++        mWaterfallTopInset = waterfallTopInset;
++        updateLayoutForCutout();
++    }
+ 
+     /**
+      * Draw this many pixels into the left/right side of the cutout to optimally use the space
+@@ -83,11 +133,6 @@
+         super(context, attrs);
+     }
+ 
+-    void setLongPressGestureDetector(
+-            StatusBarLongPressGestureDetector statusBarLongPressGestureDetector) {
+-        mStatusBarLongPressGestureDetector = statusBarLongPressGestureDetector;
+-    }
+-
+     void setTouchEventHandler(Gefingerpoken handler) {
+         mTouchEventHandler = handler;
+     }
+@@ -106,22 +151,24 @@
+         updateSafeInsets();
+     }
+ 
+-    void init(StatusBarUserChipViewModel viewModel) {
+-        StatusBarUserSwitcherContainer container = findViewById(R.id.user_switcher_container);
+-        StatusBarUserChipViewBinder.bind(container, viewModel);
+-    }
+-
+     /** Updates the status bar's touchable region. */
+-    public void updateTouchableRegion(Region touchableRegion) {
++    public void updateTouchableRegion(Rect touchableRegion) {
+         mTouchableRegion.set(touchableRegion);
+-        getViewRootImpl().setTouchableRegion(touchableRegion);
+     }
+ 
+     @Override
+     public void onFinishInflate() {
+         super.onFinishInflate();
+         mCutoutSpace = findViewById(R.id.cutout_space_view);
+-
++        LayoutInflater inflater = LayoutInflater.from(getContext());
++        ViewGroup icons = findViewById(R.id.statusIcons);
++        inflater.inflate(R.layout.status_bar_wifi_group_inner, icons, true);
++        inflater.inflate(R.layout.status_bar_mobile_signal_group_inner, icons, true);
++        mWifiGroup = icons.findViewById(R.id.wifi_group);
++        mMobileGroup = icons.findViewById(R.id.mobile_group);
++        mWifiGroup.findViewById(R.id.inout_container).setVisibility(GONE);
++        mMobileGroup.findViewById(R.id.inout_container).setVisibility(GONE);
++        setNetworkSignalLevels(-1, -1);
+         updateResources();
+     }
+ 
+@@ -131,13 +178,7 @@
+         if (updateDisplayParameters()) {
+             updateLayoutForCutout();
+         }
+-        if (edtNotAllowedOnStatusBar()) {
+-            // See b/482405546: the status bar sometimes uses a light theme, e.g. when the user's
+-            // wallpaper is light. The expanded dark theme feature inverts colors in light theme
+-            // view hierarchies so it may incorrectly invert the status bar in this case. To avoid
+-            // this we directly tell expanded dark theme to ignore this view hierarchy.
+-            getViewRootImpl().setForceInvertAllowed(false);
+-        }
++
+     }
+ 
+     @Override
+@@ -149,12 +190,8 @@
+     // Per b/300629388, we let the PhoneStatusBarView detect onConfigurationChanged to
+     // updateResources, instead of letting the PhoneStatusBarViewController detect onConfigChanged
+     // then notify PhoneStatusBarView.
+-    @Override
+-    protected void onConfigurationChanged(Configuration newConfig) {
+-        super.onConfigurationChanged(newConfig);
++    public void onConfigurationChanged(Configuration newConfig) {
+         updateResources();
+-
+-        // May trigger cutout space layout-ing
+         if (updateDisplayParameters()) {
+             updateLayoutForCutout();
+             requestLayout();
+@@ -175,24 +212,7 @@
+      */
+     private boolean updateDisplayParameters() {
+         boolean changed = false;
+-        int newRotation = RotationUtils.getExactRotation(mContext);
+-        if (newRotation != mRotationOrientation) {
+-            changed = true;
+-            mRotationOrientation = newRotation;
+-        }
+-
+-        if (!Objects.equals(getRootWindowInsets().getDisplayCutout(), mDisplayCutout)) {
+-            changed = true;
+-            mDisplayCutout = getRootWindowInsets().getDisplayCutout();
+-        }
+-
+-        Configuration newConfiguration = mContext.getResources().getConfiguration();
+-        final Rect newSize = newConfiguration.windowConfiguration.getMaxBounds();
+-        if (!Objects.equals(newSize, mDisplaySize)) {
+-            changed = true;
+-            mDisplaySize = newSize;
+-        }
+-
++        Configuration newConfiguration = getResources().getConfiguration();
+         int density = newConfiguration.densityDpi;
+         if (density != mDensity) {
+             changed = true;
+@@ -204,33 +224,6 @@
+             mFontScale = fontScale;
+         }
+         return changed;
+-    }
+-
+-    @Override
+-    public boolean onRequestSendAccessibilityEventInternal(View child, AccessibilityEvent event) {
+-        if (super.onRequestSendAccessibilityEventInternal(child, event)) {
+-            // The status bar is very small so augment the view that the user is touching
+-            // with the content of the status bar a whole. This way an accessibility service
+-            // may announce the current item as well as the entire content if appropriate.
+-            AccessibilityEvent record = AccessibilityEvent.obtain();
+-            onInitializeAccessibilityEvent(record);
+-            dispatchPopulateAccessibilityEvent(record);
+-            event.appendRecord(record);
+-            return true;
+-        }
+-        return false;
+-    }
+-
+-    @Override
+-    public boolean dispatchHoverEvent(MotionEvent event) {
+-        if (mIsStatusBarInteractiveSupplier != null
+-                && !mIsStatusBarInteractiveSupplier.getAsBoolean()) {
+-            // Consume the event to prevent any calls to #onHoverEvent on status bar view or its
+-            // components, essentially making the status bar and its children completely
+-            // non-interactive.
+-            return true;
+-        }
+-        return super.dispatchHoverEvent(event);
+     }
+ 
+     @Override
+@@ -257,24 +250,7 @@
+             return false;
+         }
+ 
+-        if (mStatusBarLongPressGestureDetector != null && !Flags.scrollToTop()) {
+-            mStatusBarLongPressGestureDetector.handleTouch(event);
+-        }
+-        if (mTouchEventHandler == null) {
+-            if (Flags.scrollToTop()) {
+-                return false;
+-            }
+-            Log.w(
+-                    TAG,
+-                    String.format(
+-                            "onTouch: No touch handler provided; eating gesture at (%d,%d)",
+-                            (int) event.getX(),
+-                            (int) event.getY()
+-                    )
+-            );
+-            return true;
+-        }
+-        return mTouchEventHandler.onTouchEvent(event);
++        return mTouchEventHandler != null && mTouchEventHandler.onTouchEvent(event);
+     }
+ 
+     @Override
+@@ -292,14 +268,14 @@
+     }
+ 
+     private void updateStatusBarHeight() {
+-        final int waterfallTopInset =
+-                mDisplayCutout == null ? 0 : mDisplayCutout.getWaterfallInsets().top;
+         ViewGroup.LayoutParams layoutParams = getLayoutParams();
+-        mStatusBarHeight = SystemBarUtils.getStatusBarHeight(mContext);
+-        layoutParams.height = mStatusBarHeight - waterfallTopInset;
++        mStatusBarHeight = getResources().getDimensionPixelSize(R.dimen.status_bar_height_default);
++        if (layoutParams != null) {
++            layoutParams.height = mStatusBarHeight - mWaterfallTopInset;
++            setLayoutParams(layoutParams);
++        }
+         updateSystemIconsContainerHeight();
+         updatePaddings();
+-        setLayoutParams(layoutParams);
+     }
+ 
+     private void updateSystemIconsContainerHeight() {
+@@ -350,8 +326,7 @@
+         if (mHasCornerCutoutFetcher != null) {
+             hasCornerCutout = mHasCornerCutoutFetcher.fetchHasCornerCutout();
+         } else {
+-            Log.e(TAG, "mHasCornerCutoutFetcher unexpectedly null");
+-            hasCornerCutout = true;
++            hasCornerCutout = false;
+         }
+ 
+         if (mDisplayCutout == null || mDisplayCutout.isEmpty() || hasCornerCutout) {
+@@ -362,7 +337,7 @@
+         mCutoutSpace.setVisibility(View.VISIBLE);
+         LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) mCutoutSpace.getLayoutParams();
+ 
+-        Rect bounds = mDisplayCutout.getBoundingRectTop();
++        Rect bounds = new Rect(mDisplayCutout);
+ 
+         bounds.left = bounds.left + mCutoutSideNudge;
+         bounds.right = bounds.right - mCutoutSideNudge;
+@@ -372,7 +347,6 @@
+ 
+     private void updateSafeInsets() {
+         if (mInsetsFetcher == null) {
+-            Log.e(TAG, "mInsetsFetcher unexpectedly null");
+             return;
+         }
+ 
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/StatusIconContainer.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/StatusIconContainer.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/StatusIconContainer.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/phone/StatusIconContainer.java
+@@ -16,13 +16,8 @@
+ 
+ package com.android.systemui.statusbar.phone;
+ 
+-import static com.android.systemui.statusbar.StatusBarIconView.STATE_DOT;
+-import static com.android.systemui.statusbar.StatusBarIconView.STATE_HIDDEN;
+-import static com.android.systemui.statusbar.StatusBarIconView.STATE_ICON;
+-
+-import android.annotation.Nullable;
++import androidx.annotation.Nullable;
+ import android.content.Context;
+-import android.content.pm.ActivityInfo;
+ import android.content.res.Configuration;
+ import android.graphics.Canvas;
+ import android.graphics.Color;
+@@ -35,12 +30,9 @@
+ import com.android.keyguard.AlphaOptimizedLinearLayout;
+ import com.android.systemui.res.R;
+ import com.android.systemui.statusbar.StatusIconDisplayable;
+-import com.android.systemui.statusbar.notification.stack.AnimationFilter;
+-import com.android.systemui.statusbar.notification.stack.AnimationProperties;
+-import com.android.systemui.statusbar.notification.stack.ViewState;
+-import com.android.systemui.statusbar.phone.ui.StatusBarIconController;
+ 
+ import java.util.ArrayList;
++import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.List;
+ import java.util.Set;
+@@ -59,6 +51,10 @@
+     // Max 8 status icons including battery
+     private static final int MAX_ICONS = 7;
+     private static final int MAX_DOTS = 1;
++    private static final int STATE_ICON = 0;
++    private static final int STATE_DOT = 1;
++    private static final int STATE_HIDDEN = 2;
++    private final HashMap<View, StatusIconState> mViewStates = new HashMap<>();
+ 
+     private int mDotPadding;
+     private int mIconSpacing;
+@@ -69,7 +65,6 @@
+     private boolean mNeedsUnderflow;
+     // Individual StatusBarIconViews draw their etc dots centered in this width
+     private int mIconDotFrameWidth;
+-    private boolean mQsExpansionTransitioning;
+     private boolean mShouldRestrictIcons = true;
+     // Used to count which states want to be visible during layout
+     private ArrayList<StatusIconState> mLayoutStates = new ArrayList<>();
+@@ -96,10 +91,6 @@
+         super.onFinishInflate();
+     }
+ 
+-    public void setQsExpansionTransitioning(boolean expansionTransitioning) {
+-        mQsExpansionTransitioning = expansionTransitioning;
+-    }
+-
+     public void setShouldRestrictIcons(boolean should) {
+         mShouldRestrictIcons = should;
+     }
+@@ -111,7 +102,7 @@
+     private void reloadDimens() {
+         // This is the same value that StatusBarIconView uses
+         mIconDotFrameWidth = getResources().getDimensionPixelSize(
+-                com.android.internal.R.dimen.status_bar_icon_size_sp);
++                R.dimen.status_bar_icon_size_sp);
+         mDotPadding = getResources().getDimensionPixelSize(R.dimen.overflow_icon_dot_padding);
+         mIconSpacing = getResources().getDimensionPixelSize(R.dimen.status_bar_system_icon_spacing);
+         int radius = getResources().getDimensionPixelSize(R.dimen.overflow_dot_radius);
+@@ -132,7 +123,6 @@
+             child.layout(0, top, width, top + height);
+         }
+ 
+-        resetViewStates();
+         calculateIconTranslations();
+         applyIconStates();
+     }
+@@ -163,16 +153,15 @@
+         final int count = getChildCount();
+         // Collect all of the views which want to be laid out
+         for (int i = 0; i < count; i++) {
+-            StatusIconDisplayable icon = (StatusIconDisplayable) getChildAt(i);
+-            if (icon.isIconVisible() && !icon.isIconBlocked()
+-                    && !mIgnoredSlots.contains(icon.getSlot())) {
+-                mMeasureViews.add((View) icon);
++            View child = getChildAt(i);
++            if (isIconVisible(child)) {
++                mMeasureViews.add(child);
+             }
+         }
+ 
+         int visibleCount = mMeasureViews.size();
+         int maxVisible = visibleCount <= MAX_ICONS ? MAX_ICONS : MAX_ICONS - 1;
+-        int totalWidth = mPaddingLeft + mPaddingRight;
++        int totalWidth = getPaddingLeft() + getPaddingRight();
+         boolean trackWidth = true;
+ 
+         // Measure all children so that they report the correct width
+@@ -230,25 +219,21 @@
+     @Override
+     public void onViewAdded(View child) {
+         super.onViewAdded(child);
+-        StatusIconState vs = new StatusIconState();
+-        vs.justAdded = true;
+-        child.setTag(R.id.status_bar_view_state_tag, vs);
++        mViewStates.put(child, new StatusIconState());
+     }
+ 
+     @Override
+     public void onViewRemoved(View child) {
+         super.onViewRemoved(child);
+-        child.setTag(R.id.status_bar_view_state_tag, null);
+-    }
+-
+-    @Override
+-    protected void onConfigurationChanged(Configuration newConfig) {
+-        super.onConfigurationChanged(newConfig);
+-        final int configDiff = newConfig.diff(mConfiguration);
++        mViewStates.remove(child);
++    }
++
++    public void onConfigurationChanged(Configuration newConfig) {
++        if (newConfig.densityDpi != mConfiguration.densityDpi
++                || newConfig.fontScale != mConfiguration.fontScale) {
++            reloadDimens();
++        }
+         mConfiguration.setTo(newConfig);
+-        if ((configDiff & (ActivityInfo.CONFIG_DENSITY | ActivityInfo.CONFIG_FONT_SCALE)) != 0) {
+-            reloadDimens();
+-        }
+     }
+ 
+     /**
+@@ -329,13 +314,10 @@
+         // Collect all of the states which want to be visible
+         for (int i = childCount - 1; i >= 0; i--) {
+             View child = getChildAt(i);
+-            StatusIconDisplayable iconView = (StatusIconDisplayable) child;
+             StatusIconState childState = getViewStateFromChild(child);
+ 
+-            if (!iconView.isIconVisible() || iconView.isIconBlocked()
+-                    || mIgnoredSlots.contains(iconView.getSlot())) {
++            if (!isIconVisible(child)) {
+                 childState.visibleState = STATE_HIDDEN;
+-                if (DEBUG) Log.d(TAG, "skipping child (" + iconView.getSlot() + ") not visible");
+                 continue;
+             }
+ 
+@@ -392,7 +374,7 @@
+         }
+ 
+         // Stole this from NotificationIconContainer. Not optimal but keeps the layout logic clean
+-        if (isLayoutRtl()) {
++        if (getLayoutDirection() == LAYOUT_DIRECTION_RTL) {
+             for (int i = 0; i < childCount; i++) {
+                 View child = getChildAt(i);
+                 StatusIconState state = getViewStateFromChild(child);
+@@ -407,27 +389,20 @@
+             StatusIconState vs = getViewStateFromChild(child);
+             if (vs != null) {
+                 vs.applyToView(child);
+-                vs.qsExpansionTransitioning = mQsExpansionTransitioning;
+-            }
+-        }
+-    }
+-
+-    private void resetViewStates() {
+-        for (int i = 0; i < getChildCount(); i++) {
+-            View child = getChildAt(i);
+-            StatusIconState vs = getViewStateFromChild(child);
+-            if (vs == null) {
+-                continue;
+-            }
+-
+-            vs.initFrom(child);
+-            vs.setAlpha(1.0f, "statusIconContainer reset");
+-            vs.hidden = false;
+-        }
+-    }
+-
+-    private static @Nullable StatusIconState getViewStateFromChild(View child) {
+-        return (StatusIconState) child.getTag(R.id.status_bar_view_state_tag);
++            }
++        }
++    }
++
++    private boolean isIconVisible(View child) {
++        if (child instanceof StatusIconDisplayable icon) {
++            return icon.isIconVisible() && !icon.isIconBlocked()
++                    && !mIgnoredSlots.contains(icon.getSlot());
++        }
++        return child.getVisibility() == VISIBLE;
++    }
++
++    private @Nullable StatusIconState getViewStateFromChild(View child) {
++        return mViewStates.get(child);
+     }
+ 
+     private static int getViewTotalMeasuredWidth(View child) {
+@@ -438,97 +413,26 @@
+         return child.getWidth() + child.getPaddingStart() + child.getPaddingEnd();
+     }
+ 
+-    /** A {@link ViewState} that also stores the icon's visibility state. */
+-    public static class StatusIconState extends ViewState {
+-
+-        public StatusIconState() {
+-            super(false /* usePhysicsForMovement */);
+-        }
+-
+-        /// StatusBarIconView.STATE_*
++    /** Applies the result of the upstream icon placement without shade animation state. */
++    public static class StatusIconState {
+         public int visibleState = STATE_ICON;
+-        public boolean justAdded = true;
+-        public boolean qsExpansionTransitioning = false;
+-
+-        // How far we are from the end of the view actually is the most relevant for animation
+-        float distanceToViewEnd = -1;
+-
+-        @Override
++        private float mXTranslation;
++
++        float getXTranslation() {
++            return mXTranslation;
++        }
++
++        void setXTranslation(float translation) {
++            mXTranslation = translation;
++        }
++
+         public void applyToView(View view) {
+-            float parentWidth = 0;
+-            if (view.getParent() instanceof View) {
+-                parentWidth = ((View) view.getParent()).getWidth();
+-            }
+-
+-            float currentDistanceToEnd = parentWidth - getXTranslation();
+-
+-            if (!(view instanceof StatusIconDisplayable)) {
+-                return;
+-            }
+-            StatusIconDisplayable icon = (StatusIconDisplayable) view;
+-            AnimationProperties animationProperties = null;
+-            boolean animateVisibility = true;
+-
+-            // Figure out which properties of the state transition (if any) we need to animate
+-            if (justAdded
+-                    || icon.getVisibleState() == STATE_HIDDEN && visibleState == STATE_ICON) {
+-                // Icon is appearing, fade it in by putting it where it will be and animating alpha
+-                super.applyToView(view);
+-                view.setAlpha(0.f);
+-                icon.setVisibleState(STATE_HIDDEN);
+-                animationProperties = ADD_ICON_PROPERTIES;
+-            } else if (icon.getVisibleState() != visibleState) {
+-                if (icon.getVisibleState() == STATE_ICON && visibleState == STATE_HIDDEN) {
+-                    // Disappearing, don't do anything fancy
+-                    animateVisibility = false;
+-                } else {
+-                    // all other transitions (to/from dot, etc)
+-                    animationProperties = ANIMATE_ALL_PROPERTIES;
+-                }
+-            } else if (visibleState != STATE_HIDDEN && distanceToViewEnd != currentDistanceToEnd) {
+-                // Visibility isn't changing, just animate position
+-                animationProperties = X_ANIMATION_PROPERTIES;
+-            }
+-
+-            icon.setVisibleState(visibleState, animateVisibility);
+-            if (animationProperties != null && !qsExpansionTransitioning) {
+-                animateTo(view, animationProperties);
++            view.setTranslationX(mXTranslation);
++            if (view instanceof StatusIconDisplayable icon) {
++                icon.setVisibleState(visibleState, false);
+             } else {
+-                super.applyToView(view);
+-            }
+-
+-            qsExpansionTransitioning = false;
+-            justAdded = false;
+-            distanceToViewEnd = currentDistanceToEnd;
+-
+-        }
+-    }
+-
+-    private static final AnimationProperties ADD_ICON_PROPERTIES = new AnimationProperties() {
+-        private AnimationFilter mAnimationFilter = new AnimationFilter().animateAlpha();
+-
+-        @Override
+-        public AnimationFilter getAnimationFilter() {
+-            return mAnimationFilter;
+-        }
+-    }.setDuration(200).setDelay(50);
+-
+-    private static final AnimationProperties X_ANIMATION_PROPERTIES = new AnimationProperties() {
+-        private AnimationFilter mAnimationFilter = new AnimationFilter().animateX();
+-
+-        @Override
+-        public AnimationFilter getAnimationFilter() {
+-            return mAnimationFilter;
+-        }
+-    }.setDuration(200);
+-
+-    private static final AnimationProperties ANIMATE_ALL_PROPERTIES = new AnimationProperties() {
+-        private AnimationFilter mAnimationFilter = new AnimationFilter().animateX().animateY()
+-                .animateAlpha().animateScale();
+-
+-        @Override
+-        public AnimationFilter getAnimationFilter() {
+-            return mAnimationFilter;
+-        }
+-    }.setDuration(200);
++                view.setAlpha(visibleState == STATE_ICON ? 1f : 0f);
++            }
++        }
++    }
+ }
+diff --git a/frameworks/base/packages/SystemUI/plugin/src/com/android/systemui/plugins/DarkIconDispatcher.java b/frameworks/base/packages/SystemUI/plugin/src/com/android/systemui/plugins/DarkIconDispatcher.java
+--- a/frameworks/base/packages/SystemUI/plugin/src/com/android/systemui/plugins/DarkIconDispatcher.java
++++ b/frameworks/base/packages/SystemUI/plugin/src/com/android/systemui/plugins/DarkIconDispatcher.java
+@@ -151,7 +151,7 @@
+             return true;
+         }
+         sTmpRect.set(area);
+-        view.getLocationOnScreen(sTmpInt2);
++        view.getLocationInWindow(sTmpInt2);
+         int left = sTmpInt2[0];
+ 
+         int intersectStart = Math.max(left, area.left);
+diff --git a/frameworks/base/packages/SystemUI/res/layout/system_icons.xml b/frameworks/base/packages/SystemUI/res/layout/system_icons.xml
+--- a/frameworks/base/packages/SystemUI/res/layout/system_icons.xml
++++ b/frameworks/base/packages/SystemUI/res/layout/system_icons.xml
+@@ -33,4 +33,9 @@
+         android:gravity="center_vertical"
+         android:orientation="horizontal"/>
+ 
++    <com.android.systemui.battery.BatteryMeterView
++        android:id="@+id/battery"
++        android:layout_width="wrap_content"
++        android:layout_height="match_parent" />
++
+ </LinearLayout>
+diff --git a/frameworks/base/packages/SystemUI/res-keyguard/layout/status_bar_mobile_signal_group_inner.xml b/frameworks/base/packages/SystemUI/res-keyguard/layout/status_bar_mobile_signal_group_inner.xml
+--- a/frameworks/base/packages/SystemUI/res-keyguard/layout/status_bar_mobile_signal_group_inner.xml
++++ b/frameworks/base/packages/SystemUI/res-keyguard/layout/status_bar_mobile_signal_group_inner.xml
+@@ -76,7 +76,7 @@
+             android:layout_width="wrap_content"
+             android:layout_height="wrap_content"
+             android:layout_gravity="center_vertical">
+-            <com.android.systemui.statusbar.AnimatedImageView
++            <com.android.systemui.statusbar.AlphaOptimizedImageView
+                 android:id="@+id/mobile_signal"
+                 android:layout_height="@dimen/status_bar_mobile_signal_size"
+                 android:layout_width="wrap_content"

@@ -1,0 +1,532 @@
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/battery/AccessorizedBatteryDrawable.kt b/frameworks/base/packages/SystemUI/src/com/android/systemui/battery/AccessorizedBatteryDrawable.kt
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/battery/AccessorizedBatteryDrawable.kt
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/battery/AccessorizedBatteryDrawable.kt
+@@ -18,15 +18,12 @@
+ import android.graphics.Canvas
+ import android.graphics.Color
+ import android.graphics.ColorFilter
+-import android.graphics.Matrix
+ import android.graphics.Paint
+ import android.graphics.Path
+ import android.graphics.PixelFormat
+-import android.graphics.PorterDuff
+-import android.graphics.PorterDuffXfermode
+ import android.graphics.Rect
+-import android.graphics.drawable.DrawableWrapper
+-import android.util.PathParser
++import android.graphics.drawable.Drawable
++import androidx.core.graphics.PathParser
+ import com.android.settingslib.graph.ThemedBatteryDrawable
+ import com.android.systemui.res.R
+ import com.android.systemui.battery.BatterySpecs.BATTERY_HEIGHT
+@@ -34,7 +31,6 @@
+ import com.android.systemui.battery.BatterySpecs.BATTERY_WIDTH
+ import com.android.systemui.battery.BatterySpecs.BATTERY_WIDTH_WITH_SHIELD
+ import com.android.systemui.battery.BatterySpecs.SHIELD_LEFT_OFFSET
+-import com.android.systemui.battery.BatterySpecs.SHIELD_STROKE
+ import com.android.systemui.battery.BatterySpecs.SHIELD_TOP_OFFSET
+ 
+ /**
+@@ -46,29 +42,17 @@
+ class AccessorizedBatteryDrawable(
+     private val context: Context,
+     frameColor: Int,
+-) : DrawableWrapper(ThemedBatteryDrawable(context, frameColor)) {
+-    private val mainBatteryDrawable: ThemedBatteryDrawable
+-        get() = drawable as ThemedBatteryDrawable
++) : Drawable(), Drawable.Callback {
++    private val mainBatteryDrawable = ThemedBatteryDrawable(context, frameColor).also {
++        it.callback = this
++    }
+ 
+     private val shieldPath = Path()
+-    private val scaledShield = Path()
+-    private val scaleMatrix = Matrix()
+-
+-    private var shieldLeftOffsetScaled = SHIELD_LEFT_OFFSET
+-    private var shieldTopOffsetScaled = SHIELD_TOP_OFFSET
+ 
+     private var density = context.resources.displayMetrics.density
+ 
+     private val dualTone =
+-        context.resources.getBoolean(com.android.internal.R.bool.config_batterymeterDualTone)
+-
+-    private val shieldTransparentOutlinePaint =
+-        Paint(Paint.ANTI_ALIAS_FLAG).also { p ->
+-            p.color = Color.TRANSPARENT
+-            p.strokeWidth = ThemedBatteryDrawable.PROTECTION_MIN_STROKE_WIDTH
+-            p.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+-            p.style = Paint.Style.FILL_AND_STROKE
+-        }
++        context.resources.getBoolean(R.bool.config_batterymeterDualTone)
+ 
+     private val shieldPaint =
+         Paint(Paint.ANTI_ALIAS_FLAG).also { p ->
+@@ -89,6 +73,7 @@
+     var displayShield: Boolean = false
+         set(value) {
+             field = value
++            updateSizes()
+             postInvalidate()
+         }
+ 
+@@ -101,28 +86,13 @@
+         val mainWidth = BatterySpecs.getMainBatteryWidth(b.width().toFloat(), displayShield)
+         val mainHeight = BatterySpecs.getMainBatteryHeight(b.height().toFloat(), displayShield)
+ 
+-        drawable?.setBounds(
++        mainBatteryDrawable.setBounds(
+             b.left,
+             b.top,
+             /* right= */ b.left + mainWidth.toInt(),
+             /* bottom= */ b.top + mainHeight.toInt()
+         )
+ 
+-        if (displayShield) {
+-            val sx = b.right / BATTERY_WIDTH_WITH_SHIELD
+-            val sy = b.bottom / BATTERY_HEIGHT_WITH_SHIELD
+-            scaleMatrix.setScale(sx, sy)
+-            shieldPath.transform(scaleMatrix, scaledShield)
+-
+-            shieldLeftOffsetScaled = sx * SHIELD_LEFT_OFFSET
+-            shieldTopOffsetScaled = sy * SHIELD_TOP_OFFSET
+-
+-            val scaledStrokeWidth =
+-                (sx * SHIELD_STROKE).coerceAtLeast(
+-                    ThemedBatteryDrawable.PROTECTION_MIN_STROKE_WIDTH
+-                )
+-            shieldTransparentOutlinePaint.strokeWidth = scaledStrokeWidth
+-        }
+     }
+ 
+     override fun getIntrinsicHeight(): Int {
+@@ -146,18 +116,16 @@
+     }
+ 
+     override fun draw(c: Canvas) {
+-        c.saveLayer(null, null)
+-        // Draw the main battery icon
+-        super.draw(c)
+-
++        mainBatteryDrawable.draw(c)
+         if (displayShield) {
+-            c.translate(shieldLeftOffsetScaled, shieldTopOffsetScaled)
+-            // We need a transparent outline around the shield, so first draw the transparent-ness
+-            // then draw the shield
+-            c.drawPath(scaledShield, shieldTransparentOutlinePaint)
+-            c.drawPath(scaledShield, shieldPaint)
++            val b = bounds
++            c.save()
++            c.translate(b.left.toFloat(), b.top.toFloat())
++            c.scale(b.width() / BATTERY_WIDTH_WITH_SHIELD, b.height() / BATTERY_HEIGHT_WITH_SHIELD)
++            c.translate(SHIELD_LEFT_OFFSET, SHIELD_TOP_OFFSET)
++            c.drawPath(shieldPath, shieldPaint)
++            c.restore()
+         }
+-        c.restore()
+     }
+ 
+     override fun getOpacity(): Int {
+@@ -169,8 +137,7 @@
+     }
+ 
+     override fun setColorFilter(colorfilter: ColorFilter?) {
+-        super.setColorFilter(colorFilter)
+-        shieldPaint.colorFilter = colorFilter
++        mainBatteryDrawable.setColorFilter(colorfilter)
+     }
+ 
+     /** Sets whether the battery is currently charging. */
+@@ -214,7 +181,14 @@
+         shieldPath.set(PathParser.createPathFromPathData(shieldPathString))
+     }
+ 
+-    private val invalidateRunnable: () -> Unit = { invalidateSelf() }
++    override fun invalidateDrawable(who: Drawable) = invalidateSelf()
++
++    override fun scheduleDrawable(who: Drawable, what: Runnable, whenMillis: Long) =
++        scheduleSelf(what, whenMillis)
++
++    override fun unscheduleDrawable(who: Drawable, what: Runnable) = unscheduleSelf(what)
++
++    private val invalidateRunnable = Runnable { invalidateSelf() }
+ 
+     private fun postInvalidate() {
+         unscheduleSelf(invalidateRunnable)
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/battery/BatteryMeterView.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/battery/BatteryMeterView.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/battery/BatteryMeterView.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/battery/BatteryMeterView.java
+@@ -15,17 +15,11 @@
+  */
+ package com.android.systemui.battery;
+ 
+-import static android.provider.Settings.System.SHOW_BATTERY_PERCENT;
+-
+-import static com.android.systemui.DejankUtils.whitelistIpcs;
+-
+ import static java.lang.annotation.RetentionPolicy.SOURCE;
+ 
+-import android.animation.LayoutTransition;
+-import android.animation.ObjectAnimator;
+-import android.annotation.IntDef;
+-import android.annotation.IntRange;
+-import android.annotation.Nullable;
++import androidx.annotation.IntDef;
++import androidx.annotation.IntRange;
++import androidx.annotation.Nullable;
+ import android.annotation.SuppressLint;
+ import android.content.Context;
+ import android.content.res.Configuration;
+@@ -33,8 +27,6 @@
+ import android.content.res.TypedArray;
+ import android.graphics.Rect;
+ import android.graphics.drawable.Drawable;
+-import android.os.UserHandle;
+-import android.provider.Settings;
+ import android.text.TextUtils;
+ import android.util.AttributeSet;
+ import android.util.TypedValue;
+@@ -47,7 +39,6 @@
+ import androidx.annotation.StyleRes;
+ import androidx.annotation.VisibleForTesting;
+ 
+-import com.android.app.animation.Interpolators;
+ import com.android.systemui.DualToneHandler;
+ import com.android.systemui.battery.unified.BatteryColors;
+ import com.android.systemui.battery.unified.BatteryDrawableState;
+@@ -57,11 +48,9 @@
+ import com.android.systemui.plugins.DarkIconDispatcher.DarkReceiver;
+ import com.android.systemui.res.R;
+ import com.android.systemui.statusbar.core.NewStatusBarIcons;
+-import com.android.systemui.statusbar.policy.BatteryController;
+ 
+ import java.io.PrintWriter;
+ import java.lang.annotation.Retention;
+-import java.text.NumberFormat;
+ import java.util.ArrayList;
+ 
+ public class BatteryMeterView extends LinearLayout implements DarkReceiver {
+@@ -100,9 +89,8 @@
+ 
+     // for NewStatusBarIcons. The unified battery icon can show percent inside
+     @Nullable private BatteryLayersDrawable mUnifiedBattery;
+-    private BatteryColors mUnifiedBatteryColors = BatteryColors.LIGHT_THEME_COLORS;
+-    private BatteryDrawableState mUnifiedBatteryState =
+-            BatteryDrawableState.Companion.getDefaultInitialState();
++    private BatteryColors mUnifiedBatteryColors;
++    private BatteryDrawableState mUnifiedBatteryState;
+ 
+     public BatteryMeterView(Context context, AttributeSet attrs) {
+         this(context, attrs, 0);
+@@ -117,19 +105,19 @@
+         TypedArray atts = context.obtainStyledAttributes(attrs, R.styleable.BatteryMeterView,
+                 defStyle, 0);
+         final int frameColor = atts.getColor(R.styleable.BatteryMeterView_frameColor,
+-                context.getColor(com.android.settingslib.R.color.meter_background_color));
++                context.getColor(android.R.color.transparent));
+         mPercentageStyleId = atts.getResourceId(R.styleable.BatteryMeterView_textAppearance, 0);
+ 
+         mDrawable = new AccessorizedBatteryDrawable(context, frameColor);
+         atts.recycle();
+ 
+         mShowPercentAvailable = context.getResources().getBoolean(
+-                com.android.internal.R.bool.config_battery_percentage_setting_available);
+-
+-        setupLayoutTransition();
++                R.bool.config_battery_percentage_setting_available);
+ 
+         mBatteryIconView = new ImageView(context);
+         if (NewStatusBarIcons.isEnabled()) {
++            mUnifiedBatteryColors = BatteryColors.LIGHT_THEME_COLORS;
++            mUnifiedBatteryState = BatteryDrawableState.Companion.getDefaultInitialState();
+             mUnifiedBattery = BatteryLayersDrawable.Companion
+                     .newBatteryDrawable(context, mUnifiedBatteryState);
+             mBatteryIconView.setImageDrawable(mUnifiedBattery);
+@@ -159,33 +147,11 @@
+         setClipToPadding(false);
+     }
+ 
+-
+     private void setBatteryDrawableState(BatteryDrawableState newState) {
+         if (!NewStatusBarIcons.isEnabled()) return;
+ 
+         mUnifiedBatteryState = newState;
+         mUnifiedBattery.setBatteryState(mUnifiedBatteryState);
+-    }
+-
+-    private void setupLayoutTransition() {
+-        LayoutTransition transition = new LayoutTransition();
+-        transition.setDuration(200);
+-
+-        // Animates appearing/disappearing of the battery percentage text using fade-in/fade-out
+-        // and disables all other animation types
+-        ObjectAnimator appearAnimator = ObjectAnimator.ofFloat(null, "alpha", 0f, 1f);
+-        transition.setAnimator(LayoutTransition.APPEARING, appearAnimator);
+-        transition.setInterpolator(LayoutTransition.APPEARING, Interpolators.ALPHA_IN);
+-
+-        ObjectAnimator disappearAnimator = ObjectAnimator.ofFloat(null, "alpha", 1f, 0f);
+-        transition.setInterpolator(LayoutTransition.DISAPPEARING, Interpolators.ALPHA_OUT);
+-        transition.setAnimator(LayoutTransition.DISAPPEARING, disappearAnimator);
+-
+-        transition.setAnimator(LayoutTransition.CHANGE_APPEARING, null);
+-        transition.setAnimator(LayoutTransition.CHANGE_DISAPPEARING, null);
+-        transition.setAnimator(LayoutTransition.CHANGING, null);
+-
+-        setLayoutTransition(transition);
+     }
+ 
+     public void setForceShowPercent(boolean show) {
+@@ -208,9 +174,7 @@
+         updatePercentText();
+     }
+ 
+-    @Override
+     protected void onConfigurationChanged(Configuration newConfig) {
+-        super.onConfigurationChanged(newConfig);
+         updatePercentView();
+         mDrawable.notifyDensityChanged();
+     }
+@@ -223,7 +187,6 @@
+         mDualToneHandler.setColorsFromContext(context);
+     }
+ 
+-    @Override
+     public boolean hasOverlappingRendering() {
+         return false;
+     }
+@@ -277,7 +240,7 @@
+ 
+         Drawable attr = null;
+         if (resId > 0) {
+-            attr = mContext.getDrawable(resId);
++            attr = getContext().getDrawable(resId);
+         }
+ 
+         return attr;
+@@ -382,12 +345,10 @@
+         if (mPercentageStyleId != 0) { // Only set if specified as attribute
+             mBatteryPercentView.setTextAppearance(mPercentageStyleId);
+         }
+-        float fontHeight = mBatteryPercentView.getPaint().getFontMetricsInt(null);
+-        mBatteryPercentView.setLineHeight(TypedValue.COMPLEX_UNIT_PX, fontHeight);
+         if (mTextColor != 0) mBatteryPercentView.setTextColor(mTextColor);
+         addView(mBatteryPercentView, new LayoutParams(
+                 LayoutParams.WRAP_CONTENT,
+-                (int) Math.ceil(fontHeight)));
++                LayoutParams.WRAP_CONTENT));
+     }
+ 
+     /**
+@@ -483,7 +444,7 @@
+     private void setPercentTextAtCurrentLevel() {
+         if (mBatteryPercentView != null) {
+             mEstimateText = null;
+-            String percentText = NumberFormat.getPercentInstance().format(mLevel / 100f);
++            String percentText = mLevel + "%";
+             // Setting text actually triggers a layout pass (because the text view is set to
+             // wrap_content width and TextView always relayouts for this). Avoid needless
+             // relayout if the text didn't actually change.
+@@ -533,11 +494,7 @@
+         if (!mBatteryStateUnknown && !shouldShow && (mShowPercentMode != MODE_OFF)) {
+             // Slow case: fall back to the system setting
+             // TODO(b/140051051)
+-            shouldShow = 0 != whitelistIpcs(() -> Settings.System
+-                    .getIntForUser(getContext().getContentResolver(),
+-                    SHOW_BATTERY_PERCENT, getContext().getResources().getBoolean(
+-                    com.android.internal.R.bool.config_defaultBatteryPercentageSetting)
+-                    ? 1 : 0, UserHandle.USER_CURRENT));
++            shouldShow = getResources().getBoolean(R.bool.config_defaultBatteryPercentageSetting);
+         }
+ 
+         setBatteryDrawableState(
+@@ -560,11 +517,7 @@
+     private void updateShowPercentLegacy() {
+         final boolean showing = mBatteryPercentView != null;
+         // TODO(b/140051051)
+-        final boolean systemSetting = 0 != whitelistIpcs(() -> Settings.System
+-                .getIntForUser(getContext().getContentResolver(),
+-                SHOW_BATTERY_PERCENT, getContext().getResources().getBoolean(
+-                com.android.internal.R.bool.config_defaultBatteryPercentageSetting)
+-                ? 1 : 0, UserHandle.USER_CURRENT));
++        final boolean systemSetting = getResources().getBoolean(R.bool.config_defaultBatteryPercentageSetting);
+         boolean shouldShow =
+                 (mShowPercentAvailable && systemSetting && mShowPercentMode != MODE_OFF)
+                 || mShowPercentMode == MODE_ON
+@@ -586,7 +539,7 @@
+ 
+     private Drawable getUnknownStateDrawable() {
+         if (mUnknownStateDrawable == null) {
+-            mUnknownStateDrawable = mContext.getDrawable(R.drawable.ic_battery_unknown);
++            mUnknownStateDrawable = getContext().getDrawable(R.drawable.ic_battery_unknown);
+             mUnknownStateDrawable.setTint(mTextColor);
+         }
+ 
+@@ -800,7 +753,7 @@
+     /** An interface that will fetch the estimated time remaining for the user's battery. */
+     public interface BatteryEstimateFetcher {
+         void fetchBatteryTimeRemainingEstimate(
+-                BatteryController.EstimateFetchCompletion completion);
++                java.util.function.Consumer<String> completion);
+     }
+ }
+ 
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/core/NewStatusBarIcons.kt b/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/core/NewStatusBarIcons.kt
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/core/NewStatusBarIcons.kt
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/statusbar/core/NewStatusBarIcons.kt
+@@ -16,47 +16,9 @@
+ 
+ package com.android.systemui.statusbar.core
+ 
+-import com.android.settingslib.flags.Flags
+-import com.android.systemui.flags.FlagToken
+-import com.android.systemui.flags.RefactorFlagUtils
+-
+-/** Helper for reading and using the status bar simple fragment flag state */
++/** Feature selection for the embedded view-based status bar. */
+ object NewStatusBarIcons {
+-    /** Aconfig flag for new status bar icons */
+-    const val FLAG_NAME = Flags.FLAG_NEW_STATUS_BAR_ICONS
+-
+-    /** A token used for dependency declaration */
+-    val token: FlagToken
+-        get() = FlagToken(FLAG_NAME, isEnabled)
+-
+-    /** Is the refactor enabled. */
+     @JvmStatic
+-    inline val isEnabled
+-        get() = Flags.newStatusBarIcons()
+-
+-    /**
+-     * Called to ensure code is only run when the flag is enabled. This protects users from the
+-     * unintended behaviors caused by accidentally running new logic, while also crashing on an eng
+-     * build to ensure that the refactor author catches issues in testing.
+-     */
+-    @JvmStatic
+-    inline fun isUnexpectedlyInLegacyMode() =
+-        RefactorFlagUtils.isUnexpectedlyInLegacyMode(isEnabled, FLAG_NAME)
+-
+-    /**
+-     * Called to ensure code is only run when the flag is disabled. This will throw an exception if
+-     * the flag is not enabled to ensure that the refactor author catches issues in testing.
+-     * Caution!! Using this check incorrectly will cause crashes in nextfood builds!
+-     */
+-    @JvmStatic
+-    @Deprecated("Avoid crashing.", ReplaceWith("if (this.isUnexpectedlyInLegacyMode()) return"))
+-    inline fun unsafeAssertInNewMode() =
+-        RefactorFlagUtils.unsafeAssertInNewMode(isEnabled, FLAG_NAME)
+-
+-    /**
+-     * Called to ensure code is only run when the flag is disabled. This will throw an exception if
+-     * the flag is enabled to ensure that the refactor author catches issues in testing.
+-     */
+-    @JvmStatic
+-    inline fun assertInLegacyMode() = RefactorFlagUtils.assertInLegacyMode(isEnabled, FLAG_NAME)
++    val isEnabled: Boolean
++        get() = false
+ }
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/DualToneHandler.kt b/frameworks/base/packages/SystemUI/src/com/android/systemui/DualToneHandler.kt
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/DualToneHandler.kt
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/DualToneHandler.kt
+@@ -16,11 +16,9 @@
+ 
+ package com.android.systemui
+ 
+-import android.animation.ArgbEvaluator
+ import android.content.Context
+ import android.view.ContextThemeWrapper
+-import com.android.settingslib.Utils
+-import com.android.settingslib.flags.Flags.newStatusBarIcons
++import android.graphics.Color as Argb
+ import com.android.systemui.res.R
+ 
+ /**
+@@ -51,33 +49,39 @@
+      */
+     fun setColorsFromContext(context: Context) {
+         val dualToneDarkTheme = ContextThemeWrapper(context,
+-                Utils.getThemeAttr(context, R.attr.darkIconTheme))
++                getThemeAttr(context, R.attr.darkIconTheme, R.style.DualToneDarkTheme))
+         val dualToneLightTheme = ContextThemeWrapper(context,
+-                Utils.getThemeAttr(context, R.attr.lightIconTheme))
+-        if (newStatusBarIcons()) {
+-            darkColor = Color(
+-                android.graphics.Color.BLACK,
+-                Utils.getColorAttrDefaultColor(dualToneDarkTheme, R.attr.iconBackgroundColor),
+-                Utils.getColorAttrDefaultColor(dualToneDarkTheme, R.attr.fillColor))
++                getThemeAttr(context, R.attr.lightIconTheme, R.style.DualToneLightTheme))
++        darkColor = Color(
++                getColorAttr(dualToneDarkTheme, R.attr.singleToneColor),
++                getColorAttr(dualToneDarkTheme, R.attr.iconBackgroundColor),
++                getColorAttr(dualToneDarkTheme, R.attr.fillColor))
++        lightColor = Color(
++                getColorAttr(dualToneLightTheme, R.attr.singleToneColor),
++                getColorAttr(dualToneLightTheme, R.attr.iconBackgroundColor),
++                getColorAttr(dualToneLightTheme, R.attr.fillColor))
++    }
+ 
+-            lightColor = Color(
+-                android.graphics.Color.WHITE,
+-                Utils.getColorAttrDefaultColor(dualToneLightTheme, R.attr.iconBackgroundColor),
+-                Utils.getColorAttrDefaultColor(dualToneLightTheme, R.attr.fillColor))
+-        } else {
+-            darkColor = Color(
+-                    Utils.getColorAttrDefaultColor(dualToneDarkTheme, R.attr.singleToneColor),
+-                    Utils.getColorAttrDefaultColor(dualToneDarkTheme, R.attr.iconBackgroundColor),
+-                    Utils.getColorAttrDefaultColor(dualToneDarkTheme, R.attr.fillColor))
+-            lightColor = Color(
+-                    Utils.getColorAttrDefaultColor(dualToneLightTheme, R.attr.singleToneColor),
+-                    Utils.getColorAttrDefaultColor(dualToneLightTheme, R.attr.iconBackgroundColor),
+-                    Utils.getColorAttrDefaultColor(dualToneLightTheme, R.attr.fillColor))
++    private fun getColorForDarkIntensity(darkIntensity: Float, lightColor: Int, darkColor: Int) =
++        blendColor(darkIntensity, lightColor, darkColor)
++
++    private fun getThemeAttr(context: Context, attr: Int, fallback: Int): Int {
++        val attributes = context.obtainStyledAttributes(intArrayOf(attr))
++        return try {
++            attributes.getResourceId(0, fallback)
++        } finally {
++            attributes.recycle()
+         }
+     }
+ 
+-    private fun getColorForDarkIntensity(darkIntensity: Float, lightColor: Int, darkColor: Int) =
+-        ArgbEvaluator.getInstance().evaluate(darkIntensity, lightColor, darkColor) as Int
++    private fun getColorAttr(context: Context, attr: Int): Int {
++        val attributes = context.obtainStyledAttributes(intArrayOf(attr))
++        return try {
++            attributes.getColor(0, 0)
++        } finally {
++            attributes.recycle()
++        }
++    }
+ 
+     /**
+      * Blends the single color associated with the light and dark theme
+@@ -109,5 +113,25 @@
+     fun getFillColor(intensity: Float) =
+             getColorForDarkIntensity(intensity, lightColor.fill, darkColor.fill)
+ 
++    companion object {
++        // ArgbEvaluator's sRGB interpolation using the embedded platform's Color and Math APIs.
++        @JvmStatic
++        fun blendColor(fraction: Float, start: Int, end: Int): Int {
++            if (fraction == 0f) return start
++            if (fraction == 1f) return end
++            val alpha = Argb.alpha(start) + fraction * (Argb.alpha(end) - Argb.alpha(start))
++            return Argb.argb(Math.round(alpha),
++                interpolate(Argb.red(start), Argb.red(end), fraction),
++                interpolate(Argb.green(start), Argb.green(end), fraction),
++                interpolate(Argb.blue(start), Argb.blue(end), fraction))
++        }
++
++        private fun interpolate(start: Int, end: Int, fraction: Float): Int {
++            val from = Math.pow((start / 255f).toDouble(), 2.2)
++            val to = Math.pow((end / 255f).toDouble(), 2.2)
++            return Math.round((Math.pow(from + fraction * (to - from), 1.0 / 2.2) * 255).toFloat())
++        }
++    }
++
+     private data class Color(val single: Int, val background: Int, val fill: Int)
+-}
+\ No newline at end of file
++}

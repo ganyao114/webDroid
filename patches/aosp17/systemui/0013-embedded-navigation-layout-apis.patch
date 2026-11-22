@@ -1,0 +1,107 @@
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ReverseLinearLayout.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ReverseLinearLayout.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ReverseLinearLayout.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/ReverseLinearLayout.java
+@@ -22,8 +22,8 @@
+ import android.view.Gravity;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.widget.FrameLayout;
+ import android.widget.LinearLayout;
+-import android.widget.RelativeLayout;
+ 
+ import java.util.ArrayList;
+ 
+@@ -70,8 +70,8 @@
+     }
+ 
+     @Override
+-    public void onRtlPropertiesChanged(int layoutDirection) {
+-        super.onRtlPropertiesChanged(layoutDirection);
++    public void setLayoutDirection(int layoutDirection) {
++        super.setLayoutDirection(layoutDirection);
+         updateOrder();
+     }
+ 
+@@ -126,7 +126,7 @@
+         void reverse(boolean isLayoutReverse);
+     }
+ 
+-    public static class ReverseRelativeLayout extends RelativeLayout implements Reversable {
++    public static class ReverseRelativeLayout extends FrameLayout implements Reversable {
+ 
+         public ReverseRelativeLayout(Context context) {
+             super(context);
+@@ -153,7 +153,14 @@
+                 gravityToApply = mDefaultGravity == Gravity.TOP ? Gravity.BOTTOM : Gravity.TOP;
+             }
+ 
+-            if (getGravity() != gravityToApply) setGravity(gravityToApply);
++            for (int i = 0; i < getChildCount(); i++) {
++                final View child = getChildAt(i);
++                final LayoutParams params = (LayoutParams) child.getLayoutParams();
++                if (params.gravity != gravityToApply) {
++                    params.gravity = gravityToApply;
++                    child.setLayoutParams(params);
++                }
++            }
+         }
+     }
+     
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/NearestTouchFrame.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/NearestTouchFrame.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/NearestTouchFrame.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/buttons/NearestTouchFrame.java
+@@ -106,9 +106,11 @@
+         // Sort by either top or left depending on mIsVertical, then take out all children
+         // that are not attached to window
+         mClickableChildren.sort(mChildRegionComparator);
+-        mClickableChildren.stream()
+-                .filter(View::isAttachedToWindow)
+-                .forEach(mAttachedChildren::add);
++        for (View child : mClickableChildren) {
++            if (child.isAttachedToWindow() && child.getVisibility() == VISIBLE) {
++                mAttachedChildren.add(child);
++            }
++        }
+ 
+         // Cache bounds of children
+         // Mark coordinates where the actual child layout resides in this frame's window
+@@ -146,7 +148,7 @@
+                 previousChildBounds.right += midPoint - ((distance % 2) == 0 ? 1 : 0);
+             }
+ 
+-            if (i == mClickableChildren.size() - 1) {
++            if (i == mAttachedChildren.size() - 1) {
+                 // Last child, nothing to right/bottom of it
+                 if (mIsVertical) {
+                     childRegion.bottom = getHeight();
+@@ -193,7 +195,7 @@
+      */
+     public Map<View, Rect> getFullTouchableChildRegions() {
+         Map<View, Rect> fullTouchRegions = new HashMap<>(mTouchableRegions.size());
+-        getLocationOnScreen(mTmpInt);
++        getLocationInWindow(mTmpInt);
+         for (Map.Entry<View, Rect> entry : mTouchableRegions.entrySet()) {
+             View child = entry.getKey();
+             Rect screenRegion = new Rect(entry.getValue());
+@@ -209,13 +211,14 @@
+             int x = (int) event.getX();
+             int y = (int) event.getY();
+             if (event.getAction() == MotionEvent.ACTION_DOWN) {
+-                mTouchingChild = mClickableChildren
+-                        .stream()
+-                        .filter(View::isAttachedToWindow)
+-                        .filter(view -> mTouchableRegions.get(view).contains(x, y))
+-                        .findFirst()
+-                        .orElse(null);
+-
++                mTouchingChild = null;
++                for (View child : mAttachedChildren) {
++                    Rect region = mTouchableRegions.get(child);
++                    if (region != null && region.contains(x, y)) {
++                        mTouchingChild = child;
++                        break;
++                    }
++                }
+             }
+             if (mTouchingChild != null) {
+                 event.offsetLocation(mTouchingChild.getWidth() / 2 - x,
