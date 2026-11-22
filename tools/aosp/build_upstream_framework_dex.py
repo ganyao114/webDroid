@@ -482,7 +482,7 @@ def compile_only_platform_sources(args, stage, inputs):
         yield stage_java(stage, name, (code + "}\n").encode())
 
 
-def dex_from_jar(args, stage, jar, output, classpath):
+def dex_from_jar(args, stage, jar, output, classpath, *, compressed_archive=False):
     out = stage / output
     out.mkdir()
     libraries = [arg for path in classpath for arg in ("--classpath", path)]
@@ -493,12 +493,12 @@ def dex_from_jar(args, stage, jar, output, classpath):
     if not count or any(not (out / name).is_file() for name in names):
         raise ValueError(f"{output}: expected consecutive classes*.dex from D8")
     artifact = stage / (output + ".dex")
-    if count == 1:
+    if count == 1 and not compressed_archive:
         (out / names[0]).replace(artifact)
     else:
-        # ART recognizes the standard multidex ZIP by magic, so the build and
-        # deployment keep one stable asset path for either representation.
-        write_jar(artifact, {name: (out / name).read_bytes() for name in names})
+        # ART recognizes ZIP archives by magic, including single-shard archives.
+        compression = zipfile.ZIP_DEFLATED if compressed_archive else zipfile.ZIP_STORED
+        write_jar(artifact, {name: (out / name).read_bytes() for name in names}, compression=compression)
     return names
 
 
@@ -666,7 +666,8 @@ def build(args, stage):
     jar_from_classes(framework_jar, framework, core_library)
     jar_from_classes(services_jar, services)
     dex_files = {
-        FRAMEWORK_DEX: dex_from_jar(args, stage, framework_jar, Path(FRAMEWORK_DEX).stem, []),
+        FRAMEWORK_DEX: dex_from_jar(args, stage, framework_jar, Path(FRAMEWORK_DEX).stem, [],
+                                    compressed_archive=True),
         SERVICES_DEX: dex_from_jar(args, stage, services_jar, Path(SERVICES_DEX).stem, [framework_jar]),
     }
 

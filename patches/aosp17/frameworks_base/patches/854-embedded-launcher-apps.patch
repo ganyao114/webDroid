@@ -1,0 +1,1484 @@
+--- a/frameworks/base/core/java/android/content/pm/LauncherActivityInfo.java
++++ b/frameworks/base/core/java/android/content/pm/LauncherActivityInfo.java
+@@ -44,7 +44,4 @@
+     private final LauncherActivityInfoInternal mInternal;
+ 
+-    private static final UnicodeSet INVISIBLE_CHARACTERS =
+-            new UnicodeSet("[[:White_Space:][:Default_Ignorable_Code_Point:][:gc=Cc:]]",
+-                    /* ignoreWhitespace= */ false).freeze();
+     // Only allow 3 consecutive invisible characters in the prefix of the string.
+     private static final int PREFIX_CONSECUTIVE_INVISIBLE_CHARACTERS_MAXIMUM = 3;
+@@ -181,12 +178,6 @@
+      */
+     public long getFirstInstallTime() {
+-        try {
+-            // TODO: Go through LauncherAppsService
+-            return mPm.getPackageInfo(getActivityInfo().packageName,
+-                    PackageManager.MATCH_UNINSTALLED_PACKAGES).firstInstallTime;
+-        } catch (NameNotFoundException nnfe) {
+-            // Sorry, can't find package
+-            return 0;
+-        }
++        // The catalog has no recorded installation timestamp.
++        return 0;
+     }
+ 
+@@ -250,45 +241,32 @@
+         int invisibleCharCount = 0;
+         int notSupportedCharCount = 0;
+-        final int[] codePoints = sequence.codePoints().toArray();
+-        for (int i = 0, length = codePoints.length; i < length; i++) {
+-            String ch = new String(new int[]{codePoints[i]}, /* offset= */ 0, /* count= */ 1);
+-
+-            // The check steps:
+-            // 1. If the character is contained in INVISIBLE_CHARACTERS, invisibleCharCount++.
+-            //    1.1 Check whether the invisibleCharCount is larger or equal to
+-            //        PREFIX_INVISIBLE_CHARACTERS_MAXIMUM when notSupportedCharCount is zero.
+-            //        It means that there are three consecutive invisible characters at the
+-            //        start of the string, return false.
+-            //    Otherwise, continue.
+-            // 2. If the character is not supported on the system:
+-            //    notSupportedCharCount++, continue
+-            // 3. If it does not continue or return on the above two cases, it means the
+-            //    character is visible and supported on the system, break.
+-            // After going through the whole string, if the sum of invisibleCharCount
+-            // and notSupportedCharCount is smaller than the length of the string, it
+-            // means the string has the other visible characters, return true.
+-            // Otherwise, return false.
+-            if (INVISIBLE_CHARACTERS.contains(ch)) {
++        for (int offset = 0; offset < sequence.length();) {
++            final int codePoint = Character.codePointAt(sequence, offset);
++            final int length = Character.charCount(codePoint);
++            final int next = offset + length;
++            if (isInvisible(codePoint)) {
+                 invisibleCharCount++;
+-                // If there are three successive invisible characters at the start of the
+-                // string, it is hard to visible to the user.
+                 if (notSupportedCharCount == 0
+                         && invisibleCharCount >= PREFIX_CONSECUTIVE_INVISIBLE_CHARACTERS_MAXIMUM) {
+                     return false;
+                 }
+-                continue;
++            } else if (paint.hasGlyph(sequence.subSequence(offset, next).toString())) {
++                return true;
++            } else {
++                notSupportedCharCount++;
+             }
+-
+-            // The character is not supported on the system, but it may not be an invisible
+-            // character. E.g. tofu (a rectangle).
+-            if (!paint.hasGlyph(ch)) {
+-                notSupportedCharCount++;
+-                continue;
+-            }
+-            // The character is visible and supported on the system, break the for loop
+-            break;
+-        }
+-
+-        return (invisibleCharCount + notSupportedCharCount < codePoints.length);
++            offset = next;
++        }
++        return false;
++    }
++
++    private static boolean isInvisible(int codePoint) {
++        if (codePoint < 0x80) return codePoint <= 0x20 || codePoint == 0x7f;
++        final int category = Character.getType(codePoint);
++        return category >= Character.SPACE_SEPARATOR && category <= Character.FORMAT
++                || codePoint == 0x034f
++                || codePoint >= 0x180b && codePoint <= 0x180f
++                || codePoint >= 0xfe00 && codePoint <= 0xfe0f
++                || codePoint >= 0xe0000 && codePoint <= 0xe0fff;
+     }
+ }
+--- a/frameworks/base/core/java/android/content/pm/LauncherApps.java
++++ b/frameworks/base/core/java/android/content/pm/LauncherApps.java
+@@ -28,6 +28,4 @@
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SdkConstant;
+-import android.annotation.SdkConstant.SdkConstantType;
+ import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+@@ -45,5 +43,4 @@
+ import android.content.LocusId;
+ import android.content.pm.PackageInstaller.SessionCallback;
+-import android.content.pm.PackageInstaller.SessionCallbackDelegate;
+ import android.content.pm.PackageInstaller.SessionInfo;
+ import android.content.pm.PackageManager.ApplicationInfoFlagsBits;
+@@ -69,5 +66,4 @@
+ import android.os.Parcelable;
+ import android.os.RemoteException;
+-import android.os.ServiceManager;
+ import android.os.UserHandle;
+ import android.os.UserManager;
+@@ -76,8 +72,6 @@
+ import android.util.Log;
+ import android.util.Pair;
+-import android.window.IDumpCallback;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.util.function.pooled.PooledLambda;
+ 
+ import java.io.IOException;
+@@ -129,5 +123,4 @@
+      * @see #EXTRA_PIN_ITEM_REQUEST
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CONFIRM_PIN_SHORTCUT =
+             "android.content.pm.action.CONFIRM_PIN_SHORTCUT";
+@@ -147,5 +140,4 @@
+      * @see #EXTRA_PIN_ITEM_REQUEST
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
+     public static final String ACTION_CONFIRM_PIN_APPWIDGET =
+             "android.content.pm.action.CONFIRM_PIN_APPWIDGET";
+@@ -194,6 +186,4 @@
+ 
+     private final Context mContext;
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+-    private final ILauncherApps mService;
+     @UnsupportedAppUsage
+     private final PackageManager mPm;
+@@ -201,8 +191,5 @@
+ 
+     private final List<CallbackMessageHandler> mCallbacks = new ArrayList<>();
+-    private final List<SessionCallbackDelegate> mDelegates = new ArrayList<>();
+-
+-    private final Map<ShortcutChangeCallback, Pair<Executor, IShortcutChangeCallback>>
+-            mShortcutChangeCallbacks = new HashMap<>();
++
+ 
+     /**
+@@ -361,5 +348,4 @@
+          *                         changed.
+          */
+-        @FlaggedApi(android.multiuser.Flags.FLAG_ADD_LAUNCHER_USER_CONFIG)
+         public void onUserConfigChanged(@NonNull LauncherUserInfo launcherUserInfo) {
+         }
+@@ -629,63 +615,11 @@
+     }
+ 
+-    /**
+-     * Callback proxy class for {@link ShortcutChangeCallback}
+-     *
+-     * @hide
+-     */
+-    private static class ShortcutChangeCallbackProxy extends
+-            android.content.pm.IShortcutChangeCallback.Stub {
+-        private final WeakReference<Pair<Executor, ShortcutChangeCallback>> mRemoteReferences;
+-
+-        ShortcutChangeCallbackProxy(Executor executor, ShortcutChangeCallback callback) {
+-            mRemoteReferences = new WeakReference<>(new Pair<>(executor, callback));
+-        }
+-
+-        @Override
+-        public void onShortcutsAddedOrUpdated(@NonNull String packageName,
+-                @NonNull List<ShortcutInfo> shortcuts, @NonNull UserHandle user) {
+-            Pair<Executor, ShortcutChangeCallback> remoteReferences = mRemoteReferences.get();
+-            if (remoteReferences == null) {
+-                // Binder is dead.
+-                return;
+-            }
+-
+-            final Executor executor = remoteReferences.first;
+-            final ShortcutChangeCallback callback = remoteReferences.second;
+-            executor.execute(
+-                    PooledLambda.obtainRunnable(ShortcutChangeCallback::onShortcutsAddedOrUpdated,
+-                            callback, packageName, shortcuts, user).recycleOnUse());
+-        }
+-
+-        @Override
+-        public void onShortcutsRemoved(@NonNull String packageName,
+-                @NonNull List<ShortcutInfo> shortcuts, @NonNull UserHandle user) {
+-            Pair<Executor, ShortcutChangeCallback> remoteReferences = mRemoteReferences.get();
+-            if (remoteReferences == null) {
+-                // Binder is dead.
+-                return;
+-            }
+-
+-            final Executor executor = remoteReferences.first;
+-            final ShortcutChangeCallback callback = remoteReferences.second;
+-            executor.execute(
+-                    PooledLambda.obtainRunnable(ShortcutChangeCallback::onShortcutsRemoved,
+-                            callback, packageName, shortcuts, user).recycleOnUse());
+-        }
+-    }
++
+ 
+     /** @hide */
+-    public LauncherApps(Context context, ILauncherApps service) {
++    public LauncherApps(Context context) {
+         mContext = context;
+-        mService = service;
+         mPm = context.getPackageManager();
+         mUserManager = context.getSystemService(UserManager.class);
+-    }
+-
+-    /** @hide */
+-    @TestApi
+-    public LauncherApps(Context context) {
+-        this(context, ILauncherApps.Stub.asInterface(
+-                ServiceManager.getService(Context.LAUNCHER_APPS_SERVICE)));
+     }
+ 
+@@ -720,16 +654,5 @@
+             anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+     public List<UserHandle> getProfiles() {
+-        if (mUserManager.isManagedProfile() || (mUserManager.isPrivateProfile())) {
+-            // If it's a managed or private profile, only return the current profile.
+-            final List result = new ArrayList(1);
+-            result.add(android.os.Process.myUserHandle());
+-            return result;
+-        } else {
+-            try {
+-                return mService.getUserProfiles();
+-            } catch (RemoteException re) {
+-                throw re.rethrowFromSystemServer();
+-            }
+-        }
++        return mUserManager.getUserProfiles();
+     }
+ 
+@@ -779,15 +702,6 @@
+     // Alternatively, a system app can access this api for private profile if they've been granted
+     // with the {@code android.Manifest.permission#ACCESS_HIDDEN_PROFILES_FULL} permission.
+-    @SuppressLint("RequiresPermission")
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+     public List<LauncherActivityInfo> getActivityList(String packageName, UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            return convertToActivityList(mService.getLauncherActivities(mContext.getPackageName(),
+-                    packageName, user), user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        return queryActivities(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), packageName, user);
+     }
+ 
+@@ -806,13 +720,5 @@
+     public PendingIntent getMainActivityLaunchIntent(@NonNull ComponentName component,
+             @Nullable Bundle startActivityOptions, @NonNull UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        if (DEBUG) {
+-            Log.i(TAG, "GetMainActivityLaunchIntent " + component + " " + user);
+-        }
+-        try {
+-            return mService.getActivityLaunchIntent(mContext.getPackageName(), component, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -831,18 +737,7 @@
+     // Alternatively, a system app can access this api for private profile if they've been granted
+     // with the {@code android.Manifest.permission#ACCESS_HIDDEN_PROFILES_FULL} permission.
+-    @Nullable
+-    @SuppressLint("RequiresPermission")
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+-    public final LauncherUserInfo getLauncherUserInfo(@NonNull UserHandle userHandle) {
+-        if (DEBUG) {
+-            Log.i(TAG, "getLauncherUserInfo " + userHandle);
+-        }
+-        try {
+-            return mService.getLauncherUserInfo(userHandle);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++    public LauncherUserInfo getLauncherUserInfo(UserHandle user) {
++        return UserHandle.SYSTEM.equals(user)
++                ? new LauncherUserInfo.Builder("android.os.usertype.full.SYSTEM", 0).build() : null;
+     }
+ 
+@@ -890,14 +785,5 @@
+     public IntentSender getAppMarketActivityIntent(@Nullable String packageName,
+             @NonNull UserHandle user) {
+-        if (DEBUG) {
+-            Log.i(TAG, "getAppMarketActivityIntent for package: " + packageName
+-                    + " user: " + user);
+-        }
+-        try {
+-            return mService.getAppMarketActivityIntent(mContext.getPackageName(),
+-                    packageName, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -918,18 +804,6 @@
+     // Alternatively, a system app can access this api for private profile if they've been granted
+     // with the {@code android.Manifest.permission#ACCESS_HIDDEN_PROFILES_FULL} permission.
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+-    @NonNull
+-    @SuppressLint("RequiresPermission")
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+-    public List<String> getPreInstalledSystemPackages(@NonNull UserHandle userHandle) {
+-        if (DEBUG) {
+-            Log.i(TAG, "getPreInstalledSystemPackages for user: " + userHandle);
+-        }
+-        try {
+-            return mService.getPreInstalledSystemPackages(userHandle);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++    public List<String> getPreInstalledSystemPackages(UserHandle user) {
++        return java.util.Collections.emptyList();
+     }
+ 
+@@ -950,9 +824,5 @@
+             anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+     public IntentSender getPrivateSpaceSettingsIntent() {
+-        try {
+-            return mService.getPrivateSpaceSettingsIntent();
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -975,15 +845,9 @@
+             anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+     public LauncherActivityInfo resolveActivity(Intent intent, UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            LauncherActivityInfoInternal ai = mService.resolveLauncherActivityInternal(
+-                    mContext.getPackageName(), intent.getComponent(), user);
+-            if (ai == null) {
+-                return null;
+-            }
+-            return new LauncherActivityInfo(mContext, ai);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        List<ResolveInfo> matches = mPm.queryIntentActivitiesAsUser(
++                intent, 0, user.getIdentifier());
++        return matches.isEmpty() ? null : new LauncherActivityInfo(mContext,
++                new LauncherActivityInfoInternal(matches.get(0).activityInfo,
++                        new IncrementalStatesInfo(false, 1f, 0), user, false));
+     }
+ 
+@@ -1000,22 +864,5 @@
+     @NonNull
+     public Map<String, LauncherActivityInfo> getActivityOverrides() {
+-        Map<String, LauncherActivityInfo> activityOverrides = new ArrayMap<>();
+-        try {
+-            Map<String, LauncherActivityInfoInternal> activityOverridesInternal =
+-                    mService.getActivityOverrides(mContext.getPackageName(), mContext.getUserId());
+-            for (Map.Entry<String, LauncherActivityInfoInternal> packageToOverride :
+-                    activityOverridesInternal.entrySet()) {
+-                activityOverrides.put(
+-                        packageToOverride.getKey(),
+-                        new LauncherActivityInfo(
+-                                mContext,
+-                                packageToOverride.getValue()
+-                        )
+-                );
+-            }
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+-        return activityOverrides;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1034,21 +881,6 @@
+     // Alternatively, a system app can access this api for private profile if they've been granted
+     // with the {@code android.Manifest.permission#ACCESS_HIDDEN_PROFILES_FULL} permission.
+-    @SuppressLint("RequiresPermission")
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+-    public void startMainActivity(ComponentName component, UserHandle user, Rect sourceBounds,
+-            Bundle opts) {
+-        logErrorForInvalidProfileAccess(user);
+-        if (DEBUG) {
+-            Log.i(TAG, "StartMainActivity " + component + " " + user.getIdentifier());
+-        }
+-        final IBinder caller = mContext.getActivityToken();
+-        try {
+-            mService.startActivityAsUser(caller, mContext.getIApplicationThread(),
+-                    mContext.getPackageName(), mContext.getAttributionTag(),
+-                    component, sourceBounds, opts, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++    public void startMainActivity(ComponentName component, UserHandle user, Rect sourceBounds, Bundle options) {
++        mPm.launch(Intent.makeMainActivity(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), user, options);
+     }
+ 
+@@ -1076,24 +908,5 @@
+     public @NonNull Map<ComponentName, Intent> getActivityLaunchIntentForAllApps(
+             @NonNull UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            ParceledListSlice<AppLaunchInfo> infos =
+-                    mService.getActivityLaunchIntentForAllApps(mContext.getPackageName(), user);
+-            if (infos == null || infos.getList().isEmpty()) {
+-                return new HashMap<>();
+-            }
+-            List<AppLaunchInfo> appLaunchInfos =
+-                    infos.getList();
+-            Map<ComponentName, Intent> convertedApps = new HashMap<>(appLaunchInfos.size());
+-
+-            for (AppLaunchInfo info : appLaunchInfos) {
+-                if (info.getComponentName() != null) {
+-                    convertedApps.put(info.getComponentName(), info.getLaunchIntent());
+-                }
+-            }
+-            return convertedApps;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1121,16 +934,5 @@
+      */
+     public @NonNull List<ShortcutInfo> getAvailableShortcuts(@NonNull UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            ParceledListSlice<ShortcutInfo> shortcuts = mService.getAvailableShortcuts(
+-                    mContext.getPackageName(), user);
+-            if (shortcuts == null || shortcuts.getList().isEmpty()) {
+-                return Collections.EMPTY_LIST;
+-            }
+-            return shortcuts.getList();
+-
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1144,12 +946,5 @@
+     public void startPackageInstallerSessionDetailsActivity(@NonNull SessionInfo sessionInfo,
+             @Nullable Rect sourceBounds, @Nullable Bundle opts) {
+-        final IBinder caller = mContext.getActivityToken();
+-        try {
+-            mService.startSessionDetailsActivityAsUser(caller, mContext.getIApplicationThread(),
+-                    mContext.getPackageName(), mContext.getAttributionTag(), sessionInfo,
+-                    sourceBounds, opts, sessionInfo.getUser());
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1174,13 +969,5 @@
+     public void startAppDetailsActivity(ComponentName component, UserHandle user,
+             Rect sourceBounds, Bundle opts) {
+-        logErrorForInvalidProfileAccess(user);
+-        final IBinder caller = mContext.getActivityToken();
+-        try {
+-            mService.showAppDetailsAsUser(caller, mContext.getIApplicationThread(),
+-                    mContext.getPackageName(), mContext.getAttributionTag(),
+-                    component, sourceBounds, opts, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1197,15 +984,5 @@
+             @NonNull final String shortcutId, @Nullable final Bundle opts,
+             @NonNull final UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        if (DEBUG) {
+-            Log.i(TAG, "GetShortcutIntent " + packageName + "/" + shortcutId + " " + user);
+-        }
+-        try {
+-            // due to b/209607104, opts will be ignored
+-            return mService.getShortcutIntent(
+-                    mContext.getPackageName(), packageName, shortcutId, null /* opts */, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1222,32 +999,8 @@
+      * @see #getShortcutConfigActivityIntent(LauncherActivityInfo)
+      */
+-    public List<LauncherActivityInfo> getShortcutConfigActivityList(@Nullable String packageName,
+-            @NonNull UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            return convertToActivityList(mService.getShortcutConfigActivities(
+-                    mContext.getPackageName(), packageName, user),
+-                    user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    private List<LauncherActivityInfo> convertToActivityList(
+-            @Nullable ParceledListSlice<LauncherActivityInfoInternal> internals, UserHandle user) {
+-        if (internals == null || internals.getList().isEmpty()) {
+-            return Collections.EMPTY_LIST;
+-        }
+-        ArrayList<LauncherActivityInfo> lais = new ArrayList<>();
+-        for (LauncherActivityInfoInternal internal : internals.getList()) {
+-            LauncherActivityInfo lai = new LauncherActivityInfo(mContext, internal);
+-            if (DEBUG) {
+-                Log.v(TAG, "Returning activity for profile " + user + " : "
+-                        + lai.getComponentName());
+-            }
+-            lais.add(lai);
+-        }
+-        return lais;
+-    }
++    public List<LauncherActivityInfo> getShortcutConfigActivityList(String packageName, UserHandle user) {
++        return queryActivities(new Intent(Intent.ACTION_CREATE_SHORTCUT), packageName, user);
++    }
++
+ 
+     /**
+@@ -1273,10 +1026,5 @@
+     @Nullable
+     public IntentSender getShortcutConfigActivityIntent(@NonNull LauncherActivityInfo info) {
+-        try {
+-            return mService.getShortcutConfigActivityIntent(
+-                    mContext.getPackageName(), info.getComponentName(), info.getUser());
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1295,14 +1043,7 @@
+     // Alternatively, a system app can access this api for private profile if they've been granted
+     // with the {@code android.Manifest.permission#ACCESS_HIDDEN_PROFILES_FULL} permission.
+-    @SuppressLint("RequiresPermission")
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+-    public boolean isPackageEnabled(String packageName, UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            return mService.isPackageEnabled(mContext.getPackageName(), packageName, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++    public boolean isPackageEnabled(String pkg, UserHandle user) {
++        try { return getApplicationInfo(pkg, 0, user).enabled; }
++        catch (PackageManager.NameNotFoundException error) { return false; }
+     }
+ 
+@@ -1336,10 +1077,5 @@
+             anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+     public @Nullable Bundle getSuspendedPackageLauncherExtras(String packageName, UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            return mService.getSuspendedPackageLauncherExtras(packageName, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1364,11 +1100,5 @@
+     public boolean shouldHideFromSuggestions(@NonNull String packageName,
+             @NonNull UserHandle user) {
+-        Objects.requireNonNull(packageName, "packageName");
+-        Objects.requireNonNull(user, "user");
+-        try {
+-            return mService.shouldHideFromSuggestions(packageName, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1390,24 +1120,7 @@
+     // Alternatively, a system app can access this api for private profile if they've been granted
+     // with the {@code android.Manifest.permission#ACCESS_HIDDEN_PROFILES_FULL} permission.
+-    @SuppressLint("RequiresPermission")
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+-    public ApplicationInfo getApplicationInfo(@NonNull String packageName,
+-            @ApplicationInfoFlagsBits int flags, @NonNull UserHandle user)
++    public ApplicationInfo getApplicationInfo(String pkg, int flags, UserHandle user)
+             throws PackageManager.NameNotFoundException {
+-        Objects.requireNonNull(packageName, "packageName");
+-        Objects.requireNonNull(user, "user");
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            final ApplicationInfo ai = mService
+-                    .getApplicationInfo(mContext.getPackageName(), packageName, flags, user);
+-            if (ai == null) {
+-                throw new NameNotFoundException("Package " + packageName + " not found for user "
+-                        + user.getIdentifier());
+-            }
+-            return ai;
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        return mPm.getApplicationInfoAsUser(pkg, flags, user.getIdentifier());
+     }
+ 
+@@ -1429,9 +1142,5 @@
+     public LauncherApps.AppUsageLimit getAppUsageLimit(@NonNull String packageName,
+             @NonNull UserHandle user) {
+-        try {
+-            return mService.getAppUsageLimit(mContext.getPackageName(), packageName, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1453,14 +1162,7 @@
+     // Alternatively, a system app can access this api for private profile if they've been granted
+     // with the {@code android.Manifest.permission#ACCESS_HIDDEN_PROFILES_FULL} permission.
+-    @SuppressLint("RequiresPermission")
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+     public boolean isActivityEnabled(ComponentName component, UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            return mService.isActivityEnabled(mContext.getPackageName(), component, user);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        LauncherActivityInfo info = resolveActivity(new Intent().setComponent(component), user);
++        return info != null && info.getActivityInfo().isEnabled();
+     }
+ 
+@@ -1485,52 +1187,11 @@
+      * @see ShortcutManager
+      */
+-    public boolean hasShortcutHostPermission() {
+-        try {
+-            return mService.hasShortcutHostPermission(mContext.getPackageName());
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
+-    }
++    public boolean hasShortcutHostPermission() { return false; }
+ 
+     private List<ShortcutInfo> maybeUpdateDisabledMessage(List<ShortcutInfo> shortcuts) {
+-        if (shortcuts == null) {
+-            return null;
+-        }
+-        for (int i = shortcuts.size() - 1; i >= 0; i--) {
+-            final ShortcutInfo si = shortcuts.get(i);
+-            final String message = ShortcutInfo.getDisabledReasonForRestoreIssue(mContext,
+-                    si.getDisabledReason());
+-            if (message != null) {
+-                si.setDisabledMessage(message);
+-            }
+-        }
+-        return shortcuts;
+-    }
+-
+-    /**
+-     * Register a callback to be called right before the wmtrace data is moved to the bugreport.
+-     * @hide
+-     */
+-    @RequiresPermission(READ_FRAME_BUFFER)
+-    public void registerDumpCallback(IDumpCallback cb) {
+-        try {
+-            mService.registerDumpCallback(cb);
+-        } catch (RemoteException e) {
+-            e.rethrowAsRuntimeException();
+-        }
+-    }
+-
+-    /**
+-     * Unregister a callback, so that it won't be called when LauncherApps dumps.
+-     * @hide
+-     */
+-    @RequiresPermission(READ_FRAME_BUFFER)
+-    public void unRegisterDumpCallback(IDumpCallback cb) {
+-        try {
+-            mService.unRegisterDumpCallback(cb);
+-        } catch (RemoteException e) {
+-            e.rethrowAsRuntimeException();
+-        }
+-    }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++
++
+ 
+     /**
+@@ -1549,21 +1210,11 @@
+      * @see ShortcutManager
+      */
+-    @Nullable
+-    public List<ShortcutInfo> getShortcuts(@NonNull ShortcutQuery query,
+-            @NonNull UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            // Note this is the only case we need to update the disabled message for shortcuts
+-            // that weren't restored.
+-            // The restore problem messages are only shown by the user, and publishers will never
+-            // see them. The only other API that the launcher gets shortcuts is the shortcut
+-            // changed callback, but that only returns shortcuts with the "key" information, so
+-            // that won't return disabled message.
+-            return maybeUpdateDisabledMessage(mService.getShortcuts(mContext.getPackageName(),
+-                                new ShortcutQueryWrapper(query), user)
+-                        .getList());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++    public List<ShortcutInfo> getShortcuts(ShortcutQuery query, UserHandle user) {
++        Objects.requireNonNull(query);
++        Objects.requireNonNull(user);
++        if ((query.mShortcutIds != null || query.mLocusIds != null) && query.mPackage == null) {
++            throw new IllegalArgumentException("Shortcut IDs require a package");
++        }
++        return Collections.emptyList();
+     }
+ 
+@@ -1605,10 +1256,5 @@
+     public void pinShortcuts(@NonNull String packageName, @NonNull List<String> shortcutIds,
+             @NonNull UserHandle user) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            mService.pinShortcuts(mContext.getPackageName(), packageName, shortcutIds, user);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1642,11 +1288,5 @@
+     public void cacheShortcuts(@NonNull String packageName, @NonNull List<String> shortcutIds,
+             @NonNull UserHandle user, @ShortcutCacheFlags int cacheFlags) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            mService.cacheShortcuts(
+-                    mContext.getPackageName(), packageName, shortcutIds, user, cacheFlags);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1673,11 +1313,5 @@
+     public void uncacheShortcuts(@NonNull String packageName, @NonNull List<String> shortcutIds,
+             @NonNull UserHandle user, @ShortcutCacheFlags int cacheFlags) {
+-        logErrorForInvalidProfileAccess(user);
+-        try {
+-            mService.uncacheShortcuts(
+-                    mContext.getPackageName(), packageName, shortcutIds, user, cacheFlags);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1687,5 +1321,5 @@
+     @Deprecated
+     public int getShortcutIconResId(@NonNull ShortcutInfo shortcut) {
+-        return shortcut.getIconResourceId();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1696,11 +1330,5 @@
+     public int getShortcutIconResId(@NonNull String packageName, @NonNull String shortcutId,
+             @NonNull UserHandle user) {
+-        final ShortcutQuery q = new ShortcutQuery();
+-        q.setPackage(packageName);
+-        q.setShortcutIds(Arrays.asList(shortcutId));
+-        q.setQueryFlags(ShortcutQuery.FLAG_GET_ALL_KINDS);
+-        final List<ShortcutInfo> shortcuts = getShortcuts(q, user);
+-
+-        return shortcuts.size() > 0 ? shortcuts.get(0).getIconResourceId() : 0;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1710,6 +1338,5 @@
+     public ParcelFileDescriptor getShortcutIconFd(
+             @NonNull ShortcutInfo shortcut) {
+-        return getShortcutIconFd(shortcut.getPackage(), shortcut.getId(),
+-                shortcut.getUserId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1724,10 +1351,5 @@
+     private ParcelFileDescriptor getShortcutIconFd(
+             @NonNull String packageName, @NonNull String shortcutId, int userId) {
+-        try {
+-            return mService.getShortcutIconFd(mContext.getPackageName(),
+-                    packageName, shortcutId, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1737,5 +1359,5 @@
+     @VisibleForTesting
+     public ParcelFileDescriptor getUriShortcutIconFd(@NonNull ShortcutInfo shortcut) {
+-        return getUriShortcutIconFd(shortcut.getPackage(), shortcut.getId(), shortcut.getUserId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1756,12 +1378,5 @@
+     private String getShortcutIconUri(@NonNull String packageName,
+             @NonNull String shortcutId, int userId) {
+-        String uri = null;
+-        try {
+-            uri = mService.getShortcutIconUri(mContext.getPackageName(), packageName, shortcutId,
+-                    userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-        return uri;
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1784,31 +1399,5 @@
+      */
+     public Drawable getShortcutIconDrawable(@NonNull ShortcutInfo shortcut, int density) {
+-        if (shortcut.hasIconFile()) {
+-            final ParcelFileDescriptor pfd = getShortcutIconFd(shortcut);
+-            return loadDrawableFromFileDescriptor(pfd, shortcut.hasAdaptiveBitmap());
+-        } else if (shortcut.hasIconUri()) {
+-            final ParcelFileDescriptor pfd = getUriShortcutIconFd(shortcut);
+-            return loadDrawableFromFileDescriptor(pfd, shortcut.hasAdaptiveBitmap());
+-        } else if (shortcut.hasIconResource()) {
+-            return loadDrawableResourceFromPackage(shortcut.getPackage(),
+-                    shortcut.getIconResourceId(), shortcut.getUserHandle(), density);
+-        } else if (shortcut.getIcon() != null) {
+-            // This happens if a shortcut is pending-approval.
+-            final Icon icon = shortcut.getIcon();
+-            switch (icon.getType()) {
+-                case Icon.TYPE_RESOURCE: {
+-                    return loadDrawableResourceFromPackage(shortcut.getPackage(),
+-                            icon.getResId(), shortcut.getUserHandle(), density);
+-                }
+-                case Icon.TYPE_BITMAP:
+-                case Icon.TYPE_ADAPTIVE_BITMAP: {
+-                    return icon.loadDrawable(mContext);
+-                }
+-                default:
+-                    return null; // Shouldn't happen though.
+-            }
+-        } else {
+-            return null; // Has no icon.
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1840,41 +1429,5 @@
+      */
+     public Icon getShortcutIcon(@NonNull ShortcutInfo shortcut) {
+-        if (shortcut.hasIconFile()) {
+-            final ParcelFileDescriptor pfd = getShortcutIconFd(shortcut);
+-            if (pfd == null) {
+-                return null;
+-            }
+-            try {
+-                final Bitmap bmp = BitmapFactory.decodeFileDescriptor(pfd.getFileDescriptor());
+-                if (bmp != null) {
+-                    if (shortcut.hasAdaptiveBitmap()) {
+-                        return Icon.createWithAdaptiveBitmap(bmp);
+-                    } else {
+-                        return Icon.createWithBitmap(bmp);
+-                    }
+-                }
+-                return null;
+-            } finally {
+-                try {
+-                    pfd.close();
+-                } catch (IOException ignore) {
+-                }
+-            }
+-        } else if (shortcut.hasIconUri()) {
+-            String uri = getShortcutIconUri(shortcut.getPackage(), shortcut.getId(),
+-                    shortcut.getUserId());
+-            if (uri == null) {
+-                return null;
+-            }
+-            if (shortcut.hasAdaptiveBitmap()) {
+-                return Icon.createWithAdaptiveBitmapContentUri(uri);
+-            } else {
+-                return Icon.createWithContentUri(uri);
+-            }
+-        } else if (shortcut.hasIconResource()) {
+-            return Icon.createWithResource(shortcut.getPackage(), shortcut.getIconResourceId());
+-        } else {
+-            return shortcut.getIcon();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1958,7 +1511,5 @@
+     public void startShortcut(@NonNull ShortcutInfo shortcut,
+             @Nullable Rect sourceBounds, @Nullable Bundle startActivityOptions) {
+-        startShortcut(shortcut.getPackage(), shortcut.getId(),
+-                sourceBounds, startActivityOptions,
+-                shortcut.getUserId());
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1967,16 +1518,5 @@
+             @Nullable Rect sourceBounds, @Nullable Bundle startActivityOptions,
+             int userId) {
+-        final IBinder caller = mContext.getActivityToken();
+-        try {
+-            final boolean success = mService.startShortcut(
+-                    caller, mContext.getPackageName(), packageName,
+-                    null /* default featureId */, shortcutId, sourceBounds, startActivityOptions,
+-                    userId);
+-            if (!success) {
+-                throw new ActivityNotFoundException("Shortcut could not be started");
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -1995,10 +1535,5 @@
+     // Alternatively, a system app can access this api for private profile if they've been granted
+     // with the {@code android.Manifest.permission#ACCESS_HIDDEN_PROFILES_FULL} permission.
+-    @SuppressLint("RequiresPermission")
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+-    public void registerCallback(Callback callback) {
+-        registerCallback(callback, null);
+-    }
++    public void registerCallback(Callback callback) { registerCallback(callback, null); }
+ 
+     /**
+@@ -2017,22 +1552,8 @@
+     // Alternatively, a system app can access this api for private profile if they've been granted
+     // with the {@code android.Manifest.permission#ACCESS_HIDDEN_PROFILES_FULL} permission.
+-    @SuppressLint("RequiresPermission")
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+     public void registerCallback(Callback callback, Handler handler) {
+-        synchronized (this) {
+-            if (callback != null && findCallbackLocked(callback) < 0) {
+-                boolean addedFirstCallback = mCallbacks.size() == 0;
+-                addCallbackLocked(callback, handler);
+-                if (addedFirstCallback) {
+-                    try {
+-                        mService.addOnAppsChangedListener(mContext.getPackageName(),
+-                                mAppsChangedListener);
+-                    } catch (RemoteException re) {
+-                        throw re.rethrowFromSystemServer();
+-                    }
+-                }
+-            }
+-        }
++        if (callback == null) throw new NullPointerException("callback");
++        unregisterCallback(callback);
++        callbacks.add(new Registration(callback, handler == null ? new Handler(Looper.getMainLooper()) : handler));
+     }
+ 
+@@ -2044,13 +1565,6 @@
+      */
+     public void unregisterCallback(Callback callback) {
+-        synchronized (this) {
+-            removeCallbackLocked(callback);
+-            if (mCallbacks.size() == 0) {
+-                try {
+-                    mService.removeOnAppsChangedListener(mAppsChangedListener);
+-                } catch (RemoteException re) {
+-                    throw re.rethrowFromSystemServer();
+-                }
+-            }
++        for (int i = callbacks.size() - 1; i >= 0; --i) {
++            if (callbacks.get(i).callback == callback) callbacks.remove(i);
+         }
+     }
+@@ -2064,10 +1578,5 @@
+     @FlaggedApi(android.content.pm.Flags.FLAG_ARCHIVING)
+     public void setArchiveCompatibility(@NonNull ArchiveCompatibilityParams params) {
+-        try {
+-            mService.setArchiveCompatibilityOptions(params.isEnableIconOverlay(),
+-                    params.isEnableUnarchivalConfirmation());
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2103,140 +1612,4 @@
+     }
+ 
+-    private final IOnAppsChangedListener.Stub mAppsChangedListener =
+-            new IOnAppsChangedListener.Stub() {
+-
+-        @Override
+-        public void onPackageRemoved(UserHandle user, String packageName)
+-                throws RemoteException {
+-            if (DEBUG) {
+-                Log.d(TAG, "onPackageRemoved " + user.getIdentifier() + "," + packageName);
+-            }
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnPackageRemoved(packageName, user);
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public void onPackageChanged(UserHandle user, String packageName) throws RemoteException {
+-            if (DEBUG) {
+-                Log.d(TAG, "onPackageChanged " + user.getIdentifier() + "," + packageName);
+-            }
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnPackageChanged(packageName, user);
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public void onPackageAdded(UserHandle user, String packageName) throws RemoteException {
+-            Log.d(TAG, "onPackageAdded " + user.getIdentifier() + "," + packageName);
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnPackageAdded(packageName, user);
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public void onPackagesAvailable(UserHandle user, String[] packageNames, boolean replacing)
+-                throws RemoteException {
+-            if (DEBUG) {
+-                Log.d(TAG, "onPackagesAvailable " + user.getIdentifier() + ","
+-                        + Arrays.toString(packageNames));
+-            }
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnPackagesAvailable(packageNames, user, replacing);
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public void onPackagesUnavailable(UserHandle user, String[] packageNames, boolean replacing)
+-                throws RemoteException {
+-            if (DEBUG) {
+-                Log.d(TAG, "onPackagesUnavailable " + user.getIdentifier() + ","
+-                        + Arrays.toString(packageNames));
+-            }
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnPackagesUnavailable(packageNames, user, replacing);
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public void onPackagesSuspended(UserHandle user, String[] packageNames,
+-                Bundle launcherExtras)
+-                throws RemoteException {
+-            if (DEBUG) {
+-                Log.d(TAG, "onPackagesSuspended " + user.getIdentifier() + ","
+-                        + Arrays.toString(packageNames));
+-            }
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnPackagesSuspended(packageNames, launcherExtras, user);
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public void onPackagesUnsuspended(UserHandle user, String[] packageNames)
+-                throws RemoteException {
+-            if (DEBUG) {
+-                Log.d(TAG, "onPackagesUnsuspended " + user.getIdentifier() + ","
+-                        + Arrays.toString(packageNames));
+-            }
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnPackagesUnsuspended(packageNames, user);
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public void onShortcutChanged(UserHandle user, String packageName,
+-                ParceledListSlice shortcuts) {
+-            if (DEBUG) {
+-                Log.d(TAG, "onShortcutChanged " + user.getIdentifier() + "," + packageName);
+-            }
+-            final List<ShortcutInfo> list = shortcuts.getList();
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnShortcutChanged(packageName, user, list);
+-                }
+-            }
+-        }
+-
+-        public void onPackageLoadingProgressChanged(UserHandle user, String packageName,
+-                float progress) {
+-            if (DEBUG) {
+-                Log.d(TAG, "onPackageLoadingProgressChanged " + user.getIdentifier() + ","
+-                        + packageName + "," + progress);
+-            }
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnPackageLoadingProgressChanged(user, packageName, progress);
+-                }
+-            }
+-        }
+-
+-        public void onUserConfigChanged(LauncherUserInfo launcherUserInfo) {
+-            if (DEBUG) {
+-                if (android.multiuser.Flags.addLauncherUserConfig()) {
+-                    Log.d(TAG, "OnUserConfigChanged for user type " + launcherUserInfo.getUserType()
+-                            + ", new userConfig: " + launcherUserInfo.getUserConfig());
+-                }
+-            }
+-            synchronized (LauncherApps.this) {
+-                for (CallbackMessageHandler callback : mCallbacks) {
+-                    callback.postOnUserConfigChanged(launcherUserInfo);
+-                }
+-            }
+-        }
+-    };
+ 
+     /**
+@@ -2315,46 +1688,5 @@
+         @Override
+         public void handleMessage(Message msg) {
+-            if (mCallback == null || !(msg.obj instanceof CallbackInfo)) {
+-                return;
+-            }
+-            CallbackInfo info = (CallbackInfo) msg.obj;
+-            switch (msg.what) {
+-                case MSG_ADDED:
+-                    mCallback.onPackageAdded(info.packageName, info.user);
+-                    break;
+-                case MSG_REMOVED:
+-                    mCallback.onPackageRemoved(info.packageName, info.user);
+-                    break;
+-                case MSG_CHANGED:
+-                    mCallback.onPackageChanged(info.packageName, info.user);
+-                    break;
+-                case MSG_AVAILABLE:
+-                    mCallback.onPackagesAvailable(info.packageNames, info.user, info.replacing);
+-                    break;
+-                case MSG_UNAVAILABLE:
+-                    mCallback.onPackagesUnavailable(info.packageNames, info.user, info.replacing);
+-                    break;
+-                case MSG_SUSPENDED:
+-                    mCallback.onPackagesSuspended(info.packageNames, info.user, info.launcherExtras
+-                    );
+-                    break;
+-                case MSG_UNSUSPENDED:
+-                    mCallback.onPackagesUnsuspended(info.packageNames, info.user);
+-                    break;
+-                case MSG_SHORTCUT_CHANGED:
+-                    mCallback.onShortcutsChanged(info.packageName, info.shortcuts, info.user);
+-                    break;
+-                case MSG_LOADING_PROGRESS_CHANGED:
+-                    mCallback.onPackageLoadingProgressChanged(info.packageName, info.user,
+-                            info.mLoadingProgress);
+-                    break;
+-                case MSG_USER_CONFIG_CHANGED:
+-                    if (android.multiuser.Flags.addLauncherUserConfig()) {
+-                        mCallback.onUserConfigChanged(Objects.requireNonNull(
+-                                info.launcherExtras.getParcelable(LAUNCHER_USER_INFO_EXTRA_KEY,
+-                                        LauncherUserInfo.class)));
+-                    }
+-                    break;
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2456,19 +1788,6 @@
+     public void registerPackageInstallerSessionCallback(
+             @NonNull @CallbackExecutor Executor executor, @NonNull SessionCallback callback) {
+-        if (executor == null) {
+-            throw new NullPointerException("Executor must not be null");
+-        }
+-
+-        synchronized (mDelegates) {
+-            final SessionCallbackDelegate delegate = new SessionCallbackDelegate(callback,
+-                    executor);
+-            try {
+-                mService.registerPackageInstallerCallback(mContext.getPackageName(),
+-                        delegate);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-            mDelegates.add(delegate);
+-        }
++        Objects.requireNonNull(executor);
++        mPm.getPackageInstaller().registerSessionCallback(callback, null);
+     }
+ 
+@@ -2480,13 +1799,5 @@
+      */
+     public void unregisterPackageInstallerSessionCallback(@NonNull SessionCallback callback) {
+-        synchronized (mDelegates) {
+-            for (Iterator<SessionCallbackDelegate> i = mDelegates.iterator(); i.hasNext();) {
+-                final SessionCallbackDelegate delegate = i.next();
+-                if (delegate.mCallback == callback) {
+-                    mPm.getPackageInstaller().unregisterSessionCallback(delegate.mCallback);
+-                    i.remove();
+-                }
+-            }
+-        }
++        mPm.getPackageInstaller().unregisterSessionCallback(callback);
+     }
+ 
+@@ -2503,13 +1814,6 @@
+      * @see PackageInstaller#getAllSessions()
+      */
+-    @SuppressLint("RequiresPermission")
+-    @RequiresPermission(conditional = true,
+-            anyOf = {ACCESS_HIDDEN_PROFILES_FULL, ACCESS_HIDDEN_PROFILES})
+-    public @NonNull List<SessionInfo> getAllPackageInstallerSessions() {
+-        try {
+-            return mService.getAllSessions(mContext.getPackageName()).getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++    public List<PackageInstaller.SessionInfo> getAllPackageInstallerSessions() {
++        return mPm.getPackageInstaller().getAllSessions();
+     }
+ 
+@@ -2527,18 +1831,5 @@
+     public void registerShortcutChangeCallback(@NonNull ShortcutChangeCallback callback,
+             @NonNull ShortcutQuery query, @NonNull @CallbackExecutor Executor executor) {
+-        Objects.requireNonNull(callback, "Callback cannot be null");
+-        Objects.requireNonNull(query, "Query cannot be null");
+-        Objects.requireNonNull(executor, "Executor cannot be null");
+-
+-        synchronized (mShortcutChangeCallbacks) {
+-            IShortcutChangeCallback proxy = new ShortcutChangeCallbackProxy(executor, callback);
+-            mShortcutChangeCallbacks.put(callback, new Pair<>(executor, proxy));
+-            try {
+-                mService.registerShortcutChangeCallback(mContext.getPackageName(),
+-                        new ShortcutQueryWrapper(query), proxy);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2552,16 +1843,5 @@
+      */
+     public void unregisterShortcutChangeCallback(@NonNull ShortcutChangeCallback callback) {
+-        Objects.requireNonNull(callback, "Callback cannot be null");
+-
+-        synchronized (mShortcutChangeCallbacks) {
+-            if (mShortcutChangeCallbacks.containsKey(callback)) {
+-                IShortcutChangeCallback proxy = mShortcutChangeCallbacks.remove(callback).second;
+-                try {
+-                    mService.unregisterShortcutChangeCallback(mContext.getPackageName(), proxy);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2628,13 +1908,5 @@
+ 
+         private final int mRequestType;
+-        private final IPinItemRequest mInner;
+-
+-        /**
+-         * @hide
+-         */
+-        public PinItemRequest(IPinItemRequest inner, int type) {
+-            mInner = inner;
+-            mRequestType = type;
+-        }
++
+ 
+         /**
+@@ -2658,9 +1930,5 @@
+         @Nullable
+         public ShortcutInfo getShortcutInfo() {
+-            try {
+-                return mInner.getShortcutInfo();
+-            } catch (RemoteException e) {
+-                throw e.rethrowAsRuntimeException();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2679,14 +1947,5 @@
+         @Nullable
+         public AppWidgetProviderInfo getAppWidgetProviderInfo(Context context) {
+-            try {
+-                final AppWidgetProviderInfo info = mInner.getAppWidgetProviderInfo();
+-                if (info == null) {
+-                    return null;
+-                }
+-                info.updateDimensions(context.getResources().getDisplayMetrics());
+-                return info;
+-            } catch (RemoteException e) {
+-                throw e.rethrowAsRuntimeException();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2701,9 +1960,5 @@
+         @Nullable
+         public Bundle getExtras() {
+-            try {
+-                return mInner.getExtras();
+-            } catch (RemoteException e) {
+-                throw e.rethrowAsRuntimeException();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2714,9 +1969,5 @@
+          */
+         public boolean isValid() {
+-            try {
+-                return mInner.isValid();
+-            } catch (RemoteException e) {
+-                return false;
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2731,9 +1982,5 @@
+          */
+         public boolean accept(@Nullable Bundle options) {
+-            try {
+-                return mInner.accept(options);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2750,14 +1997,10 @@
+ 
+         private PinItemRequest(Parcel source) {
+-            final ClassLoader cl = getClass().getClassLoader();
+-
+-            mRequestType = source.readInt();
+-            mInner = IPinItemRequest.Stub.asInterface(source.readStrongBinder());
+-        }
++            throw new UnsupportedOperationException("No pin requests in the embedded catalog");
++    }
+ 
+         @Override
+         public void writeToParcel(Parcel dest, int flags) {
+-            dest.writeInt(mRequestType);
+-            dest.writeStrongBinder(mInner.asBinder());
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2847,3 +2090,31 @@
+         }
+     }
++    private final ArrayList<Registration> callbacks = new ArrayList<>();
++    private static final class Registration {
++        final Callback callback;
++        final Handler handler;
++        Registration(Callback callback, Handler handler) {
++            this.callback = callback;
++            this.handler = handler;
++        }
++    }
++
++    private List<LauncherActivityInfo> queryActivities(Intent intent, String packageName, UserHandle user) {
++        if (packageName != null) intent.setPackage(packageName);
++        List<ResolveInfo> matches = mPm.queryIntentActivitiesAsUser(intent, 0, user.getIdentifier());
++        ArrayList<LauncherActivityInfo> result = new ArrayList<>(matches.size());
++        for (ResolveInfo match : matches) result.add(new LauncherActivityInfo(mContext,
++                new LauncherActivityInfoInternal(match.activityInfo, new IncrementalStatesInfo(false, 1f, 0), user, false)));
++        return result;
++    }
++
++    public void dispatchPackageChanged(String name, boolean replaced) {
++        for (Registration registration : callbacks) {
++            registration.handler.post(() -> {
++                if (!callbacks.contains(registration)) return;
++                if (replaced) registration.callback.onPackageChanged(name, UserHandle.SYSTEM);
++                else registration.callback.onPackageAdded(name, UserHandle.SYSTEM);
++            });
++        }
++    }
+ }
+--- a/frameworks/base/core/java/android/content/pm/LauncherUserInfo.java
++++ b/frameworks/base/core/java/android/content/pm/LauncherUserInfo.java
+@@ -17,8 +17,6 @@
+ package android.content.pm;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.os.Bundle;
+-import android.os.Flags;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+@@ -30,5 +28,4 @@
+  * the Launcher related UI elements specific to the user (like badges).
+  */
+-@FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+ public final class LauncherUserInfo implements Parcelable {
+ 
+@@ -38,5 +35,4 @@
+      * @see #getUserConfig
+      */
+-    @FlaggedApi(android.multiuser.Flags.FLAG_ADD_LAUNCHER_USER_CONFIG)
+     public static final String PRIVATE_SPACE_ENTRYPOINT_HIDDEN =
+             "private_space_entrypoint_hidden";
+@@ -59,5 +55,4 @@
+      * @return the userType for the user whose LauncherUserInfo this is
+      */
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     @NonNull
+     public String getUserType() {
+@@ -70,5 +65,4 @@
+      * @see #PRIVATE_SPACE_ENTRYPOINT_HIDDEN
+      */
+-    @FlaggedApi(android.multiuser.Flags.FLAG_ADD_LAUNCHER_USER_CONFIG)
+     @NonNull
+     public Bundle getUserConfig() {
+@@ -82,5 +76,4 @@
+      * @return the serial number associated with the user
+      */
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     public int getUserSerialNumber() {
+         return mUserSerialNumber;
+@@ -88,5 +81,5 @@
+ 
+     private LauncherUserInfo(@NonNull Parcel in) {
+-        mUserType = in.readString16NoHelper();
++        mUserType = in.readString();
+         mUserSerialNumber = in.readInt();
+         mUserConfig = in.readBundle(Bundle.class.getClassLoader());
+@@ -94,7 +87,6 @@
+ 
+     @Override
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     public void writeToParcel(@NonNull Parcel dest, int flags) {
+-        dest.writeString16NoHelper(mUserType);
++        dest.writeString(mUserType);
+         dest.writeInt(mUserSerialNumber);
+         dest.writeBundle(mUserConfig);
+@@ -102,10 +94,8 @@
+ 
+     @Override
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     public int describeContents() {
+         return 0;
+     }
+ 
+-    @FlaggedApi(Flags.FLAG_ALLOW_PRIVATE_PROFILE)
+     public static final @android.annotation.NonNull Creator<LauncherUserInfo> CREATOR =
+             new Creator<LauncherUserInfo>() {
+@@ -131,5 +121,4 @@
+ 
+ 
+-        @FlaggedApi(android.multiuser.Flags.FLAG_ADD_LAUNCHER_USER_CONFIG)
+         public Builder(@NonNull String userType, int userSerialNumber, @NonNull Bundle config) {
+             this.mUserType = userType;

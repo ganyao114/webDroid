@@ -1,0 +1,3087 @@
+--- a/frameworks/base/core/java/android/appwidget/AppWidgetHost.java
++++ b/frameworks/base/core/java/android/appwidget/AppWidgetHost.java
+@@ -16,43 +16,13 @@
+ 
+ package android.appwidget;
+ 
+-import static android.appwidget.flags.Flags.FLAG_ENGAGEMENT_METRICS;
+-import static android.appwidget.flags.Flags.engagementMetrics;
+-
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.app.Activity;
+-import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.ActivityNotFoundException;
+ import android.content.Context;
+-import android.content.IntentSender;
+-import android.content.pm.PackageManager;
+-import android.os.Binder;
+-import android.os.Build;
+-import android.os.Bundle;
+-import android.os.Handler;
+-import android.os.IBinder;
+-import android.os.Looper;
+-import android.os.Message;
+-import android.os.Process;
+-import android.os.RemoteException;
+-import android.os.ServiceManager;
+-import android.os.TransactionTooLargeException;
+ import android.util.DisplayMetrics;
+-import android.util.Log;
+ import android.util.SparseArray;
+ import android.widget.RemoteViews;
+-import android.widget.RemoteViews.InteractionHandler;
+-
+-import com.android.internal.R;
+-import com.android.internal.appwidget.IAppWidgetHost;
+-import com.android.internal.appwidget.IAppWidgetService;
+-
+-import java.lang.ref.WeakReference;
+-import java.util.ArrayList;
+-import java.util.List;
+-import java.util.function.Function;
+ 
+ /**
+  * AppWidgetHost provides the interaction with the AppWidget service for apps,
+@@ -62,164 +32,12 @@
+ 
+     private static final String TAG = "AppWidgetHost";
+ 
+-    static final int HANDLE_UPDATE = 1;
+-    static final int HANDLE_PROVIDER_CHANGED = 2;
+-    static final int HANDLE_PROVIDERS_CHANGED = 3;
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    static final int HANDLE_VIEW_DATA_CHANGED = 4;
+-    static final int HANDLE_APP_WIDGET_REMOVED = 5;
+-    static final int HANDLE_VIEW_UPDATE_DEFERRED = 6;
+-
+-    @UnsupportedAppUsage
+-    static IAppWidgetService sService;
+     private DisplayMetrics mDisplayMetrics;
+ 
+-    private String mContextOpPackageName;
+-    @UnsupportedAppUsage
+-    private final Handler mHandler;
+-    private final int mHostId;
+-    private final Callbacks mCallbacks;
+     private final SparseArray<AppWidgetHostListener> mListeners = new SparseArray<>();
+-    private InteractionHandler mInteractionHandler;
+-    private final IAppWidgetService mService;
+-
+-    /**
+-     * Default IAppWidgetService factory that does one-time initialization and returns a static
+-     * reference.
+-     */
+-    private static final Function<Context, IAppWidgetService> sServiceFactory = new Function<>() {
+-        private final Object mServiceLock = new Object();
+-        private boolean mServiceInitialized = false;
+-
+-        @Override
+-        public IAppWidgetService apply(Context context) {
+-            synchronized (mServiceLock) {
+-                if (mServiceInitialized) {
+-                    return sService;
+-                }
+-                mServiceInitialized = true;
+-                PackageManager packageManager = context.getPackageManager();
+-                if (!packageManager.hasSystemFeature(PackageManager.FEATURE_APP_WIDGETS)
+-                        && !context.getResources().getBoolean(
+-                        R.bool.config_enableAppWidgetService)) {
+-                    return null;
+-                }
+-                IBinder b = ServiceManager.getService(Context.APPWIDGET_SERVICE);
+-                sService = IAppWidgetService.Stub.asInterface(b);
+-                return sService;
+-            }
+-        }
+-    };
+-
+-    static class Callbacks extends IAppWidgetHost.Stub {
+-        private final WeakReference<Handler> mWeakHandler;
+-
+-        public Callbacks(Handler handler) {
+-            mWeakHandler = new WeakReference<>(handler);
+-        }
+-
+-        public void updateAppWidget(int appWidgetId, RemoteViews views) {
+-            if (isLocalBinder() && views != null) {
+-                views = views.clone();
+-            }
+-            Handler handler = mWeakHandler.get();
+-            if (handler == null) {
+-                return;
+-            }
+-            Message msg = handler.obtainMessage(HANDLE_UPDATE, appWidgetId, 0, views);
+-            msg.sendToTarget();
+-        }
+-
+-        public void providerChanged(int appWidgetId, AppWidgetProviderInfo info) {
+-            if (isLocalBinder() && info != null) {
+-                info = info.clone();
+-            }
+-            Handler handler = mWeakHandler.get();
+-            if (handler == null) {
+-                return;
+-            }
+-            Message msg = handler.obtainMessage(HANDLE_PROVIDER_CHANGED,
+-                    appWidgetId, 0, info);
+-            msg.sendToTarget();
+-        }
+-
+-        public void appWidgetRemoved(int appWidgetId) {
+-            Handler handler = mWeakHandler.get();
+-            if (handler == null) {
+-                return;
+-            }
+-            handler.obtainMessage(HANDLE_APP_WIDGET_REMOVED, appWidgetId, 0).sendToTarget();
+-        }
+-
+-        public void providersChanged() {
+-            Handler handler = mWeakHandler.get();
+-            if (handler == null) {
+-                return;
+-            }
+-            handler.obtainMessage(HANDLE_PROVIDERS_CHANGED).sendToTarget();
+-        }
+-
+-        public void viewDataChanged(int appWidgetId, int viewId) {
+-            Handler handler = mWeakHandler.get();
+-            if (handler == null) {
+-                return;
+-            }
+-            Message msg = handler.obtainMessage(HANDLE_VIEW_DATA_CHANGED,
+-                    appWidgetId, viewId);
+-            msg.sendToTarget();
+-        }
+-
+-        public void updateAppWidgetDeferred(int appWidgetId) {
+-            Handler handler = mWeakHandler.get();
+-            if (handler == null) {
+-                return;
+-            }
+-            Message msg = handler.obtainMessage(HANDLE_VIEW_UPDATE_DEFERRED, appWidgetId, 0, null);
+-            msg.sendToTarget();
+-        }
+-
+-        private static boolean isLocalBinder() {
+-            return Process.myPid() == Binder.getCallingPid();
+-        }
+-    }
+-
+-    class UpdateHandler extends Handler {
+-        public UpdateHandler(Looper looper) {
+-            super(looper);
+-        }
+-
+-        public void handleMessage(Message msg) {
+-            switch (msg.what) {
+-                case HANDLE_UPDATE: {
+-                    updateAppWidgetView(msg.arg1, (RemoteViews)msg.obj);
+-                    break;
+-                }
+-                case HANDLE_APP_WIDGET_REMOVED: {
+-                    dispatchOnAppWidgetRemoved(msg.arg1);
+-                    break;
+-                }
+-                case HANDLE_PROVIDER_CHANGED: {
+-                    onProviderChanged(msg.arg1, (AppWidgetProviderInfo)msg.obj);
+-                    break;
+-                }
+-                case HANDLE_PROVIDERS_CHANGED: {
+-                    onProvidersChanged();
+-                    break;
+-                }
+-                case HANDLE_VIEW_DATA_CHANGED: {
+-                    viewDataChanged(msg.arg1, msg.arg2);
+-                    break;
+-                }
+-                case HANDLE_VIEW_UPDATE_DEFERRED: {
+-                    updateAppWidgetDeferred(msg.arg1);
+-                    break;
+-                }
+-            }
+-        }
+-    }
+ 
+     public AppWidgetHost(Context context, int hostId) {
+-        this(context, hostId, null, context.getMainLooper());
++        mDisplayMetrics = context.getResources().getDisplayMetrics();
+     }
+ 
+     @Nullable
+@@ -232,88 +50,16 @@
+     }
+ 
+     /**
+-     * @hide
+-     */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public AppWidgetHost(Context context, int hostId, InteractionHandler handler, Looper looper) {
+-        this(context, hostId, handler, looper, sServiceFactory);
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public AppWidgetHost(Context context, int hostId, InteractionHandler handler, Looper looper,
+-            Function<Context, IAppWidgetService> serviceFactory) {
+-        mContextOpPackageName = context.getOpPackageName();
+-        mHostId = hostId;
+-        mInteractionHandler = handler;
+-        mHandler = new UpdateHandler(looper);
+-        mCallbacks = new Callbacks(mHandler);
+-        mDisplayMetrics = context.getResources().getDisplayMetrics();
+-        mService = serviceFactory.apply(context);
+-    }
+-
+-    /**
+      * Start receiving onAppWidgetChanged calls for your AppWidgets.  Call this when your activity
+      * becomes visible, i.e. from onStart() in your Activity.
+      */
+-    public void startListening() {
+-        if (mService == null) {
+-            return;
+-        }
+-        final int[] idsToUpdate;
+-        synchronized (mListeners) {
+-            int n = mListeners.size();
+-            idsToUpdate = new int[n];
+-            for (int i = 0; i < n; i++) {
+-                idsToUpdate[i] = mListeners.keyAt(i);
+-            }
+-        }
+-        List<PendingHostUpdate> updates;
+-        try {
+-            updates = mService.startListening(
+-                    mCallbacks, mContextOpPackageName, mHostId, idsToUpdate).getList();
+-        }
+-        catch (RemoteException e) {
+-            throw new RuntimeException("system server dead?", e);
+-        }
+-
+-        int N = updates.size();
+-        for (int i = 0; i < N; i++) {
+-            PendingHostUpdate update = updates.get(i);
+-            switch (update.type) {
+-                case PendingHostUpdate.TYPE_VIEWS_UPDATE:
+-                    updateAppWidgetView(update.appWidgetId, update.views);
+-                    break;
+-                case PendingHostUpdate.TYPE_PROVIDER_CHANGED:
+-                    onProviderChanged(update.appWidgetId, update.widgetInfo);
+-                    break;
+-                case PendingHostUpdate.TYPE_VIEW_DATA_CHANGED:
+-                    viewDataChanged(update.appWidgetId, update.viewId);
+-                    break;
+-                case PendingHostUpdate.TYPE_APP_WIDGET_REMOVED:
+-                    dispatchOnAppWidgetRemoved(update.appWidgetId);
+-                    break;
+-            }
+-        }
+-    }
++    public void startListening() {}
+ 
+     /**
+      * Stop receiving onAppWidgetChanged calls for your AppWidgets.  Call this when your activity is
+      * no longer visible, i.e. from onStop() in your Activity.
+      */
+-    public void stopListening() {
+-        if (mService == null) {
+-            return;
+-        }
+-        try {
+-            mService.stopListening(mContextOpPackageName, mHostId);
+-        }
+-        catch (RemoteException e) {
+-            throw new RuntimeException("system server dead?", e);
+-        }
+-        reportAllWidgetEvents();
+-    }
++    public void stopListening() {}
+ 
+     /**
+      * Get a appWidgetId for a host in the calling process.
+@@ -321,135 +67,21 @@
+      * @return a appWidgetId
+      */
+     public int allocateAppWidgetId() {
+-        if (mService == null) {
+-            return -1;
+-        }
+-        try {
+-            return mService.allocateAppWidgetId(mContextOpPackageName, mHostId);
+-        }
+-        catch (RemoteException e) {
+-            throw new RuntimeException("system server dead?", e);
+-        }
+-    }
+-
+-    /**
+-     * Returns an {@link IntentSender} for starting the configuration activity for the widget.
+-     *
+-     * @return The {@link IntentSender} or null if service is currently unavailable
+-     *
+-     * @throws android.content.ActivityNotFoundException If configuration activity is not found.
+-     *
+-     * @see #startAppWidgetConfigureActivityForResult
+-     *
+-     * @hide
+-     */
+-    @Nullable
+-    public final IntentSender getIntentSenderForConfigureActivity(int appWidgetId,
+-            int intentFlags)  {
+-        if (mService == null) {
+-            return null;
+-        }
+-
+-        IntentSender intentSender;
+-        try {
+-            intentSender = mService.createAppWidgetConfigIntentSender(mContextOpPackageName,
+-                    appWidgetId, intentFlags);
+-        } catch (RemoteException e) {
+-            throw new RuntimeException("system server dead?", e);
+-        }
+-
+-        if (intentSender == null) {
+-            throw new ActivityNotFoundException();
+-        }
+-        return intentSender;
+-    }
+-
+-    /**
+-     * Starts an app widget provider configure activity for result on behalf of the caller.
+-     * Use this method if the provider is in another profile as you are not allowed to start
+-     * an activity in another profile. You can optionally provide a request code that is
+-     * returned in {@link Activity#onActivityResult(int, int, android.content.Intent)} and
+-     * an options bundle to be passed to the started activity.
+-     * <p>
+-     * Note that the provided app widget has to be bound for this method to work.
+-     * </p>
+-     *
+-     * @param activity The activity from which to start the configure one.
+-     * @param appWidgetId The bound app widget whose provider's config activity to start.
+-     * @param requestCode Optional request code retuned with the result.
+-     * @param intentFlags Optional intent flags.
+-     *
+-     * @throws android.content.ActivityNotFoundException If the activity is not found.
+-     *
+-     * @see AppWidgetProviderInfo#getProfile()
+-     */
+-    public final void startAppWidgetConfigureActivityForResult(@NonNull Activity activity,
+-            int appWidgetId, int intentFlags, int requestCode, @Nullable Bundle options) {
+-        if (mService == null) {
+-            return;
+-        }
+-        try {
+-            IntentSender intentSender = getIntentSenderForConfigureActivity(appWidgetId,
+-                    intentFlags);
+-            activity.startIntentSenderForResult(intentSender, requestCode, null, 0, 0, 0, options);
+-        } catch (IntentSender.SendIntentException e) {
+-            throw new ActivityNotFoundException();
+-        }
+-    }
+-
+-    /**
+-     * Set the visibiity of all widgets associated with this host to hidden
+-     *
+-     * @hide
+-     */
+-    public void setAppWidgetHidden() {
+-        if (mService == null) {
+-            return;
+-        }
+-        try {
+-            mService.setAppWidgetHidden(mContextOpPackageName, mHostId);
+-        } catch (RemoteException e) {
+-            throw new RuntimeException("System server dead?", e);
+-        }
+-        reportAllWidgetEvents();
+-    }
+-
+-    /**
+-     * Set the host's interaction handler.
+-     *
+-     * @hide
+-     */
+-    public void setInteractionHandler(InteractionHandler interactionHandler) {
+-        mInteractionHandler = interactionHandler;
++        return AppWidgetManager.INVALID_APPWIDGET_ID;
+     }
+ 
+     /**
+      * Gets a list of all the appWidgetIds that are bound to the current host
+      */
+     public int[] getAppWidgetIds() {
+-        if (mService == null) {
+-            return new int[0];
+-        }
+-        try {
+-            return mService.getAppWidgetIdsForHost(mContextOpPackageName, mHostId);
+-        } catch (RemoteException e) {
+-            throw new RuntimeException("system server dead?", e);
+-        }
++        return new int[0];
+     }
+ 
+     /**
+      * Stop listening to changes for this AppWidget.
+      */
+     public void deleteAppWidgetId(int appWidgetId) {
+-        if (mService == null) {
+-            return;
+-        }
+         removeListener(appWidgetId);
+-        try {
+-            mService.deleteAppWidgetId(mContextOpPackageName, appWidgetId);
+-        } catch (RemoteException e) {
+-            throw new RuntimeException("system server dead?", e);
+-        }
+     }
+ 
+     /**
+@@ -461,15 +93,7 @@
+      * </ul>
+      */
+     public void deleteHost() {
+-        if (mService == null) {
+-            return;
+-        }
+-        try {
+-            mService.deleteHost(mContextOpPackageName, mHostId);
+-        }
+-        catch (RemoteException e) {
+-            throw new RuntimeException("system server dead?", e);
+-        }
++        clearViews();
+     }
+ 
+     /**
+@@ -480,17 +104,7 @@
+      *   host.  Any future calls about this host will cause the records to be re-allocated.</li>
+      * </ul>
+      */
+-    public static void deleteAllHosts() {
+-        if (sService == null) {
+-            return;
+-        }
+-        try {
+-            sService.deleteAllHosts();
+-        }
+-        catch (RemoteException e) {
+-            throw new RuntimeException("system server dead?", e);
+-        }
+-    }
++    public static void deleteAllHosts() {}
+ 
+     /**
+      * Create the AppWidgetHostView for the given widget.
+@@ -498,14 +112,9 @@
+      */
+     public final AppWidgetHostView createView(Context context, int appWidgetId,
+             AppWidgetProviderInfo appWidget) {
+-        if (mService == null) {
+-            return null;
+-        }
+         AppWidgetHostView view = onCreateView(context, appWidgetId, appWidget);
+-        view.setInteractionHandler(mInteractionHandler);
+         view.setAppWidget(appWidgetId, appWidget);
+         setListener(appWidgetId, view);
+-
+         return view;
+     }
+ 
+@@ -515,7 +124,7 @@
+      */
+     protected AppWidgetHostView onCreateView(Context context, int appWidgetId,
+             AppWidgetProviderInfo appWidget) {
+-        return new AppWidgetHostView(context, mInteractionHandler);
++        return new AppWidgetHostView(context);
+     }
+ 
+     /**
+@@ -566,15 +175,8 @@
+          * @hide
+          */
+         default void updateAppWidgetDeferred(String packageName, int appWidgetId) {
+-            RemoteViews latestViews = null;
+-            try {
+-                latestViews = sService.getAppWidgetViews(packageName,
+-                        appWidgetId);
+-            } catch (Exception e) {
+-                Log.e(TAG, "updateAppWidgetDeferred: ", e);
+-            }
+-            updateAppWidget(latestViews);
+-        }
++            updateAppWidget(null);
++    }
+ 
+         /**
+          * This function is called when the view ID is changed for the app widget
+@@ -584,16 +186,6 @@
+          */
+         void onViewDataChanged(int viewId);
+ 
+-        /**
+-         * This function returns the current set of widget event data being tracked by this widget.
+-         *
+-         * @hide
+-         */
+-        @FlaggedApi(FLAG_ENGAGEMENT_METRICS)
+-        @Nullable
+-        default AppWidgetEvent collectWidgetEvent() {
+-            return null;
+-        }
+     }
+ 
+     void dispatchOnAppWidgetRemoved(int appWidgetId) {
+@@ -628,15 +220,7 @@
+         synchronized (mListeners) {
+             mListeners.put(appWidgetId, listener);
+         }
+-        RemoteViews views = null;
+-        try {
+-            views = mService.getAppWidgetViews(mContextOpPackageName, appWidgetId);
+-        } catch (TransactionTooLargeException e) {
+-            Log.e(TAG, "setListener: Transaction too large for appWidgetId=" + appWidgetId, e);
+-        } catch (RemoteException e) {
+-            e.rethrowFromSystemServer();
+-        }
+-        listener.updateAppWidget(views);
++        listener.updateAppWidget(null);
+     }
+ 
+     /**
+@@ -646,10 +230,7 @@
+      * @hide
+      */
+     public void removeListener(int appWidgetId) {
+-        reportEventForWidget(appWidgetId);
+-        synchronized (mListeners) {
+-            mListeners.remove(appWidgetId);
+-        }
++        synchronized (mListeners) { mListeners.remove(appWidgetId); }
+     }
+ 
+     void updateAppWidgetView(int appWidgetId, RemoteViews views) {
+@@ -666,86 +247,12 @@
+         }
+     }
+ 
+-    private void updateAppWidgetDeferred(int appWidgetId) {
+-        AppWidgetHostListener v = getListener(appWidgetId);
+-        if (v == null) {
+-            Log.e(TAG, "updateAppWidgetDeferred: null listener for id: " + appWidgetId);
+-            return;
+-        }
+-        v.updateAppWidgetDeferred(mContextOpPackageName, appWidgetId);
+-    }
+-
+     /**
+      * Clear the list of Views that have been created by this AppWidgetHost.
+      */
+     protected void clearViews() {
+-        reportAllWidgetEvents();
+-        synchronized (mListeners) {
+-            mListeners.clear();
+-        }
+-    }
+-
+-    /**
+-     * Report any pending widget event data to the AppWidgetService.
+-     *
+-     * @hide
+-     */
+-    public void reportAllWidgetEvents() {
+-        if (mService == null || !engagementMetrics()) {
+-            return;
+-        }
+-
+-        SparseArray<AppWidgetHostListener> listeners;
+-        synchronized (mListeners) {
+-            listeners = mListeners.clone();
+-        }
+-        List<AppWidgetEvent> eventList = new ArrayList<>();
+-        for (int i = 0; i < listeners.size(); i++) {
+-            AppWidgetEvent event = listeners.valueAt(i).collectWidgetEvent();
+-            if (event != null) {
+-                eventList.add(event);
+-            }
+-        }
+-        if (eventList.isEmpty()) {
+-            return;
+-        }
+-        AppWidgetEvent[] events = new AppWidgetEvent[eventList.size()];
+-        for (int i = 0; i < events.length; i++) {
+-            events[i] = eventList.get(i);
+-        }
+-
+-        try {
+-            mService.reportWidgetEvents(mContextOpPackageName, events);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Report a pending widget event to the AppWidgetService.
+-     *
+-     * @hide
+-     */
+-    public void reportEventForWidget(int appWidgetId) {
+-        if (mService == null || !engagementMetrics()) {
+-            return;
+-        }
+-        AppWidgetHostListener listener = getListener(appWidgetId);
+-        if (listener == null) {
+-            return;
+-        }
+-        AppWidgetEvent event = listener.collectWidgetEvent();
+-        if (event == null) {
+-            return;
+-        }
+-        AppWidgetEvent[] events = {event};
+-
+-        try {
+-            mService.reportWidgetEvents(mContextOpPackageName, events);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++        synchronized (mListeners) { mListeners.clear(); }
++    }
++
+ }
+ 
+-
+--- a/frameworks/base/core/java/android/appwidget/AppWidgetHostView.java
++++ b/frameworks/base/core/java/android/appwidget/AppWidgetHostView.java
+@@ -16,59 +16,22 @@
+ 
+ package android.appwidget;
+ 
+-import static android.appwidget.AppWidgetManager.OPTION_APPWIDGET_HOST_CATEGORY;
+-import static android.appwidget.AppWidgetProviderInfo.WIDGET_CATEGORY_KEYGUARD;
+-import static android.appwidget.flags.Flags.FLAG_ENGAGEMENT_METRICS;
+-import static android.appwidget.flags.Flags.engagementMetrics;
+-import static android.appwidget.flags.Flags.widgetDisplayChanges;
+-import static android.content.res.Flags.selfTargetingAndroidResourceFrro;
+-
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.app.Activity;
+-import android.app.ActivityOptions;
+-import android.app.PendingIntent;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.ComponentName;
+ import android.content.Context;
+-import android.content.ContextWrapper;
+-import android.content.Intent;
+-import android.content.pm.ApplicationInfo;
+-import android.content.pm.LauncherActivityInfo;
+-import android.content.pm.LauncherApps;
+ import android.content.res.Resources;
+-import android.graphics.Canvas;
+-import android.graphics.Color;
+-import android.graphics.PointF;
+ import android.graphics.Rect;
+ import android.os.Build;
+ import android.os.Bundle;
+-import android.os.CancellationSignal;
+-import android.os.Parcelable;
+-import android.util.AttributeSet;
+ import android.util.Log;
+-import android.util.Pair;
+ import android.util.SizeF;
+-import android.util.SparseArray;
+-import android.util.SparseIntArray;
+ import android.view.Gravity;
+ import android.view.View;
+-import android.view.ViewParent;
+-import android.view.accessibility.AccessibilityNodeInfo;
+-import android.widget.AbsListView;
+-import android.widget.Adapter;
+-import android.widget.AdapterView;
+-import android.widget.BaseAdapter;
+ import android.widget.FrameLayout;
+ import android.widget.RemoteViews;
+-import android.widget.RemoteViews.InteractionHandler;
+-import android.widget.RemoteViewsAdapter.RemoteAdapterConnectionCallback;
+-import android.widget.TextView;
+-
+-import com.android.internal.annotations.VisibleForTesting;
+-
+-import java.util.ArrayList;
++
+ import java.util.List;
+ import java.util.concurrent.Executor;
+ 
+@@ -80,10 +43,6 @@
+ public class AppWidgetHostView extends FrameLayout implements AppWidgetHost.AppWidgetHostListener {
+ 
+     static final String TAG = "AppWidgetHostView";
+-    private static final String KEY_JAILED_ARRAY = "jail";
+-    private static final String KEY_INFLATION_ID = "inflation_id";
+-
+-    static final boolean LOGD = false;
+ 
+     static final int VIEW_MODE_NOINIT = 0;
+     static final int VIEW_MODE_CONTENT = 1;
+@@ -97,34 +56,13 @@
+     View mView;
+     int mViewMode = VIEW_MODE_NOINIT;
+     // If true, we should not try to re-apply the RemoteViews on the next inflation.
+-    boolean mColorMappingChanged = false;
+-    @NonNull
+-    private InteractionLogger mInteractionLogger = new InteractionLogger();
+-    private boolean mOnLightBackground;
+-    private SizeF mCurrentSize = null;
+-    private RemoteViews.ColorResources mColorResources = null;
+     // Stores the last remote views last inflated.
+-    private RemoteViews mLastInflatedRemoteViews = null;
+-    private long mLastInflatedRemoteViewsId = -1;
+-
+-    private Executor mAsyncExecutor;
+-    private CancellationSignal mLastExecutionSignal;
+-    private SparseArray<Parcelable> mDelayedRestoredState;
+-    private long mDelayedRestoredInflationId;
+ 
+     /**
+      * Create a host view.  Uses default fade animations.
+      */
+     public AppWidgetHostView(Context context) {
+-        this(context, android.R.anim.fade_in, android.R.anim.fade_out);
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public AppWidgetHostView(Context context, InteractionHandler handler) {
+-        this(context, android.R.anim.fade_in, android.R.anim.fade_out);
+-        setInteractionHandler(handler);
++        super(context);
+     }
+ 
+     /**
+@@ -136,53 +74,7 @@
+      */
+     @SuppressWarnings({"UnusedDeclaration"})
+     public AppWidgetHostView(Context context, int animationIn, int animationOut) {
+-        super(context);
+-        // We want to segregate the view ids within AppWidgets to prevent
+-        // problems when those ids collide with view ids in the AppWidgetHost.
+-        setIsRootNamespace(true);
+-    }
+-
+-    /**
+-     * Pass the given handler to RemoteViews when updating this widget. Unless this
+-     * is done immediately after construction, a call to {@link #updateAppWidget(RemoteViews)}
+-     * should be made.
+-     *
+-     * @hide
+-     */
+-    public void setInteractionHandler(InteractionHandler handler) {
+-        if (handler instanceof InteractionLogger logger) {
+-            // Nested AppWidgetHostViews should reuse the parent logger instead of wrapping it.
+-            mInteractionLogger = logger;
+-        } else {
+-            mInteractionLogger = new InteractionLogger(handler);
+-        }
+-    }
+-
+-    /**
+-     * Return the InteractionLogger used by this class.
+-     *
+-     * @hide
+-     */
+-    @VisibleForTesting
+-    @NonNull
+-    public InteractionLogger getInteractionLogger() {
+-        return mInteractionLogger;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public static class AdapterChildHostView extends AppWidgetHostView {
+-
+-        public AdapterChildHostView(Context context) {
+-            super(context);
+-        }
+-
+-        @Override
+-        protected boolean isVisibilityTrackingPermitted() {
+-            // Do not track visibility for individual adapter items
+-            return false;
+-        }
++        this(context);
+     }
+ 
+     /**
+@@ -191,23 +83,9 @@
+      * and can be overridden in order to add custom padding.
+      */
+     public void setAppWidget(int appWidgetId, AppWidgetProviderInfo info) {
++        if (mInfo != info || mAppWidgetId != appWidgetId) mViewMode = VIEW_MODE_NOINIT;
+         mAppWidgetId = appWidgetId;
+         mInfo = info;
+-
+-        // We add padding to the AppWidgetHostView if necessary
+-        Rect padding = getDefaultPadding();
+-        setPadding(padding.left, padding.top, padding.right, padding.bottom);
+-
+-        // Sometimes the AppWidgetManager returns a null AppWidgetProviderInfo object for
+-        // a widget, eg. for some widgets in safe mode.
+-        if (info != null) {
+-            String description = info.loadLabel(getContext().getPackageManager());
+-            if ((info.providerInfo.applicationInfo.flags & ApplicationInfo.FLAG_SUSPENDED) != 0) {
+-                description = Resources.getSystem().getString(
+-                        com.android.internal.R.string.suspended_widget_accessibility, description);
+-            }
+-            setContentDescription(description);
+-        }
+     }
+ 
+     /**
+@@ -250,7 +128,7 @@
+     }
+ 
+     private Rect getDefaultPadding() {
+-        return getDefaultPaddingForWidget(mContext, null);
++        return getDefaultPaddingForWidget(getContext(), (Rect) null);
+     }
+ 
+     public int getAppWidgetId() {
+@@ -259,118 +137,6 @@
+ 
+     public AppWidgetProviderInfo getAppWidgetInfo() {
+         return mInfo;
+-    }
+-
+-    @Override
+-    protected void dispatchSaveInstanceState(SparseArray<Parcelable> container) {
+-        final SparseArray<Parcelable> jail = new SparseArray<>();
+-        super.dispatchSaveInstanceState(jail);
+-
+-        Bundle bundle = new Bundle();
+-        bundle.putSparseParcelableArray(KEY_JAILED_ARRAY, jail);
+-        bundle.putLong(KEY_INFLATION_ID, mLastInflatedRemoteViewsId);
+-        container.put(generateId(), bundle);
+-        container.put(generateId(), bundle);
+-    }
+-
+-    private int generateId() {
+-        final int id = getId();
+-        return id == View.NO_ID ? mAppWidgetId : id;
+-    }
+-
+-    @Override
+-    protected void dispatchRestoreInstanceState(SparseArray<Parcelable> container) {
+-        final Parcelable parcelable = container.get(generateId());
+-
+-        SparseArray<Parcelable> jail = null;
+-        long inflationId = -1;
+-        if (parcelable instanceof Bundle) {
+-            Bundle bundle = (Bundle) parcelable;
+-            jail = bundle.getSparseParcelableArray(KEY_JAILED_ARRAY);
+-            inflationId = bundle.getLong(KEY_INFLATION_ID, -1);
+-        }
+-
+-        if (jail == null) jail = new SparseArray<>();
+-
+-        mDelayedRestoredState = jail;
+-        mDelayedRestoredInflationId = inflationId;
+-        restoreInstanceState();
+-    }
+-
+-    void restoreInstanceState() {
+-        long inflationId = mDelayedRestoredInflationId;
+-        SparseArray<Parcelable> state = mDelayedRestoredState;
+-        if (inflationId == -1 || inflationId != mLastInflatedRemoteViewsId) {
+-            return; // We don't restore.
+-        }
+-        mDelayedRestoredInflationId = -1;
+-        mDelayedRestoredState = null;
+-        try {
+-            super.dispatchRestoreInstanceState(state);
+-        } catch (Exception e) {
+-            Log.e(TAG, "failed to restoreInstanceState for widget id: " + mAppWidgetId + ", "
+-                    + (mInfo == null ? "null" : mInfo.provider), e);
+-        }
+-    }
+-
+-    private SizeF computeSizeFromLayout(int left, int top, int right, int bottom) {
+-        float density = getResources().getDisplayMetrics().density;
+-        return new SizeF(
+-                (right - left - getPaddingLeft() - getPaddingRight()) / density,
+-                (bottom - top - getPaddingTop() - getPaddingBottom()) / density
+-        );
+-    }
+-
+-    @Override
+-    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+-        try {
+-            SizeF oldSize = mCurrentSize;
+-            SizeF newSize = computeSizeFromLayout(left, top, right, bottom);
+-            mCurrentSize = newSize;
+-            if (mLastInflatedRemoteViews != null) {
+-                RemoteViews toApply = mLastInflatedRemoteViews.getRemoteViewsToApplyIfDifferent(
+-                        oldSize, newSize);
+-                if (toApply != null) {
+-                    applyRemoteViews(toApply, false);
+-                    measureChildWithMargins(mView,
+-                            MeasureSpec.makeMeasureSpec(getMeasuredWidth(), MeasureSpec.EXACTLY),
+-                            0 /* widthUsed */,
+-                            MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.EXACTLY),
+-                            0 /* heightUsed */);
+-                }
+-            }
+-            if (changed && isVisibilityTrackingPermitted()) {
+-                mInteractionLogger.onPositionChanged();
+-            }
+-            super.onLayout(changed, left, top, right, bottom);
+-        } catch (final RuntimeException e) {
+-            Log.e(TAG, "Remote provider threw runtime exception, using error view instead.", e);
+-            handleViewError();
+-        }
+-    }
+-
+-    @Override
+-    public void onWindowFocusChanged(boolean hasWindowFocus) {
+-        super.onWindowFocusChanged(hasWindowFocus);
+-        if (isVisibilityTrackingPermitted()) {
+-            mInteractionLogger.onWindowFocusChanged();
+-        }
+-    }
+-
+-    /**
+-     * Remove bad view and replace with error message view
+-     */
+-    private void handleViewError() {
+-        removeViewInLayout(mView);
+-        View child = getErrorView();
+-        prepareView(child);
+-        addViewInLayout(child, 0, child.getLayoutParams());
+-        measureChild(child, MeasureSpec.makeMeasureSpec(getMeasuredWidth(), MeasureSpec.EXACTLY),
+-                MeasureSpec.makeMeasureSpec(getMeasuredHeight(), MeasureSpec.EXACTLY));
+-        child.layout(0, 0, child.getMeasuredWidth() + mPaddingLeft + mPaddingRight,
+-                child.getMeasuredHeight() + mPaddingTop + mPaddingBottom);
+-        mView = child;
+-        mViewMode = VIEW_MODE_ERROR;
+     }
+ 
+     /**
+@@ -413,45 +179,7 @@
+      * @see AppWidgetProvider#onAppWidgetOptionsChanged(Context, AppWidgetManager, int, Bundle)
+      */
+     public void updateAppWidgetSize(@NonNull Bundle newOptions, @NonNull List<SizeF> sizes) {
+-        AppWidgetManager widgetManager = AppWidgetManager.getInstance(mContext);
+-
+-        Rect padding = getDefaultPadding();
+-        float density = getResources().getDisplayMetrics().density;
+-
+-        float xPaddingDips = (padding.left + padding.right) / density;
+-        float yPaddingDips = (padding.top + padding.bottom) / density;
+-
+-        ArrayList<SizeF> paddedSizes = new ArrayList<>(sizes.size());
+-        float minWidth = Float.MAX_VALUE;
+-        float maxWidth = 0;
+-        float minHeight = Float.MAX_VALUE;
+-        float maxHeight = 0;
+-        for (int i = 0; i < sizes.size(); i++) {
+-            SizeF size = sizes.get(i);
+-            SizeF paddedSize = new SizeF(Math.max(0.f, size.getWidth() - xPaddingDips),
+-                    Math.max(0.f, size.getHeight() - yPaddingDips));
+-            paddedSizes.add(paddedSize);
+-            minWidth = Math.min(minWidth, paddedSize.getWidth());
+-            maxWidth = Math.max(maxWidth, paddedSize.getWidth());
+-            minHeight = Math.min(minHeight, paddedSize.getHeight());
+-            maxHeight = Math.max(maxHeight, paddedSize.getHeight());
+-        }
+-        if (paddedSizes.equals(
+-                widgetManager.getAppWidgetOptions(mAppWidgetId).getParcelableArrayList(
+-                        AppWidgetManager.OPTION_APPWIDGET_SIZES, SizeF.class))) {
+-            return;
+-        }
+-        Bundle options = newOptions.deepCopy();
+-        options.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, (int) minWidth);
+-        options.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, (int) minHeight);
+-        options.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, (int) maxWidth);
+-        options.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, (int) maxHeight);
+-        options.putParcelableArrayList(AppWidgetManager.OPTION_APPWIDGET_SIZES, paddedSizes);
+-        if (widgetDisplayChanges() && getDisplay() != null) {
+-            options.putInt(AppWidgetManager.OPTION_APPWIDGET_DISPLAY_ID,
+-                    getDisplay().getDisplayId());
+-        }
+-        updateAppWidgetOptions(options);
++        updateAppWidgetOptions(newOptions);
+     }
+ 
+     /**
+@@ -460,42 +188,12 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public void updateAppWidgetSize(Bundle newOptions, int minWidth, int minHeight, int maxWidth,
+             int maxHeight, boolean ignorePadding) {
+-        if (newOptions == null) {
+-            newOptions = new Bundle();
+-        }
+-
+-        Rect padding = getDefaultPadding();
+-        float density = getResources().getDisplayMetrics().density;
+-
+-        int xPaddingDips = (int) ((padding.left + padding.right) / density);
+-        int yPaddingDips = (int) ((padding.top + padding.bottom) / density);
+-
+-        int newMinWidth = minWidth - (ignorePadding ? 0 : xPaddingDips);
+-        int newMinHeight = minHeight - (ignorePadding ? 0 : yPaddingDips);
+-        int newMaxWidth = maxWidth - (ignorePadding ? 0 : xPaddingDips);
+-        int newMaxHeight = maxHeight - (ignorePadding ? 0 : yPaddingDips);
+-
+-        AppWidgetManager widgetManager = AppWidgetManager.getInstance(mContext);
+-
+-        // We get the old options to see if the sizes have changed
+-        Bundle oldOptions = widgetManager.getAppWidgetOptions(mAppWidgetId);
+-        boolean needsUpdate = false;
+-        if (newMinWidth != oldOptions.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH) ||
+-                newMinHeight != oldOptions.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT) ||
+-                newMaxWidth != oldOptions.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH) ||
+-                newMaxHeight != oldOptions.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT)) {
+-            needsUpdate = true;
+-        }
+-
+-        if (needsUpdate) {
+-            newOptions.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, newMinWidth);
+-            newOptions.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, newMinHeight);
+-            newOptions.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, newMaxWidth);
+-            newOptions.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, newMaxHeight);
+-            newOptions.putParcelableArrayList(AppWidgetManager.OPTION_APPWIDGET_SIZES,
+-                    new ArrayList<PointF>());
+-            updateAppWidgetOptions(newOptions);
+-        }
++        Bundle options = newOptions == null ? new Bundle() : new Bundle(newOptions);
++        options.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, minWidth);
++        options.putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, minHeight);
++        options.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, maxWidth);
++        options.putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, maxHeight);
++        updateAppWidgetOptions(options);
+     }
+ 
+     /**
+@@ -506,14 +204,7 @@
+      * @see AppWidgetProvider#onAppWidgetOptionsChanged(Context, AppWidgetManager, int, Bundle)
+      */
+     public void updateAppWidgetOptions(Bundle options) {
+-        AppWidgetManager.getInstance(mContext).updateAppWidgetOptions(mAppWidgetId, options);
+-    }
+-
+-    /** @hide **/
+-    @Override
+-    public LayoutParams generateLayoutParams(Context inflationContext, AttributeSet attrs) {
+-        // Widget's layout parameter should be inflated in widget's context
+-        return new FrameLayout.LayoutParams(inflationContext, attrs);
++        AppWidgetManager.getInstance(getContext()).updateAppWidgetOptions(mAppWidgetId, options);
+     }
+ 
+     /**
+@@ -523,14 +214,7 @@
+      *
+      * @param executor the executor to use or null.
+      */
+-    public void setExecutor(Executor executor) {
+-        if (mLastExecutionSignal != null) {
+-            mLastExecutionSignal.cancel();
+-            mLastExecutionSignal = null;
+-        }
+-
+-        mAsyncExecutor = executor;
+-    }
++    public void setExecutor(Executor executor) {}
+ 
+     /**
+      * Sets whether the widget is being displayed on a light/white background and use an
+@@ -538,9 +222,7 @@
+      *
+      * @see RemoteViews#setLightBackgroundLayoutId(int)
+      */
+-    public void setOnLightBackground(boolean onLightBackground) {
+-        mOnLightBackground = onLightBackground;
+-    }
++    public void setOnLightBackground(boolean onLightBackground) {}
+ 
+     /**
+      * Update the AppWidgetProviderInfo for this view, and reset it to the
+@@ -551,7 +233,6 @@
+     @Override
+     public void onUpdateProviderInfo(@Nullable AppWidgetProviderInfo info) {
+         setAppWidget(mAppWidgetId, info);
+-        mViewMode = VIEW_MODE_NOINIT;
+         updateAppWidget(null);
+     }
+ 
+@@ -561,186 +242,28 @@
+      */
+     @Override
+     public void updateAppWidget(RemoteViews remoteViews) {
+-        mLastInflatedRemoteViews = remoteViews;
+         applyRemoteViews(remoteViews, true);
+     }
+ 
+     /**
+-     * Reapply the last inflated remote views, or the default view is none was inflated.
+-     */
+-    private void reapplyLastRemoteViews() {
+-        SparseArray<Parcelable> savedState = new SparseArray<>();
+-        saveHierarchyState(savedState);
+-        applyRemoteViews(mLastInflatedRemoteViews, true);
+-        restoreHierarchyState(savedState);
+-    }
+-
+-    /**
+      * @hide
+      */
+     protected void applyRemoteViews(@Nullable RemoteViews remoteViews, boolean useAsyncIfPossible) {
+-        boolean recycled = false;
+         View content = null;
+-        Exception exception = null;
+-
+-        // Block state restore until the end of the apply.
+-        mLastInflatedRemoteViewsId = -1;
+-
+-        if (mLastExecutionSignal != null) {
+-            mLastExecutionSignal.cancel();
+-            mLastExecutionSignal = null;
+-        }
+-
+-        if (remoteViews == null) {
+-            if (mViewMode == VIEW_MODE_DEFAULT) {
+-                // We've already done this -- nothing to do.
+-                return;
+-            }
+-            content = getDefaultView();
+-            mViewMode = VIEW_MODE_DEFAULT;
+-        } else {
+-            // Select the remote view we are actually going to apply.
+-            RemoteViews rvToApply = remoteViews.getRemoteViewsToApply(mContext, mCurrentSize);
+-            if (mOnLightBackground) {
+-                rvToApply = rvToApply.getDarkTextViews();
+-            }
+-
+-            if (mAsyncExecutor != null && useAsyncIfPossible) {
+-                inflateAsync(rvToApply);
+-                return;
+-            }
+-
+-            if (!mColorMappingChanged && rvToApply.canRecycleView(mView)) {
+-                try {
+-                    rvToApply.reapply(mContext, mView, mInteractionLogger, mCurrentSize,
+-                            mColorResources);
+-                    content = mView;
+-                    mLastInflatedRemoteViewsId = rvToApply.computeUniqueId(remoteViews);
+-                    recycled = true;
+-                    if (LOGD) Log.d(TAG, "was able to recycle existing layout");
+-                } catch (RuntimeException e) {
+-                    exception = e;
+-                }
+-            }
+-
+-            // Try normal RemoteView inflation
+-            if (content == null) {
+-                try {
+-                    content = rvToApply.apply(mContext, this, mInteractionLogger,
+-                            mCurrentSize, mColorResources);
+-                    mLastInflatedRemoteViewsId = rvToApply.computeUniqueId(remoteViews);
+-                    if (LOGD) Log.d(TAG, "had to inflate new layout");
+-                } catch (RuntimeException e) {
+-                    exception = e;
+-                }
+-            }
+-
+-            mViewMode = VIEW_MODE_CONTENT;
+-        }
+-
+-        applyContent(content, recycled, exception);
+-    }
+-
+-    private void applyContent(View content, boolean recycled, Exception exception) {
+-        mColorMappingChanged = false;
+-        if (content == null) {
+-            if (mViewMode == VIEW_MODE_ERROR) {
+-                // We've already done this -- nothing to do.
+-                return;
+-            }
+-            if (exception != null) {
+-                Log.w(TAG, "Error inflating RemoteViews", exception);
+-            }
+-            content = getErrorView();
+-            mViewMode = VIEW_MODE_ERROR;
+-        }
+-
+-        if (!recycled) {
+-            prepareView(content);
+-            addView(content);
+-        }
+-
+-        if (mView != content) {
+-            removeView(mView);
+-            mView = content;
+-        }
+-    }
+-
+-    private void inflateAsync(@NonNull RemoteViews remoteViews) {
+-        // Prepare a local reference to the remote Context so we're ready to
+-        // inflate any requested LayoutParams.
+-        int layoutId = remoteViews.getLayoutId();
+-
+-        if (mLastExecutionSignal != null) {
+-            mLastExecutionSignal.cancel();
+-        }
+-
+-        // If our stale view has been prepared to match active, and the new
+-        // layout matches, try recycling it
+-        if (!mColorMappingChanged && remoteViews.canRecycleView(mView)) {
++        if (remoteViews != null && remoteViews.getLayoutId() != 0) {
+             try {
+-                mLastExecutionSignal = remoteViews.reapplyAsync(mContext,
+-                        mView,
+-                        mAsyncExecutor,
+-                        new ViewApplyListener(remoteViews, layoutId, true),
+-                        mInteractionLogger,
+-                        mCurrentSize,
+-                        mColorResources);
+-            } catch (Exception e) {
+-                // Reapply failed. Try apply
++                content = remoteViews.apply(getContext(), this);
++            } catch (RuntimeException unavailable) {
++                Log.w(TAG, "Widget layout unavailable", unavailable);
+             }
+         }
+-        if (mLastExecutionSignal == null) {
+-            mLastExecutionSignal = remoteViews.applyAsync(mContext,
+-                    this,
+-                    mAsyncExecutor,
+-                    new ViewApplyListener(remoteViews, layoutId, false),
+-                    mInteractionLogger,
+-                    mCurrentSize,
+-                    mColorResources);
+-        }
+-    }
+-
+-    private class ViewApplyListener implements RemoteViews.OnViewAppliedListener {
+-        private final RemoteViews mViews;
+-        private final boolean mIsReapply;
+-        private final int mLayoutId;
+-
+-        ViewApplyListener(
+-                RemoteViews views,
+-                int layoutId,
+-                boolean isReapply) {
+-            mViews = views;
+-            mLayoutId = layoutId;
+-            mIsReapply = isReapply;
+-        }
+-
+-        @Override
+-        public void onViewApplied(View v) {
+-            mViewMode = VIEW_MODE_CONTENT;
+-
+-            applyContent(v, mIsReapply, null);
+-
+-            mLastInflatedRemoteViewsId = mViews.computeUniqueId(mLastInflatedRemoteViews);
+-            restoreInstanceState();
+-            mLastExecutionSignal = null;
+-        }
+-
+-        @Override
+-        public void onError(Exception e) {
+-            if (mIsReapply) {
+-                // Try a fresh replay
+-                mLastExecutionSignal = mViews.applyAsync(mContext,
+-                        AppWidgetHostView.this,
+-                        mAsyncExecutor,
+-                        new ViewApplyListener(mViews, mLayoutId, false),
+-                        mInteractionLogger,
+-                        mCurrentSize);
+-            } else {
+-                applyContent(null, false, e);
+-                mLastExecutionSignal = null;
+-            }
+-        }
++        if (content == null && mViewMode == VIEW_MODE_ERROR) return;
++        mViewMode = content == null ? VIEW_MODE_ERROR : VIEW_MODE_CONTENT;
++        if (content == null) content = getErrorView();
++        prepareView(content);
++        removeAllViews();
++        addView(content);
++        mView = content;
+     }
+ 
+     /**
+@@ -750,22 +273,7 @@
+      * @hide
+      */
+     @Override
+-    public void onViewDataChanged(int viewId) {
+-        View v = findViewById(viewId);
+-        if ((v != null) && (v instanceof AdapterView<?>)) {
+-            AdapterView<?> adapterView = (AdapterView<?>) v;
+-            Adapter adapter = adapterView.getAdapter();
+-            if (adapter instanceof BaseAdapter) {
+-                BaseAdapter baseAdapter = (BaseAdapter) adapter;
+-                baseAdapter.notifyDataSetChanged();
+-            } else if (adapter == null && adapterView instanceof RemoteAdapterConnectionCallback) {
+-                // If the adapter is null, it may mean that the RemoteViewsAapter has not yet
+-                // connected to its associated service, and hence the adapter hasn't been set.
+-                // In this case, we need to defer the notify call until it has been set.
+-                ((RemoteAdapterConnectionCallback) adapterView).deferNotifyDataSetChanged();
+-            }
+-        }
+-    }
++    public void onViewDataChanged(int viewId) {}
+ 
+     /**
+      * Prepare the given view to be shown. This might include adjusting
+@@ -784,457 +292,10 @@
+     }
+ 
+     /**
+-     * Inflate and return the default layout requested by AppWidget provider.
+-     */
+-    protected View getDefaultView() {
+-        if (LOGD) {
+-            Log.d(TAG, "getDefaultView");
+-        }
+-        View defaultView = null;
+-        Exception exception = null;
+-
+-        try {
+-            if (mInfo != null && mInfo.initialLayout != 0) {
+-                int layoutId = mInfo.initialLayout;
+-                int kgLayoutId = mInfo.initialKeyguardLayout;
+-                if (kgLayoutId != 0 && kgLayoutId != layoutId) {
+-                    // If this this a keyguard widget, use keyguard layout
+-                    Bundle options = AppWidgetManager.getInstance(mContext)
+-                            .getAppWidgetOptions(mAppWidgetId);
+-                    if (options.containsKey(OPTION_APPWIDGET_HOST_CATEGORY)
+-                            && options.getInt(OPTION_APPWIDGET_HOST_CATEGORY)
+-                                    == WIDGET_CATEGORY_KEYGUARD) {
+-                        layoutId = kgLayoutId;
+-                    }
+-                }
+-
+-                defaultView = new RemoteViewsWrapper(mInfo.providerInfo.applicationInfo, layoutId)
+-                        .apply(mContext, this, mInteractionLogger, null, mColorResources);
+-                if (!(defaultView instanceof AdapterView)) {
+-                    // AdapterView does not support onClickListener
+-                    defaultView.setOnClickListener(this::onDefaultViewClicked);
+-                }
+-            } else {
+-                Log.w(TAG, "can't inflate defaultView, missing defaultLayout, mInfo: " + mInfo);
+-            }
+-        } catch (RuntimeException e) {
+-            exception = e;
+-        }
+-
+-        if (exception != null) {
+-            Log.w(TAG, "Error inflating AppWidget " + mInfo, exception);
+-        }
+-
+-        if (defaultView == null) {
+-            if (LOGD) Log.d(TAG, "getDefaultView couldn't find any view, so inflating error");
+-            defaultView = getErrorView();
+-        }
+-
+-        return defaultView;
+-    }
+-
+-    /**
+-     * Handles interactions on the default view of the widget. By default does not use the
+-     * {@link InteractionHandler} used by other interactions. However, this can be overridden
+-     * in order to customize the click behavior.
+-     *
+-     * @hide
+-     */
+-    protected void onDefaultViewClicked(@NonNull View view) {
+-        final AppWidgetManager manager = AppWidgetManager.getInstance(mContext);
+-        if (manager != null) {
+-            manager.noteAppWidgetTapped(mAppWidgetId);
+-        }
+-        if (mInfo != null) {
+-            LauncherApps launcherApps = getContext().getSystemService(LauncherApps.class);
+-            List<LauncherActivityInfo> activities = launcherApps.getActivityList(
+-                    mInfo.provider.getPackageName(), mInfo.getProfile());
+-            if (!activities.isEmpty()) {
+-                LauncherActivityInfo ai = activities.get(0);
+-                launcherApps.startMainActivity(ai.getComponentName(), ai.getUser(),
+-                        RemoteViews.getSourceBounds(view), null);
+-            }
+-        }
+-    }
+-
+-    /**
+      * Inflate and return a view that represents an error state.
+      */
+     protected View getErrorView() {
+-        TextView tv = new TextView(mContext);
+-        tv.setText(com.android.internal.R.string.gadget_host_error_inflating);
+-        // TODO: get this color from somewhere.
+-        tv.setBackgroundColor(Color.argb(127, 0, 0, 0));
+-        return tv;
+-    }
+-
+-    /** @hide */
+-    @Override
+-    public void onInitializeAccessibilityNodeInfoInternal(AccessibilityNodeInfo info) {
+-        super.onInitializeAccessibilityNodeInfoInternal(info);
+-        info.setClassName(AppWidgetHostView.class.getName());
+-    }
+-
+-    /** @hide */
+-    public ActivityOptions createSharedElementActivityOptions(
+-            int[] sharedViewIds, String[] sharedViewNames, Intent fillInIntent) {
+-        Context parentContext = getContext();
+-        while ((parentContext instanceof ContextWrapper)
+-                && !(parentContext instanceof Activity)) {
+-            parentContext = ((ContextWrapper) parentContext).getBaseContext();
+-        }
+-        if (!(parentContext instanceof Activity)) {
+-            return null;
+-        }
+-
+-        List<Pair<View, String>> sharedElements = new ArrayList<>();
+-        Bundle extras = new Bundle();
+-
+-        for (int i = 0; i < sharedViewIds.length; i++) {
+-            View view = findViewById(sharedViewIds[i]);
+-            if (view != null) {
+-                sharedElements.add(Pair.create(view, sharedViewNames[i]));
+-
+-                extras.putParcelable(sharedViewNames[i], RemoteViews.getSourceBounds(view));
+-            }
+-        }
+-
+-        if (!sharedElements.isEmpty()) {
+-            fillInIntent.putExtra(RemoteViews.EXTRA_SHARED_ELEMENT_BOUNDS, extras);
+-            final ActivityOptions opts = ActivityOptions.makeSceneTransitionAnimation(
+-                    (Activity) parentContext,
+-                    sharedElements.toArray(new Pair[sharedElements.size()]));
+-            opts.setPendingIntentLaunchFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-            return opts;
+-        }
+-        return null;
+-    }
+-
+-    /**
+-     * Set the dynamically overloaded color resources.
+-     *
+-     * {@code colorMapping} maps a predefined set of color resources to their ARGB
+-     * representation. Any entry not in the predefined set of colors will be ignored.
+-     *
+-     * Calling this method will trigger a full re-inflation of the App Widget.
+-     *
+-     * If flag {@code android.content.res.self_targeting_android_resource_frro} is set, any colors
+-     * in {@code colorMapping} will be overloaded, otherwise the color resources that can
+-     * be overloaded are the ones whose name is prefixed with {@code system_neutral} or
+-     * {@code system_accent}, for example {@link android.R.color#system_neutral1_500}.
+-     */
+-    public void setColorResources(@NonNull SparseIntArray colorMapping) {
+-        if (mColorResources != null
+-                && isSameColorMapping(mColorResources.getColorMapping(), colorMapping)) {
+-            return;
+-        }
+-        if (selfTargetingAndroidResourceFrro()) {
+-            setColorResources(
+-                    RemoteViews.ColorResources.createWithOverlay(mContext, colorMapping));
+-        } else {
+-            setColorResources(RemoteViews.ColorResources.create(mContext, colorMapping));
+-        }
+-    }
+-
+-    private void setColorResourcesStates(RemoteViews.ColorResources colorResources) {
+-        mColorResources = colorResources;
+-        mColorMappingChanged = true;
+-        mViewMode = VIEW_MODE_NOINIT;
+-    }
+-
+-    /** @hide **/
+-    public void setColorResources(RemoteViews.ColorResources colorResources) {
+-        if (colorResources == mColorResources) {
+-            return;
+-        }
+-        setColorResourcesStates(colorResources);
+-        reapplyLastRemoteViews();
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void setColorResourcesNoReapply(RemoteViews.ColorResources colorResources) {
+-        if (colorResources == mColorResources) {
+-            return;
+-        }
+-        setColorResourcesStates(colorResources);
+-    }
+-
+-    /** Check if, in the current context, the two color mappings are equivalent. */
+-    private boolean isSameColorMapping(SparseIntArray oldColors, SparseIntArray newColors) {
+-        if (oldColors.size() != newColors.size()) {
+-            return false;
+-        }
+-        for (int i = 0; i < oldColors.size(); i++) {
+-            if (oldColors.keyAt(i) != newColors.keyAt(i)
+-                    || oldColors.valueAt(i) != newColors.valueAt(i)) {
+-                return false;
+-            }
+-        }
+-        return true;
+-    }
+-
+-    /**
+-     * Reset the dynamically overloaded resources, reverting to the default values for
+-     * all the colors.
+-     *
+-     * If colors were defined before, calling this method will trigger a full re-inflation of the
+-     * App Widget.
+-     */
+-    public void resetColorResources() {
+-        if (mColorResources != null) {
+-            mColorResources = null;
+-            mColorMappingChanged = true;
+-            mViewMode = VIEW_MODE_NOINIT;
+-            reapplyLastRemoteViews();
+-        }
+-    }
+-
+-    @Override
+-    protected void dispatchDraw(@NonNull Canvas canvas) {
+-        try {
+-            super.dispatchDraw(canvas);
+-        } catch (Exception e) {
+-            // Catch draw exceptions that may be caused by RemoteViews
+-            Log.e(TAG, "Drawing view failed: " + e);
+-            post(this::handleViewError);
+-        }
+-    }
+-
+-    @Override
+-    public void onVisibilityAggregated(boolean isVisible) {
+-        super.onVisibilityAggregated(isVisible);
+-        if (isVisibilityTrackingPermitted()) {
+-            mInteractionLogger.onVisibilityAggregated();
+-        }
+-    }
+-
+-    /**
+-     * Start visibility tracking for this widget. This should be called when this view has become
+-     * visible on screen to the user. This view will mark the start of a duration of visibility.
+-     */
+-    @FlaggedApi(FLAG_ENGAGEMENT_METRICS)
+-    public void startVisibilityTracking()  {
+-        mInteractionLogger.onTrackingChanged(true);
+-    }
+-
+-    /**
+-     * Stop visibility tracking for this widget. This should be called when this view is no longer
+-     * visible on screen to the user. This view will mark the end of a duration of visibility and
+-     * add it to the total visibility duration tracked by this view.
+-     *
+-     * <p>Once the {@link AppWidgetHost} stops listening or this widget is deleted, the duration of
+-     * visibility will be recorded into an {@link AppWidgetEvent} and reported to the widget
+-     * service.
+-     */
+-    @FlaggedApi(FLAG_ENGAGEMENT_METRICS)
+-    public void stopVisibilityTracking() {
+-        mInteractionLogger.onTrackingChanged(false);
+-    }
+-
+-    /**
+-     * Override this to return false for AppWidgetHostViews that should never allow visibility
+-     * tracking.
+-     *
+-     * @hide
+-     */
+-    protected boolean isVisibilityTrackingPermitted() {
+-        return true;
+-    }
+-
+-    /**
+-     * This function returns the current set of widget event data being tracked by this widget. The
+-     * tracked data is cleared is returned here.
+-     *
+-     * @hide
+-     */
+-    @FlaggedApi(FLAG_ENGAGEMENT_METRICS)
+-    @Override
+-    public AppWidgetEvent collectWidgetEvent() {
+-        return mInteractionLogger.collectWidgetEvent();
+-    }
+-
+-    /**
+-     * This class is used to track user interactions with this widget.
+-     * @hide
+-     */
+-    public class InteractionLogger implements RemoteViews.InteractionHandler {
+-        @NonNull
+-        private final AppWidgetEvent.Builder mEvent = new AppWidgetEvent.Builder();
+-        @Nullable
+-        private RemoteViews.InteractionHandler mInteractionHandler = null;
+-        private boolean mIsVisible = false;
+-        private boolean mIsTracking = false;
+-
+-        InteractionLogger() {
+-        }
+-
+-        InteractionLogger(@Nullable InteractionHandler handler) {
+-            mInteractionHandler = handler;
+-        }
+-
+-        /**
+-         * Return the current AppWidgetEvent without clearing the tracked data.
+-         */
+-        @VisibleForTesting
+-        public AppWidgetEvent getEvent() {
+-            synchronized (this) {
+-                return mEvent.build();
+-            }
+-        }
+-
+-        @Override
+-        public boolean onInteraction(View view, PendingIntent pendingIntent,
+-                RemoteViews.RemoteResponse response) {
+-            if (engagementMetrics()) {
+-                synchronized (this) {
+-                    mEvent.addClickedId(getMetricsId(view));
+-                }
+-            }
+-            AppWidgetManager manager = AppWidgetManager.getInstance(mContext);
+-            if (manager != null) {
+-                manager.noteAppWidgetTapped(mAppWidgetId);
+-            }
+-
+-            if (mInteractionHandler != null) {
+-                return mInteractionHandler.onInteraction(view, pendingIntent, response);
+-            } else {
+-                return RemoteViews.startPendingIntent(view, pendingIntent,
+-                        response.getLaunchOptions(view));
+-            }
+-        }
+-
+-        @Override
+-        public void onScroll(@NonNull AbsListView view) {
+-            if (!engagementMetrics()) return;
+-
+-            synchronized (this) {
+-                mEvent.addScrolledId(getMetricsId(view));
+-            }
+-            if (mInteractionHandler != null) {
+-                mInteractionHandler.onScroll(view);
+-            }
+-        }
+-
+-        @FlaggedApi(FLAG_ENGAGEMENT_METRICS)
+-        private int getMetricsId(@NonNull View view) {
+-            Object metricsTag = view.getTag(com.android.internal.R.id.remoteViewsMetricsId);
+-            if (metricsTag instanceof Integer tag) {
+-                return tag;
+-            } else {
+-                return view.getId();
+-            }
+-        }
+-
+-        /**
+-         * Invoked when the root view is resized or moved.
+-         */
+-        private void onPositionChanged() {
+-            if (!engagementMetrics()) return;
+-            Rect position = new Rect();
+-            if (getGlobalVisibleRect(position)) {
+-                applyScrollOffset(position);
+-                synchronized (this) {
+-                    mEvent.setPosition(position);
+-                }
+-            }
+-        }
+-
+-        /**
+-         * Finds the first parent with a scrollX or scrollY offset and applies it to the current
+-         * position Rect. This corresponds to the current "page" of this widget on its workspace.
+-         */
+-        private void applyScrollOffset(@Nullable Rect position) {
+-            if (position == null) return;
+-            int dx = 0;
+-            int dy = 0;
+-            for (ViewParent parent = getParent(); parent != null; parent = parent.getParent()) {
+-                if (parent instanceof View view && (view.getScrollX() != 0
+-                        || view.getScrollY() != 0)) {
+-                    dx = view.getScrollX();
+-                    dy = view.getScrollY();
+-                    break;
+-                }
+-            }
+-            position.offset(dx, dy);
+-        }
+-
+-        private void onWindowFocusChanged() {
+-            if (!engagementMetrics()) return;
+-            synchronized (this) {
+-                updateVisibilityLocked(mIsTracking);
+-            }
+-        }
+-
+-        private void onVisibilityAggregated() {
+-            if (!engagementMetrics()) return;
+-            synchronized (this) {
+-                updateVisibilityLocked(mIsTracking);
+-            }
+-        }
+-
+-        private void onTrackingChanged(boolean isTracking) {
+-            if (!engagementMetrics()) return;
+-            synchronized (this) {
+-                mIsTracking = isTracking;
+-                updateVisibilityLocked(mIsTracking);
+-            }
+-        }
+-
+-        /**
+-         * Check if this view is currently visible, and update the duration if an impression has
+-         * finished.
+-         */
+-        private void updateVisibilityLocked(boolean isTracking) {
+-            boolean wasVisible = mIsVisible;
+-            boolean isVisible = isTracking && hasWindowFocus() && isVisibleToUser();
+-            if (!wasVisible && isVisible) {
+-                // View has become visible, start the tracker.
+-                mEvent.startVisibility();
+-                if (LOGD) Log.d(TAG, logName() + " became visible");
+-            } else if (wasVisible && !isVisible) {
+-                // View is no longer visible, add duration.
+-                mEvent.endVisibility();
+-                if (LOGD) Log.d(TAG, logName() + " lost visibility");
+-            }
+-
+-            mIsVisible = isVisible;
+-        }
+-
+-        @Nullable
+-        private AppWidgetEvent collectWidgetEvent() {
+-            if (!engagementMetrics()) return null;
+-
+-            synchronized (this) {
+-                if (mIsVisible) {
+-                    // If the widget is currently visible, add the current duration to the event
+-                    // data.
+-                    updateVisibilityLocked(false);
+-                }
+-                mEvent.setAppWidgetId(mAppWidgetId);
+-                if (mEvent.isEmpty()) {
+-                    if (LOGD) Log.d(TAG, "Skipping event for " + logName() + ", no event data");
+-                    return null;
+-                }
+-                AppWidgetEvent event = mEvent.build();
+-                mEvent.clear();
+-                if (LOGD) Log.d(TAG, "Returning event for " + logName() + ", " + event);
+-                return event;
+-            }
+-        }
+-
+-        private String logName() {
+-            return (mInfo == null ? "null" : mInfo.provider.getPackageName()) + "(" + mAppWidgetId
+-                + ")";
+-        }
+-    }
+-
+-    private static class RemoteViewsWrapper extends RemoteViews {
+-
+-        RemoteViewsWrapper(ApplicationInfo application, int layoutId) {
+-            super(application, layoutId);
+-        }
++        return new View(getContext());
+     }
+ 
+ }
+--- a/frameworks/base/core/java/android/appwidget/AppWidgetManager.java
++++ b/frameworks/base/core/java/android/appwidget/AppWidgetManager.java
+@@ -16,62 +16,25 @@
+ 
+ package android.appwidget;
+ 
+-import static android.appwidget.flags.Flags.remoteAdapterConversion;
+-
+-import android.annotation.BroadcastBehavior;
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.RequiresFeature;
+-import android.annotation.SdkConstant;
+-import android.annotation.SdkConstant.SdkConstantType;
+-import android.annotation.SystemService;
+ import android.annotation.TestApi;
+-import android.annotation.UiThread;
+ import android.annotation.UserIdInt;
+-import android.annotation.WorkerThread;
+-import android.app.IServiceConnection;
+ import android.app.PendingIntent;
+-import android.app.usage.UsageStatsManager;
+-import android.appwidget.flags.Flags;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.Intent;
+-import android.content.Intent.FilterComparison;
+ import android.content.IntentSender;
+-import android.content.ServiceConnection;
+-import android.content.pm.PackageManager;
+-import android.content.pm.ParceledListSlice;
+ import android.content.pm.ShortcutInfo;
+-import android.os.Binder;
+ import android.os.Build;
+ import android.os.Bundle;
+-import android.os.Handler;
+-import android.os.IBinder;
+-import android.os.Looper;
+-import android.os.Process;
+-import android.os.RemoteException;
+ import android.os.UserHandle;
+-import android.util.ArrayMap;
+ import android.util.DisplayMetrics;
+-import android.util.Log;
+ import android.widget.RemoteViews;
+ 
+-import com.android.internal.appwidget.IAppWidgetService;
+-import com.android.internal.os.BackgroundThread;
+-import com.android.internal.util.FunctionalUtils;
+-
+-import java.util.ArrayDeque;
+ import java.util.Collections;
+ import java.util.List;
+-import java.util.Map;
+-import java.util.Objects;
+-import java.util.concurrent.Executor;
+-import java.util.concurrent.ExecutorService;
+-import java.util.concurrent.Executors;
+-import java.util.concurrent.Future;
+-import java.util.function.Consumer;
+ 
+ /**
+  * Updates AppWidget state; gets information about installed AppWidget providers and other
+@@ -83,10 +46,8 @@
+  * <a href="{@docRoot}guide/topics/appwidgets/index.html">App Widgets</a> developer guide.</p>
+  * </div>
+  */
+-@SystemService(Context.APPWIDGET_SERVICE)
+-@RequiresFeature(PackageManager.FEATURE_APP_WIDGETS)
++
+ public class AppWidgetManager {
+-
+ 
+     /**
+      * Activity action to launch from your {@link AppWidgetHost} activity when you want to
+@@ -119,14 +80,14 @@
+      *
+      * @see #ACTION_APPWIDGET_CONFIGURE
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
++
+     public static final String ACTION_APPWIDGET_PICK = "android.appwidget.action.APPWIDGET_PICK";
+ 
+     /**
+      * Similar to ACTION_APPWIDGET_PICK, but used from keyguard
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
++
+     public static final String
+             ACTION_KEYGUARD_APPWIDGET_PICK = "android.appwidget.action.KEYGUARD_APPWIDGET_PICK";
+ 
+@@ -173,7 +134,7 @@
+      * @see #ACTION_APPWIDGET_CONFIGURE
+      *
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
++
+     public static final String ACTION_APPWIDGET_BIND = "android.appwidget.action.APPWIDGET_BIND";
+ 
+     /**
+@@ -198,7 +159,7 @@
+      * and not display this AppWidget, and you will receive a {@link #ACTION_APPWIDGET_DELETED}
+      * broadcast.
+      */
+-    @SdkConstant(SdkConstantType.ACTIVITY_INTENT_ACTION)
++
+     public static final String ACTION_APPWIDGET_CONFIGURE = "android.appwidget.action.APPWIDGET_CONFIGURE";
+ 
+     /**
+@@ -217,7 +178,6 @@
+      * @see #updateAppWidgetOptions(int, Bundle)
+      */
+     public static final String OPTION_APPWIDGET_RESTORE_COMPLETED = "appWidgetRestoreCompleted";
+-
+ 
+     /**
+      * A bundle extra (int) that contains the lower bound on the current width, in dips, of a
+@@ -266,7 +226,7 @@
+      *
+      * @see android.view.Display#getDisplayId()
+      */
+-    @FlaggedApi(Flags.FLAG_WIDGET_DISPLAY_CHANGES)
++
+     public static final String OPTION_APPWIDGET_DISPLAY_ID = "appWidgetDisplayId";
+ 
+     /**
+@@ -363,8 +323,7 @@
+      *
+      * @see AppWidgetProvider#onUpdate AppWidgetProvider.onUpdate(Context context, AppWidgetManager appWidgetManager, int[] appWidgetIds)
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(explicitOnly = true)
++
+     public static final String ACTION_APPWIDGET_UPDATE = "android.appwidget.action.APPWIDGET_UPDATE";
+ 
+     /**
+@@ -373,8 +332,7 @@
+      *
+      * @hide
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(explicitOnly = true)
++
+     public static final String ACTION_APPWIDGET_ENABLE_AND_UPDATE = "android.appwidget.action"
+             + ".APPWIDGET_ENABLE_AND_UPDATE";
+ 
+@@ -388,8 +346,7 @@
+      *      AppWidgetProvider.onAppWidgetOptionsChanged(Context context,
+      *      AppWidgetManager appWidgetManager, int appWidgetId, Bundle newExtras)
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(explicitOnly = true)
++
+     public static final String ACTION_APPWIDGET_OPTIONS_CHANGED = "android.appwidget.action.APPWIDGET_UPDATE_OPTIONS";
+ 
+     /**
+@@ -400,8 +357,7 @@
+      *
+      * @see AppWidgetProvider#onDeleted AppWidgetProvider.onDeleted(Context context, int[] appWidgetIds)
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(explicitOnly = true)
++
+     public static final String ACTION_APPWIDGET_DELETED = "android.appwidget.action.APPWIDGET_DELETED";
+ 
+     /**
+@@ -412,8 +368,7 @@
+      *
+      * @see AppWidgetProvider#onEnabled AppWidgetProvider.onDisabled(Context context)
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(explicitOnly = true)
++
+     public static final String ACTION_APPWIDGET_DISABLED = "android.appwidget.action.APPWIDGET_DISABLED";
+ 
+     /**
+@@ -426,8 +381,7 @@
+      *
+      * @see AppWidgetProvider#onEnabled AppWidgetProvider.onEnabled(Context context)
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(explicitOnly = true)
++
+     public static final String ACTION_APPWIDGET_ENABLED = "android.appwidget.action.APPWIDGET_ENABLED";
+ 
+     /**
+@@ -459,8 +413,7 @@
+      *
+      * @see #ACTION_APPWIDGET_HOST_RESTORED
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(explicitOnly = true)
++
+     public static final String ACTION_APPWIDGET_RESTORED
+             = "android.appwidget.action.APPWIDGET_RESTORED";
+ 
+@@ -498,8 +451,7 @@
+      *
+      * @see #ACTION_APPWIDGET_RESTORED
+      */
+-    @SdkConstant(SdkConstantType.BROADCAST_INTENT_ACTION)
+-    @BroadcastBehavior(explicitOnly = true)
++
+     public static final String ACTION_APPWIDGET_HOST_RESTORED
+             = "android.appwidget.action.APPWIDGET_HOST_RESTORED";
+ 
+@@ -583,8 +535,6 @@
+ 
+     private static final String TAG = "AppWidgetManager";
+ 
+-    private static Executor sUpdateExecutor;
+-
+     /**
+      * An intent extra that contains multiple appWidgetIds.  These are id values as
+      * they were provided to the application during a recent restore from backup.  It is
+@@ -621,119 +571,12 @@
+      */
+     public static final String META_DATA_APPWIDGET_PROVIDER = "android.appwidget.provider";
+ 
+-    private final Context mContext;
+-    private final String mPackageName;
+-    @UnsupportedAppUsage
+-    private final IAppWidgetService mService;
+-    private final DisplayMetrics mDisplayMetrics;
+-
+-    private int mMaxBitmapMemory = 0;
+-
+-    private boolean mHasPostedLegacyLists = false;
+-
+-    @NonNull
+-    private final ServiceCollectionCache mServiceCollectionCache;
+-
+     /**
+      * Get the AppWidgetManager instance to use for the supplied {@link android.content.Context
+      * Context} object.
+      */
+     public static AppWidgetManager getInstance(Context context) {
+         return (AppWidgetManager) context.getSystemService(Context.APPWIDGET_SERVICE);
+-    }
+-
+-    /**
+-     * Creates a new instance.
+-     *
+-     * @param context The current context in which to operate.
+-     * @param service The backing system service.
+-     * @hide
+-     */
+-    public AppWidgetManager(Context context, IAppWidgetService service) {
+-        mContext = context;
+-        mPackageName = context.getOpPackageName();
+-        mService = service;
+-        mDisplayMetrics = context.getResources().getDisplayMetrics();
+-        mServiceCollectionCache = new ServiceCollectionCache(context, /* timeout= */ 5000L);
+-        if (mService == null) {
+-            return;
+-        }
+-        // Allowing some buffer when estimating the maximum bitmap cache size
+-        try {
+-            mMaxBitmapMemory = (int) (mService.getMaxBitmapMemory() * 0.9);
+-        } catch (Exception e) {
+-            Log.e(TAG, "Error setting the maximum bitmap memory", e);
+-        }
+-        BackgroundThread.getExecutor().execute(() -> {
+-            try {
+-                mService.notifyProviderInheritance(getInstalledProvidersForPackage(mPackageName,
+-                        null)
+-                        .stream().filter(Objects::nonNull)
+-                        .map(info -> info.provider).filter(p -> {
+-                            try {
+-                                Class clazz = Class.forName(p.getClassName());
+-                                return AppWidgetProvider.class.isAssignableFrom(clazz);
+-                            } catch (Exception e) {
+-                                return false;
+-                            }
+-                        }).toArray(ComponentName[]::new));
+-            } catch (Exception e) {
+-                Log.e(TAG, "Notify service of inheritance info", e);
+-            }
+-        });
+-    }
+-
+-    private void tryAdapterConversion(
+-            FunctionalUtils.RemoteExceptionIgnoringConsumer<RemoteViews> action,
+-            RemoteViews original, int[] appWidgetIds, String failureMsg) {
+-        if (remoteAdapterConversion()) {
+-            mHasPostedLegacyLists = mHasPostedLegacyLists
+-                    || (original != null && original.hasLegacyLists());
+-        }
+-        if (remoteAdapterConversion() && mHasPostedLegacyLists && original != null) {
+-            final RemoteViews viewsCopy = new RemoteViews(original);
+-            Runnable updateWidgetWithTask = () -> {
+-                try {
+-                    if (shouldSkipListConversion(viewsCopy, appWidgetIds)) {
+-                        Log.d(TAG, "Skipping legacy list conversion, pending config activity");
+-                        viewsCopy.replaceAllIntentsWithEmptyList();
+-                    } else {
+-                        viewsCopy.collectAllIntents(mMaxBitmapMemory, false /* invalidateData */,
+-                                        mServiceCollectionCache)
+-                                .thenRun(() -> {
+-                                    try {
+-                                        action.acceptOrThrow(viewsCopy);
+-                                    } catch (RemoteException e) {
+-                                        e.rethrowFromSystemServer();
+-                                    }
+-                                }).exceptionally(e -> {
+-                                    Log.e(TAG, failureMsg, e);
+-                                    return null;
+-                                });
+-                    }
+-                } catch (Exception e) {
+-                    Log.e(TAG, failureMsg, e);
+-                }
+-            };
+-            if (Looper.getMainLooper() == Looper.myLooper()) {
+-                createUpdateExecutorIfNull().execute(updateWidgetWithTask);
+-                return;
+-            }
+-            updateWidgetWithTask.run();
+-        } else {
+-            try {
+-                action.acceptOrThrow(original);
+-            } catch (RemoteException re) {
+-                throw re.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    private boolean shouldSkipListConversion(RemoteViews views, int[] appWidgetIds)
+-            throws RemoteException {
+-        return appWidgetIds.length == 1
+-                && views.hasLegacyLists()
+-                && mService.isFirstConfigActivityPending(mPackageName, appWidgetIds[0]);
+     }
+ 
+     /**
+@@ -755,15 +598,7 @@
+      * @param appWidgetIds The AppWidget instances for which to set the RemoteViews.
+      * @param views The RemoteViews object to show.
+      */
+-    public void updateAppWidget(int[] appWidgetIds, RemoteViews views) {
+-        if (mService == null) {
+-            return;
+-        }
+-
+-        views.setOriginalDensity(mDisplayMetrics.density);
+-        tryAdapterConversion(view -> mService.updateAppWidgetIds(mPackageName, appWidgetIds,
+-                view), views, appWidgetIds, "Error updating app widget views in background");
+-    }
++    public void updateAppWidget(int[] appWidgetIds, RemoteViews views) {}
+ 
+     /**
+      * Update the extras for a given widget instance.
+@@ -779,16 +614,7 @@
+      * @param appWidgetId The AppWidget instances for which to set the RemoteViews.
+      * @param options The options to associate with this widget
+      */
+-    public void updateAppWidgetOptions(int appWidgetId, Bundle options) {
+-        if (mService == null) {
+-            return;
+-        }
+-        try {
+-            mService.updateAppWidgetOptions(mPackageName, appWidgetId, options);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++    public void updateAppWidgetOptions(int appWidgetId, Bundle options) {}
+ 
+     /**
+      * Get the extras associated with a given widget instance.
+@@ -802,14 +628,7 @@
+      * @return The options associated with the given widget instance.
+      */
+     public Bundle getAppWidgetOptions(int appWidgetId) {
+-        if (mService == null) {
+-            return Bundle.EMPTY;
+-        }
+-        try {
+-            return mService.getAppWidgetOptions(mPackageName, appWidgetId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return new Bundle();
+     }
+ 
+     /**
+@@ -831,12 +650,7 @@
+      * @param appWidgetId      The AppWidget instance for which to set the RemoteViews.
+      * @param views         The RemoteViews object to show.
+      */
+-    public void updateAppWidget(int appWidgetId, RemoteViews views) {
+-        if (mService == null) {
+-            return;
+-        }
+-        updateAppWidget(new int[] { appWidgetId }, views);
+-    }
++    public void updateAppWidget(int appWidgetId, RemoteViews views) {}
+ 
+     /**
+      * Perform an incremental update or command on the widget(s) specified by appWidgetIds.
+@@ -862,16 +676,7 @@
+      * @param appWidgetIds     The AppWidget instances for which to set the RemoteViews.
+      * @param views            The RemoteViews object containing the incremental update / command.
+      */
+-    public void partiallyUpdateAppWidget(int[] appWidgetIds, RemoteViews views) {
+-        if (mService == null) {
+-            return;
+-        }
+-
+-        views.setOriginalDensity(mDisplayMetrics.density);
+-        tryAdapterConversion(view -> mService.partiallyUpdateAppWidgetIds(mPackageName,
+-                appWidgetIds, view), views, appWidgetIds,
+-                "Error partially updating app widget views in background");
+-    }
++    public void partiallyUpdateAppWidget(int[] appWidgetIds, RemoteViews views) {}
+ 
+     /**
+      * Perform an incremental update or command on the widget specified by appWidgetId.
+@@ -897,12 +702,7 @@
+      * @param appWidgetId      The AppWidget instance for which to set the RemoteViews.
+      * @param views            The RemoteViews object containing the incremental update / command.
+      */
+-    public void partiallyUpdateAppWidget(int appWidgetId, RemoteViews views) {
+-        if (mService == null) {
+-            return;
+-        }
+-        partiallyUpdateAppWidget(new int[] { appWidgetId }, views);
+-    }
++    public void partiallyUpdateAppWidget(int appWidgetId, RemoteViews views) {}
+ 
+     /**
+      * Set the RemoteViews to use for all AppWidget instances for the supplied AppWidget provider.
+@@ -917,15 +717,7 @@
+      *                      for your AppWidget.
+      * @param views         The RemoteViews object to show.
+      */
+-    public void updateAppWidget(ComponentName provider, RemoteViews views) {
+-        if (mService == null) {
+-            return;
+-        }
+-
+-        views.setOriginalDensity(mDisplayMetrics.density);
+-        tryAdapterConversion(view -> mService.updateAppWidgetProvider(provider, view), views,
+-                new int[0], "Error updating app widget view using provider in background");
+-    }
++    public void updateAppWidget(ComponentName provider, RemoteViews views) {}
+ 
+     /**
+      * Updates the info for the supplied AppWidget provider. Apps can use this to change the default
+@@ -946,16 +738,7 @@
+      * @param metaDataKey key for the meta-data tag pointing to the new provider info. Use null
+      *    to reset any previously set info.
+      */
+-    public void updateAppWidgetProviderInfo(ComponentName provider, @Nullable String metaDataKey) {
+-        if (mService == null) {
+-            return;
+-        }
+-        try {
+-            mService.updateAppWidgetProviderInfo(provider, metaDataKey);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++    public void updateAppWidgetProviderInfo(ComponentName provider, @Nullable String metaDataKey) {}
+ 
+     /**
+      * Notifies the specified collection view in all the specified AppWidget instances
+@@ -975,62 +758,7 @@
+      * or {@link #partiallyUpdateAppWidget(int, RemoteViews)}, whichever applicable.
+      */
+     @Deprecated
+-    public void notifyAppWidgetViewDataChanged(int[] appWidgetIds, int viewId) {
+-        if (mService == null) {
+-            return;
+-        }
+-
+-        if (remoteAdapterConversion()) {
+-            mHasPostedLegacyLists = true;
+-            if (Looper.myLooper() == Looper.getMainLooper()) {
+-                createUpdateExecutorIfNull().execute(
+-                        () -> notifyCollectionWidgetChange(appWidgetIds, viewId));
+-            } else {
+-                notifyCollectionWidgetChange(appWidgetIds, viewId);
+-            }
+-        } else {
+-            try {
+-                mService.notifyAppWidgetViewDataChanged(mPackageName, appWidgetIds, viewId);
+-            } catch (RemoteException re) {
+-                throw re.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    @WorkerThread
+-    private void notifyCollectionWidgetChange(int[] appWidgetIds, int viewId) {
+-        try {
+-            for (final int widgetId : appWidgetIds) {
+-                try {
+-                    if (mService.isFirstConfigActivityPending(mPackageName, widgetId)) {
+-                        Log.d(TAG, "Skipping collection notify, pending config activity");
+-                        continue;
+-                    }
+-                    RemoteViews views = mService.getAppWidgetViews(mPackageName, widgetId);
+-                    if (views == null || !views.replaceRemoteCollections(viewId)) {
+-                        continue;
+-                    }
+-                    views.collectAllIntents(
+-                            mMaxBitmapMemory, true /* invalidateData */, mServiceCollectionCache)
+-                            .thenRun(() -> {
+-                                try {
+-                                    mService.updateAppWidgetIds(
+-                                            mPackageName, new int[]{widgetId}, views);
+-                                } catch (RemoteException e) {
+-                                    e.rethrowFromSystemServer();
+-                                }
+-                            }).exceptionally(e -> {
+-                                Log.e(TAG, "Error notifying changes in RemoteViews", e);
+-                                return null;
+-                            });
+-                } catch (Exception e) {
+-                    Log.e(TAG, "Error notifying changes in RemoteViews", e);
+-                }
+-            }
+-        } catch (Exception e) {
+-            Log.e(TAG, "Error notifying changes for all widgets", e);
+-        }
+-    }
++    public void notifyAppWidgetViewDataChanged(int[] appWidgetIds, int viewId) {}
+ 
+     /**
+      * Notifies the specified collection view in the specified AppWidget instance
+@@ -1050,12 +778,7 @@
+      * or {@link #partiallyUpdateAppWidget(int, RemoteViews)}, whichever applicable.
+      */
+     @Deprecated
+-    public void notifyAppWidgetViewDataChanged(int appWidgetId, int viewId) {
+-        if (mService == null) {
+-            return;
+-        }
+-        notifyAppWidgetViewDataChanged(new int[] { appWidgetId }, viewId);
+-    }
++    public void notifyAppWidgetViewDataChanged(int appWidgetId, int viewId) {}
+ 
+     /**
+      * Gets the AppWidget providers for the given user profile. User profile can only
+@@ -1072,9 +795,6 @@
+      */
+     public @NonNull List<AppWidgetProviderInfo> getInstalledProvidersForProfile(
+             @Nullable UserHandle profile) {
+-        if (mService == null) {
+-            return Collections.emptyList();
+-        }
+         return getInstalledProvidersForProfile(AppWidgetProviderInfo.WIDGET_CATEGORY_HOME_SCREEN,
+                 profile, null);
+     }
+@@ -1103,9 +823,6 @@
+                     "If you want all widgets regardless of package, see " +
+                     "getInstalledProvidersForProfile(UserHandle)");
+         }
+-        if (mService == null) {
+-            return Collections.emptyList();
+-        }
+         return getInstalledProvidersForProfile(AppWidgetProviderInfo.WIDGET_CATEGORY_HOME_SCREEN,
+                 profile, packageName);
+     }
+@@ -1114,9 +831,6 @@
+      * Return a list of the AppWidget providers that are currently installed.
+      */
+     public List<AppWidgetProviderInfo> getInstalledProviders() {
+-        if (mService == null) {
+-            return Collections.emptyList();
+-        }
+         return getInstalledProvidersForProfile(AppWidgetProviderInfo.WIDGET_CATEGORY_HOME_SCREEN,
+                 null, null);
+     }
+@@ -1135,9 +849,6 @@
+      */
+     @UnsupportedAppUsage
+     public List<AppWidgetProviderInfo> getInstalledProviders(int categoryFilter) {
+-        if (mService == null) {
+-            return Collections.emptyList();
+-        }
+         return getInstalledProvidersForProfile(categoryFilter, null, null);
+     }
+ 
+@@ -1163,28 +874,7 @@
+     @UnsupportedAppUsage
+     public List<AppWidgetProviderInfo> getInstalledProvidersForProfile(int categoryFilter,
+             @Nullable UserHandle profile, @Nullable String packageName) {
+-        if (mService == null) {
+-            return Collections.emptyList();
+-        }
+-
+-        if (profile == null) {
+-            profile = mContext.getUser();
+-        }
+-
+-        try {
+-            ParceledListSlice<AppWidgetProviderInfo> providers = mService.getInstalledProvidersForProfile(
+-                    categoryFilter, profile.getIdentifier(), packageName);
+-            if (providers == null) {
+-                return Collections.emptyList();
+-            }
+-            for (AppWidgetProviderInfo info : providers.getList()) {
+-                // Converting complex to dp.
+-                info.updateDimensions(mDisplayMetrics);
+-            }
+-            return providers.getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return Collections.emptyList();
+     }
+ 
+     /**
+@@ -1195,23 +885,7 @@
+      *         to that widget.
+      */
+     public AppWidgetProviderInfo getAppWidgetInfo(int appWidgetId) {
+-        if (mService == null) {
+-            Log.e(TAG, "Service wasn't initialized, appWidgetId=" + appWidgetId);
+-            return null;
+-        }
+-        try {
+-            AppWidgetProviderInfo info = mService.getAppWidgetInfo(mPackageName, appWidgetId);
+-            if (info != null) {
+-                // Converting complex to dp.
+-                info.updateDimensions(mDisplayMetrics);
+-            } else {
+-                Log.e(TAG, "App widget provider info is null. PackageName=" + mPackageName
+-                        + " appWidgetId-" + appWidgetId);
+-            }
+-            return info;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return null;
+     }
+ 
+     /**
+@@ -1227,12 +901,7 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    public void bindAppWidgetId(int appWidgetId, ComponentName provider) {
+-        if (mService == null) {
+-            return;
+-        }
+-        bindAppWidgetId(appWidgetId, provider, null);
+-    }
++    public void bindAppWidgetId(int appWidgetId, ComponentName provider) {}
+ 
+     /**
+      * Set the component for a given appWidgetId.
+@@ -1250,12 +919,7 @@
+      * @hide
+      */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public void bindAppWidgetId(int appWidgetId, ComponentName provider, Bundle options) {
+-        if (mService == null) {
+-            return;
+-        }
+-        bindAppWidgetIdIfAllowed(appWidgetId, mContext.getUser(), provider, options);
+-    }
++    public void bindAppWidgetId(int appWidgetId, ComponentName provider, Bundle options) {}
+ 
+     /**
+      * Set the component for a given appWidgetId.
+@@ -1274,10 +938,7 @@
+      * @return true if this component has permission to bind the AppWidget
+      */
+     public boolean bindAppWidgetIdIfAllowed(int appWidgetId, ComponentName provider) {
+-        if (mService == null) {
+-            return false;
+-        }
+-        return bindAppWidgetIdIfAllowed(appWidgetId, mContext.getUserId(), provider, null);
++        return false;
+     }
+ 
+     /**
+@@ -1301,10 +962,7 @@
+      */
+     public boolean bindAppWidgetIdIfAllowed(int appWidgetId, ComponentName provider,
+             Bundle options) {
+-        if (mService == null) {
+-            return false;
+-        }
+-        return bindAppWidgetIdIfAllowed(appWidgetId, mContext.getUserId(), provider, options);
++        return false;
+     }
+ 
+     /**
+@@ -1329,10 +987,7 @@
+      */
+     public boolean bindAppWidgetIdIfAllowed(int appWidgetId, UserHandle user,
+             ComponentName provider, Bundle options) {
+-        if (mService == null) {
+-            return false;
+-        }
+-        return bindAppWidgetIdIfAllowed(appWidgetId, user.getIdentifier(), provider, options);
++        return false;
+     }
+ 
+     /**
+@@ -1346,14 +1001,7 @@
+      * @hide
+      */
+     public boolean hasBindAppWidgetPermission(String packageName, int userId) {
+-        if (mService == null) {
+-            return false;
+-        }
+-        try {
+-            return mService.hasBindAppWidgetPermission(packageName, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -1366,14 +1014,7 @@
+      * @hide
+      */
+     public boolean hasBindAppWidgetPermission(String packageName) {
+-        if (mService == null) {
+-            return false;
+-        }
+-        try {
+-            return mService.hasBindAppWidgetPermission(packageName, mContext.getUserId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -1386,12 +1027,7 @@
+      *
+      * @hide
+      */
+-    public void setBindAppWidgetPermission(String packageName, boolean permission) {
+-        if (mService == null) {
+-            return;
+-        }
+-        setBindAppWidgetPermission(packageName, mContext.getUserId(), permission);
+-    }
++    public void setBindAppWidgetPermission(String packageName, boolean permission) {}
+ 
+     /**
+      * Changes any user-granted permission for the given package to bind app widgets
+@@ -1406,48 +1042,7 @@
+      */
+     @TestApi
+     public void setBindAppWidgetPermission(
+-            @NonNull String packageName, @UserIdInt int userId, boolean permission) {
+-        if (mService == null) {
+-            return;
+-        }
+-        try {
+-            mService.setBindAppWidgetPermission(packageName, userId, permission);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Binds the RemoteViewsService for a given appWidgetId and intent.
+-     *
+-     * The appWidgetId specified must already be bound to the calling AppWidgetHost via
+-     * {@link android.appwidget.AppWidgetManager#bindAppWidgetId AppWidgetManager.bindAppWidgetId()}.
+-     *
+-     * @param appWidgetId   The AppWidget instance for which to bind the RemoteViewsService.
+-     * @param intent        The intent of the service which will be providing the data to the
+-     *                      RemoteViewsAdapter.
+-     * @param connection    The callback interface to be notified when a connection is made or lost.
+-     * @param flags         Flags used for binding to the service. Currently only
+-     *                     {@link Context#BIND_AUTO_CREATE} and
+-     *                     {@link Context#BIND_FOREGROUND_SERVICE_WHILE_AWAKE} are supported.
+-     *
+-     * @see Context#getServiceDispatcher(ServiceConnection, Handler, long)
+-     * @hide
+-     */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public boolean bindRemoteViewsService(Context context, int appWidgetId, Intent intent,
+-            IServiceConnection connection, @Context.BindServiceFlagsBits int flags) {
+-        if (mService == null) {
+-            return false;
+-        }
+-        try {
+-            return mService.bindRemoteViewsService(context.getOpPackageName(), appWidgetId, intent,
+-                    context.getIApplicationThread(), context.getActivityToken(), connection,
+-                    Integer.toUnsignedLong(flags));
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++            @NonNull String packageName, @UserIdInt int userId, boolean permission) {}
+ 
+     /**
+      * Get the list of appWidgetIds that have been bound to the given AppWidget
+@@ -1457,42 +1052,20 @@
+      *            AppWidget provider to find appWidgetIds for.
+      */
+     public int[] getAppWidgetIds(ComponentName provider) {
+-        if (mService == null) {
+-            return new int[0];
+-        }
+-        try {
+-            return mService.getAppWidgetIds(provider);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return new int[0];
+     }
+ 
+     /**
+      * @hide
+      */
+     public boolean isBoundWidgetPackage(String packageName, int userId) {
+-        if (mService == null) {
+-            return false;
+-        }
+-        try {
+-            return mService.isBoundWidgetPackage(packageName, userId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     @UnsupportedAppUsage
+     private boolean bindAppWidgetIdIfAllowed(int appWidgetId, int profileId,
+             ComponentName provider, Bundle options) {
+-        if (mService == null) {
+-            return false;
+-        }
+-        try {
+-            return mService.bindAppWidgetId(mPackageName, appWidgetId,
+-                    profileId, provider, options);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -1500,11 +1073,7 @@
+      * {@link #requestPinAppWidget(ComponentName, Bundle, PendingIntent)}
+      */
+     public boolean isRequestPinAppWidgetSupported() {
+-        try {
+-            return mService.isRequestPinAppWidgetSupported(mPackageName);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -1555,12 +1124,7 @@
+      */
+     public boolean requestPinAppWidget(@NonNull ComponentName provider,
+             @Nullable Bundle extras, @Nullable PendingIntent successCallback) {
+-        try {
+-            return mService.requestPinAppWidget(mPackageName, provider, extras,
+-                    successCallback == null ? null : successCallback.getIntentSender());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -1569,13 +1133,7 @@
+      * @param appWidgetId App widget id.
+      * @hide
+      */
+-    public void noteAppWidgetTapped(int appWidgetId) {
+-        try {
+-            mService.noteAppWidgetTapped(mPackageName, appWidgetId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++    public void noteAppWidgetTapped(int appWidgetId) {}
+ 
+     /**
+      * Set a preview for this widget. This preview will be used instead of the provider's {@link
+@@ -1602,16 +1160,11 @@
+      *
+      * @return true if the call was successful, false if it was rate-limited.
+      */
+-    @FlaggedApi(Flags.FLAG_GENERATED_PREVIEWS)
++
+     public boolean setWidgetPreview(@NonNull ComponentName provider,
+             @AppWidgetProviderInfo.CategoryFlags int widgetCategories,
+             @NonNull RemoteViews preview) {
+-        try {
+-            preview.setOriginalDensity(mDisplayMetrics.density);
+-            return mService.setWidgetPreview(provider, widgetCategories, preview);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -1629,18 +1182,10 @@
+      * @see AppWidgetProviderInfo#generatedPreviewCategories
+      */
+     @Nullable
+-    @FlaggedApi(Flags.FLAG_GENERATED_PREVIEWS)
++
+     public RemoteViews getWidgetPreview(@NonNull ComponentName provider,
+             @Nullable UserHandle profile, @AppWidgetProviderInfo.CategoryFlags int widgetCategory) {
+-        try {
+-            if (profile == null) {
+-                profile = mContext.getUser();
+-            }
+-            return mService.getWidgetPreview(mPackageName, provider, profile.getIdentifier(),
+-                    widgetCategory);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return null;
+     }
+ 
+     /**
+@@ -1652,225 +1197,13 @@
+      *    preview for WIDGET_CATEGORY_HOME_SCREEN | WIDGET_CATEGORY_KEYGUARD will remove the
+      *    previews for both categories.
+      */
+-    @FlaggedApi(Flags.FLAG_GENERATED_PREVIEWS)
++
+     public void removeWidgetPreview(@NonNull ComponentName provider,
+-            @AppWidgetProviderInfo.CategoryFlags int widgetCategories) {
+-        try {
+-            mService.removeWidgetPreview(provider, widgetCategories);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++            @AppWidgetProviderInfo.CategoryFlags int widgetCategories) {}
+ 
+     /** @hide */
+-    public void setConfigActivityComplete(int widgetId) {
+-        try {
+-            mService.setConfigActivityComplete(widgetId);
+-        } catch (RemoteException e) {
+-            Log.d(TAG, "Error notifying config activity completed");
+-        }
+-    }
+-
+-    /**
+-     * Query for app widget interaction events in the given time range. Events are only kept by the
+-     * system for a few days. This method only returns events for widgets provided by the calling
+-     * package and does not require any additional permissions.
+-     *
+-     * @param beginTime The inclusive beginning of the range of events to include in the results.
+-     *                  Defined in terms of "Unix time", see
+-     *                  {@link java.lang.System#currentTimeMillis}.
+-     * @param endTime The exclusive end of the range of events to include in the results. Defined
+-     *                in terms of "Unix time", see {@link java.lang.System#currentTimeMillis}.
+-     * @return An array of {@link AppWidgetEvent} objects.
+-     */
+-    @FlaggedApi(Flags.FLAG_ENGAGEMENT_METRICS)
+-    @NonNull
+-    public List<AppWidgetEvent> queryAppWidgetEvents(long beginTime, long endTime) {
+-        try {
+-            ParceledListSlice<AppWidgetEvent> events = mService.queryAppWidgetEvents(mPackageName,
+-                    beginTime, endTime);
+-            return events != null ? events.getList() : Collections.emptyList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    @UiThread
+-    private static @NonNull Executor createUpdateExecutorIfNull() {
+-        if (sUpdateExecutor == null) {
+-            sUpdateExecutor = createExecutorService(
+-                    "widget_manager_update_helper_thread", Process.THREAD_PRIORITY_FOREGROUND);
+-        }
+-        return sUpdateExecutor;
+-    }
+-
+-    private static ExecutorService createExecutorService(@NonNull String name, int priority) {
+-        return Executors.newSingleThreadExecutor(r -> new Thread(() -> {
+-            Process.setThreadPriority(Process.myTid(), priority);
+-            r.run();
+-        }, name));
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public static class ServiceCollectionCache {
+-
+-        private final Context mContext;
+-        private final Handler mHandler;
+-        private final long mTimeOut;
+-
+-        private final Map<FilterComparison, ConnectionTask> mActiveConnections =
+-                new ArrayMap<>();
+-
+-        public ServiceCollectionCache(Context context, long timeOut) {
+-            mContext = context;
+-            mHandler = new Handler(BackgroundThread.getHandler().getLooper());
+-            mTimeOut = timeOut;
+-        }
+-
+-        /**
+-         * Connect to the service indicated by the {@code Intent}, and consume the binder on the
+-         * specified executor
+-         */
+-        public void connectAndConsume(Intent intent, Consumer<IBinder> task) {
+-            mHandler.post(() -> connectAndConsumeInner(intent, task));
+-        }
+-
+-        private void connectAndConsumeInner(Intent intent, Consumer<IBinder> task) {
+-            ConnectionTask activeConnection = mActiveConnections.computeIfAbsent(
+-                    new FilterComparison(intent), ConnectionTask::new);
+-            activeConnection.add(task);
+-        }
+-
+-        private class ConnectionTask implements ServiceConnection {
+-
+-            private final Runnable mDestroyAfterTimeout = this::onDestroyTimeout;
+-            private final Runnable mConnectionTimeout = this::onConnectionTimeout;
+-            private final ArrayDeque<Consumer<IBinder>> mTaskQueue = new ArrayDeque<>();
+-
+-            private final String mExecutorName;
+-            private boolean mOnDestroyTimeout = false;
+-            private IBinder mIBinder;
+-
+-            private ExecutorService mBinderCallExecutor;
+-            private Object mCurrentTaskToken;
+-
+-            ConnectionTask(@NonNull FilterComparison filter) {
+-                mExecutorName = "appwidget-connectiontask-" + filter.hashCode();
+-                try {
+-                    mContext.bindService(filter.getIntent(),
+-                            Context.BindServiceFlags.of(Context.BIND_AUTO_CREATE),
+-                            mHandler::post,
+-                            this);
+-                } catch (Exception e) {
+-                    Log.e(TAG, "Error connecting to service in connection cache", e);
+-                }
+-                mHandler.postDelayed(mConnectionTimeout, MAX_ADAPTER_CONVERSION_WAITING_TIME_MS);
+-            }
+-
+-            @Override
+-            public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
+-                onBinderReceived(iBinder);
+-            }
+-
+-            @Override
+-            public void onNullBinding(ComponentName name) {
+-                // Use an empty binder, follow up tasks will handle the failure
+-                onServiceConnected(name, new Binder());
+-            }
+-
+-            private void onConnectionTimeout() {
+-                onBinderReceived(new Binder());
+-            }
+-
+-            private void onBinderReceived(IBinder iBinder) {
+-                if (mIBinder != null) {
+-                    return;
+-                }
+-                mIBinder = iBinder;
+-                mHandler.removeCallbacks(mConnectionTimeout);
+-                mHandler.post(this::handleNext);
+-            }
+-
+-            @Override
+-            public void onServiceDisconnected(ComponentName componentName) { }
+-
+-            void add(Consumer<IBinder> task) {
+-                mTaskQueue.add(task);
+-                if (mOnDestroyTimeout) {
+-                    // If we are waiting for timeout, cancel it and execute the next task
+-                    handleNext();
+-                }
+-            }
+-
+-            private void onTaskComplete(Object taskToken) {
+-                if (mCurrentTaskToken == taskToken) {
+-                    mCurrentTaskToken = null;
+-                    handleNext();
+-                }
+-            }
+-
+-            private void handleNext() {
+-                mHandler.removeCallbacks(mDestroyAfterTimeout);
+-                Consumer<IBinder> next = mTaskQueue.pollFirst();
+-                if (next != null) {
+-                    mCurrentTaskToken = next;
+-                    mOnDestroyTimeout = false;
+-                    if (mBinderCallExecutor == null) {
+-                        mBinderCallExecutor = createExecutorService(
+-                                mExecutorName, Process.THREAD_PRIORITY_FOREGROUND);
+-                    }
+-                    Future task = mBinderCallExecutor.submit(() -> {
+-                        next.accept(mIBinder);
+-                        mHandler.post(() -> onTaskComplete(next));
+-                    });
+-
+-                    mHandler.postDelayed(
+-                            () -> onTaskTimeout(task, next),
+-                            MAX_ADAPTER_CONVERSION_WAITING_TIME_MS);
+-
+-                } else {
+-                    // Finished all tasks, start a timeout to unbind this service
+-                    mOnDestroyTimeout = true;
+-                    mHandler.postDelayed(mDestroyAfterTimeout, mTimeOut);
+-                }
+-            }
+-
+-            /**
+-             * If a task times out, we try to interrupt it, but also switch to a new executor,
+-             * in case the previous executor gets blocked for ever
+-             */
+-            private void onTaskTimeout(Future task, Object taskToken) {
+-                if (!task.isDone()) {
+-                    ExecutorService oldExecutor = mBinderCallExecutor;
+-                    mBinderCallExecutor = null;
+-                    task.cancel(true);
+-                    if (oldExecutor != null) {
+-                        oldExecutor.shutdown();
+-                    }
+-                    onTaskComplete(taskToken);
+-                }
+-            }
+-
+-            /**
+-             * Called after we have waited for {@link #mTimeOut} after the last task is finished
+-             */
+-            private void onDestroyTimeout() {
+-                if (!mTaskQueue.isEmpty()) {
+-                    handleNext();
+-                    return;
+-                }
+-                try {
+-                    mContext.unbindService(this);
+-                } catch (Exception e) {
+-                    Log.e(TAG, "Error unbinding the cached connection", e);
+-                }
+-                if (mBinderCallExecutor != null) {
+-                    mBinderCallExecutor.shutdown();
+-                }
+-                mActiveConnections.values().remove(this);
+-            }
+-        }
+-    }
++    public void setConfigActivityComplete(int widgetId) {}
++
++    /** The embedded device starts without a widget service. */
++    public AppWidgetManager() {}
+ }
+--- a/frameworks/base/core/java/android/appwidget/AppWidgetProviderInfo.java
++++ b/frameworks/base/core/java/android/appwidget/AppWidgetProviderInfo.java
+@@ -16,11 +16,6 @@
+ 
+ package android.appwidget;
+ 
+-import static android.appwidget.flags.Flags.FLAG_GENERATED_PREVIEWS;
+-import static android.appwidget.flags.Flags.generatedPreviews;
+-
+-import android.annotation.FlaggedApi;
+-import android.annotation.IdRes;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -31,7 +26,6 @@
+ import android.content.Context;
+ import android.content.pm.ActivityInfo;
+ import android.content.pm.PackageManager;
+-import android.content.res.ResourceId;
+ import android.content.res.Resources;
+ import android.graphics.drawable.Drawable;
+ import android.os.Bundle;
+@@ -104,7 +98,7 @@
+      * <p>Setting this category doesn't change the behavior of AppWidgetManager queries, it is the
+      * responsibility of the widget surface to respect this value.
+      */
+-    @FlaggedApi(android.appwidget.flags.Flags.FLAG_NOT_KEYGUARD_CATEGORY)
++
+     public static final int WIDGET_CATEGORY_NOT_KEYGUARD = 8;
+ 
+     /** @hide */
+@@ -298,7 +292,7 @@
+      * <p>This field corresponds to the <code>android:autoAdvanceViewId</code> attribute in
+      * the AppWidget meta-data file.
+      */
+-    public int autoAdvanceViewId;
++    public int autoAdvanceViewId = -1;
+ 
+     /**
+      * A preview of what the AppWidget will look like after it's configured.
+@@ -323,7 +317,7 @@
+      * AppWidget meta-data file.
+      */
+     @SuppressLint("MutableBareField")
+-    @IdRes
++
+     public int previewLayout;
+ 
+     /**
+@@ -356,7 +350,7 @@
+      * meta-data file.
+      */
+     @SuppressLint("MutableBareField")
+-    @IdRes
++
+     public int descriptionRes;
+ 
+     /**
+@@ -387,7 +381,7 @@
+      * @see #WIDGET_CATEGORY_SEARCHBOX
+      * @see AppWidgetManager#getWidgetPreview
+      */
+-    @FlaggedApi(FLAG_GENERATED_PREVIEWS)
++
+     @SuppressLint("MutableBareField")
+     public int generatedPreviewCategories;
+ 
+@@ -424,7 +418,7 @@
+         this.widgetFeatures = in.readInt();
+         this.descriptionRes = in.readInt();
+         this.isExtendedFromAppWidgetProvider = in.readBoolean();
+-        if (generatedPreviews()) {
++        if (true) {
+             generatedPreviewCategories = in.readInt();
+         }
+     }
+@@ -494,7 +488,7 @@
+      */
+     @Nullable
+     public final CharSequence loadDescription(@NonNull Context context) {
+-        if (ResourceId.isValid(descriptionRes)) {
++        if (descriptionRes != 0) {
+             CharSequence description =
+                     context.getPackageManager().getText(
+                             providerInfo.packageName,
+@@ -513,7 +507,9 @@
+      * @return The hosting user profile.
+      */
+     public final UserHandle getProfile() {
+-        return new UserHandle(UserHandle.getUserId(providerInfo.getUid()));
++        return providerInfo == null || providerInfo.applicationInfo == null
++                ? android.os.Process.myUserHandle()
++                : UserHandle.getUserHandleForUid(providerInfo.applicationInfo.uid);
+     }
+ 
+     /**
+@@ -551,7 +547,7 @@
+         out.writeInt(this.widgetFeatures);
+         out.writeInt(this.descriptionRes);
+         out.writeBoolean(this.isExtendedFromAppWidgetProvider);
+-        if (generatedPreviews()) {
++        if (true) {
+             out.writeInt(this.generatedPreviewCategories);
+         }
+     }
+@@ -584,7 +580,7 @@
+         that.widgetFeatures = this.widgetFeatures;
+         that.descriptionRes = this.descriptionRes;
+         that.isExtendedFromAppWidgetProvider = this.isExtendedFromAppWidgetProvider;
+-        if (generatedPreviews()) {
++        if (true) {
+             that.generatedPreviewCategories = this.generatedPreviewCategories;
+         }
+         return that;
+@@ -599,7 +595,7 @@
+         try {
+             Resources resources = context.getPackageManager().getResourcesForApplication(
+                     providerInfo.applicationInfo);
+-            if (ResourceId.isValid(resourceId)) {
++            if (resourceId != 0) {
+                 if (density < 0) {
+                     density = 0;
+                 }

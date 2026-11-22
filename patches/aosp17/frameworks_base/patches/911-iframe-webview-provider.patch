@@ -1,0 +1,3085 @@
+--- a/frameworks/base/core/java/android/webkit/WebSettings.java
++++ b/frameworks/base/core/java/android/webkit/WebSettings.java
+@@ -16,12 +16,10 @@
+ 
+ package android.webkit;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.Nullable;
+ import android.annotation.SystemApi;
+ import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledAfter;
+ import android.compat.annotation.EnabledSince;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+@@ -165,8 +163,7 @@
+      * @hide
+      */
+     @ChangeId
+-    @EnabledAfter(targetSdkVersion = android.os.Build.VERSION_CODES.BAKLAVA)
+-    @FlaggedApi(android.webkit.Flags.FLAG_USER_AGENT_REDUCTION)
++
+     @SystemApi
+     public static final long ENABLE_USER_AGENT_REDUCTION = 371034303L;
+ 
+@@ -310,7 +307,9 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+     @Deprecated
+-    public abstract void setNavDump(boolean enabled);
++    public void setNavDump(boolean enabled) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether dumping the navigation cache is enabled.
+@@ -323,7 +322,9 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+     @Deprecated
+-    public abstract boolean getNavDump();
++    public boolean getNavDump() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should support zooming using its on-screen zoom
+@@ -334,7 +335,9 @@
+      *
+      * @param support whether the WebView should support zoom
+      */
+-    public abstract void setSupportZoom(boolean support);
++    public void setSupportZoom(boolean support) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView supports zoom.
+@@ -342,7 +345,9 @@
+      * @return {@code true} if the WebView supports zoom
+      * @see #setSupportZoom
+      */
+-    public abstract boolean supportZoom();
++    public boolean supportZoom() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView requires a user gesture to play media.
+@@ -350,7 +355,9 @@
+      *
+      * @param require whether the WebView requires a user gesture to play media
+      */
+-    public abstract void setMediaPlaybackRequiresUserGesture(boolean require);
++    public void setMediaPlaybackRequiresUserGesture(boolean require) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView requires a user gesture to play media.
+@@ -358,7 +365,9 @@
+      * @return {@code true} if the WebView requires a user gesture to play media
+      * @see #setMediaPlaybackRequiresUserGesture
+      */
+-    public abstract boolean getMediaPlaybackRequiresUserGesture();
++    public boolean getMediaPlaybackRequiresUserGesture() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should use its built-in zoom mechanisms. The
+@@ -378,7 +387,9 @@
+     // This method was intended to select between the built-in zoom mechanisms
+     // and the separate zoom controls. The latter were obtained using
+     // {@link WebView#getZoomControls}, which is now hidden.
+-    public abstract void setBuiltInZoomControls(boolean enabled);
++    public void setBuiltInZoomControls(boolean enabled) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the zoom mechanisms built into WebView are being used.
+@@ -386,7 +397,9 @@
+      * @return {@code true} if the zoom mechanisms built into WebView are being used
+      * @see #setBuiltInZoomControls
+      */
+-    public abstract boolean getBuiltInZoomControls();
++    public boolean getBuiltInZoomControls() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should display on-screen zoom controls when
+@@ -397,7 +410,9 @@
+      *
+      * @param enabled whether the WebView should display on-screen zoom controls
+      */
+-    public abstract void setDisplayZoomControls(boolean enabled);
++    public void setDisplayZoomControls(boolean enabled) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView displays on-screen zoom controls when using
+@@ -407,7 +422,9 @@
+      *         the built-in zoom mechanisms
+      * @see #setDisplayZoomControls
+      */
+-    public abstract boolean getDisplayZoomControls();
++    public boolean getDisplayZoomControls() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Enables or disables file access within WebView.
+@@ -427,28 +444,36 @@
+      * {@link android.os.Build.VERSION_CODES#Q} and below, and {@code false} when targeting
+      * {@link android.os.Build.VERSION_CODES#R} and above.
+      */
+-    public abstract void setAllowFileAccess(boolean allow);
++    public void setAllowFileAccess(boolean allow) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether this WebView supports file access.
+      *
+      * @see #setAllowFileAccess
+      */
+-    public abstract boolean getAllowFileAccess();
++    public boolean getAllowFileAccess() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Enables or disables content URL access within WebView.  Content URL
+      * access allows WebView to load content from a content provider installed
+      * in the system. The default is enabled.
+      */
+-    public abstract void setAllowContentAccess(boolean allow);
++    public void setAllowContentAccess(boolean allow) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether this WebView supports content URL access.
+      *
+      * @see #setAllowContentAccess
+      */
+-    public abstract boolean getAllowContentAccess();
++    public boolean getAllowContentAccess() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView loads pages in overview mode, that is,
+@@ -457,7 +482,9 @@
+      * of the WebView control, for example, when {@link #getUseWideViewPort}
+      * is enabled. The default is {@code false}.
+      */
+-    public abstract void setLoadWithOverviewMode(boolean overview);
++    public void setLoadWithOverviewMode(boolean overview) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether this WebView loads pages in overview mode.
+@@ -465,7 +492,9 @@
+      * @return whether this WebView loads pages in overview mode
+      * @see #setLoadWithOverviewMode
+      */
+-    public abstract boolean getLoadWithOverviewMode();
++    public boolean getLoadWithOverviewMode() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView will enable smooth transition while panning or
+@@ -477,7 +506,9 @@
+      * @deprecated This method is now obsolete, and will become a no-op in future.
+      */
+     @Deprecated
+-    public abstract void setEnableSmoothTransition(boolean enable);
++    public void setEnableSmoothTransition(boolean enable) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView enables smooth transition while panning or
+@@ -488,7 +519,9 @@
+      * @deprecated This method is now obsolete, and will become a no-op in future.
+      */
+     @Deprecated
+-    public abstract  boolean enableSmoothTransition();
++    public  boolean enableSmoothTransition() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView uses its background for over scroll background.
+@@ -501,7 +534,9 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+     @Deprecated
+-    public abstract  void setUseWebViewBackgroundForOverscrollBackground(boolean view);
++    public  void setUseWebViewBackgroundForOverscrollBackground(boolean view) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether this WebView uses WebView's background instead of
+@@ -514,7 +549,9 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+     @Deprecated
+-    public abstract  boolean getUseWebViewBackgroundForOverscrollBackground();
++    public  boolean getUseWebViewBackgroundForOverscrollBackground() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should save form data. In {@link android.os.Build.VERSION_CODES#O},
+@@ -529,7 +566,9 @@
+      * will be saved to platform's autofill service if applicable.
+      */
+     @Deprecated
+-    public abstract  void setSaveFormData(boolean save);
++    public  void setSaveFormData(boolean save) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView saves form data. In {@link android.os.Build.VERSION_CODES#O}, the
+@@ -545,14 +584,18 @@
+      * will be filled from the platform's autofill service if applicable.
+      */
+     @Deprecated
+-    public abstract boolean getSaveFormData();
++    public boolean getSaveFormData() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should save passwords. The default is {@code true}.
+      * @deprecated Saving passwords in WebView will not be supported in future versions.
+      */
+     @Deprecated
+-    public abstract void setSavePassword(boolean save);
++    public void setSavePassword(boolean save) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView saves passwords.
+@@ -562,14 +605,18 @@
+      * @deprecated Saving passwords in WebView will not be supported in future versions.
+      */
+     @Deprecated
+-    public abstract boolean getSavePassword();
++    public boolean getSavePassword() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the text zoom of the page in percent. The default is 100.
+      *
+      * @param textZoom the text zoom in percent
+      */
+-    public abstract void setTextZoom(int textZoom);
++    public void setTextZoom(int textZoom) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the text zoom of the page in percent.
+@@ -577,7 +624,9 @@
+      * @return the text zoom of the page in percent
+      * @see #setTextZoom
+      */
+-    public abstract int getTextZoom();
++    public int getTextZoom() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets policy for third party cookies.
+@@ -586,7 +635,9 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+-    public abstract void setAcceptThirdPartyCookies(boolean accept);
++    public void setAcceptThirdPartyCookies(boolean accept) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets policy for third party cookies.
+@@ -595,7 +646,9 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+-    public abstract boolean getAcceptThirdPartyCookies();
++    public boolean getAcceptThirdPartyCookies() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the text size of the page. The default is {@link TextSize#NORMAL}.
+@@ -650,7 +703,9 @@
+      *             recommended alternatives.
+      */
+     @Deprecated
+-    public abstract void setDefaultZoom(ZoomDensity zoom);
++    public void setDefaultZoom(ZoomDensity zoom) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the default zoom density of the page. This should be called from
+@@ -663,7 +718,9 @@
+      * @deprecated Will only return the default value.
+      */
+     @Deprecated
+-    public abstract ZoomDensity getDefaultZoom();
++    public ZoomDensity getDefaultZoom() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Enables using light touches to make a selection and activate mouseovers.
+@@ -671,7 +728,9 @@
+      *             setting is obsolete and has no effect.
+      */
+     @Deprecated
+-    public abstract void setLightTouchEnabled(boolean enabled);
++    public void setLightTouchEnabled(boolean enabled) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether light touches are enabled.
+@@ -679,7 +738,9 @@
+      * @deprecated This setting is obsolete.
+      */
+     @Deprecated
+-    public abstract boolean getLightTouchEnabled();
++    public boolean getLightTouchEnabled() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Controlled a rendering optimization that is no longer present. Setting
+@@ -724,7 +785,9 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+     @Deprecated
+-    public abstract void setUserAgent(int ua);
++    public void setUserAgent(int ua) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the user-agent as an integer code.
+@@ -743,7 +806,9 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+     @Deprecated
+-    public abstract int getUserAgent();
++    public int getUserAgent() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should enable support for the &quot;viewport&quot;
+@@ -756,7 +821,9 @@
+      *
+      * @param use whether to enable support for the viewport meta tag
+      */
+-    public abstract void setUseWideViewPort(boolean use);
++    public void setUseWideViewPort(boolean use) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView supports the &quot;viewport&quot;
+@@ -765,7 +832,9 @@
+      * @return {@code true} if the WebView supports the viewport meta tag
+      * @see #setUseWideViewPort
+      */
+-    public abstract boolean getUseWideViewPort();
++    public boolean getUseWideViewPort() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should support multiple windows.
+@@ -782,7 +851,9 @@
+      *
+      * @param support whether to support multiple windows
+      */
+-    public abstract void setSupportMultipleWindows(boolean support);
++    public void setSupportMultipleWindows(boolean support) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView supports multiple windows.
+@@ -790,7 +861,9 @@
+      * @return {@code true} if the WebView supports multiple windows
+      * @see #setSupportMultipleWindows
+      */
+-    public abstract boolean supportMultipleWindows();
++    public boolean supportMultipleWindows() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the underlying layout algorithm. This will cause a re-layout of the
+@@ -798,7 +871,9 @@
+      *
+      * @param l the layout algorithm to use, as a {@link LayoutAlgorithm} value
+      */
+-    public abstract void setLayoutAlgorithm(LayoutAlgorithm l);
++    public void setLayoutAlgorithm(LayoutAlgorithm l) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the current layout algorithm.
+@@ -806,14 +881,18 @@
+      * @return the layout algorithm in use, as a {@link LayoutAlgorithm} value
+      * @see #setLayoutAlgorithm
+      */
+-    public abstract LayoutAlgorithm getLayoutAlgorithm();
++    public LayoutAlgorithm getLayoutAlgorithm() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the standard font family name. The default is "sans-serif".
+      *
+      * @param font a font family name
+      */
+-    public abstract void setStandardFontFamily(String font);
++    public void setStandardFontFamily(String font) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the standard font family name.
+@@ -821,14 +900,18 @@
+      * @return the standard font family name as a string
+      * @see #setStandardFontFamily
+      */
+-    public abstract String getStandardFontFamily();
++    public String getStandardFontFamily() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the fixed font family name. The default is "monospace".
+      *
+      * @param font a font family name
+      */
+-    public abstract void setFixedFontFamily(String font);
++    public void setFixedFontFamily(String font) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the fixed font family name.
+@@ -836,14 +919,18 @@
+      * @return the fixed font family name as a string
+      * @see #setFixedFontFamily
+      */
+-    public abstract String getFixedFontFamily();
++    public String getFixedFontFamily() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the sans-serif font family name. The default is "sans-serif".
+      *
+      * @param font a font family name
+      */
+-    public abstract void setSansSerifFontFamily(String font);
++    public void setSansSerifFontFamily(String font) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the sans-serif font family name.
+@@ -851,14 +938,18 @@
+      * @return the sans-serif font family name as a string
+      * @see #setSansSerifFontFamily
+      */
+-    public abstract String getSansSerifFontFamily();
++    public String getSansSerifFontFamily() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the serif font family name. The default is "sans-serif".
+      *
+      * @param font a font family name
+      */
+-    public abstract void setSerifFontFamily(String font);
++    public void setSerifFontFamily(String font) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the serif font family name. The default is "serif".
+@@ -866,14 +957,18 @@
+      * @return the serif font family name as a string
+      * @see #setSerifFontFamily
+      */
+-    public abstract String getSerifFontFamily();
++    public String getSerifFontFamily() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the cursive font family name. The default is "cursive".
+      *
+      * @param font a font family name
+      */
+-    public abstract void setCursiveFontFamily(String font);
++    public void setCursiveFontFamily(String font) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the cursive font family name.
+@@ -881,14 +976,18 @@
+      * @return the cursive font family name as a string
+      * @see #setCursiveFontFamily
+      */
+-    public abstract String getCursiveFontFamily();
++    public String getCursiveFontFamily() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the fantasy font family name. The default is "fantasy".
+      *
+      * @param font a font family name
+      */
+-    public abstract void setFantasyFontFamily(String font);
++    public void setFantasyFontFamily(String font) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the fantasy font family name.
+@@ -896,7 +995,9 @@
+      * @return the fantasy font family name as a string
+      * @see #setFantasyFontFamily
+      */
+-    public abstract String getFantasyFontFamily();
++    public String getFantasyFontFamily() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the minimum font size. The default is 8.
+@@ -904,7 +1005,9 @@
+      * @param size a non-negative integer between 1 and 72. Any number outside
+      *             the specified range will be pinned.
+      */
+-    public abstract void setMinimumFontSize(int size);
++    public void setMinimumFontSize(int size) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the minimum font size.
+@@ -912,7 +1015,9 @@
+      * @return a non-negative integer between 1 and 72
+      * @see #setMinimumFontSize
+      */
+-    public abstract int getMinimumFontSize();
++    public int getMinimumFontSize() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the minimum logical font size. The default is 8.
+@@ -920,7 +1025,9 @@
+      * @param size a non-negative integer between 1 and 72. Any number outside
+      *             the specified range will be pinned.
+      */
+-    public abstract void setMinimumLogicalFontSize(int size);
++    public void setMinimumLogicalFontSize(int size) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the minimum logical font size.
+@@ -928,7 +1035,9 @@
+      * @return a non-negative integer between 1 and 72
+      * @see #setMinimumLogicalFontSize
+      */
+-    public abstract int getMinimumLogicalFontSize();
++    public int getMinimumLogicalFontSize() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the default font size. The default is 16.
+@@ -936,7 +1045,9 @@
+      * @param size a non-negative integer between 1 and 72. Any number outside
+      *             the specified range will be pinned.
+      */
+-    public abstract void setDefaultFontSize(int size);
++    public void setDefaultFontSize(int size) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the default font size.
+@@ -944,7 +1055,9 @@
+      * @return a non-negative integer between 1 and 72
+      * @see #setDefaultFontSize
+      */
+-    public abstract int getDefaultFontSize();
++    public int getDefaultFontSize() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the default fixed font size. The default is 16.
+@@ -952,7 +1065,9 @@
+      * @param size a non-negative integer between 1 and 72. Any number outside
+      *             the specified range will be pinned.
+      */
+-    public abstract void setDefaultFixedFontSize(int size);
++    public void setDefaultFixedFontSize(int size) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the default fixed font size.
+@@ -960,7 +1075,9 @@
+      * @return a non-negative integer between 1 and 72
+      * @see #setDefaultFixedFontSize
+      */
+-    public abstract int getDefaultFixedFontSize();
++    public int getDefaultFixedFontSize() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should load image resources. Note that this method
+@@ -973,7 +1090,9 @@
+      *
+      * @param flag whether the WebView should load image resources
+      */
+-    public abstract void setLoadsImagesAutomatically(boolean flag);
++    public void setLoadsImagesAutomatically(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView loads image resources. This includes
+@@ -982,7 +1101,9 @@
+      * @return {@code true} if the WebView loads image resources
+      * @see #setLoadsImagesAutomatically
+      */
+-    public abstract boolean getLoadsImagesAutomatically();
++    public boolean getLoadsImagesAutomatically() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should not load image resources from the
+@@ -999,7 +1120,9 @@
+      *             network
+      * @see #setBlockNetworkLoads
+      */
+-    public abstract void setBlockNetworkImage(boolean flag);
++    public void setBlockNetworkImage(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView does not load image resources from the network.
+@@ -1007,7 +1130,9 @@
+      * @return {@code true} if the WebView does not load image resources from the network
+      * @see #setBlockNetworkImage
+      */
+-    public abstract boolean getBlockNetworkImage();
++    public boolean getBlockNetworkImage() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should not load resources from the network.
+@@ -1026,7 +1151,9 @@
+      * @param flag {@code true} means block network loads by the WebView
+      * @see android.webkit.WebView#reload
+      */
+-    public abstract void setBlockNetworkLoads(boolean flag);
++    public void setBlockNetworkLoads(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the WebView does not load any resources from the network.
+@@ -1034,7 +1161,9 @@
+      * @return {@code true} if the WebView does not load any resources from the network
+      * @see #setBlockNetworkLoads
+      */
+-    public abstract boolean getBlockNetworkLoads();
++    public boolean getBlockNetworkLoads() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Tells the WebView to enable JavaScript execution.
+@@ -1072,7 +1201,9 @@
+      *             androidx.webkit.WebViewAssetLoader</a> to load file content securely.
+      */
+     @Deprecated
+-    public abstract void setAllowUniversalAccessFromFileURLs(boolean flag);
++    public void setAllowUniversalAccessFromFileURLs(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether cross-origin requests in the context of a file scheme URL should be allowed to
+@@ -1102,7 +1233,9 @@
+      *             androidx.webkit.WebViewAssetLoader</a> to load file content securely.
+      */
+     @Deprecated
+-    public abstract void setAllowFileAccessFromFileURLs(boolean flag);
++    public void setAllowFileAccessFromFileURLs(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the WebView should enable plugins. The default is {@code false}.
+@@ -1115,7 +1248,9 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+     @Deprecated
+-    public abstract void setPluginsEnabled(boolean flag);
++    public void setPluginsEnabled(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Tells the WebView to enable, disable, or have plugins on demand. On
+@@ -1130,7 +1265,9 @@
+      *             enabling plugins is a no-op.
+      */
+     @Deprecated
+-    public abstract void setPluginState(PluginState state);
++    public void setPluginState(PluginState state) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets a custom path to plugins used by the WebView. This method is
+@@ -1159,7 +1296,9 @@
+      *             will have no effect.
+      */
+     @Deprecated
+-    public abstract void setDatabasePath(String databasePath);
++    public void setDatabasePath(String databasePath) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the path where the Geolocation databases should be saved. In order
+@@ -1172,7 +1311,9 @@
+      *             will have no effect.
+      */
+     @Deprecated
+-    public abstract void setGeolocationDatabasePath(String databasePath);
++    public void setGeolocationDatabasePath(String databasePath) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the Application Caches API should be enabled. The default
+@@ -1243,14 +1384,18 @@
+      * https://developer.chrome.com/blog/deprecating-web-sql for more information.
+      */
+     @Deprecated
+-    public abstract void setDatabaseEnabled(boolean flag);
++    public void setDatabaseEnabled(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether the DOM storage API is enabled. The default value is {@code false}.
+      *
+      * @param flag {@code true} if the WebView should use the DOM storage API
+      */
+-    public abstract void setDomStorageEnabled(boolean flag);
++    public void setDomStorageEnabled(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the DOM Storage APIs are enabled.
+@@ -1258,7 +1403,9 @@
+      * @return {@code true} if the DOM Storage APIs are enabled
+      * @see #setDomStorageEnabled
+      */
+-    public abstract boolean getDomStorageEnabled();
++    public boolean getDomStorageEnabled() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the path to where database storage API databases are saved.
+@@ -1268,7 +1415,9 @@
+      * @deprecated Database paths are managed by the implementation this method is obsolete.
+      */
+     @Deprecated
+-    public abstract String getDatabasePath();
++    public String getDatabasePath() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether the database storage API is enabled.
+@@ -1280,7 +1429,9 @@
+      * https://developer.chrome.com/blog/deprecating-web-sql for more information.
+      */
+     @Deprecated
+-    public abstract boolean getDatabaseEnabled();
++    public boolean getDatabaseEnabled() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether Geolocation is enabled. The default is {@code true}.
+@@ -1300,7 +1451,9 @@
+      *
+      * @param flag whether Geolocation should be enabled
+      */
+-    public abstract void setGeolocationEnabled(boolean flag);
++    public void setGeolocationEnabled(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether JavaScript is enabled.
+@@ -1319,7 +1472,9 @@
+      *         can access content from any origin
+      * @see #setAllowUniversalAccessFromFileURLs
+      */
+-    public abstract boolean getAllowUniversalAccessFromFileURLs();
++    public boolean getAllowUniversalAccessFromFileURLs() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether JavaScript running in the context of a file scheme URL can
+@@ -1329,7 +1484,9 @@
+      *         can access content from other file scheme URLs
+      * @see #setAllowFileAccessFromFileURLs
+      */
+-    public abstract boolean getAllowFileAccessFromFileURLs();
++    public boolean getAllowFileAccessFromFileURLs() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether plugins are enabled.
+@@ -1342,7 +1499,9 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+     @Deprecated
+-    public abstract boolean getPluginsEnabled();
++    public boolean getPluginsEnabled() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the current state regarding whether plugins are enabled.
+@@ -1354,7 +1513,9 @@
+      *             enabling plugins is a no-op.
+      */
+     @Deprecated
+-    public abstract PluginState getPluginState();
++    public PluginState getPluginState() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the directory that contains the plugin libraries. This method is
+@@ -1384,7 +1545,9 @@
+      * @param flag {@code true} if JavaScript can open windows without a user
+      *             gesture.
+      */
+-    public abstract void setJavaScriptCanOpenWindowsAutomatically(boolean flag);
++    public void setJavaScriptCanOpenWindowsAutomatically(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether JavaScript can open windows without a user gesture.
+@@ -1393,7 +1556,9 @@
+      *         gesture using {@code window.open()}
+      * @see #setJavaScriptCanOpenWindowsAutomatically
+      */
+-    public abstract boolean getJavaScriptCanOpenWindowsAutomatically();
++    public boolean getJavaScriptCanOpenWindowsAutomatically() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the default text encoding name to use when decoding html pages.
+@@ -1401,7 +1566,9 @@
+      *
+      * @param encoding the text encoding name
+      */
+-    public abstract void setDefaultTextEncodingName(String encoding);
++    public void setDefaultTextEncodingName(String encoding) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the default text encoding name.
+@@ -1409,7 +1576,9 @@
+      * @return the default text encoding name as a string
+      * @see #setDefaultTextEncodingName
+      */
+-    public abstract String getDefaultTextEncodingName();
++    public String getDefaultTextEncodingName() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the WebView's user-agent string. If the string is {@code null} or empty,
+@@ -1427,7 +1596,9 @@
+      *
+      * @param ua new user-agent string
+      */
+-    public abstract void setUserAgentString(@Nullable String ua);
++    public void setUserAgentString(@Nullable String ua) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the WebView's user-agent string.
+@@ -1445,7 +1616,7 @@
+      * @param context a Context object used to access application assets
+      */
+     public static String getDefaultUserAgent(Context context) {
+-        return WebViewFactory.getProvider().getStatics().getDefaultUserAgent(context);
++        return "WasmAndroid WebView";
+     }
+ 
+     /**
+@@ -1455,7 +1626,9 @@
+      *
+      * @param flag whether the WebView needs to set a node
+      */
+-    public abstract void setNeedInitialFocus(boolean flag);
++    public void setNeedInitialFocus(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets the CPU scheduling priority of the Render thread. Unlike the other settings, this
+@@ -1468,7 +1641,9 @@
+      *             under low memory conditions.
+      */
+     @Deprecated
+-    public abstract void setRenderPriority(RenderPriority priority);
++    public void setRenderPriority(RenderPriority priority) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Overrides the way the cache is used. The way the cache is used is based
+@@ -1482,7 +1657,9 @@
+      *
+      * @param mode the mode to use
+      */
+-    public abstract void setCacheMode(@CacheMode int mode);
++    public void setCacheMode(@CacheMode int mode) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the current setting for overriding the cache mode.
+@@ -1491,7 +1668,9 @@
+      * @see #setCacheMode
+      */
+     @CacheMode
+-    public abstract int getCacheMode();
++    public int getCacheMode() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Configures the WebView's behavior when a secure origin attempts to load a resource from an
+@@ -1508,7 +1687,9 @@
+      * @param mode The mixed content mode to use. One of {@link #MIXED_CONTENT_NEVER_ALLOW},
+      *     {@link #MIXED_CONTENT_ALWAYS_ALLOW} or {@link #MIXED_CONTENT_COMPATIBILITY_MODE}.
+      */
+-    public abstract void setMixedContentMode(int mode);
++    public void setMixedContentMode(int mode) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the current behavior of the WebView with regard to loading insecure content from a
+@@ -1516,7 +1697,9 @@
+      * @return The current setting, one of {@link #MIXED_CONTENT_NEVER_ALLOW},
+      *     {@link #MIXED_CONTENT_ALWAYS_ALLOW} or {@link #MIXED_CONTENT_COMPATIBILITY_MODE}.
+      */
+-    public abstract int getMixedContentMode();
++    public int getMixedContentMode() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether to use a video overlay for embedded encrypted video.
+@@ -1541,7 +1724,9 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+-    public abstract void setVideoOverlayForEmbeddedEncryptedVideoEnabled(boolean flag);
++    public void setVideoOverlayForEmbeddedEncryptedVideoEnabled(boolean flag) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether a video overlay will be used for embedded encrypted video.
+@@ -1552,7 +1737,9 @@
+      */
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+-    public abstract boolean getVideoOverlayForEmbeddedEncryptedVideoEnabled();
++    public boolean getVideoOverlayForEmbeddedEncryptedVideoEnabled() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether this WebView should raster tiles when it is
+@@ -1567,7 +1754,9 @@
+      *   visible WebViews and WebViews about to be animated to visible.
+      * </ul>
+      */
+-    public abstract void setOffscreenPreRaster(boolean enabled);
++    public void setOffscreenPreRaster(boolean enabled) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether this WebView should raster tiles when it is
+@@ -1575,8 +1764,9 @@
+      * @return {@code true} if this WebView will raster tiles when it is
+      * offscreen but attached to a window.
+      */
+-    public abstract boolean getOffscreenPreRaster();
+-
++    public boolean getOffscreenPreRaster() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Sets whether Safe Browsing is enabled. Safe Browsing allows WebView to
+@@ -1592,7 +1782,9 @@
+      *
+      * @param enabled Whether Safe Browsing is enabled.
+      */
+-    public abstract void setSafeBrowsingEnabled(boolean enabled);
++    public void setSafeBrowsingEnabled(boolean enabled) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets whether Safe Browsing is enabled.
+@@ -1600,8 +1792,9 @@
+      *
+      * @return {@code true} if Safe Browsing is enabled and {@code false} otherwise.
+      */
+-    public abstract boolean getSafeBrowsingEnabled();
+-
++    public boolean getSafeBrowsingEnabled() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Set the force dark mode for this WebView.
+@@ -1748,7 +1941,9 @@
+      * Disables the action mode menu items according to {@code menuItems} flag.
+      * @param menuItems an integer field flag for the menu items to be disabled.
+      */
+-    public abstract void setDisabledActionModeMenuItems(@MenuItemFlags int menuItems);
++    public void setDisabledActionModeMenuItems(@MenuItemFlags int menuItems) {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * Gets the action mode menu items that are disabled, expressed in an integer field flag.
+@@ -1756,7 +1951,9 @@
+      *
+      * @return all the disabled menu item flags combined with bitwise OR.
+      */
+-    public abstract @MenuItemFlags int getDisabledActionModeMenuItems();
++    public @MenuItemFlags int getDisabledActionModeMenuItems() {
++        throw new UnsupportedOperationException("Setting is unavailable for the iframe provider");
++    }
+ 
+     /**
+      * No menu items should be disabled.
+--- a/frameworks/base/core/java/android/webkit/WebView.java
++++ b/frameworks/base/core/java/android/webkit/WebView.java
+@@ -16,72 +16,40 @@
+ 
+ package android.webkit;
+ 
++import android.widget.FrameLayout;
++
+ import android.annotation.CallbackExecutor;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.SystemApi;
+-import android.annotation.Widget;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.pm.PackageInfo;
+-import android.content.res.Configuration;
+ import android.graphics.Bitmap;
+ import android.graphics.Canvas;
+-import android.graphics.Paint;
+ import android.graphics.Picture;
+-import android.graphics.Rect;
+-import android.graphics.drawable.Drawable;
+ import android.net.Uri;
+ import android.net.http.SslCertificate;
+ import android.os.Build;
+ import android.os.Bundle;
+-import android.os.Handler;
+ import android.os.Looper;
+ import android.os.Message;
+-import android.os.RemoteException;
+-import android.os.StrictMode;
+ import android.print.PrintDocumentAdapter;
+ import android.util.AttributeSet;
+-import android.util.Log;
+-import android.util.LongSparseArray;
+-import android.util.SparseArray;
+-import android.view.DragEvent;
+ import android.view.KeyEvent;
+-import android.view.MotionEvent;
+-import android.view.PointerIcon;
+ import android.view.View;
+-import android.view.ViewDebug;
+ import android.view.ViewGroup;
+-import android.view.ViewHierarchyEncoder;
+-import android.view.ViewStructure;
+ import android.view.ViewTreeObserver;
+-import android.view.WindowInsets;
+-import android.view.accessibility.AccessibilityEvent;
+-import android.view.accessibility.AccessibilityNodeInfo;
+-import android.view.accessibility.AccessibilityNodeProvider;
+-import android.view.autofill.AutofillId;
+-import android.view.autofill.AutofillValue;
+-import android.view.inputmethod.EditorInfo;
+-import android.view.inputmethod.InputConnection;
+-import android.view.inspector.InspectableProperty;
+ import android.view.textclassifier.TextClassifier;
+-import android.view.translation.TranslationCapability;
+-import android.view.translation.TranslationSpec.DataFormat;
+-import android.view.translation.ViewTranslationRequest;
+-import android.view.translation.ViewTranslationResponse;
+-import android.widget.AbsoluteLayout;
+-
+-import java.io.BufferedWriter;
++
+ import java.io.File;
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.concurrent.Executor;
+-import java.util.function.Consumer;
+ 
+ /**
+  * A View that displays web pages.
+@@ -111,10 +79,10 @@
+ // Methods are delegated to the provider implementation: all public API methods introduced in this
+ // file are fully delegated, whereas public and protected methods from the View base classes are
+ // only delegated where a specific need exists for them to do so.
+-@Widget
+-public class WebView extends AbsoluteLayout
++
++public class WebView extends FrameLayout
+         implements ViewTreeObserver.OnGlobalFocusChangeListener,
+-        ViewGroup.OnHierarchyChangeListener, ViewDebug.HierarchyHandler {
++        ViewGroup.OnHierarchyChangeListener {
+ 
+     private static final String LOGTAG = "WebView";
+ 
+@@ -415,28 +383,11 @@
+             int defStyleRes, @Nullable Map<String, Object> javaScriptInterfaces,
+             boolean privateBrowsing) {
+         super(context, attrs, defStyleAttr, defStyleRes);
+-
+-        // WebView is important by default, unless app developer overrode attribute.
+-        if (getImportantForAutofill() == IMPORTANT_FOR_AUTOFILL_AUTO) {
+-            setImportantForAutofill(IMPORTANT_FOR_AUTOFILL_YES);
+-        }
+-        if (getImportantForContentCapture() == IMPORTANT_FOR_CONTENT_CAPTURE_AUTO) {
+-            setImportantForContentCapture(IMPORTANT_FOR_CONTENT_CAPTURE_YES);
+-        }
+-
+-        if (context == null) {
+-            throw new IllegalArgumentException("Invalid context argument");
+-        }
+-        if (mWebViewThread == null) {
+-            throw new RuntimeException(
+-                "WebView cannot be initialized on a thread that has no Looper.");
+-        }
+-        checkThread();
+-
++        setFocusableInTouchMode(true);
++        setBackgroundColor(android.graphics.Color.WHITE);
++        setWillNotDraw(false);
+         ensureProviderCreated();
+         mProvider.init(javaScriptInterfaces, privateBrowsing);
+-        // Post condition of creating a webview is the CookieSyncManager.getInstance() is allowed.
+-        CookieSyncManager.setGetInstanceIsAllowed();
+     }
+ 
+     /**
+@@ -619,9 +570,7 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    public static void freeMemoryForTests() {
+-        getFactory().getStatics().freeMemoryForTests();
+-    }
++    public static void freeMemoryForTests() {}
+ 
+     /**
+      * Informs WebView of the network state. This is used to set
+@@ -1156,7 +1105,7 @@
+      * {@link WebViewClient#onScaleChanged}.
+      */
+     @Deprecated
+-    @ViewDebug.ExportedProperty(category = "webview")
++
+     public float getScale() {
+         checkThread();
+         return mProvider.getScale();
+@@ -1256,8 +1205,7 @@
+      *
+      * @return the URL for the current page or {@code null} if no page has been loaded
+      */
+-    @InspectableProperty(hasAttributeId = false)
+-    @ViewDebug.ExportedProperty(category = "webview")
++
+     @Nullable
+     public String getUrl() {
+         checkThread();
+@@ -1274,8 +1222,7 @@
+      * @return the URL that was originally requested for the current page or
+      * {@code null} if no page has been loaded
+      */
+-    @InspectableProperty(hasAttributeId = false)
+-    @ViewDebug.ExportedProperty(category = "webview")
++
+     @Nullable
+     public String getOriginalUrl() {
+         checkThread();
+@@ -1288,8 +1235,7 @@
+      *
+      * @return the title for the current page or {@code null} if no page has been loaded
+      */
+-    @InspectableProperty(hasAttributeId = false)
+-    @ViewDebug.ExportedProperty(category = "webview")
++
+     @Nullable
+     public String getTitle() {
+         checkThread();
+@@ -1303,7 +1249,7 @@
+      * @return the favicon for the current page or {@code null} if the page doesn't
+      * have one or if no page has been loaded
+      */
+-    @InspectableProperty(hasAttributeId = false)
++
+     @Nullable
+     public Bitmap getFavicon() {
+         checkThread();
+@@ -1327,7 +1273,7 @@
+      *
+      * @return the progress for the current page between 0 and 100
+      */
+-    @InspectableProperty(hasAttributeId = false)
++
+     public int getProgress() {
+         checkThread();
+         return mProvider.getProgress();
+@@ -1338,8 +1284,7 @@
+      *
+      * @return the height of the HTML content
+      */
+-    @InspectableProperty(hasAttributeId = false)
+-    @ViewDebug.ExportedProperty(category = "webview")
++
+     public int getContentHeight() {
+         checkThread();
+         return mProvider.getContentHeight();
+@@ -1351,7 +1296,7 @@
+      * @return the width of the HTML content
+      * @hide
+      */
+-    @ViewDebug.ExportedProperty(category = "webview")
++
+     @UnsupportedAppUsage
+     public int getContentWidth() {
+         return mProvider.getContentWidth();
+@@ -1469,7 +1414,7 @@
+      *                   The runnable will be called in UI thread.
+      */
+     public static void clearClientCertPreferences(@Nullable Runnable onCleared) {
+-        getFactory().getStatics().clearClientCertPreferences(onCleared);
++        if (onCleared != null) onCleared.run();
+     }
+ 
+     /**
+@@ -1494,10 +1439,10 @@
+      * is enabled and supported on the device.
+      */
+     @Deprecated
+-    @FlaggedApi(android.webkit.Flags.FLAG_DEPRECATE_START_SAFE_BROWSING)
++
+     public static void startSafeBrowsing(@NonNull Context context,
+             @Nullable ValueCallback<Boolean> callback) {
+-        getFactory().getStatics().initSafeBrowsing(context, callback);
++        if (callback != null) callback.onReceiveValue(false);
+     }
+ 
+     /**
+@@ -1525,17 +1470,7 @@
+      */
+     public static void setSafeBrowsingWhitelist(@NonNull List<String> hosts,
+             @Nullable ValueCallback<Boolean> callback) {
+-        getFactory().getStatics().setSafeBrowsingWhitelist(hosts, callback);
+-    }
+-
+-    /**
+-     * Returns a URL pointing to the privacy policy for Safe Browsing reporting.
+-     *
+-     * @return the url pointing to a privacy policy document which can be displayed to users.
+-     */
+-    @NonNull
+-    public static Uri getSafeBrowsingPrivacyPolicyUrl() {
+-        return getFactory().getStatics().getSafeBrowsingPrivacyPolicyUrl();
++        if (callback != null) callback.onReceiveValue(false);
+     }
+ 
+     /**
+@@ -1592,7 +1527,6 @@
+     @Deprecated
+     public int findAll(String find) {
+         checkThread();
+-        StrictMode.noteSlowCall("findAll blocks UI: prefer findAllAsync");
+         return mProvider.findAll(find);
+     }
+ 
+@@ -1627,48 +1561,6 @@
+     public boolean showFindDialog(@Nullable String text, boolean showIme) {
+         checkThread();
+         return mProvider.showFindDialog(text, showIme);
+-    }
+-
+-    /**
+-     * Gets the first substring which appears to be the address of a physical
+-     * location. Only addresses in the United States can be detected, which
+-     * must consist of:
+-     * <ul>
+-     *   <li>a house number</li>
+-     *   <li>a street name</li>
+-     *   <li>a street type (Road, Circle, etc), either spelled out or
+-     *       abbreviated</li>
+-     *   <li>a city name</li>
+-     *   <li>a state or territory, either spelled out or two-letter abbr</li>
+-     *   <li>an optional 5 digit or 9 digit zip code</li>
+-     * </ul>
+-     * All names must be correctly capitalized, and the zip code, if present,
+-     * must be valid for the state. The street type must be a standard USPS
+-     * spelling or abbreviation. The state or territory must also be spelled
+-     * or abbreviated using USPS standards. The house number may not exceed
+-     * five digits.
+-     *
+-     * <p class="note"><b>Note:</b> This function is deprecated and should be
+-     * avoided on all API levels, as it cannot detect addresses outside of the
+-     * United States and has a high rate of false positives. On API level
+-     * {@link android.os.Build.VERSION_CODES#O_MR1} and earlier, it also causes
+-     * the entire WebView implementation to be loaded and initialized, which
+-     * can throw {@link android.util.AndroidRuntimeException} or other exceptions
+-     * if the WebView implementation is currently being updated.
+-     *
+-     * @param addr the string to search for addresses
+-     * @return the address, or if no address is found, {@code null}
+-     * @deprecated This method is superseded by {@link TextClassifier#generateLinks(
+-     * android.view.textclassifier.TextLinks.Request)}. Avoid using this method even when targeting
+-     * API levels where no alternative is available.
+-     */
+-    @Nullable
+-    @Deprecated
+-    public static String findAddress(String addr) {
+-        if (addr == null) {
+-            throw new NullPointerException("addr is null");
+-        }
+-        return FindAddress.findAddress(addr);
+     }
+ 
+     /**
+@@ -1686,9 +1578,7 @@
+      * Enabling drawing the entire HTML document has a significant performance
+      * cost. This method should be called before any WebViews are created.
+      */
+-    public static void enableSlowWholeDocumentDraw() {
+-        getFactory().getStatics().enableSlowWholeDocumentDraw();
+-    }
++    public static void enableSlowWholeDocumentDraw() {}
+ 
+     /**
+      * Clears the highlighting surrounding text matches created by
+@@ -1734,7 +1624,6 @@
+         checkThread();
+         return mProvider.getWebViewClient();
+     }
+-
+ 
+     /**
+      * Gets a handle to the WebView renderer process associated with this WebView.
+@@ -2016,22 +1905,7 @@
+      *
+      * @param enabled whether to enable web contents debugging
+      */
+-    public static void setWebContentsDebuggingEnabled(boolean enabled) {
+-        getFactory().getStatics().setWebContentsDebuggingEnabled(enabled);
+-    }
+-
+-    /**
+-     * Gets the list of currently loaded plugins.
+-     *
+-     * @return the list of currently loaded plugins
+-     * @deprecated This was used for Gears, which has been deprecated.
+-     * @hide
+-     */
+-    @Deprecated
+-    @UnsupportedAppUsage
+-    public static synchronized PluginList getPluginList() {
+-        return new PluginList();
+-    }
++    public static void setWebContentsDebuggingEnabled(boolean enabled) {}
+ 
+     /**
+      * Define the directory used to store WebView data for the current process.
+@@ -2065,7 +1939,8 @@
+      * @throws IllegalArgumentException if the suffix contains a path separator.
+      */
+     public static void setDataDirectorySuffix(@NonNull String suffix) {
+-        WebViewFactory.setDataDirectorySuffix(suffix);
++        if (suffix == null || suffix.indexOf('/') >= 0) throw new IllegalArgumentException("Invalid suffix");
++        if (sCreated) throw new IllegalStateException("WebView already initialized");
+     }
+ 
+     /**
+@@ -2087,9 +1962,9 @@
+      *                               in the current process.
+      */
+     public static void disableWebView() {
+-        WebViewFactory.disableWebView();
+-    }
+-
++        if (sCreated) throw new IllegalStateException("WebView already initialized");
++        sDisabled = true;
++    }
+ 
+     /**
+      * @deprecated This was used for Gears, which has been deprecated.
+@@ -2150,7 +2025,6 @@
+         checkThread();
+         mProvider.setMapTrackballToArrowKeys(setMap);
+     }
+-
+ 
+     public void flingScroll(int vx, int vy) {
+         checkThread();
+@@ -2239,34 +2113,6 @@
+     public boolean zoomOut() {
+         checkThread();
+         return mProvider.zoomOut();
+-    }
+-
+-    /**
+-     * @deprecated This method is now obsolete.
+-     * @hide Since API level {@link android.os.Build.VERSION_CODES#JELLY_BEAN_MR1}
+-     */
+-    @Deprecated
+-    @UnsupportedAppUsage
+-    public void debugDump() {
+-        checkThread();
+-    }
+-
+-    /**
+-     * See {@link ViewDebug.HierarchyHandler#dumpViewHierarchyWithProperties(BufferedWriter, int)}
+-     * @hide
+-     */
+-    @Override
+-    public void dumpViewHierarchyWithProperties(BufferedWriter out, int level) {
+-        mProvider.dumpViewHierarchyWithProperties(out, level);
+-    }
+-
+-    /**
+-     * See {@link ViewDebug.HierarchyHandler#findHierarchyView(String, int)}
+-     * @hide
+-     */
+-    @Override
+-    public View findHierarchyView(String className, int hashCode) {
+-        return mProvider.findHierarchyView(className, hashCode);
+     }
+ 
+     /** @hide */
+@@ -2373,11 +2219,7 @@
+      * @see #setRendererPriorityPolicy
+      * @see RenderProcessGoneDetail#rendererPriorityAtExit
+      */
+-    @InspectableProperty(hasAttributeId = false, enumMapping = {
+-            @InspectableProperty.EnumEntry(name = "waived", value = RENDERER_PRIORITY_WAIVED),
+-            @InspectableProperty.EnumEntry(name = "bound", value = RENDERER_PRIORITY_BOUND),
+-            @InspectableProperty.EnumEntry(name = "important", value = RENDERER_PRIORITY_IMPORTANT)
+-    })
++
+     @RendererPriority
+     public int getRendererRequestedPriority() {
+         return mProvider.getRendererRequestedPriority();
+@@ -2390,7 +2232,7 @@
+      * @return whether this WebView requests a priority of
+      * {@link #RENDERER_PRIORITY_WAIVED} when not visible.
+      */
+-    @InspectableProperty(hasAttributeId = false)
++
+     public boolean getRendererPriorityWaivedWhenNotVisible() {
+         return mProvider.getRendererPriorityWaivedWhenNotVisible();
+     }
+@@ -2418,7 +2260,7 @@
+      */
+     @NonNull
+     public static ClassLoader getWebViewClassLoader() {
+-        return getFactory().getWebViewClassLoader();
++        return WebView.class.getClassLoader();
+     }
+ 
+     /**
+@@ -2443,126 +2285,6 @@
+     @SystemApi
+     public WebViewProvider getWebViewProvider() {
+         return mProvider;
+-    }
+-
+-    /**
+-     * Callback interface, allows the provider implementation to access non-public methods
+-     * and fields, and make super-class calls in this WebView instance.
+-     * @hide Only for use by WebViewProvider implementations
+-     */
+-    @SystemApi
+-    public class PrivateAccess {
+-        // ---- Access to super-class methods ----
+-        public int super_getScrollBarStyle() {
+-            return WebView.super.getScrollBarStyle();
+-        }
+-
+-        public void super_scrollTo(int scrollX, int scrollY) {
+-            WebView.super.scrollTo(scrollX, scrollY);
+-        }
+-
+-        public void super_computeScroll() {
+-            WebView.super.computeScroll();
+-        }
+-
+-        public boolean super_onHoverEvent(MotionEvent event) {
+-            return WebView.super.onHoverEvent(event);
+-        }
+-
+-        public boolean super_performAccessibilityAction(int action, Bundle arguments) {
+-            return WebView.super.performAccessibilityActionInternal(action, arguments);
+-        }
+-
+-        public boolean super_performLongClick() {
+-            return WebView.super.performLongClick();
+-        }
+-
+-        public boolean super_setFrame(int left, int top, int right, int bottom) {
+-            return WebView.super.setFrame(left, top, right, bottom);
+-        }
+-
+-        public boolean super_dispatchKeyEvent(KeyEvent event) {
+-            return WebView.super.dispatchKeyEvent(event);
+-        }
+-
+-        public boolean super_onGenericMotionEvent(MotionEvent event) {
+-            return WebView.super.onGenericMotionEvent(event);
+-        }
+-
+-        public boolean super_requestFocus(int direction, Rect previouslyFocusedRect) {
+-            return WebView.super.requestFocus(direction, previouslyFocusedRect);
+-        }
+-
+-        public void super_setLayoutParams(ViewGroup.LayoutParams params) {
+-            WebView.super.setLayoutParams(params);
+-        }
+-
+-        public void super_startActivityForResult(Intent intent, int requestCode) {
+-            WebView.super.startActivityForResult(intent, requestCode);
+-        }
+-
+-        /**
+-         * @see View#onApplyWindowInsets(WindowInsets)
+-         */
+-        @Nullable
+-        public WindowInsets super_onApplyWindowInsets(@Nullable WindowInsets insets) {
+-            return WebView.super.onApplyWindowInsets(insets);
+-        }
+-
+-        // ---- Access to non-public methods ----
+-        public void overScrollBy(int deltaX, int deltaY,
+-                int scrollX, int scrollY,
+-                int scrollRangeX, int scrollRangeY,
+-                int maxOverScrollX, int maxOverScrollY,
+-                boolean isTouchEvent) {
+-            WebView.this.overScrollBy(deltaX, deltaY, scrollX, scrollY, scrollRangeX, scrollRangeY,
+-                    maxOverScrollX, maxOverScrollY, isTouchEvent);
+-        }
+-
+-        public void awakenScrollBars(int duration) {
+-            WebView.this.awakenScrollBars(duration);
+-        }
+-
+-        public void awakenScrollBars(int duration, boolean invalidate) {
+-            WebView.this.awakenScrollBars(duration, invalidate);
+-        }
+-
+-        public float getVerticalScrollFactor() {
+-            return WebView.this.getVerticalScrollFactor();
+-        }
+-
+-        public float getHorizontalScrollFactor() {
+-            return WebView.this.getHorizontalScrollFactor();
+-        }
+-
+-        public void setMeasuredDimension(int measuredWidth, int measuredHeight) {
+-            WebView.this.setMeasuredDimension(measuredWidth, measuredHeight);
+-        }
+-
+-        public void onScrollChanged(int l, int t, int oldl, int oldt) {
+-            WebView.this.onScrollChanged(l, t, oldl, oldt);
+-        }
+-
+-        public int getHorizontalScrollbarHeight() {
+-            return WebView.this.getHorizontalScrollbarHeight();
+-        }
+-
+-        public void super_onDrawVerticalScrollBar(Canvas canvas, Drawable scrollBar,
+-                int l, int t, int r, int b) {
+-            WebView.super.onDrawVerticalScrollBar(canvas, scrollBar, l, t, r, b);
+-        }
+-
+-        // ---- Access to (non-public) fields ----
+-        /** Raw setter for the scroll X value, without invoking onScrollChanged handlers etc. */
+-        public void setScrollXRaw(int scrollX) {
+-            WebView.this.mScrollX = scrollX;
+-        }
+-
+-        /** Raw setter for the scroll Y value, without invoking onScrollChanged handlers etc. */
+-        public void setScrollYRaw(int scrollY) {
+-            WebView.this.mScrollY = scrollY;
+-        }
+-
+     }
+ 
+     //-------------------------------------------------------------------------
+@@ -2624,16 +2346,10 @@
+ 
+     private void ensureProviderCreated() {
+         checkThread();
+-        if (mProvider == null) {
+-            // As this can get called during the base class constructor chain, pass the minimum
+-            // number of dependencies here; the rest are deferred to init().
+-            mProvider = getFactory().createWebView(this, new PrivateAccess());
+-        }
+-    }
+-
+-    @UnsupportedAppUsage
+-    private static WebViewFactoryProvider getFactory() {
+-        return WebViewFactory.getProvider();
++        if (mProvider != null) return;
++        if (sDisabled) throw new IllegalStateException("WebView is disabled");
++        sCreated = true;
++        mProvider = new IframeProvider(this);
+     }
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+@@ -2641,18 +2357,8 @@
+ 
+     @UnsupportedAppUsage
+     private void checkThread() {
+-        // Ignore mWebViewThread == null because this can be called during in the super class
+-        // constructor, before this class's own constructor has even started.
+-        if (mWebViewThread != null && Looper.myLooper() != mWebViewThread) {
+-            Throwable throwable = new Throwable(
+-                    "A WebView method was called on thread '" +
+-                    Thread.currentThread().getName() + "'. " +
+-                    "All WebView methods must be called on the same thread. " +
+-                    "(Expected Looper " + mWebViewThread + " called on " + Looper.myLooper() +
+-                    ", FYI main Looper is " + Looper.getMainLooper() + ")");
+-            Log.w(LOGTAG, Log.getStackTraceString(throwable));
+-            StrictMode.onWebViewMethodCalledOnWrongThread(throwable);
+-            throw new RuntimeException(throwable);
++        if (mWebViewThread != Looper.myLooper()) {
++            throw new IllegalStateException("WebView must be accessed on its creating thread");
+         }
+     }
+ 
+@@ -2663,110 +2369,6 @@
+     // TODO: Add a test that enumerates all methods in ViewDelegte & ScrollDelegate, and ensures
+     // there's a corresponding override (or better, caller) for each of them in here.
+ 
+-    @Override
+-    protected void onAttachedToWindow() {
+-        super.onAttachedToWindow();
+-        mProvider.getViewDelegate().onAttachedToWindow();
+-    }
+-
+-    /** @hide */
+-    @Override
+-    protected void onDetachedFromWindowInternal() {
+-        mProvider.getViewDelegate().onDetachedFromWindow();
+-        super.onDetachedFromWindowInternal();
+-    }
+-
+-    /** @hide */
+-    @Override
+-    public void onMovedToDisplay(int displayId, Configuration config) {
+-        mProvider.getViewDelegate().onMovedToDisplay(displayId, config);
+-    }
+-
+-    @Override
+-    public void setLayoutParams(ViewGroup.LayoutParams params) {
+-        mProvider.getViewDelegate().setLayoutParams(params);
+-    }
+-
+-    @Override
+-    public void setOverScrollMode(int mode) {
+-        super.setOverScrollMode(mode);
+-        // This method may be called in the constructor chain, before the WebView provider is
+-        // created.
+-        ensureProviderCreated();
+-        mProvider.getViewDelegate().setOverScrollMode(mode);
+-    }
+-
+-    @Override
+-    public void setScrollBarStyle(int style) {
+-        mProvider.getViewDelegate().setScrollBarStyle(style);
+-        super.setScrollBarStyle(style);
+-    }
+-
+-    @Override
+-    protected int computeHorizontalScrollRange() {
+-        return mProvider.getScrollDelegate().computeHorizontalScrollRange();
+-    }
+-
+-    @Override
+-    protected int computeHorizontalScrollOffset() {
+-        return mProvider.getScrollDelegate().computeHorizontalScrollOffset();
+-    }
+-
+-    @Override
+-    protected int computeVerticalScrollRange() {
+-        return mProvider.getScrollDelegate().computeVerticalScrollRange();
+-    }
+-
+-    @Override
+-    protected int computeVerticalScrollOffset() {
+-        return mProvider.getScrollDelegate().computeVerticalScrollOffset();
+-    }
+-
+-    @Override
+-    protected int computeVerticalScrollExtent() {
+-        return mProvider.getScrollDelegate().computeVerticalScrollExtent();
+-    }
+-
+-    @Override
+-    public void computeScroll() {
+-        mProvider.getScrollDelegate().computeScroll();
+-    }
+-
+-    @Override
+-    public boolean onHoverEvent(MotionEvent event) {
+-        return mProvider.getViewDelegate().onHoverEvent(event);
+-    }
+-
+-    @Override
+-    public boolean onTouchEvent(MotionEvent event) {
+-        return mProvider.getViewDelegate().onTouchEvent(event);
+-    }
+-
+-    @Override
+-    public boolean onGenericMotionEvent(MotionEvent event) {
+-        return mProvider.getViewDelegate().onGenericMotionEvent(event);
+-    }
+-
+-    @Override
+-    public boolean onTrackballEvent(MotionEvent event) {
+-        return mProvider.getViewDelegate().onTrackballEvent(event);
+-    }
+-
+-    @Override
+-    public boolean onKeyDown(int keyCode, KeyEvent event) {
+-        return mProvider.getViewDelegate().onKeyDown(keyCode, event);
+-    }
+-
+-    @Override
+-    public boolean onKeyUp(int keyCode, KeyEvent event) {
+-        return mProvider.getViewDelegate().onKeyUp(keyCode, event);
+-    }
+-
+-    @Override
+-    public boolean onKeyMultiple(int keyCode, int repeatCount, KeyEvent event) {
+-        return mProvider.getViewDelegate().onKeyMultiple(keyCode, repeatCount, event);
+-    }
+-
+     /*
+     TODO: These are not currently implemented in WebViewClassic, but it seems inconsistent not
+     to be delegating them too.
+@@ -2786,314 +2388,8 @@
+     */
+ 
+     @Override
+-    public AccessibilityNodeProvider getAccessibilityNodeProvider() {
+-        AccessibilityNodeProvider provider =
+-                mProvider.getViewDelegate().getAccessibilityNodeProvider();
+-        return provider == null ? super.getAccessibilityNodeProvider() : provider;
+-    }
+-
+-    @Deprecated
+-    @Override
+-    public boolean shouldDelayChildPressedState() {
+-        return mProvider.getViewDelegate().shouldDelayChildPressedState();
+-    }
+-
+-    @Override
+     public CharSequence getAccessibilityClassName() {
+         return WebView.class.getName();
+-    }
+-
+-    @Override
+-    public void onProvideVirtualStructure(ViewStructure structure) {
+-        mProvider.getViewDelegate().onProvideVirtualStructure(structure);
+-    }
+-
+-    /**
+-     * {@inheritDoc}
+-     *
+-     * <p>The {@link ViewStructure} traditionally represents a {@link View}, while for web pages
+-     * it represent HTML nodes. Hence, it's necessary to "map" the HTML properties in a way that is
+-     * understood by the {@link android.service.autofill.AutofillService} implementations:
+-     *
+-     * <ol>
+-     *   <li>Only the HTML nodes inside a {@code FORM} are generated.
+-     *   <li>The source of the HTML is set using {@link ViewStructure#setWebDomain(String)} in the
+-     *   node representing the WebView.
+-     *   <li>If a web page has multiple {@code FORM}s, only the data for the current form is
+-     *   represented&mdash;if the user taps a field from another form, then the current autofill
+-     *   context is canceled (by calling {@link android.view.autofill.AutofillManager#cancel()} and
+-     *   a new context is created for that {@code FORM}.
+-     *   <li>Similarly, if the page has {@code IFRAME} nodes, they are not initially represented in
+-     *   the view structure until the user taps a field from a {@code FORM} inside the
+-     *   {@code IFRAME}, in which case it would be treated the same way as multiple forms described
+-     *   above, except that the {@link ViewStructure#setWebDomain(String) web domain} of the
+-     *   {@code FORM} contains the {@code src} attribute from the {@code IFRAME} node.
+-     *   <li>The W3C autofill field ({@code autocomplete} tag attribute) maps to
+-     *   {@link ViewStructure#setAutofillHints(String[])}.
+-     *   <li>If the view is editable, the {@link ViewStructure#setAutofillType(int)} and
+-     *   {@link ViewStructure#setAutofillValue(AutofillValue)} must be set.
+-     *   <li>The {@code placeholder} attribute maps to {@link ViewStructure#setHint(CharSequence)}.
+-     *   <li>Other HTML attributes can be represented through
+-     *   {@link ViewStructure#setHtmlInfo(android.view.ViewStructure.HtmlInfo)}.
+-     * </ol>
+-     *
+-     * <p>If the WebView implementation can determine that the value of a field was set statically
+-     * (for example, not through Javascript), it should also call
+-     * {@code structure.setDataIsSensitive(false)}.
+-     *
+-     * <p>For example, an HTML form with 2 fields for username and password:
+-     *
+-     * <pre class="prettyprint">
+-     *    &lt;label&gt;Username:&lt;/label&gt;
+-     *    &lt;input type="text" name="username" id="user" value="Type your username" autocomplete="username" placeholder="Email or username"&gt;
+-     *    &lt;label&gt;Password:&lt;/label&gt;
+-     *    &lt;input type="password" name="password" id="pass" autocomplete="current-password" placeholder="Password"&gt;
+-     * </pre>
+-     *
+-     * <p>Would map to:
+-     *
+-     * <pre class="prettyprint">
+-     *     int index = structure.addChildCount(2);
+-     *     ViewStructure username = structure.newChild(index);
+-     *     username.setAutofillId(structure.getAutofillId(), 1); // id 1 - first child
+-     *     username.setAutofillHints("username");
+-     *     username.setHtmlInfo(username.newHtmlInfoBuilder("input")
+-     *         .addAttribute("type", "text")
+-     *         .addAttribute("name", "username")
+-     *         .addAttribute("label", "Username:")
+-     *         .build());
+-     *     username.setHint("Email or username");
+-     *     username.setAutofillType(View.AUTOFILL_TYPE_TEXT);
+-     *     username.setAutofillValue(AutofillValue.forText("Type your username"));
+-     *     // Value of the field is not sensitive because it was created statically and not changed.
+-     *     username.setDataIsSensitive(false);
+-     *
+-     *     ViewStructure password = structure.newChild(index + 1);
+-     *     username.setAutofillId(structure, 2); // id 2 - second child
+-     *     password.setAutofillHints("current-password");
+-     *     password.setHtmlInfo(password.newHtmlInfoBuilder("input")
+-     *         .addAttribute("type", "password")
+-     *         .addAttribute("name", "password")
+-     *         .addAttribute("label", "Password:")
+-     *         .build());
+-     *     password.setHint("Password");
+-     *     password.setAutofillType(View.AUTOFILL_TYPE_TEXT);
+-     * </pre>
+-     */
+-    @Override
+-    public void onProvideAutofillVirtualStructure(ViewStructure structure, int flags) {
+-        mProvider.getViewDelegate().onProvideAutofillVirtualStructure(structure, flags);
+-    }
+-
+-    @Override
+-    public void onProvideContentCaptureStructure(@NonNull ViewStructure structure, int flags) {
+-        mProvider.getViewDelegate().onProvideContentCaptureStructure(structure, flags);
+-    }
+-
+-    @Override
+-    public void autofill(SparseArray<AutofillValue>values) {
+-        mProvider.getViewDelegate().autofill(values);
+-    }
+-
+-    @Override
+-    public boolean isVisibleToUserForAutofill(int virtualId) {
+-        return mProvider.getViewDelegate().isVisibleToUserForAutofill(virtualId);
+-    }
+-
+-    @Override
+-    @Nullable
+-    public void onCreateVirtualViewTranslationRequests(@NonNull long[] virtualIds,
+-            @NonNull @DataFormat int[] supportedFormats,
+-            @NonNull Consumer<ViewTranslationRequest> requestsCollector) {
+-        mProvider.getViewDelegate().onCreateVirtualViewTranslationRequests(virtualIds,
+-                supportedFormats, requestsCollector);
+-    }
+-
+-    @Override
+-    public void dispatchCreateViewTranslationRequest(@NonNull Map<AutofillId, long[]> viewIds,
+-            @NonNull @DataFormat int[] supportedFormats,
+-            @Nullable TranslationCapability capability,
+-            @NonNull List<ViewTranslationRequest> requests) {
+-        super.dispatchCreateViewTranslationRequest(viewIds, supportedFormats, capability, requests);
+-        mProvider.getViewDelegate().dispatchCreateViewTranslationRequest(viewIds, supportedFormats,
+-                capability, requests);
+-    }
+-
+-    @Override
+-    public void onVirtualViewTranslationResponses(
+-            @NonNull LongSparseArray<ViewTranslationResponse> response) {
+-        mProvider.getViewDelegate().onVirtualViewTranslationResponses(response);
+-    }
+-
+-    /** @hide */
+-    @Override
+-    public void onInitializeAccessibilityNodeInfoInternal(AccessibilityNodeInfo info) {
+-        super.onInitializeAccessibilityNodeInfoInternal(info);
+-        mProvider.getViewDelegate().onInitializeAccessibilityNodeInfo(info);
+-    }
+-
+-    /** @hide */
+-    @Override
+-    public void onInitializeAccessibilityEventInternal(AccessibilityEvent event) {
+-        super.onInitializeAccessibilityEventInternal(event);
+-        mProvider.getViewDelegate().onInitializeAccessibilityEvent(event);
+-    }
+-
+-    /** @hide */
+-    @Override
+-    public boolean performAccessibilityActionInternal(int action, Bundle arguments) {
+-        return mProvider.getViewDelegate().performAccessibilityAction(action, arguments);
+-    }
+-
+-    /** @hide */
+-    @Override
+-    @UnsupportedAppUsage
+-    protected void onDrawVerticalScrollBar(Canvas canvas, Drawable scrollBar,
+-            int l, int t, int r, int b) {
+-        mProvider.getViewDelegate().onDrawVerticalScrollBar(canvas, scrollBar, l, t, r, b);
+-    }
+-
+-    @Override
+-    protected void onOverScrolled(int scrollX, int scrollY, boolean clampedX, boolean clampedY) {
+-        mProvider.getViewDelegate().onOverScrolled(scrollX, scrollY, clampedX, clampedY);
+-    }
+-
+-    @Override
+-    protected void onWindowVisibilityChanged(int visibility) {
+-        super.onWindowVisibilityChanged(visibility);
+-        mProvider.getViewDelegate().onWindowVisibilityChanged(visibility);
+-    }
+-
+-    @Override
+-    protected void onDraw(Canvas canvas) {
+-        mProvider.getViewDelegate().onDraw(canvas);
+-    }
+-
+-    @Override
+-    public boolean performLongClick() {
+-        return mProvider.getViewDelegate().performLongClick();
+-    }
+-
+-    @Override
+-    protected void onConfigurationChanged(Configuration newConfig) {
+-        mProvider.getViewDelegate().onConfigurationChanged(newConfig);
+-    }
+-
+-    /**
+-     * Creates a new InputConnection for an InputMethod to interact with the WebView.
+-     * This is similar to {@link View#onCreateInputConnection} but note that WebView
+-     * calls InputConnection methods on a thread other than the UI thread.
+-     * If these methods are overridden, then the overriding methods should respect
+-     * thread restrictions when calling View methods or accessing data.
+-     */
+-    @Override
+-    public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+-        return mProvider.getViewDelegate().onCreateInputConnection(outAttrs);
+-    }
+-
+-    @Override
+-    public boolean onDragEvent(DragEvent event) {
+-        return mProvider.getViewDelegate().onDragEvent(event);
+-    }
+-
+-    @Override
+-    protected void onVisibilityChanged(View changedView, int visibility) {
+-        super.onVisibilityChanged(changedView, visibility);
+-        // This method may be called in the constructor chain, before the WebView provider is
+-        // created.
+-        ensureProviderCreated();
+-        mProvider.getViewDelegate().onVisibilityChanged(changedView, visibility);
+-    }
+-
+-    @Override
+-    public void onWindowFocusChanged(boolean hasWindowFocus) {
+-        mProvider.getViewDelegate().onWindowFocusChanged(hasWindowFocus);
+-        super.onWindowFocusChanged(hasWindowFocus);
+-    }
+-
+-    @Override
+-    protected void onFocusChanged(boolean focused, int direction, Rect previouslyFocusedRect) {
+-        mProvider.getViewDelegate().onFocusChanged(focused, direction, previouslyFocusedRect);
+-        super.onFocusChanged(focused, direction, previouslyFocusedRect);
+-    }
+-
+-    /** @hide */
+-    @Override
+-    @UnsupportedAppUsage
+-    protected boolean setFrame(int left, int top, int right, int bottom) {
+-        return mProvider.getViewDelegate().setFrame(left, top, right, bottom);
+-    }
+-
+-    @Override
+-    protected void onSizeChanged(int w, int h, int ow, int oh) {
+-        super.onSizeChanged(w, h, ow, oh);
+-        mProvider.getViewDelegate().onSizeChanged(w, h, ow, oh);
+-    }
+-
+-    @Override
+-    protected void onScrollChanged(int l, int t, int oldl, int oldt) {
+-        super.onScrollChanged(l, t, oldl, oldt);
+-        mProvider.getViewDelegate().onScrollChanged(l, t, oldl, oldt);
+-    }
+-
+-    @Override
+-    public boolean dispatchKeyEvent(KeyEvent event) {
+-        return mProvider.getViewDelegate().dispatchKeyEvent(event);
+-    }
+-
+-    @Override
+-    public boolean requestFocus(int direction, Rect previouslyFocusedRect) {
+-        return mProvider.getViewDelegate().requestFocus(direction, previouslyFocusedRect);
+-    }
+-
+-    @Override
+-    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+-        super.onMeasure(widthMeasureSpec, heightMeasureSpec);
+-        mProvider.getViewDelegate().onMeasure(widthMeasureSpec, heightMeasureSpec);
+-    }
+-
+-    @Override
+-    public boolean requestChildRectangleOnScreen(View child, Rect rect, boolean immediate) {
+-        return mProvider.getViewDelegate().requestChildRectangleOnScreen(child, rect, immediate);
+-    }
+-
+-    @Override
+-    public void setBackgroundColor(int color) {
+-        mProvider.getViewDelegate().setBackgroundColor(color);
+-    }
+-
+-    @Override
+-    public void setLayerType(int layerType, Paint paint) {
+-        super.setLayerType(layerType, paint);
+-        mProvider.getViewDelegate().setLayerType(layerType, paint);
+-    }
+-
+-    @Override
+-    protected void dispatchDraw(Canvas canvas) {
+-        mProvider.getViewDelegate().preDispatchDraw(canvas);
+-        super.dispatchDraw(canvas);
+-    }
+-
+-    @Override
+-    public void onStartTemporaryDetach() {
+-        super.onStartTemporaryDetach();
+-        mProvider.getViewDelegate().onStartTemporaryDetach();
+-    }
+-
+-    @Override
+-    public void onFinishTemporaryDetach() {
+-        super.onFinishTemporaryDetach();
+-        mProvider.getViewDelegate().onFinishTemporaryDetach();
+-    }
+-
+-    @Override
+-    public Handler getHandler() {
+-        return mProvider.getViewDelegate().getHandler(super.getHandler());
+-    }
+-
+-    @Override
+-    public View findFocus() {
+-        return mProvider.getViewDelegate().findFocus(super.findFocus());
+     }
+ 
+     /**
+@@ -3109,81 +2405,168 @@
+      */
+     @Nullable
+     public static PackageInfo getCurrentWebViewPackage() {
+-        PackageInfo webviewPackage = WebViewFactory.getLoadedPackageInfo();
+-        if (webviewPackage != null) {
+-            return webviewPackage;
++        return null;
++    }
++
++    /** @deprecated Address detection requires a local WebView engine. */
++    @Nullable
++    @Deprecated
++    public static String findAddress(String addr) {
++        if (addr == null) throw new NullPointerException("addr is null");
++        return null;
++    }
++
++    private static boolean sCreated;
++    private static boolean sDisabled;
++
++    @Override
++    protected void onAttachedToWindow() {
++        super.onAttachedToWindow();
++        if (mProvider != null) ((IframeProvider) mProvider).attach();
++    }
++
++    @Override
++    protected void onDetachedFromWindow() {
++        if (mProvider != null) ((IframeProvider) mProvider).close();
++        super.onDetachedFromWindow();
++    }
++
++    @Override
++    public void setVisibility(int visibility) {
++        super.setVisibility(visibility);
++        if (mProvider == null) return;
++        IframeProvider provider = (IframeProvider) mProvider;
++        if (visibility == VISIBLE) provider.attach();
++        else provider.close();
++    }
++
++    @Override
++    protected void onDraw(Canvas canvas) {
++        super.onDraw(canvas);
++        if (mProvider != null) ((IframeProvider) mProvider).place();
++    }
++
++    private static final class IframeProvider implements WebViewProvider {
++        private static final String BLANK = "about:blank";
++        private static int sNextId = 2;
++        private final int mId = sNextId++;
++        private final IframeSettings mSettings = new IframeSettings();
++        private final java.util.ArrayList<String> mHistory = new java.util.ArrayList<>();
++        private final int[] mLocation = new int[2];
++        private final WebView mView;
++        private WebViewClient mClient;
++        private int mPage = -1;
++        private boolean mDestroyed;
++
++        IframeProvider(WebView view) {
++            mView = view;
+         }
+ 
+-        if (Flags.updateServiceIpcWrapper()) {
+-            if (WebViewFactory.isWebViewSupported()) {
+-                return WebViewUpdateManager.getInstance().getCurrentWebViewPackage();
+-            } else {
+-                return null;
+-            }
+-        } else {
+-            IWebViewUpdateService service = WebViewFactory.getUpdateService();
+-            if (service == null) {
+-                return null;
+-            }
+-            try {
+-                return service.getCurrentWebViewPackage();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
++        @Override public void init(Map<String, Object> interfaces, boolean privateBrowsing) {
++            if (privateBrowsing || interfaces != null && !interfaces.isEmpty()) {
++                throw new UnsupportedOperationException("The iframe owns its browser storage and script context");
+             }
+         }
+-    }
+-
+-    /**
+-     * Receive the result from a previous call to {@link #startActivityForResult(Intent, int)}.
+-     *
+-     * @param requestCode The integer request code originally supplied to
+-     *                    startActivityForResult(), allowing you to identify who this
+-     *                    result came from.
+-     * @param resultCode The integer result code returned by the child activity
+-     *                   through its setResult().
+-     * @param data An Intent, which can return result data to the caller
+-     *               (various data can be attached to Intent "extras").
+-     * @hide
+-     */
+-    @Override
+-    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+-        mProvider.getViewDelegate().onActivityResult(requestCode, resultCode, data);
+-    }
+-
+-    @Override
+-    public boolean onCheckIsTextEditor() {
+-        return mProvider.getViewDelegate().onCheckIsTextEditor();
+-    }
+-
+-    /** @hide */
+-    @Override
+-    protected void encodeProperties(@NonNull ViewHierarchyEncoder encoder) {
+-        super.encodeProperties(encoder);
+-
+-        checkThread();
+-        encoder.addProperty("webview:contentHeight", mProvider.getContentHeight());
+-        encoder.addProperty("webview:contentWidth", mProvider.getContentWidth());
+-        encoder.addProperty("webview:scale", mProvider.getScale());
+-        encoder.addProperty("webview:title", mProvider.getTitle());
+-        encoder.addProperty("webview:url", mProvider.getUrl());
+-        encoder.addProperty("webview:originalUrl", mProvider.getOriginalUrl());
+-    }
+-
+-    @Override
+-    public WindowInsets onApplyWindowInsets(WindowInsets insets) {
+-        WindowInsets result = mProvider.getViewDelegate().onApplyWindowInsets(insets);
+-        if (result == null) return super.onApplyWindowInsets(insets);
+-        return result;
+-    }
+-
+-    @Override
+-    @Nullable
+-    public PointerIcon onResolvePointerIcon(@NonNull MotionEvent event, int pointerIndex) {
+-        PointerIcon icon =
+-                mProvider.getViewDelegate().onResolvePointerIcon(event, pointerIndex);
+-        if (icon != null) {
+-            return icon;
++
++        @Override public WebSettings getSettings() { return mSettings; }
++        @Override public void setWebViewClient(WebViewClient client) { mClient = client; }
++        @Override public WebViewClient getWebViewClient() { return mClient; }
++        @Override public String getUrl() { return mPage < 0 ? null : mHistory.get(mPage); }
++        @Override public String getOriginalUrl() { return getUrl(); }
++        @Override public int getProgress() { return BLANK.equals(getUrl()) ? 100 : 0; }
++        @Override public boolean isPrivateBrowsingEnabled() { return false; }
++
++        @Override public void loadUrl(String url, Map<String, String> headers) {
++            if (headers != null && !headers.isEmpty()) {
++                throw new UnsupportedOperationException("The iframe does not support request headers");
++            }
++            loadUrl(url);
+         }
+-        return super.onResolvePointerIcon(event, pointerIndex);
+-    }
++
++        @Override public void loadUrl(String url) {
++            if (!navigate(url)) return;
++            while (mHistory.size() > mPage + 1) mHistory.remove(mHistory.size() - 1);
++            mHistory.add(url);
++            mPage++;
++        }
++
++        @Override public boolean canGoBack() { return canGoBackOrForward(-1); }
++        @Override public boolean canGoForward() { return canGoBackOrForward(1); }
++        @Override public void goBack() { goBackOrForward(-1); }
++        @Override public void goForward() { goBackOrForward(1); }
++
++        @Override public boolean canGoBackOrForward(int steps) {
++            long target = (long) mPage + steps;
++            return target >= 0 && target < mHistory.size();
++        }
++
++        @Override public void goBackOrForward(int steps) {
++            if (canGoBackOrForward(steps) && navigate(mHistory.get(mPage + steps))) mPage += steps;
++        }
++
++        @Override public void reload() {
++            if (mPage >= 0) navigate(mHistory.get(mPage));
++        }
++
++        @Override public void clearHistory() {
++            if (mPage < 0) return;
++            String url = mHistory.get(mPage);
++            mHistory.clear();
++            mHistory.add(url);
++            mPage = 0;
++        }
++
++        private boolean navigate(String url) {
++            if (mDestroyed) return false;
++            // The iframe provider allows page scripts only after the app opts in.
++            if (url == null || (!BLANK.equals(url) && !mSettings.getJavaScriptEnabled())
++                    || !nativeNavigate(mId, url)) {
++                if (mClient != null) mClient.onReceivedError(mView, WebViewClient.ERROR_UNSUPPORTED_SCHEME,
++                        "The embedded WebView requires an HTTP(S) URL and JavaScript permission", url);
++                return false;
++            }
++            if (mClient != null) {
++                mClient.onPageStarted(mView, url, null);
++                if (BLANK.equals(url) && mClient != null) mClient.onPageFinished(mView, url);
++            }
++            mView.invalidate();
++            return true;
++        }
++
++        void attach() {
++            if (!mDestroyed && mPage >= 0) nativeNavigate(mId, mHistory.get(mPage));
++        }
++
++        void close() {
++            if (!mDestroyed) nativeClose(mId);
++        }
++
++        void place() {
++            if (mDestroyed || mPage < 0) return;
++            mView.getLocationInWindow(mLocation);
++            nativePlace(mId, mLocation[0], mLocation[1], mView.getWidth(), mView.getHeight());
++        }
++
++        @Override public void destroy() {
++            if (mDestroyed) return;
++            close();
++            mDestroyed = true;
++            mClient = null;
++            mHistory.clear();
++            mPage = -1;
++            mView.invalidate();
++        }
++    }
++
++    private static final class IframeSettings extends WebSettings {
++        private boolean mJavaScriptEnabled;
++
++        @Override public boolean getJavaScriptEnabled() { return mJavaScriptEnabled; }
++        @Override public void setJavaScriptEnabled(boolean enabled) { mJavaScriptEnabled = enabled; }
++        @Override public String getUserAgentString() { return getDefaultUserAgent(null); }
++    }
++
++    private static native boolean nativeNavigate(int id, String url);
++    private static native void nativePlace(int id, int x, int y, int width, int height);
++    private static native void nativeClose(int id);
+ }
+--- a/frameworks/base/core/java/android/webkit/WebViewClient.java
++++ b/frameworks/base/core/java/android/webkit/WebViewClient.java
+@@ -23,7 +23,6 @@
+ import android.os.Message;
+ import android.view.InputEvent;
+ import android.view.KeyEvent;
+-import android.view.ViewRootImpl;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -541,12 +540,7 @@
+         onUnhandledInputEventInternal(view, event);
+     }
+ 
+-    private void onUnhandledInputEventInternal(WebView view, InputEvent event) {
+-        ViewRootImpl root = view.getViewRootImpl();
+-        if (root != null) {
+-            root.dispatchUnhandledInputEvent(event);
+-        }
+-    }
++    private void onUnhandledInputEventInternal(WebView view, InputEvent event) {}
+ 
+     /**
+      * Notify the host application that the scale applied to the WebView has
+--- a/frameworks/base/core/java/android/webkit/WebViewProvider.java
++++ b/frameworks/base/core/java/android/webkit/WebViewProvider.java
+@@ -18,54 +18,24 @@
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+-import android.content.Intent;
+-import android.content.res.Configuration;
+ import android.graphics.Bitmap;
+-import android.graphics.Canvas;
+-import android.graphics.Paint;
+ import android.graphics.Picture;
+-import android.graphics.Rect;
+-import android.graphics.drawable.Drawable;
+ import android.net.Uri;
+ import android.net.http.SslCertificate;
+ import android.os.Bundle;
+-import android.os.Handler;
+ import android.os.Message;
+ import android.print.PrintDocumentAdapter;
+-import android.util.LongSparseArray;
+-import android.util.SparseArray;
+-import android.view.DragEvent;
+-import android.view.KeyEvent;
+-import android.view.MotionEvent;
+-import android.view.PointerIcon;
+ import android.view.View;
+-import android.view.ViewGroup.LayoutParams;
+-import android.view.WindowInsets;
+-import android.view.accessibility.AccessibilityEvent;
+-import android.view.accessibility.AccessibilityNodeInfo;
+-import android.view.accessibility.AccessibilityNodeProvider;
+-import android.view.autofill.AutofillId;
+-import android.view.autofill.AutofillValue;
+-import android.view.inputmethod.EditorInfo;
+-import android.view.inputmethod.InputConnection;
+ import android.view.textclassifier.TextClassifier;
+-import android.view.translation.TranslationCapability;
+-import android.view.translation.TranslationSpec.DataFormat;
+-import android.view.translation.ViewTranslationRequest;
+-import android.view.translation.ViewTranslationResponse;
+ import android.webkit.WebView.HitTestResult;
+ import android.webkit.WebView.PictureListener;
+ import android.webkit.WebView.VisualStateCallback;
+ 
+-
+ import java.io.BufferedWriter;
+ import java.io.File;
+-import java.util.List;
+ import java.util.Map;
+ import java.util.concurrent.Executor;
+-import java.util.function.Consumer;
+ 
+ /**
+  * WebView backend provider interface: this interface is the abstract backend to a WebView
+@@ -92,29 +62,29 @@
+             boolean privateBrowsing);
+ 
+     // Deprecated - should never be called
+-    public void setHorizontalScrollbarOverlay(boolean overlay);
++    public default void setHorizontalScrollbarOverlay(boolean overlay) { throw unsupported(); }
+ 
+     // Deprecated - should never be called
+-    public void setVerticalScrollbarOverlay(boolean overlay);
++    public default void setVerticalScrollbarOverlay(boolean overlay) { throw unsupported(); }
+ 
+     // Deprecated - should never be called
+-    public boolean overlayHorizontalScrollbar();
++    public default boolean overlayHorizontalScrollbar() { throw unsupported(); }
+ 
+     // Deprecated - should never be called
+-    public boolean overlayVerticalScrollbar();
+-
+-    public int getVisibleTitleHeight();
+-
+-    public SslCertificate getCertificate();
+-
+-    public void setCertificate(SslCertificate certificate);
+-
+-    public void savePassword(String host, String username, String password);
+-
+-    public void setHttpAuthUsernamePassword(String host, String realm,
+-            String username, String password);
+-
+-    public String[] getHttpAuthUsernamePassword(String host, String realm);
++    public default boolean overlayVerticalScrollbar() { throw unsupported(); }
++
++    public default int getVisibleTitleHeight() { throw unsupported(); }
++
++    public default SslCertificate getCertificate() { throw unsupported(); }
++
++    public default void setCertificate(SslCertificate certificate) { throw unsupported(); }
++
++    public default void savePassword(String host, String username, String password) { throw unsupported(); }
++
++    public default void setHttpAuthUsernamePassword(String host, String realm,
++            String username, String password) { throw unsupported(); }
++
++    public default String[] getHttpAuthUsernamePassword(String host, String realm) { throw unsupported(); }
+ 
+     /**
+      * See {@link WebView#destroy()}.
+@@ -124,34 +94,34 @@
+      */
+     public void destroy();
+ 
+-    public void setNetworkAvailable(boolean networkUp);
+-
+-    public WebBackForwardList saveState(Bundle outState);
+-
+-    public boolean savePicture(Bundle b, final File dest);
+-
+-    public boolean restorePicture(Bundle b, File src);
+-
+-    public WebBackForwardList restoreState(Bundle inState);
++    public default void setNetworkAvailable(boolean networkUp) { throw unsupported(); }
++
++    public default WebBackForwardList saveState(Bundle outState) { throw unsupported(); }
++
++    public default boolean savePicture(Bundle b, final File dest) { throw unsupported(); }
++
++    public default boolean restorePicture(Bundle b, File src) { throw unsupported(); }
++
++    public default WebBackForwardList restoreState(Bundle inState) { throw unsupported(); }
+ 
+     public void loadUrl(String url, Map<String, String> additionalHttpHeaders);
+ 
+     public void loadUrl(String url);
+ 
+-    public void postUrl(String url, byte[] postData);
+-
+-    public void loadData(String data, String mimeType, String encoding);
+-
+-    public void loadDataWithBaseURL(String baseUrl, String data,
+-            String mimeType, String encoding, String historyUrl);
+-
+-    public void evaluateJavaScript(String script, ValueCallback<String> resultCallback);
+-
+-    public void saveWebArchive(String filename);
+-
+-    public void saveWebArchive(String basename, boolean autoname, ValueCallback<String> callback);
+-
+-    public void stopLoading();
++    public default void postUrl(String url, byte[] postData) { throw unsupported(); }
++
++    public default void loadData(String data, String mimeType, String encoding) { throw unsupported(); }
++
++    public default void loadDataWithBaseURL(String baseUrl, String data,
++            String mimeType, String encoding, String historyUrl) { throw unsupported(); }
++
++    public default void evaluateJavaScript(String script, ValueCallback<String> resultCallback) { throw unsupported(); }
++
++    public default void saveWebArchive(String filename) { throw unsupported(); }
++
++    public default void saveWebArchive(String basename, boolean autoname, ValueCallback<String> callback) { throw unsupported(); }
++
++    public default void stopLoading() { throw unsupported(); }
+ 
+     public void reload();
+ 
+@@ -169,139 +139,139 @@
+ 
+     public boolean isPrivateBrowsingEnabled();
+ 
+-    public boolean pageUp(boolean top);
+-
+-    public boolean pageDown(boolean bottom);
+-
+-    public void insertVisualStateCallback(long requestId, VisualStateCallback callback);
+-
+-    public void clearView();
+-
+-    public Picture capturePicture();
+-
+-    public PrintDocumentAdapter createPrintDocumentAdapter(String documentName);
+-
+-    public float getScale();
+-
+-    public void setInitialScale(int scaleInPercent);
+-
+-    public void invokeZoomPicker();
+-
+-    public HitTestResult getHitTestResult();
+-
+-    public void requestFocusNodeHref(Message hrefMsg);
+-
+-    public void requestImageRef(Message msg);
++    public default boolean pageUp(boolean top) { throw unsupported(); }
++
++    public default boolean pageDown(boolean bottom) { throw unsupported(); }
++
++    public default void insertVisualStateCallback(long requestId, VisualStateCallback callback) { throw unsupported(); }
++
++    public default void clearView() { throw unsupported(); }
++
++    public default Picture capturePicture() { throw unsupported(); }
++
++    public default PrintDocumentAdapter createPrintDocumentAdapter(String documentName) { throw unsupported(); }
++
++    public default float getScale() { throw unsupported(); }
++
++    public default void setInitialScale(int scaleInPercent) { throw unsupported(); }
++
++    public default void invokeZoomPicker() { throw unsupported(); }
++
++    public default HitTestResult getHitTestResult() { throw unsupported(); }
++
++    public default void requestFocusNodeHref(Message hrefMsg) { throw unsupported(); }
++
++    public default void requestImageRef(Message msg) { throw unsupported(); }
+ 
+     public String getUrl();
+ 
+     public String getOriginalUrl();
+ 
+-    public String getTitle();
+-
+-    public Bitmap getFavicon();
+-
+-    public String getTouchIconUrl();
++    public default String getTitle() { throw unsupported(); }
++
++    public default Bitmap getFavicon() { throw unsupported(); }
++
++    public default String getTouchIconUrl() { throw unsupported(); }
+ 
+     public int getProgress();
+ 
+-    public int getContentHeight();
+-
+-    public int getContentWidth();
+-
+-    public void pauseTimers();
+-
+-    public void resumeTimers();
+-
+-    public void onPause();
+-
+-    public void onResume();
+-
+-    public boolean isPaused();
+-
+-    public void freeMemory();
+-
+-    public void clearCache(boolean includeDiskFiles);
+-
+-    public void clearFormData();
++    public default int getContentHeight() { throw unsupported(); }
++
++    public default int getContentWidth() { throw unsupported(); }
++
++    public default void pauseTimers() { throw unsupported(); }
++
++    public default void resumeTimers() { throw unsupported(); }
++
++    public default void onPause() { throw unsupported(); }
++
++    public default void onResume() { throw unsupported(); }
++
++    public default boolean isPaused() { throw unsupported(); }
++
++    public default void freeMemory() { throw unsupported(); }
++
++    public default void clearCache(boolean includeDiskFiles) { throw unsupported(); }
++
++    public default void clearFormData() { throw unsupported(); }
+ 
+     public void clearHistory();
+ 
+-    public void clearSslPreferences();
+-
+-    public WebBackForwardList copyBackForwardList();
+-
+-    public void setFindListener(WebView.FindListener listener);
+-
+-    public void findNext(boolean forward);
+-
+-    public int findAll(String find);
+-
+-    public void findAllAsync(String find);
+-
+-    public boolean showFindDialog(String text, boolean showIme);
+-
+-    public void clearMatches();
+-
+-    public void documentHasImages(Message response);
++    public default void clearSslPreferences() { throw unsupported(); }
++
++    public default WebBackForwardList copyBackForwardList() { throw unsupported(); }
++
++    public default void setFindListener(WebView.FindListener listener) { throw unsupported(); }
++
++    public default void findNext(boolean forward) { throw unsupported(); }
++
++    public default int findAll(String find) { throw unsupported(); }
++
++    public default void findAllAsync(String find) { throw unsupported(); }
++
++    public default boolean showFindDialog(String text, boolean showIme) { throw unsupported(); }
++
++    public default void clearMatches() { throw unsupported(); }
++
++    public default void documentHasImages(Message response) { throw unsupported(); }
+ 
+     public void setWebViewClient(WebViewClient client);
+ 
+     public WebViewClient getWebViewClient();
+ 
+-    @Nullable
+-    public WebViewRenderProcess getWebViewRenderProcess();
+-
+-    public void setWebViewRenderProcessClient(
++    default @Nullable
++    public WebViewRenderProcess getWebViewRenderProcess() { throw unsupported(); }
++
++    public default void setWebViewRenderProcessClient(
+             @Nullable Executor executor,
+-            @Nullable WebViewRenderProcessClient client);
+-
+-    @Nullable
+-    public WebViewRenderProcessClient getWebViewRenderProcessClient();
+-
+-    public void setDownloadListener(DownloadListener listener);
+-
+-    public void setWebChromeClient(WebChromeClient client);
+-
+-    public WebChromeClient getWebChromeClient();
+-
+-    public void setPictureListener(PictureListener listener);
+-
+-    public void addJavascriptInterface(Object obj, String interfaceName);
+-
+-    public void removeJavascriptInterface(String interfaceName);
+-
+-    public WebMessagePort[] createWebMessageChannel();
+-
+-    public void postMessageToMainFrame(WebMessage message, Uri targetOrigin);
++            @Nullable WebViewRenderProcessClient client) { throw unsupported(); }
++
++    default @Nullable
++    public WebViewRenderProcessClient getWebViewRenderProcessClient() { throw unsupported(); }
++
++    public default void setDownloadListener(DownloadListener listener) { throw unsupported(); }
++
++    public default void setWebChromeClient(WebChromeClient client) { throw unsupported(); }
++
++    public default WebChromeClient getWebChromeClient() { throw unsupported(); }
++
++    public default void setPictureListener(PictureListener listener) { throw unsupported(); }
++
++    public default void addJavascriptInterface(Object obj, String interfaceName) { throw unsupported(); }
++
++    public default void removeJavascriptInterface(String interfaceName) { throw unsupported(); }
++
++    public default WebMessagePort[] createWebMessageChannel() { throw unsupported(); }
++
++    public default void postMessageToMainFrame(WebMessage message, Uri targetOrigin) { throw unsupported(); }
+ 
+     public WebSettings getSettings();
+ 
+-    public void setMapTrackballToArrowKeys(boolean setMap);
+-
+-    public void flingScroll(int vx, int vy);
+-
+-    public View getZoomControls();
+-
+-    public boolean canZoomIn();
+-
+-    public boolean canZoomOut();
+-
+-    public boolean zoomBy(float zoomFactor);
+-
+-    public boolean zoomIn();
+-
+-    public boolean zoomOut();
+-
+-    public void dumpViewHierarchyWithProperties(BufferedWriter out, int level);
+-
+-    public View findHierarchyView(String className, int hashCode);
+-
+-    public void setRendererPriorityPolicy(int rendererRequestedPriority, boolean waivedWhenNotVisible);
+-
+-    public int getRendererRequestedPriority();
+-
+-    public boolean getRendererPriorityWaivedWhenNotVisible();
++    public default void setMapTrackballToArrowKeys(boolean setMap) { throw unsupported(); }
++
++    public default void flingScroll(int vx, int vy) { throw unsupported(); }
++
++    public default View getZoomControls() { throw unsupported(); }
++
++    public default boolean canZoomIn() { throw unsupported(); }
++
++    public default boolean canZoomOut() { throw unsupported(); }
++
++    public default boolean zoomBy(float zoomFactor) { throw unsupported(); }
++
++    public default boolean zoomIn() { throw unsupported(); }
++
++    public default boolean zoomOut() { throw unsupported(); }
++
++    public default void dumpViewHierarchyWithProperties(BufferedWriter out, int level) { throw unsupported(); }
++
++    public default View findHierarchyView(String className, int hashCode) { throw unsupported(); }
++
++    public default void setRendererPriorityPolicy(int rendererRequestedPriority, boolean waivedWhenNotVisible) { throw unsupported(); }
++
++    public default int getRendererRequestedPriority() { throw unsupported(); }
++
++    public default boolean getRendererPriorityWaivedWhenNotVisible() { throw unsupported(); }
+ 
+     @SuppressWarnings("unused")
+     public default void setTextClassifier(@Nullable TextClassifier textClassifier) {}
+@@ -317,19 +287,17 @@
+      * @return the ViewDelegate implementation. This provides the functionality to back all of
+      * the name-sake functions from the View and ViewGroup base classes of WebView.
+      */
+-    /* package */ ViewDelegate getViewDelegate();
+-
++    /* package */
+     /**
+      * @return a ScrollDelegate implementation. Normally this would be same object as is
+      * returned by getViewDelegate().
+      */
+-    /* package */ ScrollDelegate getScrollDelegate();
+-
++    /* package */
+     /**
+      * Only used by FindActionModeCallback to inform providers that the find dialog has
+      * been dismissed.
+      */
+-    public void notifyFindDialogDismissed();
++    public default void notifyFindDialogDismissed() { throw unsupported(); }
+ 
+     //-------------------------------------------------------------------------
+     // View / ViewGroup delegation methods
+@@ -346,199 +314,8 @@
+      */
+     // TODO: See if the pattern of the super-class calls can be rationalized at all, and document
+     // the remainder on the methods below.
+-    interface ViewDelegate {
+-        public boolean shouldDelayChildPressedState();
+-
+-        public void onProvideVirtualStructure(android.view.ViewStructure structure);
+-
+-        default void onProvideAutofillVirtualStructure(
+-                @SuppressWarnings("unused") android.view.ViewStructure structure,
+-                @SuppressWarnings("unused") int flags) {
+-        }
+-
+-        default void autofill(@SuppressWarnings("unused") SparseArray<AutofillValue> values) {
+-        }
+-
+-        default boolean isVisibleToUserForAutofill(@SuppressWarnings("unused") int virtualId) {
+-            return true; // true is the default value returned by View.isVisibleToUserForAutofill()
+-        }
+-
+-        default void onProvideContentCaptureStructure(
+-                @NonNull @SuppressWarnings("unused") android.view.ViewStructure structure,
+-                @SuppressWarnings("unused") int flags) {
+-        }
+-
+-        @SuppressLint("NullableCollection")
+-        default void onCreateVirtualViewTranslationRequests(
+-                @NonNull @SuppressWarnings("unused") long[] virtualIds,
+-                @NonNull @SuppressWarnings("unused") @DataFormat int[] supportedFormats,
+-                @NonNull @SuppressWarnings("unused")
+-                        Consumer<ViewTranslationRequest> requestsCollector) {
+-        }
+-
+-        default void onVirtualViewTranslationResponses(
+-                @NonNull @SuppressWarnings("unused")
+-                        LongSparseArray<ViewTranslationResponse> response) {
+-        }
+-
+-        default void dispatchCreateViewTranslationRequest(
+-                @NonNull @SuppressWarnings("unused") Map<AutofillId, long[]> viewIds,
+-                @NonNull @SuppressWarnings("unused") @DataFormat int[] supportedFormats,
+-                @Nullable @SuppressWarnings("unused") TranslationCapability capability,
+-                @NonNull @SuppressWarnings("unused") List<ViewTranslationRequest> requests) {
+-
+-        }
+-
+-        public AccessibilityNodeProvider getAccessibilityNodeProvider();
+-
+-        public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info);
+-
+-        public void onInitializeAccessibilityEvent(AccessibilityEvent event);
+-
+-        public boolean performAccessibilityAction(int action, Bundle arguments);
+-
+-        public void setOverScrollMode(int mode);
+-
+-        public void setScrollBarStyle(int style);
+-
+-        public void onDrawVerticalScrollBar(Canvas canvas, Drawable scrollBar, int l, int t,
+-                int r, int b);
+-
+-        public void onOverScrolled(int scrollX, int scrollY, boolean clampedX, boolean clampedY);
+-
+-        public void onWindowVisibilityChanged(int visibility);
+-
+-        public void onDraw(Canvas canvas);
+-
+-        public void setLayoutParams(LayoutParams layoutParams);
+-
+-        public boolean performLongClick();
+-
+-        public void onConfigurationChanged(Configuration newConfig);
+-
+-        public InputConnection onCreateInputConnection(EditorInfo outAttrs);
+-
+-        public boolean onDragEvent(DragEvent event);
+-
+-        public boolean onKeyMultiple(int keyCode, int repeatCount, KeyEvent event);
+-
+-        public boolean onKeyDown(int keyCode, KeyEvent event);
+-
+-        public boolean onKeyUp(int keyCode, KeyEvent event);
+-
+-        public void onAttachedToWindow();
+-
+-        public void onDetachedFromWindow();
+-
+-        public default void onMovedToDisplay(int displayId, Configuration config) {}
+-
+-        public void onVisibilityChanged(View changedView, int visibility);
+-
+-        public void onWindowFocusChanged(boolean hasWindowFocus);
+-
+-        public void onFocusChanged(boolean focused, int direction, Rect previouslyFocusedRect);
+-
+-        public boolean setFrame(int left, int top, int right, int bottom);
+-
+-        public void onSizeChanged(int w, int h, int ow, int oh);
+-
+-        public void onScrollChanged(int l, int t, int oldl, int oldt);
+-
+-        public boolean dispatchKeyEvent(KeyEvent event);
+-
+-        public boolean onTouchEvent(MotionEvent ev);
+-
+-        public boolean onHoverEvent(MotionEvent event);
+-
+-        public boolean onGenericMotionEvent(MotionEvent event);
+-
+-        public boolean onTrackballEvent(MotionEvent ev);
+-
+-        public boolean requestFocus(int direction, Rect previouslyFocusedRect);
+-
+-        public void onMeasure(int widthMeasureSpec, int heightMeasureSpec);
+-
+-        public boolean requestChildRectangleOnScreen(View child, Rect rect, boolean immediate);
+-
+-        public void setBackgroundColor(int color);
+-
+-        public void setLayerType(int layerType, Paint paint);
+-
+-        public void preDispatchDraw(Canvas canvas);
+-
+-        public void onStartTemporaryDetach();
+-
+-        public void onFinishTemporaryDetach();
+-
+-        public void onActivityResult(int requestCode, int resultCode, Intent data);
+-
+-        public Handler getHandler(Handler originalHandler);
+-
+-        public View findFocus(View originalFocusedView);
+-
+-        @SuppressWarnings("unused")
+-        default boolean onCheckIsTextEditor() {
+-            return false;
+-        }
+-
+-        /**
+-         * <p>This is the entry point for the WebView implementation to override. It returns
+-         * {@code null} when the WebView implementation hasn't implemented the WindowInsets support
+-         * on S yet. In this case, the {@link View#onApplyWindowInsets()} super method will be
+-         * called instead.
+-         *
+-         * @param insets Insets to apply
+-         * @return The supplied insets with any applied insets consumed.
+-         * @see View#onApplyWindowInsets(WindowInsets)
+-         */
+-        @SuppressWarnings("unused")
+-        @Nullable
+-        default WindowInsets onApplyWindowInsets(@Nullable WindowInsets insets) {
+-            return null;
+-        }
+-
+-        /**
+-         * @hide Only used by WebView.
+-         */
+-        @SuppressWarnings("unused")
+-        @Nullable
+-        default PointerIcon onResolvePointerIcon(@NonNull MotionEvent event, int pointerIndex) {
+-            return null;
+-        }
+-    }
+-
+-    interface ScrollDelegate {
+-        // These methods are declared protected in the ViewGroup base class. This interface
+-        // exists to promote them to public so they may be called by the WebView proxy class.
+-        // TODO: Combine into ViewDelegate?
+-        /**
+-         * See {@link android.webkit.WebView#computeHorizontalScrollRange}
+-         */
+-        public int computeHorizontalScrollRange();
+-
+-        /**
+-         * See {@link android.webkit.WebView#computeHorizontalScrollOffset}
+-         */
+-        public int computeHorizontalScrollOffset();
+-
+-        /**
+-         * See {@link android.webkit.WebView#computeVerticalScrollRange}
+-         */
+-        public int computeVerticalScrollRange();
+-
+-        /**
+-         * See {@link android.webkit.WebView#computeVerticalScrollOffset}
+-         */
+-        public int computeVerticalScrollOffset();
+-
+-        /**
+-         * See {@link android.webkit.WebView#computeVerticalScrollExtent}
+-         */
+-        public int computeVerticalScrollExtent();
+-
+-        /**
+-         * See {@link android.webkit.WebView#computeScroll}
+-         */
+-        public void computeScroll();
++
++    private static UnsupportedOperationException unsupported() {
++        return new UnsupportedOperationException("Operation is unavailable for the iframe provider");
+     }
+ }

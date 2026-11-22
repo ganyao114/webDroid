@@ -1,0 +1,190 @@
+--- a/frameworks/base/core/java/android/app/SearchManager.java
++++ b/frameworks/base/core/java/android/app/SearchManager.java
+@@ -16,4 +16,6 @@
+ 
+ package android.app;
++
++import android.content.pm.PackageManager;
+ 
+ import android.annotation.Nullable;
+@@ -36,6 +38,4 @@
+ import android.os.Handler;
+ import android.os.RemoteException;
+-import android.os.ServiceManager;
+-import android.os.ServiceManager.ServiceNotFoundException;
+ import android.text.TextUtils;
+ import android.util.Log;
+@@ -539,8 +539,4 @@
+             = "android.search.DISABLE_VOICE_SEARCH";
+ 
+-    /**
+-     * Reference to the shared system search service.
+-     */
+-    private final ISearchManager mService;
+ 
+     private final Context mContext;
+@@ -551,14 +547,5 @@
+     /* package */ OnCancelListener mCancelListener = null;
+ 
+-    @UnsupportedAppUsage
+-    private SearchDialog mSearchDialog;
+-
+-    @UnsupportedAppUsage
+-    /*package*/ SearchManager(Context context, Handler handler) throws ServiceNotFoundException {
+-        mContext = context;
+-        mHandler = handler;
+-        mService = ISearchManager.Stub.asInterface(
+-                ServiceManager.getServiceOrThrow(Context.SEARCH_SERVICE));
+-    }
++
+ 
+     /**
+@@ -624,24 +611,9 @@
+                             boolean globalSearch,
+                             Rect sourceBounds) {
+-        if (globalSearch) {
+-            startGlobalSearch(initialQuery, selectInitialQuery, appSearchData, sourceBounds);
+-            return;
+-        }
+-
+-        final UiModeManager uiModeManager = mContext.getSystemService(UiModeManager.class);
+-        // Don't show search dialog on televisions.
+-        if (uiModeManager.getCurrentModeType() != Configuration.UI_MODE_TYPE_TELEVISION) {
+-            ensureSearchDialog();
+-
+-            mSearchDialog.show(initialQuery, selectInitialQuery, launchActivity, appSearchData);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+     private void ensureSearchDialog() {
+-        if (mSearchDialog == null) {
+-            mSearchDialog = new SearchDialog(mContext, this);
+-            mSearchDialog.setOnCancelListener(this);
+-            mSearchDialog.setOnDismissListener(this);
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -692,9 +664,5 @@
+      */
+     public List<ResolveInfo> getGlobalSearchActivities() {
+-        try {
+-            return mService.getGlobalSearchActivities();
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -703,9 +671,7 @@
+      */
+     public ComponentName getGlobalSearchActivity() {
+-        try {
+-            return mService.getGlobalSearchActivity();
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
+-        }
++        android.content.pm.ResolveInfo activity = mContext.getPackageManager()
++                .resolveActivity(new Intent(INTENT_ACTION_GLOBAL_SEARCH), PackageManager.MATCH_DEFAULT_ONLY);
++        return activity == null ? null : activity.activityInfo.getComponentName();
+     }
+ 
+@@ -721,9 +687,5 @@
+     @UnsupportedAppUsage
+     public ComponentName getWebSearchActivity() {
+-        try {
+-            return mService.getWebSearchActivity();
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -744,10 +706,5 @@
+                               ComponentName launchActivity,
+                               Bundle appSearchData) {
+-        if (query == null || TextUtils.getTrimmedLength(query) == 0) {
+-            Log.w(TAG, "triggerSearch called with empty query, ignoring.");
+-            return;
+-        }
+-        startSearch(query, false, launchActivity, appSearchData, false);
+-        mSearchDialog.launchQuerySearch();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -766,7 +723,5 @@
+      */
+     public void stopSearch() {
+-        if (mSearchDialog != null) {
+-            mSearchDialog.cancel();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -782,5 +737,5 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public boolean isVisible() {
+-        return mSearchDialog == null? false : mSearchDialog.isShowing();
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -861,9 +816,5 @@
+      */
+     public SearchableInfo getSearchableInfo(ComponentName componentName) {
+-        try {
+-            return mService.getSearchableInfo(componentName);
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -947,9 +898,5 @@
+      */
+     public List<SearchableInfo> getSearchablesInGlobalSearch() {
+-        try {
+-            return mService.getSearchablesInGlobalSearch();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -961,17 +908,5 @@
+      */
+     public Intent getAssistIntent(boolean inclContext) {
+-        try {
+-            Intent intent = new Intent(Intent.ACTION_ASSIST);
+-            if (inclContext) {
+-                IActivityTaskManager am = ActivityTaskManager.getService();
+-                Bundle extras = am.getAssistContextExtras(ActivityManager.ASSIST_CONTEXT_BASIC);
+-                if (extras != null) {
+-                    intent.replaceExtras(extras);
+-                }
+-            }
+-            return intent;
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -988,12 +923,9 @@
+     @SystemApi
+     public void launchAssist(@Nullable Bundle args) {
+-        try {
+-            if (mService == null) {
+-                return;
+-            }
+-            mService.launchAssist(mContext.getUserId(), args);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    }
++    SearchManager(Context context) {
++        mContext = context;
++        mHandler = new Handler(context.getMainLooper());
+     }
+ }

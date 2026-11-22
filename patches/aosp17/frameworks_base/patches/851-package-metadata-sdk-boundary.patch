@@ -1,0 +1,679 @@
+--- a/frameworks/base/core/java/android/content/pm/ActivityInfo.java
++++ b/frameworks/base/core/java/android/content/pm/ActivityInfo.java
+@@ -27,5 +27,4 @@
+ import android.compat.annotation.ChangeId;
+ import android.compat.annotation.Disabled;
+-import android.compat.annotation.EnabledAfter;
+ import android.compat.annotation.EnabledSince;
+ import android.compat.annotation.Overridable;
+@@ -1236,5 +1235,4 @@
+     @TestApi
+     @SuppressLint("UnflaggedApi") // @TestApi without associated public API.
+-    @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+     public static final long UNIVERSAL_RESIZABLE_BY_DEFAULT = 357141415L; // buganizer id
+ 
+@@ -1265,5 +1263,4 @@
+     @Disabled
+     @TestApi
+-    @FlaggedApi(Flags.FLAG_APP_COMPAT_PROPERTIES_API)
+     public static final long OVERRIDE_ENABLE_COMPAT_IGNORE_ORIENTATION_REQUEST_WHEN_LOOP_DETECTED =
+             273509367L; // buganizer id
+@@ -1690,5 +1687,4 @@
+     @Disabled
+     @TestApi
+-    @FlaggedApi(Flags.FLAG_EXCLUDE_CAPTION_INSETS_OPT_OUT_API)
+     public static final long OVERRIDE_EXCLUDE_CAPTION_INSETS_FROM_APP_BOUNDS = 388014743L;
+ 
+@@ -1769,5 +1765,4 @@
+     @Overridable
+     @Disabled
+-    @FlaggedApi(Flags.FLAG_VIRTUAL_GAMEPAD_DEVELOPER_OPT_OUT)
+     @TestApi
+     public static final long OVERRIDE_ENABLE_VIRTUAL_GAMEPAD = 447093535L;
+@@ -1784,5 +1779,4 @@
+     @ChangeId
+     @Overridable
+-    @FlaggedApi(Flags.FLAG_ENABLE_LESS_ACTIVITY_RECREATION_ON_CONFIG_CHANGE)
+     @TestApi
+     public static final long SKIP_ACTIVITY_RECREATION_ON_CONFIG_CHANGE = 454795633L;
+@@ -2104,21 +2098,5 @@
+     }
+ 
+-    /**
+-     * Returns if the activity should never be sandboxed to the activity window bounds.
+-     * @hide
+-     */
+-    public boolean neverSandboxDisplayApis(ConstrainDisplayApisConfig constrainDisplayApisConfig) {
+-        return isChangeEnabled(NEVER_SANDBOX_DISPLAY_APIS)
+-                || constrainDisplayApisConfig.getNeverConstrainDisplayApis(applicationInfo);
+-    }
+-
+-    /**
+-     * Returns if the activity should always be sandboxed to the activity window bounds.
+-     * @hide
+-     */
+-    public boolean alwaysSandboxDisplayApis(ConstrainDisplayApisConfig constrainDisplayApisConfig) {
+-        return isChangeEnabled(ALWAYS_SANDBOX_DISPLAY_APIS)
+-                || constrainDisplayApisConfig.getAlwaysConstrainDisplayApis(applicationInfo);
+-    }
++
+ 
+     /** @hide */
+@@ -2564,5 +2542,4 @@
+          */
+         @Deprecated
+-        @FlaggedApi(Flags.FLAG_RUNTIME_DENSITY_RESOLUTION_FOR_WINDOW_LAYOUT)
+         public WindowLayout(int width, float widthFraction, int height, float heightFraction,
+                 int gravity, int minWidth, int minHeight) {
+@@ -2633,5 +2610,4 @@
+          */
+         @Deprecated
+-        @FlaggedApi(Flags.FLAG_RUNTIME_DENSITY_RESOLUTION_FOR_WINDOW_LAYOUT)
+         public final int width;
+ 
+@@ -2661,5 +2637,4 @@
+          */
+         @Deprecated
+-        @FlaggedApi(Flags.FLAG_RUNTIME_DENSITY_RESOLUTION_FOR_WINDOW_LAYOUT)
+         public final int height;
+ 
+@@ -2703,5 +2678,4 @@
+          */
+         @Deprecated
+-        @FlaggedApi(Flags.FLAG_RUNTIME_DENSITY_RESOLUTION_FOR_WINDOW_LAYOUT)
+         public final int minWidth;
+ 
+@@ -2728,5 +2702,4 @@
+          */
+         @Deprecated
+-        @FlaggedApi(Flags.FLAG_RUNTIME_DENSITY_RESOLUTION_FOR_WINDOW_LAYOUT)
+         public final int minHeight;
+ 
+@@ -2762,9 +2735,5 @@
+          */
+         public int getDefaultWidth(@NonNull DisplayMetrics metrics) {
+-            if (!Flags.runtimeDensityResolutionForWindowLayoutBugfix()) {
+-                return this.width;
+-            }
+-
+-            return complexToDimensionPixelSize(complexWidth, metrics);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2777,9 +2746,5 @@
+          */
+         public int getDefaultHeight(@NonNull DisplayMetrics metrics) {
+-            if (!Flags.runtimeDensityResolutionForWindowLayoutBugfix()) {
+-                return this.height;
+-            }
+-
+-            return complexToDimensionPixelSize(complexHeight, metrics);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2792,9 +2757,5 @@
+          */
+         public int getMinWidth(@NonNull DisplayMetrics metrics) {
+-            if (!Flags.runtimeDensityResolutionForWindowLayoutBugfix()) {
+-                return this.minWidth;
+-            }
+-
+-            return complexToDimensionPixelSize(complexMinWidth, metrics);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+@@ -2807,9 +2768,5 @@
+          */
+         public int getMinHeight(@NonNull DisplayMetrics metrics) {
+-            if (!Flags.runtimeDensityResolutionForWindowLayoutBugfix()) {
+-                return this.minHeight;
+-            }
+-
+-            return complexToDimensionPixelSize(complexMinHeight, metrics);
++            throw new UnsupportedOperationException("No platform service in the embedded runtime");
+         }
+ 
+--- a/frameworks/base/core/java/android/content/pm/ApplicationInfo.java
++++ b/frameworks/base/core/java/android/content/pm/ApplicationInfo.java
+@@ -28,5 +28,4 @@
+ import android.annotation.TestApi;
+ import android.annotation.XmlRes;
+-import android.app.compat.CompatChanges;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+@@ -50,5 +49,4 @@
+ import android.window.OnBackInvokedCallback;
+ 
+-import com.android.internal.content.LibraryAlignmentInfo;
+ import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.Parcelling;
+@@ -76,5 +74,5 @@
+ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
+     private static final String TAG = ApplicationInfo.class.getSimpleName();
+-    private static final ForBoolean sForBoolean = Parcelling.Cache.getOrCreate(ForBoolean.class);
++    private static final ForBoolean sForBoolean = new ForBoolean();
+     private static final Parcelling.BuiltIn.ForStringSet sForStringSet =
+             Parcelling.Cache.getOrCreate(Parcelling.BuiltIn.ForStringSet.class);
+@@ -1316,10 +1314,4 @@
+     public int enabledSetting = PackageManager.COMPONENT_ENABLED_STATE_DEFAULT;
+ 
+-    /**
+-     * For convenient access to package's install location.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public int installLocation = PackageInfo.INSTALL_LOCATION_UNSPECIFIED;
+ 
+     /**
+@@ -1585,10 +1577,4 @@
+     public @interface PageSizeAppCompatFlags {}
+ 
+-    /**
+-     * If mPageSizeCompatFlags indicates a mismatch, this will contain detailed
+-     * information for each native library that was found to be unaligned.
+-     * @hide
+-     */
+-    public LibraryAlignmentInfo[] unalignedNativeLibraries;
+ 
+     /** @hide */
+@@ -1967,128 +1953,5 @@
+     /** @hide */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId, int dumpFlags) {
+-        long token = proto.start(fieldId);
+-        super.dumpDebug(proto, ApplicationInfoProto.PACKAGE, dumpFlags);
+-        proto.write(ApplicationInfoProto.PERMISSION, permission);
+-        proto.write(ApplicationInfoProto.PROCESS_NAME, processName);
+-        proto.write(ApplicationInfoProto.UID, uid);
+-        proto.write(ApplicationInfoProto.FLAGS, flags);
+-        proto.write(ApplicationInfoProto.PRIVATE_FLAGS, privateFlags);
+-        proto.write(ApplicationInfoProto.THEME, theme);
+-        proto.write(ApplicationInfoProto.SOURCE_DIR, sourceDir);
+-        if (!Objects.equals(sourceDir, publicSourceDir)) {
+-            proto.write(ApplicationInfoProto.PUBLIC_SOURCE_DIR, publicSourceDir);
+-        }
+-        if (!ArrayUtils.isEmpty(splitSourceDirs)) {
+-            for (String dir : splitSourceDirs) {
+-                proto.write(ApplicationInfoProto.SPLIT_SOURCE_DIRS, dir);
+-            }
+-        }
+-        if (!ArrayUtils.isEmpty(splitPublicSourceDirs)
+-                && !Arrays.equals(splitSourceDirs, splitPublicSourceDirs)) {
+-            for (String dir : splitPublicSourceDirs) {
+-                proto.write(ApplicationInfoProto.SPLIT_PUBLIC_SOURCE_DIRS, dir);
+-            }
+-        }
+-        if (resourceDirs != null) {
+-            for (String dir : resourceDirs) {
+-                proto.write(ApplicationInfoProto.RESOURCE_DIRS, dir);
+-            }
+-        }
+-        if (overlayPaths != null) {
+-            for (String dir : overlayPaths) {
+-                proto.write(ApplicationInfoProto.OVERLAY_PATHS, dir);
+-            }
+-        }
+-        proto.write(ApplicationInfoProto.DATA_DIR, dataDir);
+-        proto.write(ApplicationInfoProto.CLASS_LOADER_NAME, classLoaderName);
+-        if (!ArrayUtils.isEmpty(splitClassLoaderNames)) {
+-            for (String name : splitClassLoaderNames) {
+-                proto.write(ApplicationInfoProto.SPLIT_CLASS_LOADER_NAMES, name);
+-            }
+-        }
+-
+-        long versionToken = proto.start(ApplicationInfoProto.VERSION);
+-        proto.write(ApplicationInfoProto.Version.ENABLED, enabled);
+-        proto.write(ApplicationInfoProto.Version.MIN_SDK_VERSION, minSdkVersion);
+-        proto.write(ApplicationInfoProto.Version.TARGET_SDK_VERSION, targetSdkVersion);
+-        proto.write(ApplicationInfoProto.Version.VERSION_CODE, longVersionCode);
+-        proto.write(ApplicationInfoProto.Version.TARGET_SANDBOX_VERSION, targetSandboxVersion);
+-        proto.end(versionToken);
+-
+-        if ((dumpFlags & DUMP_FLAG_DETAILS) != 0) {
+-            long detailToken = proto.start(ApplicationInfoProto.DETAIL);
+-            if (className != null) {
+-                proto.write(ApplicationInfoProto.Detail.CLASS_NAME, className);
+-            }
+-            proto.write(ApplicationInfoProto.Detail.TASK_AFFINITY, taskAffinity);
+-            proto.write(ApplicationInfoProto.Detail.REQUIRES_SMALLEST_WIDTH_DP,
+-                    requiresSmallestWidthDp);
+-            proto.write(ApplicationInfoProto.Detail.COMPATIBLE_WIDTH_LIMIT_DP,
+-                    compatibleWidthLimitDp);
+-            proto.write(ApplicationInfoProto.Detail.LARGEST_WIDTH_LIMIT_DP,
+-                    largestWidthLimitDp);
+-            if (seInfo != null) {
+-                proto.write(ApplicationInfoProto.Detail.SEINFO, seInfo);
+-                proto.write(ApplicationInfoProto.Detail.SEINFO_USER, seInfoUser);
+-            }
+-            proto.write(ApplicationInfoProto.Detail.DEVICE_PROTECTED_DATA_DIR,
+-                    deviceProtectedDataDir);
+-            proto.write(ApplicationInfoProto.Detail.CREDENTIAL_PROTECTED_DATA_DIR,
+-                    credentialProtectedDataDir);
+-            if (sharedLibraryFiles != null) {
+-                for (String f : sharedLibraryFiles) {
+-                    proto.write(ApplicationInfoProto.Detail.SHARED_LIBRARY_FILES, f);
+-                }
+-            }
+-            if (manageSpaceActivityName != null) {
+-                proto.write(ApplicationInfoProto.Detail.MANAGE_SPACE_ACTIVITY_NAME,
+-                        manageSpaceActivityName);
+-            }
+-            if (descriptionRes != 0) {
+-                proto.write(ApplicationInfoProto.Detail.DESCRIPTION_RES, descriptionRes);
+-            }
+-            if (uiOptions != 0) {
+-                proto.write(ApplicationInfoProto.Detail.UI_OPTIONS, uiOptions);
+-            }
+-            proto.write(ApplicationInfoProto.Detail.SUPPORTS_RTL, hasRtlSupport());
+-            if (fullBackupContent > 0) {
+-                proto.write(ApplicationInfoProto.Detail.CONTENT, "@xml/" + fullBackupContent);
+-            } else {
+-                proto.write(ApplicationInfoProto.Detail.IS_FULL_BACKUP, fullBackupContent == 0);
+-            }
+-            if (networkSecurityConfigRes != 0) {
+-                proto.write(ApplicationInfoProto.Detail.NETWORK_SECURITY_CONFIG_RES,
+-                        networkSecurityConfigRes);
+-            }
+-            if (category != CATEGORY_UNDEFINED) {
+-                proto.write(ApplicationInfoProto.Detail.CATEGORY, category);
+-            }
+-            if (gwpAsanMode != GWP_ASAN_DEFAULT) {
+-                proto.write(ApplicationInfoProto.Detail.ENABLE_GWP_ASAN, gwpAsanMode);
+-            }
+-            if (memtagMode != MEMTAG_DEFAULT) {
+-                proto.write(ApplicationInfoProto.Detail.ENABLE_MEMTAG, memtagMode);
+-            }
+-            if (nativeHeapZeroInitialized != ZEROINIT_DEFAULT) {
+-                proto.write(ApplicationInfoProto.Detail.NATIVE_HEAP_ZERO_INIT,
+-                        nativeHeapZeroInitialized);
+-            }
+-            proto.write(ApplicationInfoProto.Detail.ALLOW_CROSS_UID_ACTIVITY_SWITCH_FROM_BELOW,
+-                    allowCrossUidActivitySwitchFromBelow);
+-
+-            proto.write(ApplicationInfoProto.Detail.ENABLE_PAGE_SIZE_APP_COMPAT,
+-                        mPageSizeAppCompatFlags);
+-
+-            proto.write(ApplicationInfoProto.Detail.IS_APP_LOCK_SUPPORTED, isAppLockSupported);
+-            proto.write(ApplicationInfoProto.Detail.IS_APP_LOCK_ENABLED, isAppLockEnabled);
+-
+-            proto.end(detailToken);
+-        }
+-        if (!ArrayUtils.isEmpty(mKnownActivityEmbeddingCerts)) {
+-            for (String knownCert : mKnownActivityEmbeddingCerts) {
+-                proto.write(ApplicationInfoProto.KNOWN_ACTIVITY_EMBEDDING_CERTS, knownCert);
+-            }
+-        }
+-        proto.end(token);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2217,5 +2080,4 @@
+         isAppLockSupported = orig.isAppLockSupported;
+         isAppLockEnabled = orig.isAppLockEnabled;
+-        this.unalignedNativeLibraries = orig.unalignedNativeLibraries;
+     }
+ 
+@@ -2232,7 +2094,4 @@
+     @SuppressWarnings("unchecked")
+     public void writeToParcel(Parcel dest, int parcelableFlags) {
+-        if (dest.maybeWriteSquashed(this)) {
+-            return;
+-        }
+         final int preWriteSize = dest.dataSize();
+         super.writeToParcel(dest, parcelableFlags);
+@@ -2259,8 +2118,8 @@
+         dest.writeString8(sourceDir);
+         dest.writeString8(publicSourceDir);
+-        dest.writeString8Array(splitNames);
+-        dest.writeString8Array(splitSourceDirs);
+-        dest.writeString8Array(splitPublicSourceDirs);
+-        dest.writeSparseArray((SparseArray) splitDependencies);
++        writeStringArray(dest, splitNames);
++        writeStringArray(dest, splitSourceDirs);
++        writeStringArray(dest, splitPublicSourceDirs);
++        writeSplitDependencies(dest, splitDependencies);
+         dest.writeString8(nativeLibraryDir);
+         dest.writeString8(secondaryNativeLibraryDir);
+@@ -2269,11 +2128,11 @@
+         dest.writeString8(primaryCpuAbi);
+         dest.writeString8(secondaryCpuAbi);
+-        dest.writeString8Array(resourceDirs);
+-        dest.writeString8Array(overlayPaths);
++        writeStringArray(dest, resourceDirs);
++        writeStringArray(dest, overlayPaths);
+         dest.writeString8(seInfo);
+         dest.writeString8(seInfoUser);
+-        dest.writeString8Array(sharedLibraryFiles);
+-        dest.writeTypedList(sharedLibraryInfos);
+-        dest.writeTypedList(optionalSharedLibraryInfos);
++        writeStringArray(dest, sharedLibraryFiles);
++        writeLibraries(dest, sharedLibraryInfos, parcelableFlags);
++        writeLibraries(dest, optionalSharedLibraryInfos, parcelableFlags);
+         dest.writeString8(dataDir);
+         dest.writeString8(deviceProtectedDataDir);
+@@ -2299,5 +2158,5 @@
+         dest.writeInt(targetSandboxVersion);
+         dest.writeString8(classLoaderName);
+-        dest.writeString8Array(splitClassLoaderNames);
++        writeStringArray(dest, splitClassLoaderNames);
+         dest.writeInt(compileSdkVersion);
+         dest.writeString8(compileSdkVersionCodename);
+@@ -2330,7 +2189,6 @@
+         dest.writeBoolean(isAppLockSupported);
+         dest.writeBoolean(isAppLockEnabled);
+-        dest.writeTypedArray(unalignedNativeLibraries, parcelableFlags);
+-
+-        sForStringSet.parcel(mKnownActivityEmbeddingCerts, dest, flags);
++
++        sForStringSet.parcel(mKnownActivityEmbeddingCerts, dest, parcelableFlags);
+ 
+         final int elmSize = dest.dataSize() - preWriteSize;
+@@ -2346,5 +2204,5 @@
+             }
+             if (resourceDirs != null) sb.append(" resDirs=").append(resourceDirs.length);
+-            if (overlayPaths != null) sb.append(" overlayPaths=").append(resourceDirs.length);
++            if (overlayPaths != null) sb.append(" overlayPaths=").append(overlayPaths.length);
+ 
+             Log.w(TAG, sb.toString());
+@@ -2352,16 +2210,47 @@
+     }
+ 
+-    public static final @android.annotation.NonNull Parcelable.Creator<ApplicationInfo> CREATOR
+-            = new Parcelable.Creator<ApplicationInfo>() {
+-        @Override
+-        public ApplicationInfo createFromParcel(Parcel source) {
+-            return source.readSquashed(ApplicationInfo::new);
+-        }
+-
+-        @Override
+-        public ApplicationInfo[] newArray(int size) {
+-            return new ApplicationInfo[size];
+-        }
+-    };
++
++    private static void writeSplitDependencies(Parcel dest, SparseArray<int[]> dependencies) {
++        if (dependencies == null) {
++            dest.writeInt(-1);
++            return;
++        }
++        dest.writeInt(dependencies.size());
++        for (int i = 0; i < dependencies.size(); i++) {
++            dest.writeInt(dependencies.keyAt(i));
++            dest.writeIntArray(dependencies.valueAt(i));
++        }
++    }
++
++    private static SparseArray<int[]> readSplitDependencies(Parcel source) {
++        final int size = source.readInt();
++        if (size < 0) return null;
++        final SparseArray<int[]> dependencies = new SparseArray<>(size);
++        for (int i = 0; i < size; i++) {
++            dependencies.append(source.readInt(), source.createIntArray());
++        }
++        return dependencies;
++    }
++
++    private static void writeLibraries(Parcel dest, List<SharedLibraryInfo> libraries, int flags) {
++        if (libraries == null) {
++            dest.writeInt(-1);
++            return;
++        }
++        dest.writeInt(libraries.size());
++        for (SharedLibraryInfo library : libraries) {
++            dest.writeTypedObject(library, flags);
++        }
++    }
++
++    private static List<SharedLibraryInfo> readLibraries(Parcel source) {
++        final int size = source.readInt();
++        if (size < 0) return null;
++        final List<SharedLibraryInfo> libraries = new ArrayList<>(size);
++        for (int i = 0; i < size; i++) {
++            libraries.add(source.readTypedObject(SharedLibraryInfo.CREATOR));
++        }
++        return libraries;
++    }
+ 
+     @SuppressWarnings("unchecked")
+@@ -2381,5 +2270,5 @@
+         if (source.readInt() != 0) {
+             storageUuid = new UUID(source.readLong(), source.readLong());
+-            volumeUuid = StorageManager.convert(storageUuid);
++            volumeUuid = storageUuid.toString();
+         }
+         scanSourceDir = source.readString8();
+@@ -2387,8 +2276,8 @@
+         sourceDir = source.readString8();
+         publicSourceDir = source.readString8();
+-        splitNames = source.createString8Array();
+-        splitSourceDirs = source.createString8Array();
+-        splitPublicSourceDirs = source.createString8Array();
+-        splitDependencies = source.readSparseArray(null, int[].class);
++        splitNames = readStringArray(source);
++        splitSourceDirs = readStringArray(source);
++        splitPublicSourceDirs = readStringArray(source);
++        splitDependencies = readSplitDependencies(source);
+         nativeLibraryDir = source.readString8();
+         secondaryNativeLibraryDir = source.readString8();
+@@ -2397,11 +2286,11 @@
+         primaryCpuAbi = source.readString8();
+         secondaryCpuAbi = source.readString8();
+-        resourceDirs = source.createString8Array();
+-        overlayPaths = source.createString8Array();
++        resourceDirs = readStringArray(source);
++        overlayPaths = readStringArray(source);
+         seInfo = source.readString8();
+         seInfoUser = source.readString8();
+-        sharedLibraryFiles = source.createString8Array();
+-        sharedLibraryInfos = source.createTypedArrayList(SharedLibraryInfo.CREATOR);
+-        optionalSharedLibraryInfos = source.createTypedArrayList(SharedLibraryInfo.CREATOR);
++        sharedLibraryFiles = readStringArray(source);
++        sharedLibraryInfos = readLibraries(source);
++        optionalSharedLibraryInfos = readLibraries(source);
+         dataDir = source.readString8();
+         deviceProtectedDataDir = source.readString8();
+@@ -2427,5 +2316,5 @@
+         targetSandboxVersion = source.readInt();
+         classLoaderName = source.readString8();
+-        splitClassLoaderNames = source.createString8Array();
++        splitClassLoaderNames = readStringArray(source);
+         compileSdkVersion = source.readInt();
+         compileSdkVersionCodename = source.readString8();
+@@ -2455,5 +2344,4 @@
+         isAppLockSupported = source.readBoolean();
+         isAppLockEnabled = source.readBoolean();
+-        unalignedNativeLibraries = source.createTypedArray(LibraryAlignmentInfo.CREATOR);
+ 
+         mKnownActivityEmbeddingCerts = sForStringSet.unparcel(source);
+@@ -2512,24 +2400,5 @@
+     @android.ravenwood.annotation.RavenwoodThrow(blockedBy = Environment.class)
+     public void initForUser(int userId) {
+-        uid = UserHandle.getUid(userId, UserHandle.getAppId(uid));
+-
+-        if ("android".equals(packageName)) {
+-            dataDir = Environment.getDataSystemDirectory().getAbsolutePath();
+-            return;
+-        }
+-
+-        deviceProtectedDataDir = Environment
+-                .getDataUserDePackageDirectory(volumeUuid, userId, packageName)
+-                .getAbsolutePath();
+-        credentialProtectedDataDir = Environment
+-                .getDataUserCePackageDirectory(volumeUuid, userId, packageName)
+-                .getAbsolutePath();
+-
+-        if ((privateFlags & PRIVATE_FLAG_DEFAULT_TO_DEVICE_PROTECTED_STORAGE) != 0
+-                && PackageManager.APPLY_DEFAULT_TO_DEVICE_PROTECTED_STORAGE) {
+-            dataDir = deviceProtectedDataDir;
+-        } else {
+-            dataDir = credentialProtectedDataDir;
+-        }
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -2669,5 +2538,4 @@
+      * @hide
+      */
+-    @FlaggedApi(android.security.Flags.FLAG_CONSCRYPT_NETWORK_SECURITY_CONFIG)
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+     public @XmlRes int getNetworkSecurityConfigResourceId() {
+@@ -2932,6 +2800,5 @@
+      */
+     public boolean isChangeEnabled(long changeId) {
+-        return CompatChanges.isChangeEnabled(changeId, packageName,
+-                UserHandle.getUserHandleForUid(uid));
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -3205,3 +3072,18 @@
+         return shouldBackupAgentRunInPccProcess() ? pccUid : uid;
+     }
++    /** @hide */
++    public int installLocation = -1;
++
++    public static final Parcelable.Creator<ApplicationInfo> CREATOR =
++            new Parcelable.Creator<ApplicationInfo>() {
++        @Override
++        public ApplicationInfo createFromParcel(Parcel source) {
++            return new ApplicationInfo(source);
++        }
++
++        @Override
++        public ApplicationInfo[] newArray(int size) {
++            return new ApplicationInfo[size];
++        }
++    };
+ }
+--- a/frameworks/base/core/java/android/content/pm/ComponentInfo.java
++++ b/frameworks/base/core/java/android/content/pm/ComponentInfo.java
+@@ -375,5 +375,5 @@
+ 
+         dest.writeString8(splitName);
+-        dest.writeString8Array(attributionTags);
++        writeStringArray(dest, attributionTags);
+         dest.writeInt(descriptionRes);
+         // enabled, exported, directBootAware are in flags
+@@ -416,5 +416,5 @@
+ 
+         if (!inheritMetaData) {
+-            metaData = source.readBundle();
++            metaData = source.readBundle(null);
+         }
+ 
+@@ -432,5 +432,5 @@
+ 
+         splitName = source.readString8();
+-        attributionTags = source.createString8Array();
++        attributionTags = readStringArray(source);
+         descriptionRes = source.readInt();
+ 
+--- a/frameworks/base/core/java/android/content/pm/PackageItemInfo.java
++++ b/frameworks/base/core/java/android/content/pm/PackageItemInfo.java
+@@ -26,5 +26,4 @@
+ import android.annotation.NonNull;
+ import android.annotation.SystemApi;
+-import android.app.ActivityThread;
+ import android.content.res.XmlResourceParser;
+ import android.graphics.drawable.Drawable;
+@@ -218,5 +217,5 @@
+     @android.ravenwood.annotation.RavenwoodThrow(blockedBy = android.content.res.Resources.class)
+     public @NonNull CharSequence loadLabel(@NonNull PackageManager pm) {
+-        if (sForceSafeLabels && !Objects.equals(packageName, ActivityThread.currentPackageName())) {
++        if (sForceSafeLabels && !Objects.equals(packageName, android.app.Application.getProcessName())) {
+             return loadSafeLabel(pm, DEFAULT_MAX_LABEL_SIZE_PX, SAFE_STRING_FLAG_TRIM
+                     | SAFE_STRING_FLAG_FIRST_LINE);
+@@ -472,21 +471,30 @@
+     }
+ 
++    static void writeStringArray(Parcel dest, String[] values) {
++        if (values == null) {
++            dest.writeInt(-1);
++            return;
++        }
++        dest.writeInt(values.length);
++        for (String value : values) {
++            dest.writeString8(value);
++        }
++    }
++
++    static String[] readStringArray(Parcel source) {
++        final int size = source.readInt();
++        if (size < 0) return null;
++        final String[] values = new String[size];
++        for (int i = 0; i < size; i++) {
++            values[i] = source.readString8();
++        }
++        return values;
++    }
++
+     /**
+      * @hide
+      */
+     public void dumpDebug(ProtoOutputStream proto, long fieldId, int dumpFlags) {
+-        long token = proto.start(fieldId);
+-        if (name != null) {
+-            proto.write(PackageItemInfoProto.NAME, name);
+-        }
+-        proto.write(PackageItemInfoProto.PACKAGE_NAME, packageName);
+-        proto.write(PackageItemInfoProto.LABEL_RES, labelRes);
+-        if (nonLocalizedLabel != null) {
+-            proto.write(PackageItemInfoProto.NON_LOCALIZED_LABEL, nonLocalizedLabel.toString());
+-        }
+-        proto.write(PackageItemInfoProto.ICON, icon);
+-        proto.write(PackageItemInfoProto.BANNER, banner);
+-        proto.write(PackageItemInfoProto.IS_ARCHIVED, isArchived);
+-        proto.end(token);
++        throw new UnsupportedOperationException("No platform service in the embedded runtime");
+     }
+ 
+@@ -499,5 +507,5 @@
+         icon = source.readInt();
+         logo = source.readInt();
+-        metaData = source.readBundle();
++        metaData = source.readBundle(null);
+         banner = source.readInt();
+         showUserIcon = source.readInt();
+--- a/frameworks/base/core/java/android/content/pm/ResolveInfo.java
++++ b/frameworks/base/core/java/android/content/pm/ResolveInfo.java
+@@ -17,4 +17,6 @@
+ package android.content.pm;
+ 
++import android.util.Log;
++
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -31,5 +33,4 @@
+ import android.text.TextUtils;
+ import android.util.Printer;
+-import android.util.Slog;
+ 
+ import java.text.Collator;
+@@ -71,11 +72,4 @@
+     public ProviderInfo providerInfo;
+ 
+-    /**
+-     * An auxiliary response that may modify the resolved information. This is
+-     * only set under certain circumstances; such as when resolving instant apps
+-     * or components defined in un-installed splits.
+-     * @hide
+-     */
+-    public AuxiliaryResolveInfo auxiliaryInfo;
+ 
+     /**
+@@ -381,8 +375,8 @@
+         } else if (serviceInfo != null) {
+             pw.println(prefix + "ServiceInfo:");
+-            serviceInfo.dump(pw, prefix + "  ", dumpFlags);
++            serviceInfo.dump(pw, prefix + "  ");
+         } else if (providerInfo != null) {
+             pw.println(prefix + "ProviderInfo:");
+-            providerInfo.dump(pw, prefix + "  ", dumpFlags);
++            providerInfo.dump(pw, prefix + "  ");
+         }
+     }
+@@ -538,5 +532,5 @@
+                 break;
+             default:
+-                Slog.w(TAG, "Missing ComponentInfo!");
++                Log.w(TAG, "Missing ComponentInfo!");
+                 break;
+         }

@@ -93,6 +93,34 @@ frameworks/base/core/java/android/os/SimpleClock.java
 frameworks/base/core/java/android/os/SystemClock.java
 frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
 frameworks/base/core/java/android/os/TraceNameSupplier.java
+
+# Phase 3 W3: upstream os, database, provider, appwidget, display, webkit
+frameworks/base/core/java/android/appwidget/AppWidgetHost.java
+frameworks/base/core/java/android/appwidget/AppWidgetHostView.java
+frameworks/base/core/java/android/appwidget/AppWidgetManager.java
+frameworks/base/core/java/android/appwidget/AppWidgetProviderInfo.java
+frameworks/base/core/java/android/database/ContentObserver.java
+frameworks/base/core/java/android/database/DataSetObserver.java
+frameworks/base/core/java/android/database/DatabaseUtils.java
+frameworks/base/core/java/android/database/sqlite/SQLiteClosable.java
+frameworks/base/core/java/android/database/sqlite/SQLiteDatabase.java
+frameworks/base/core/java/android/database/sqlite/SQLiteProgram.java
+frameworks/base/core/java/android/database/sqlite/SQLiteStatement.java
+frameworks/base/core/java/android/hardware/display/DisplayManager.java
+frameworks/base/core/java/android/os/Build.java
+frameworks/base/core/java/android/os/IBinder.java
+frameworks/base/core/java/android/os/Parcel.java
+frameworks/base/core/java/android/os/ParcelFormatException.java
+frameworks/base/core/java/android/os/Process.java
+frameworks/base/core/java/android/os/ServiceSpecificException.java
+frameworks/base/core/java/android/os/UserManager.java
+frameworks/base/core/java/android/os/Vibrator.java
+frameworks/base/core/java/android/provider/Settings.java
+frameworks/base/core/java/android/webkit/WebSettings.java
+frameworks/base/core/java/android/webkit/WebView.java
+frameworks/base/core/java/android/webkit/WebViewClient.java
+frameworks/base/core/java/android/webkit/WebViewProvider.java
+
 frameworks/base/core/java/android/util/ArrayMap.java
 frameworks/base/core/java/android/util/AttributeSet.java
 frameworks/base/core/java/android/util/ContainerHelpers.java
@@ -179,6 +207,49 @@ libcore/luni/src/main/java/libcore/util/FP16.java
 libcore/luni/src/main/java/libcore/util/HexEncoding.java
 
 frameworks/base/core/java/android/app/WindowConfiguration.java
+
+# Phase 3 W2: upstream android.app & android.content.pm
+frameworks/base/core/java/android/app/Activity.java
+frameworks/base/core/java/android/app/ActivityManager.java
+frameworks/base/core/java/android/app/Application.java
+frameworks/base/core/java/android/app/BackStackRecord.java
+frameworks/base/core/java/android/app/Fragment.java
+frameworks/base/core/java/android/app/FragmentContainer.java
+frameworks/base/core/java/android/app/FragmentController.java
+frameworks/base/core/java/android/app/FragmentHostCallback.java
+frameworks/base/core/java/android/app/FragmentManager.java
+frameworks/base/core/java/android/app/FragmentManagerNonConfig.java
+frameworks/base/core/java/android/app/FragmentState.java
+frameworks/base/core/java/android/app/FragmentTransaction.java
+frameworks/base/core/java/android/app/FragmentTransition.java
+frameworks/base/core/java/android/app/LoaderManager.java
+frameworks/base/core/java/android/app/SearchManager.java
+frameworks/base/core/java/android/app/WallpaperColors.java
+frameworks/base/core/java/android/app/WallpaperManager.java
+frameworks/base/core/java/android/content/ComponentCallbacksController.java
+frameworks/base/core/java/android/content/ContentInterface.java
+frameworks/base/core/java/android/content/ContentResolver.java
+frameworks/base/core/java/android/content/Context.java
+frameworks/base/core/java/android/content/DialogInterface.java
+frameworks/base/core/java/android/content/Loader.java
+frameworks/base/core/java/android/content/pm/ActivityInfo.java
+frameworks/base/core/java/android/content/pm/ApplicationInfo.java
+frameworks/base/core/java/android/content/pm/ComponentInfo.java
+frameworks/base/core/java/android/content/pm/IncrementalStatesInfo.java
+frameworks/base/core/java/android/content/pm/InstallSourceInfo.java
+frameworks/base/core/java/android/content/pm/LauncherActivityInfo.java
+frameworks/base/core/java/android/content/pm/LauncherActivityInfoInternal.java
+frameworks/base/core/java/android/content/pm/LauncherApps.java
+frameworks/base/core/java/android/content/pm/LauncherUserInfo.java
+frameworks/base/core/java/android/content/pm/PackageInstaller.java
+frameworks/base/core/java/android/content/pm/PackageItemInfo.java
+frameworks/base/core/java/android/content/pm/PackageManager.java
+frameworks/base/core/java/android/content/pm/ResolveInfo.java
+frameworks/base/core/java/android/os/HandlerExecutor.java
+frameworks/base/core/java/android/os/UserHandle.java
+frameworks/base/core/java/android/util/DebugUtils.java
+frameworks/base/core/java/android/util/SuperNotCalledException.java
+
 frameworks/base/core/java/android/util/ArraySet.java
 frameworks/base/core/java/android/util/PathParser.java
 frameworks/base/core/java/android/util/SparseIntArray.java
@@ -230,6 +301,18 @@ libcore/luni/src/main/java/libcore/api/CorePlatformApi.java
 libcore/luni/src/main/java/libcore/api/IntraCoreApi.java
 libcore/luni/src/main/java/libcore/util/NonNull.java
 libcore/luni/src/main/java/libcore/util/Nullable.java
+
+# Phase 3 W1: upstream Display and AccessibilityManager
+frameworks/base/core/java/android/view/Display.java
+frameworks/base/core/java/android/view/DisplayInfo.java
+frameworks/base/core/java/android/view/DisplayAddress.java
+frameworks/base/core/java/android/view/FrameRateCategoryRate.java
+frameworks/base/core/java/android/view/FrameRateVelocityPoint.java
+frameworks/base/core/java/android/hardware/display/BrightnessInfo.java
+frameworks/base/core/java/android/hardware/display/DeviceProductInfo.java
+frameworks/base/core/java/android/hardware/OverlayProperties.java
+frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java
+frameworks/base/core/java/android/view/accessibility/AccessibilityRequestPreparer.java
 
 [sdk-support]
 # The SDK supplies the color appearance model used by ColorStateList lStar.
@@ -412,6 +495,9 @@ android/annotation/CallbackExecutor.java
 android/annotation/RequiresPermission.java
 dalvik/annotation/optimization/NeverInline.java
 
+# Phase 3 W3 compile-only annotations
+android/annotation/SdkConstant.java
+
 [aconfig]
 frameworks/base/core/java/android/app/privatecompute/flags/flags.aconfig
 frameworks/base/core/java/android/content/pm/flags.aconfig
@@ -454,6 +540,19 @@ patches/607-control-view-boundaries.patch
 patches/608-list-view-platform-boundaries.patch
 patches/609-toast-window-boundary.patch
 
+# Phase 3 W3: upstream os, database, provider, appwidget, display, webkit
+patches/901-embedded-build-and-process.patch
+patches/902-local-binder-token.patch
+patches/903-parcel-buffer.patch
+patches/904-local-user-and-vibration.patch
+patches/905-content-observer-dispatch.patch
+patches/906-in-memory-sqlite.patch
+patches/907-database-utility-boundary.patch
+patches/908-in-memory-settings-provider.patch
+patches/909-local-appwidget-host.patch
+patches/910-embedded-display-manager.patch
+patches/911-iframe-webview-provider.patch
+
 01-offline-proto-diagnostics.patch
 02-interpreter-arrays.patch
 04-long-array-validation.patch
@@ -492,6 +591,21 @@ patches/123-mounted-app-locale-boundary.patch
 patches/124-resource-sdk-version-boundary.patch
 patches/125-mounted-system-asset-set-boundary.patch
 patches/126-color-state-set-boot-library-boundary.patch
+
+# Phase 3 W2 application and package service adapters
+patches/851-package-metadata-sdk-boundary.patch
+patches/852-embedded-package-catalog.patch
+patches/853-embedded-package-installer.patch
+patches/854-embedded-launcher-apps.patch
+patches/855-embedded-context.patch
+patches/856-embedded-content-resolver.patch
+patches/857-embedded-application.patch
+patches/858-embedded-activity.patch
+patches/859-embedded-fragment-host.patch
+patches/860-embedded-activity-manager.patch
+patches/861-embedded-search-catalog.patch
+patches/862-embedded-wallpaper.patch
+
 patches/201-canvas-host-window.patch
 patches/202-svg-path-data.patch
 patches/203-bitmap-host-allocation.patch
@@ -520,3 +634,6 @@ patches/503-text-input-sdk36-edges.patch
 patches/504-text-format-sdk36-edges.patch
 patches/505-guest-bidi-boundary.patch
 patches/506-button-sdk36-platform-edges.patch
+
+patches/801-local-display.patch
+patches/802-local-accessibility-manager.patch

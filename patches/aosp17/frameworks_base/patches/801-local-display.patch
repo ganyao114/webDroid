@@ -1,0 +1,1409 @@
+--- a/frameworks/base/core/java/android/view/Display.java
++++ b/frameworks/base/core/java/android/view/Display.java
+@@ -16,20 +16,8 @@
+ 
+ package android.view;
+ 
+-import static android.Manifest.permission.CONFIGURE_DISPLAY_COLOR_MODE;
+-import static android.Manifest.permission.CONTROL_DISPLAY_BRIGHTNESS;
+-import static android.hardware.flags.Flags.FLAG_DISPLAY_HDR_26Q2;
+-import static android.hardware.flags.Flags.FLAG_OVERLAYPROPERTIES_CLASS_API;
+ import static android.util.TypedValue.COMPLEX_UNIT_DIP;
+ 
+-import static com.android.server.display.feature.flags.Flags.FLAG_DISPLAY_TOPOLOGY_API;
+-import static com.android.server.display.feature.flags.Flags.FLAG_ENABLE_GET_SUGGESTED_FRAME_RATE;
+-import static com.android.server.display.feature.flags.Flags.FLAG_ENABLE_GET_SUPPORTED_REFRESH_RATES;
+-import static com.android.server.display.feature.flags.Flags.FLAG_ENABLE_HAS_ARR_SUPPORT;
+-import static com.android.server.display.feature.flags.Flags.FLAG_FRAME_RATE_MAPPING_API;
+-import static com.android.server.display.feature.flags.Flags.FLAG_HIGHEST_HDR_SDR_RATIO_API;
+-
+-import android.Manifest;
+ import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+@@ -37,7 +25,6 @@
+ import android.annotation.RequiresPermission;
+ import android.annotation.SuppressLint;
+ import android.annotation.TestApi;
+-import android.app.ActivityThread;
+ import android.app.KeyguardManager;
+ import android.app.WindowConfiguration;
+ import android.compat.annotation.UnsupportedAppUsage;
+@@ -51,13 +38,9 @@
+ import android.hardware.OverlayProperties;
+ import android.hardware.display.BrightnessInfo;
+ import android.hardware.display.DeviceProductInfo;
+-import android.hardware.display.DisplayManager;
+-import android.hardware.display.DisplayManagerGlobal;
+-import android.hardware.graphics.common.DisplayDecorationSupport;
+ import android.os.Build;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.os.Process;
+ import android.os.SystemClock;
+ import android.util.ArraySet;
+ import android.util.DisplayMetrics;
+@@ -104,14 +87,13 @@
+     private static final boolean DEBUG = false;
+ 
+     private final Object mLock = new Object();
+-    private final DisplayManagerGlobal mGlobal;
+     private final int mDisplayId;
+     private final int mFlags;
+     private final int mOwnerUid;
+     private final String mOwnerPackageName;
+     private final Resources mResources;
+     private DisplayAdjustments mDisplayAdjustments;
+-    private boolean mRefreshRateChangesRegistered;
++    private int mNavigationBarInset = -1;
+ 
+     @UnsupportedAppUsage
+     private DisplayInfo mDisplayInfo; // never null
+@@ -131,8 +113,6 @@
+     private long mLastCachedAppSizeUpdate;
+     private int mCachedAppWidthCompat;
+     private int mCachedAppHeightCompat;
+-
+-    private ArrayList<HdrSdrRatioListenerWrapper> mHdrSdrRatioListeners = new ArrayList<>();
+ 
+     /**
+      * The default Display id, which is the id of the primary display assuming there is one.
+@@ -417,8 +397,7 @@
+      * @hide
+      */
+     @TestApi
+-    @FlaggedApi(com.android.server.display.feature.flags.Flags
+-            .FLAG_VIRTUAL_DISPLAYS_SUPPORT_DESKTOP_MODE)
++    @FlaggedApi("com.android.server.display.feature.flags.virtual_displays_support_desktop_mode")
+     public static final int FLAG_ALLOWS_CONTENT_MODE_SWITCH = 1 << 15;
+ 
+     /**
+@@ -488,21 +467,21 @@
+      *
+      * @see #getState
+      */
+-    public static final int STATE_UNKNOWN = ViewProtoEnums.DISPLAY_STATE_UNKNOWN; // 0
++    public static final int STATE_UNKNOWN = 0;
+ 
+     /**
+      * Display state: The display is off.
+      *
+      * @see #getState
+      */
+-    public static final int STATE_OFF = ViewProtoEnums.DISPLAY_STATE_OFF; // 1
++    public static final int STATE_OFF = 1;
+ 
+     /**
+      * Display state: The display is on.
+      *
+      * @see #getState
+      */
+-    public static final int STATE_ON = ViewProtoEnums.DISPLAY_STATE_ON; // 2
++    public static final int STATE_ON = 2;
+ 
+     /**
+      * Display state: The display is dozing in a low power state; it is still
+@@ -512,7 +491,7 @@
+      * @see #getState
+      * @see android.os.PowerManager#isInteractive
+      */
+-    public static final int STATE_DOZE = ViewProtoEnums.DISPLAY_STATE_DOZE; // 3
++    public static final int STATE_DOZE = 3;
+ 
+     /**
+      * Display state: The display is dozing in a suspended low power state; it is still
+@@ -524,7 +503,7 @@
+      * @see #getState
+      * @see android.os.PowerManager#isInteractive
+      */
+-    public static final int STATE_DOZE_SUSPEND = ViewProtoEnums.DISPLAY_STATE_DOZE_SUSPEND; // 4
++    public static final int STATE_DOZE_SUSPEND = 4;
+ 
+     /**
+      * Display state: The display is on and optimized for VR mode.
+@@ -532,7 +511,7 @@
+      * @see #getState
+      * @see android.os.PowerManager#isInteractive
+      */
+-    public static final int STATE_VR = ViewProtoEnums.DISPLAY_STATE_VR; // 5
++    public static final int STATE_VR = 5;
+ 
+     /**
+      * Display state: The display is in a suspended full power state; it is still
+@@ -544,7 +523,7 @@
+      * @see #getState
+      * @see android.os.PowerManager#isInteractive
+      */
+-    public static final int STATE_ON_SUSPEND = ViewProtoEnums.DISPLAY_STATE_ON_SUSPEND; // 6
++    public static final int STATE_ON_SUSPEND = 6;
+ 
+     /** @hide */
+     @IntDef(prefix = {"STATE_"}, value = {
+@@ -564,67 +543,63 @@
+      *
+      * @hide
+      */
+-    public static final int STATE_REASON_UNKNOWN = ViewProtoEnums.DISPLAY_STATE_REASON_UNKNOWN;
++    public static final int STATE_REASON_UNKNOWN = 0;
+ 
+     /**
+      * The default power and display policy caused the display state.
+      *
+      * @hide
+      */
+-    public static final int STATE_REASON_DEFAULT_POLICY =
+-            ViewProtoEnums.DISPLAY_STATE_REASON_DEFAULT_POLICY;
++    public static final int STATE_REASON_DEFAULT_POLICY = 1;
+ 
+     /**
+      * The display state was changed due to acquiring a draw wake lock.
+      *
+      * @hide
+      */
+-    public static final int STATE_REASON_DRAW_WAKE_LOCK =
+-            ViewProtoEnums.DISPLAY_STATE_REASON_DRAW_WAKE_LOCK;
++    public static final int STATE_REASON_DRAW_WAKE_LOCK = 2;
+ 
+     /**
+      * The display state was changed due to display offloading.
+      *
+      * @hide
+      */
+-    public static final int STATE_REASON_OFFLOAD = ViewProtoEnums.DISPLAY_STATE_REASON_OFFLOAD;
++    public static final int STATE_REASON_OFFLOAD = 3;
+ 
+     /**
+      * The display state was changed due to a tilt event.
+      *
+      * @hide
+      */
+-    public static final int STATE_REASON_TILT = ViewProtoEnums.DISPLAY_STATE_REASON_TILT;
++    public static final int STATE_REASON_TILT = 4;
+ 
+     /**
+      * The display state was changed due to the dream manager.
+      *
+      * @hide
+      */
+-    public static final int STATE_REASON_DREAM_MANAGER =
+-            ViewProtoEnums.DISPLAY_STATE_REASON_DREAM_MANAGER;
++    public static final int STATE_REASON_DREAM_MANAGER = 5;
+ 
+     /**
+      * The display state was changed due to a {@link KeyEvent}.
+      *
+      * @hide
+      */
+-    public static final int STATE_REASON_KEY = ViewProtoEnums.DISPLAY_STATE_REASON_KEY;
++    public static final int STATE_REASON_KEY = 6;
+ 
+     /**
+      * The display state was changed due to a {@link MotionEvent}.
+      *
+      * @hide
+      */
+-    public static final int STATE_REASON_MOTION = ViewProtoEnums.DISPLAY_STATE_REASON_MOTION;
++    public static final int STATE_REASON_MOTION = 7;
+ 
+     /**
+      * The display state was changed due to an accessibility event.
+      *
+      * @hide
+      */
+-    public static final int STATE_REASON_ACCESSIBILITY =
+-            ViewProtoEnums.DISPLAY_STATE_REASON_ACCESSIBILITY;
++    public static final int STATE_REASON_ACCESSIBILITY = 8;
+ 
+     /** @hide */
+     @IntDef(prefix = {"STATE_REASON_"}, value = {
+@@ -714,53 +689,34 @@
+     /** @hide */
+     public static final int DISPLAY_MODE_ID_FOR_FRAME_RATE_OVERRIDE = 0xFF;
+ 
+-    /**
+-     * Internal method to create a display.
+-     * The display created with this method will have a static {@link DisplayAdjustments} applied.
+-     * Applications should use {@link android.content.Context#getDisplay} with
+-     * {@link android.app.Activity} or a context associated with a {@link Display} via
+-     * {@link android.content.Context#createDisplayContext(Display)}
+-     * to get a display object associated with a {@link android.app.Context}, or
+-     * {@link android.hardware.display.DisplayManager#getDisplay} to get a display object by id.
+-     *
+-     * @see android.content.Context#getDisplay()
+-     * @see android.content.Context#createDisplayContext(Display)
+-     * @hide
+-     */
+-    public Display(DisplayManagerGlobal global, int displayId, /*@NotNull*/ DisplayInfo displayInfo,
+-            DisplayAdjustments daj) {
+-        this(global, displayId, displayInfo, daj, null /*res*/);
+-    }
+-
+-    /**
+-     * Internal method to create a display.
+-     * The display created with this method will be adjusted based on the adjustments in the
+-     * supplied {@link Resources}.
+-     *
+-     * @hide
+-     */
+-    @android.ravenwood.annotation.RavenwoodKeep
+-    public Display(DisplayManagerGlobal global, int displayId, /*@NotNull*/ DisplayInfo displayInfo,
+-            Resources res) {
+-        this(global, displayId, displayInfo, null /*daj*/, res);
+-    }
+-
+-    @android.ravenwood.annotation.RavenwoodKeep
+-    private Display(DisplayManagerGlobal global, int displayId,
+-            /*@NotNull*/ DisplayInfo displayInfo, DisplayAdjustments daj, Resources res) {
+-        mGlobal = global;
+-        mDisplayId = displayId;
+-        mDisplayInfo = displayInfo;
+-        mResources = res;
+-        mDisplayAdjustments = mResources != null
+-            ? new DisplayAdjustments(mResources.getConfiguration())
+-            : daj != null ? new DisplayAdjustments(daj) : new DisplayAdjustments();
++    /** Creates the default logical display backed by the guest's host viewport. @hide */
++    public Display(Resources resources) {
++        mResources = Objects.requireNonNull(resources);
++        mDisplayId = DEFAULT_DISPLAY;
++        mDisplayInfo = new DisplayInfo();
++        mDisplayInfo.displayId = mDisplayId;
++        mDisplayInfo.type = TYPE_INTERNAL;
++        mDisplayInfo.name = "Embedded display";
++        mDisplayInfo.uniqueId = "local:0";
++        mDisplayInfo.flags = FLAG_TRUSTED;
++        mDisplayInfo.state = STATE_ON;
++        mDisplayInfo.committedState = STATE_ON;
++        mDisplayInfo.canHostTasks = true;
++        mDisplayInfo.frameRateVelocityMapping = Collections.emptyList();
++        mDisplayAdjustments = new DisplayAdjustments(mResources.getConfiguration());
+         mIsValid = true;
+-
+-        // Cache properties that cannot change as long as the display is valid.
+-        mFlags = displayInfo.flags;
+-        mOwnerUid = displayInfo.ownerUid;
+-        mOwnerPackageName = displayInfo.ownerPackageName;
++        mFlags = mDisplayInfo.flags;
++        mOwnerUid = mDisplayInfo.ownerUid;
++        mOwnerPackageName = mDisplayInfo.ownerPackageName;
++        updateDisplayInfoLocked();
++    }
++
++    int getNavigationBarInset() {
++        return mNavigationBarInset;
++    }
++
++    void setNavigationBarInset(int pixels) {
++        mNavigationBarInset = pixels;
+     }
+ 
+     /**
+@@ -881,7 +837,7 @@
+      * Check if this is a built-in display. A built-in display is physically part of the device;
+      * it's not connected via an external cable, or a Wi-Fi/Overlay/Virtual display.
+      */
+-    @FlaggedApi(FLAG_DISPLAY_TOPOLOGY_API)
++    @FlaggedApi("com.android.server.display.feature.flags.display_topology_api")
+     public boolean isInternal() {
+         return getType() == TYPE_INTERNAL;
+     }
+@@ -981,9 +937,9 @@
+      * @return Brightness information about the display.
+      * @hide
+      */
+-    @RequiresPermission(CONTROL_DISPLAY_BRIGHTNESS)
++    @RequiresPermission("android.permission.CONTROL_DISPLAY_BRIGHTNESS")
+     public @Nullable BrightnessInfo getBrightnessInfo() {
+-        return mGlobal.getBrightnessInfo(mDisplayId);
++        return null;
+     }
+ 
+     /**
+@@ -1166,7 +1122,6 @@
+      * This rotation value will match the results of {@link #getMetrics}: this means that the
+      * rotation value will correspond to the activity if accessed through the activity.
+      */
+-    @Surface.Rotation
+     public int getRotation() {
+         synchronized (mLock) {
+             updateDisplayInfoLocked();
+@@ -1178,7 +1133,6 @@
+      * Returns the install orientation of the display.
+      * @hide
+      */
+-    @Surface.Rotation
+     public int getInstallOrientation() {
+         synchronized (mLock) {
+             updateDisplayInfoLocked();
+@@ -1191,7 +1145,6 @@
+      * @return orientation of this display.
+      */
+     @Deprecated
+-    @Surface.Rotation
+     public int getOrientation() {
+         return getRotation();
+     }
+@@ -1231,7 +1184,7 @@
+         synchronized (mLock) {
+             updateDisplayInfoLocked();
+             final RoundedCorners roundedCorners = mDisplayInfo.roundedCorners;
+-            final @Surface.Rotation int rotation = getLocalRotation();
++            final int rotation = getLocalRotation();
+             if (roundedCorners != null && rotation != mDisplayInfo.rotation) {
+                 roundedCorners.rotate(rotation,
+                         mDisplayInfo.logicalWidth, mDisplayInfo.logicalHeight);
+@@ -1254,7 +1207,7 @@
+         synchronized (mLock) {
+             updateDisplayInfoLocked();
+             final DisplayShape displayShape = mDisplayInfo.displayShape;
+-            final @Surface.Rotation int rotation = getLocalRotation();
++            final int rotation = getLocalRotation();
+             if (displayShape != null && rotation != mDisplayInfo.rotation) {
+                 return displayShape.setRotation(rotation);
+             }
+@@ -1279,10 +1232,6 @@
+      */
+     public float getRefreshRate() {
+         synchronized (mLock) {
+-            if (!mRefreshRateChangesRegistered) {
+-                DisplayManagerGlobal.getInstance().registerForRefreshRateChanges();
+-                mRefreshRateChangesRegistered = true;
+-            }
+             updateDisplayInfoLocked();
+             return mDisplayInfo.getRefreshRate();
+         }
+@@ -1299,7 +1248,7 @@
+      * use {@link #getSupportedModes()}.
+      * </ul>
+      */
+-    @FlaggedApi(FLAG_ENABLE_GET_SUPPORTED_REFRESH_RATES)
++    @FlaggedApi("com.android.server.display.feature.flags.enable_get_supported_refresh_rates")
+     public @NonNull float[] getSupportedRefreshRates() {
+         synchronized (mLock) {
+             updateDisplayInfoLocked();
+@@ -1373,7 +1322,7 @@
+      * Returns whether display supports adaptive refresh rate or not.
+      */
+     // TODO(b/372526856) Add a link to the documentation for ARR.
+-    @FlaggedApi(FLAG_ENABLE_HAS_ARR_SUPPORT)
++    @FlaggedApi("com.android.server.display.feature.flags.enable_has_arr_support")
+     public boolean hasArrSupport() {
+         synchronized (mLock) {
+             updateDisplayInfoLocked();
+@@ -1389,7 +1338,7 @@
+      * @see #getSuggestedFrameRate(int)
+      * @see #FRAME_RATE_CATEGORY_HIGH
+      */
+-    @FlaggedApi(FLAG_ENABLE_GET_SUGGESTED_FRAME_RATE)
++    @FlaggedApi("com.android.server.display.feature.flags.enable_get_suggested_frame_rate")
+     public static final int FRAME_RATE_CATEGORY_NORMAL = 0;
+ 
+     /**
+@@ -1400,7 +1349,7 @@
+      * @see #getSuggestedFrameRate(int)
+      * @see #FRAME_RATE_CATEGORY_NORMAL
+      */
+-    @FlaggedApi(FLAG_ENABLE_GET_SUGGESTED_FRAME_RATE)
++    @FlaggedApi("com.android.server.display.feature.flags.enable_get_suggested_frame_rate")
+     public static final int FRAME_RATE_CATEGORY_HIGH = 1;
+ 
+     /**
+@@ -1433,7 +1382,7 @@
+      * @throws IllegalArgumentException when category is not {@link #FRAME_RATE_CATEGORY_NORMAL}
+      * or {@link #FRAME_RATE_CATEGORY_HIGH}
+      */
+-    @FlaggedApi(FLAG_ENABLE_GET_SUGGESTED_FRAME_RATE)
++    @FlaggedApi("com.android.server.display.feature.flags.enable_get_suggested_frame_rate")
+     public float getSuggestedFrameRate(@FrameRateCategory int category) {
+         synchronized (mLock) {
+             updateDisplayInfoLocked();
+@@ -1478,7 +1427,7 @@
+      * @see FrameRateVelocityPoint
+      */
+     @NonNull
+-    @FlaggedApi(FLAG_FRAME_RATE_MAPPING_API)
++    @FlaggedApi("com.android.server.display.feature.flags.frame_rate_mapping_api")
+     public List<FrameRateVelocityPoint> getFrameRateVelocityMapping() {
+         synchronized (mLock) {
+             updateDisplayInfoLocked();
+@@ -1529,9 +1478,9 @@
+      * Request the display applies a color mode.
+      * @hide
+      */
+-    @RequiresPermission(CONFIGURE_DISPLAY_COLOR_MODE)
++    @RequiresPermission("android.permission.CONFIGURE_DISPLAY_COLOR_MODE")
+     public void requestColorMode(int colorMode) {
+-        mGlobal.requestColorMode(mDisplayId, colorMode);
++        // The host compositor selects the output color mode.
+     }
+ 
+     /**
+@@ -1572,7 +1521,7 @@
+     @TestApi
+     @Nullable
+     public Display.Mode getSystemPreferredDisplayMode() {
+-        return mGlobal.getSystemPreferredDisplayMode(getDisplayId());
++        return getDefaultMode();
+     }
+ 
+     /**
+@@ -1680,16 +1629,6 @@
+         }
+     }
+ 
+-    private int findHdrSdrRatioListenerLocked(Consumer<Display> listener) {
+-        for (int i = 0; i < mHdrSdrRatioListeners.size(); i++) {
+-            final HdrSdrRatioListenerWrapper wrapper = mHdrSdrRatioListeners.get(i);
+-            if (wrapper.mListener == listener) {
+-                return i;
+-            }
+-        }
+-        return -1;
+-    }
+-
+     /**
+      * Registers a listener that will be invoked whenever the display's hdr/sdr ratio has changed.
+      * After receiving the callback on the specified Executor, call {@link #getHdrSdrRatio()} to
+@@ -1703,27 +1642,7 @@
+      */
+     public void registerHdrSdrRatioChangedListener(@NonNull Executor executor,
+             @NonNull Consumer<Display> listener) {
+-        if (!isHdrSdrRatioAvailable()) {
+-            throw new IllegalStateException("HDR/SDR ratio changed not available");
+-        }
+-        HdrSdrRatioListenerWrapper toRegister = null;
+-        synchronized (mLock) {
+-            if (findHdrSdrRatioListenerLocked(listener) == -1) {
+-                toRegister = new HdrSdrRatioListenerWrapper(listener);
+-                mHdrSdrRatioListeners.add(toRegister);
+-            } // else already listening, don't do anything
+-        }
+-        if (toRegister != null) {
+-            // Although we only care about the HDR/SDR ratio changing, that can also come in the
+-            // form of the larger DISPLAY_CHANGED event
+-            mGlobal.registerDisplayListener(toRegister, executor,
+-                    DisplayManagerGlobal
+-                                    .INTERNAL_EVENT_FLAG_DISPLAY_BASIC_CHANGED
+-                            | DisplayManagerGlobal
+-                                    .INTERNAL_EVENT_FLAG_DISPLAY_HDR_SDR_RATIO_CHANGED,
+-                    ActivityThread.currentPackageName(), /* isEventFilterImplicit */ true);
+-        }
+-
++        throw new IllegalStateException("HDR/SDR ratio changed not available");
+     }
+ 
+     /**
+@@ -1734,25 +1653,15 @@
+      * @see #registerHdrSdrRatioChangedListener(Executor, Consumer)
+      */
+     public void unregisterHdrSdrRatioChangedListener(@NonNull Consumer<Display> listener) {
+-        HdrSdrRatioListenerWrapper toRemove = null;
+-        synchronized (mLock) {
+-            int index = findHdrSdrRatioListenerLocked(listener);
+-            if (index != -1) {
+-                toRemove = mHdrSdrRatioListeners.remove(index);
+-            }
+-        }
+-        if (toRemove != null) {
+-            mGlobal.unregisterDisplayListener(toRemove);
+-        }
+     }
+ 
+     /**
+      * @return The highest possible HDR/SDR ratio. If {@link #isHdrSdrRatioAvailable()} returns
+      * false, this method returns 1.
+      */
+-    @FlaggedApi(FLAG_HIGHEST_HDR_SDR_RATIO_API)
++    @FlaggedApi("com.android.server.display.feature.flags.highest_hdr_sdr_ratio_api")
+     public float getHighestHdrSdrRatio() {
+-        return mGlobal.getHighestHdrSdrRatio(mDisplayId);
++        return 1.0f;
+     }
+ 
+     /**
+@@ -1766,7 +1675,7 @@
+      * @hide
+      */
+     @TestApi
+-    @RequiresPermission(Manifest.permission.MODIFY_USER_PREFERRED_DISPLAY_MODE)
++    @RequiresPermission("android.permission.MODIFY_USER_PREFERRED_DISPLAY_MODE")
+     public void setUserPreferredDisplayMode(@NonNull Display.Mode mode) {
+         setUserPreferredDisplayMode(mode, true);
+     }
+@@ -1782,13 +1691,10 @@
+      *`
+      * @hide
+      */
+-    @RequiresPermission(Manifest.permission.MODIFY_USER_PREFERRED_DISPLAY_MODE)
++    @RequiresPermission("android.permission.MODIFY_USER_PREFERRED_DISPLAY_MODE")
+     public void setUserPreferredDisplayMode(@NonNull Display.Mode mode, boolean storeMode) {
+-        // Create a new object containing default values for the unused fields like mode ID and
+-        // alternative refresh rates.
+-        Display.Mode preferredMode = new Display.Mode(mode.getPhysicalWidth(),
+-                mode.getPhysicalHeight(), mode.getRefreshRate());
+-        mGlobal.setUserPreferredDisplayMode(mDisplayId, preferredMode, storeMode);
++        Objects.requireNonNull(mode);
++        // The host vsync source controls the display mode.
+     }
+ 
+     /**
+@@ -1796,9 +1702,8 @@
+      *`
+      * @hide
+      */
+-    @RequiresPermission(Manifest.permission.MODIFY_USER_PREFERRED_DISPLAY_MODE)
++    @RequiresPermission("android.permission.MODIFY_USER_PREFERRED_DISPLAY_MODE")
+     public void resetUserPreferredDisplayMode() {
+-        mGlobal.resetUserPreferredDisplayMode(mDisplayId);
+     }
+ 
+     /**
+@@ -1807,9 +1712,8 @@
+      * @hide
+      */
+     @TestApi
+-    @RequiresPermission(Manifest.permission.MODIFY_USER_PREFERRED_DISPLAY_MODE)
++    @RequiresPermission("android.permission.MODIFY_USER_PREFERRED_DISPLAY_MODE")
+     public void clearUserPreferredDisplayMode() {
+-        mGlobal.setUserPreferredDisplayMode(mDisplayId, null);
+     }
+ 
+     /**
+@@ -1820,7 +1724,7 @@
+     @TestApi
+     @Nullable
+     public Display.Mode getUserPreferredDisplayMode() {
+-        return mGlobal.getUserPreferredDisplayMode(mDisplayId);
++        return null;
+     }
+ 
+ 
+@@ -1846,29 +1750,16 @@
+      */
+     @Nullable
+     public ColorSpace getPreferredWideGamutColorSpace() {
+-        synchronized (mLock) {
+-            updateDisplayInfoLocked();
+-            if (mDisplayInfo.isWideColorGamut()) {
+-                return mGlobal.getPreferredWideGamutColorSpace();
+-            }
+-            return null;
+-        }
++        return null;
+     }
+ 
+     /**
+      * Returns the {@link OverlayProperties} of the display.
+      */
+-    @FlaggedApi(FLAG_OVERLAYPROPERTIES_CLASS_API)
++    @FlaggedApi("android.hardware.flags.overlayproperties_class_api")
+     @NonNull
+     public OverlayProperties getOverlaySupport() {
+-        synchronized (mLock) {
+-            updateDisplayInfoLocked();
+-            if (mDisplayInfo.type == TYPE_INTERNAL
+-                    || mDisplayInfo.type == TYPE_EXTERNAL) {
+-                return mGlobal.getOverlaySupport();
+-            }
+-            return OverlayProperties.getDefault();
+-        }
++        return OverlayProperties.getDefault();
+     }
+ 
+     /**
+@@ -2078,7 +1969,7 @@
+             }
+             outSize.x = mDisplayInfo.logicalWidth;
+             outSize.y = mDisplayInfo.logicalHeight;
+-            final @Surface.Rotation int rotation = getLocalRotation();
++            final int rotation = getLocalRotation();
+             if (rotation != mDisplayInfo.rotation) {
+                 adjustSize(outSize, mDisplayInfo.rotation, rotation);
+             }
+@@ -2148,7 +2039,7 @@
+             }
+             mDisplayInfo.getLogicalMetrics(outMetrics,
+                     CompatibilityInfo.DEFAULT_COMPATIBILITY_INFO, null);
+-            final @Surface.Rotation int rotation = getLocalRotation();
++            final int rotation = getLocalRotation();
+             if (rotation != mDisplayInfo.rotation) {
+                 adjustMetrics(outMetrics, mDisplayInfo.rotation, rotation);
+             }
+@@ -2232,10 +2123,8 @@
+     public static boolean hasAccess(int uid, int flags, int ownerUid, int displayId) {
+         return (flags & Display.FLAG_PRIVATE) == 0
+                 || uid == ownerUid
+-                || uid == Process.SYSTEM_UID
+-                || uid == 0
+-                // Check if the UID is present on given display.
+-                || DisplayManagerGlobal.getInstance().isUidPresentOnDisplay(uid, displayId);
++                || uid == 1000 /* Process.SYSTEM_UID */
++                || uid == 0;
+     }
+ 
+     /**
+@@ -2268,26 +2157,31 @@
+     }
+ 
+     private void updateDisplayInfoLocked() {
+-        // Note: The display manager caches display info objects on our behalf.
+-        DisplayInfo newInfo = mGlobal.getDisplayInfo(mDisplayId);
+-        if (newInfo == null) {
+-            // Preserve the old mDisplayInfo after the display is removed.
+-            if (mIsValid) {
+-                mIsValid = false;
+-                if (DEBUG) {
+-                    Log.d(TAG, "Logical display " + mDisplayId + " was removed.");
+-                }
+-            }
+-        } else {
+-            // Use the new display info.  (It might be the same object if nothing changed.)
+-            mDisplayInfo = newInfo;
+-            if (!mIsValid) {
+-                mIsValid = true;
+-                if (DEBUG) {
+-                    Log.d(TAG, "Logical display " + mDisplayId + " was recreated.");
+-                }
+-            }
+-        }
++        final DisplayMetrics metrics = mResources.getDisplayMetrics();
++        final int width = metrics.widthPixels;
++        final int height = metrics.heightPixels;
++        final long frameInterval = Choreographer.frameIntervalNanos();
++        final float refreshRate = frameInterval > 0 ? 1_000_000_000f / frameInterval : 60f;
++        if (mDisplayInfo.supportedModes.length == 0 || mDisplayInfo.logicalWidth != width
++                || mDisplayInfo.logicalHeight != height || mDisplayInfo.renderFrameRate != refreshRate) {
++            final int modeId = 1;
++            mDisplayInfo.supportedModes = new Mode[] {new Mode(modeId, width, height, refreshRate)};
++            mDisplayInfo.modeId = modeId;
++            mDisplayInfo.defaultModeId = modeId;
++            mDisplayInfo.renderFrameRate = refreshRate;
++            mDisplayInfo.presentationDeadlineNanos = frameInterval;
++            mDisplayInfo.displayShape = DisplayShape.createDefaultDisplayShape(width, height, false);
++            mDisplayInfo.frameRateCategoryRate = new FrameRateCategoryRate(refreshRate, refreshRate);
++        }
++        mDisplayInfo.logicalWidth = mDisplayInfo.appWidth = width;
++        mDisplayInfo.logicalHeight = mDisplayInfo.appHeight = height;
++        mDisplayInfo.smallestNominalAppWidth = mDisplayInfo.largestNominalAppWidth = width;
++        mDisplayInfo.smallestNominalAppHeight = mDisplayInfo.largestNominalAppHeight = height;
++        // Resources.updateDisplay publishes the host viewport density in the configured metrics.
++        mDisplayInfo.logicalDensityDpi = metrics.densityDpi;
++        mDisplayInfo.physicalXDpi = metrics.xdpi;
++        mDisplayInfo.physicalYDpi = metrics.ydpi;
++        mDisplayInfo.rotation = width > height ? Surface.ROTATION_90 : Surface.ROTATION_0;
+     }
+ 
+     private void updateCachedAppSizeIfNeededLocked() {
+@@ -2302,8 +2196,8 @@
+     }
+ 
+     /** Returns {@code false} if the width and height of display should swap. */
+-    private static boolean noFlip(@Surface.Rotation int realRotation,
+-            @Surface.Rotation int localRotation) {
++    private static boolean noFlip(int realRotation,
++            int localRotation) {
+         // Check if the delta is rotated by 90 degrees.
+         return (realRotation - localRotation + 4) % 2 == 0;
+     }
+@@ -2312,8 +2206,8 @@
+      * Adjusts the given size by a rotation offset if necessary.
+      * @hide
+      */
+-    private void adjustSize(@NonNull Point size, @Surface.Rotation int realRotation,
+-            @Surface.Rotation int localRotation) {
++    private void adjustSize(@NonNull Point size, int realRotation,
++            int localRotation) {
+         if (noFlip(realRotation, localRotation)) return;
+         final int w = size.x;
+         size.x = size.y;
+@@ -2325,7 +2219,7 @@
+      * @hide
+      */
+     private void adjustMetrics(@NonNull DisplayMetrics metrics,
+-            @Surface.Rotation int realRotation, @Surface.Rotation int localRotation) {
++            int realRotation, int localRotation) {
+         if (noFlip(realRotation, localRotation)) return;
+         int w = metrics.widthPixels;
+         metrics.widthPixels = metrics.heightPixels;
+@@ -2336,12 +2230,18 @@
+         metrics.noncompatHeightPixels = w;
+     }
+ 
+-    private @Surface.Rotation int getLocalRotation() {
++    private int getLocalRotation() {
+         if (mResources == null) return mDisplayInfo.rotation;
+-        final @Surface.Rotation int localRotation =
++        final int localRotation =
+                 mResources.getConfiguration().windowConfiguration.getDisplayRotation();
+         if (localRotation != WindowConfiguration.ROTATION_UNDEFINED) return localRotation;
+         return mDisplayInfo.rotation;
++    }
++
++    // The guest boot library supports deepToString for primitive arrays.
++    static String formatPrimitiveArray(Object array) {
++        final String wrapped = Arrays.deepToString(new Object[] {array});
++        return wrapped.substring(1, wrapped.length() - 1);
+     }
+ 
+     // For debugging purposes
+@@ -2504,19 +2404,6 @@
+     }
+ 
+     /**
+-     * Returns whether/how the specified display supports DISPLAY_DECORATION.
+-     *
+-     * Composition.DISPLAY_DECORATION is a special layer type which is used to
+-     * render the screen decorations (i.e. antialiased rounded corners and
+-     * cutouts) while taking advantage of specific hardware.
+-     *
+-     * @hide
+-     */
+-    public DisplayDecorationSupport getDisplayDecorationSupport() {
+-        return mGlobal.getDisplayDecorationSupport(mDisplayId);
+-    }
+-
+-    /**
+      * A mode supported by a given display.
+      *
+      * @see Display#getSupportedModes()
+@@ -2888,9 +2775,9 @@
+                     .append(", fps=").append(mPeakRefreshRate)
+                     .append(", vsync=").append(mVsyncRate)
+                     .append(", alternativeRefreshRates=")
+-                    .append(Arrays.toString(mAlternativeRefreshRates))
++                    .append(formatPrimitiveArray(mAlternativeRefreshRates))
+                     .append(", supportedHdrTypes=")
+-                    .append(Arrays.toString(mSupportedHdrTypes))
++                    .append(formatPrimitiveArray(mSupportedHdrTypes))
+                     .append("}")
+                     .toString();
+         }
+@@ -3060,7 +2947,7 @@
+         /**
+          * HLG+ display.
+          */
+-        @FlaggedApi(FLAG_DISPLAY_HDR_26Q2)
++        @FlaggedApi("android.hardware.flags.display_hdr_26q2")
+         public static final int HDR_TYPE_HLG_PLUS = 6;
+ 
+         /** @hide */
+@@ -3215,7 +3102,7 @@
+         @Override
+         public String toString() {
+             return "HdrCapabilities{"
+-                    + "mSupportedHdrTypes=" + Arrays.toString(mSupportedHdrTypes)
++                    + "mSupportedHdrTypes=" + formatPrimitiveArray(mSupportedHdrTypes)
+                     + ", mMaxLuminance=" + mMaxLuminance
+                     + ", mMaxAverageLuminance=" + mMaxAverageLuminance
+                     + ", mMinLuminance=" + mMinLuminance + '}';
+@@ -3242,34 +3129,4 @@
+             }
+         }
+     }
+-
+-    private class HdrSdrRatioListenerWrapper implements DisplayManager.DisplayListener {
+-        Consumer<Display> mListener;
+-        float mLastReportedRatio = 1.f;
+-
+-        private HdrSdrRatioListenerWrapper(Consumer<Display> listener) {
+-            mListener = listener;
+-        }
+-
+-        @Override
+-        public void onDisplayAdded(int displayId) {
+-            // don't care
+-        }
+-
+-        @Override
+-        public void onDisplayRemoved(int displayId) {
+-            // don't care
+-        }
+-
+-        @Override
+-        public void onDisplayChanged(int displayId) {
+-            if (displayId == getDisplayId()) {
+-                float newRatio = getHdrSdrRatio();
+-                if (newRatio != mLastReportedRatio) {
+-                    mLastReportedRatio = newRatio;
+-                    mListener.accept(Display.this);
+-                }
+-            }
+-        }
+-    }
+ }
+--- a/frameworks/base/core/java/android/view/DisplayInfo.java
++++ b/frameworks/base/core/java/android/view/DisplayInfo.java
+@@ -17,14 +17,6 @@
+ package android.view;
+ 
+ import static android.view.Display.Mode.INVALID_MODE_ID;
+-import static android.internal.perfetto.protos.Displayinfo.DisplayInfoProto.APP_HEIGHT;
+-import static android.internal.perfetto.protos.Displayinfo.DisplayInfoProto.APP_WIDTH;
+-import static android.internal.perfetto.protos.Displayinfo.DisplayInfoProto.CUTOUT;
+-import static android.internal.perfetto.protos.Displayinfo.DisplayInfoProto.FLAGS;
+-import static android.internal.perfetto.protos.Displayinfo.DisplayInfoProto.LOGICAL_HEIGHT;
+-import static android.internal.perfetto.protos.Displayinfo.DisplayInfoProto.LOGICAL_WIDTH;
+-import static android.internal.perfetto.protos.Displayinfo.DisplayInfoProto.NAME;
+-import static android.internal.perfetto.protos.Displayinfo.DisplayInfoProto.TYPE;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -32,6 +24,7 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.res.CompatibilityInfo;
+ import android.content.res.Configuration;
++import android.graphics.PointF;
+ import android.graphics.Rect;
+ import android.hardware.display.DeviceProductInfo;
+ import android.os.Build;
+@@ -43,8 +36,6 @@
+ import android.util.SparseArray;
+ import android.util.proto.ProtoOutputStream;
+ 
+-import com.android.internal.display.BrightnessSynchronizer;
+-import com.android.server.display.feature.flags.Flags;
+ 
+ import java.util.ArrayList;
+ import java.util.Arrays;
+@@ -182,7 +173,6 @@
+      * more than one physical display.
+      * </p>
+      */
+-    @Surface.Rotation
+     @UnsupportedAppUsage
+     public int rotation;
+ 
+@@ -378,7 +368,6 @@
+     /**
+      * Install orientation of the display relative to its natural orientation.
+      */
+-    @Surface.Rotation
+     public int installOrientation;
+ 
+     @Nullable
+@@ -388,7 +377,7 @@
+      * Refresh rate range limitation based on the current device layout
+      */
+     @Nullable
+-    public SurfaceControl.RefreshRateRange layoutLimitedRefreshRate;
++    private PointF layoutLimitedRefreshRate;
+ 
+     /**
+      * The current hdr/sdr ratio for the display. If the display doesn't support hdr/sdr ratio
+@@ -400,7 +389,7 @@
+      * RefreshRateRange limitation for @Temperature.ThrottlingStatus
+      */
+     @NonNull
+-    public SparseArray<SurfaceControl.RefreshRateRange> thermalRefreshRateThrottling =
++    private SparseArray<PointF> thermalRefreshRateThrottling =
+             new SparseArray<>();
+ 
+     /**
+@@ -580,7 +569,7 @@
+         for (int i = 0; i < numOfSupportedRefreshRates; i++) {
+             supportedRefreshRates[i] = source.readFloat();
+         }
+-        frameRateVelocityMapping = source.createTypedArrayList(FrameRateVelocityPoint.CREATOR);
++        frameRateVelocityMapping = readFrameRateVelocityMapping(source);
+         defaultModeId = source.readInt();
+         userPreferredModeId = source.readInt();
+         int nModes = source.readInt();
+@@ -621,10 +610,13 @@
+         }
+         installOrientation = source.readInt();
+         displayShape = source.readTypedObject(DisplayShape.CREATOR);
+-        layoutLimitedRefreshRate = source.readTypedObject(SurfaceControl.RefreshRateRange.CREATOR);
++        layoutLimitedRefreshRate = source.readTypedObject(PointF.CREATOR);
+         hdrSdrRatio = source.readFloat();
+-        thermalRefreshRateThrottling = source.readSparseArray(null,
+-                SurfaceControl.RefreshRateRange.class);
++        final int thermalRangeCount = source.readInt();
++        thermalRefreshRateThrottling = new SparseArray<>(thermalRangeCount);
++        for (int i = 0; i < thermalRangeCount; i++) {
++            thermalRefreshRateThrottling.append(source.readInt(), source.readTypedObject(PointF.CREATOR));
++        }
+         thermalBrightnessThrottlingDataId = source.readString8();
+         canHostTasks = source.readBoolean();
+     }
+@@ -657,7 +649,12 @@
+         for (float supportedRefreshRate : supportedRefreshRates) {
+             dest.writeFloat(supportedRefreshRate);
+         }
+-        dest.writeTypedList(frameRateVelocityMapping);
++        dest.writeInt(frameRateVelocityMapping == null ? -1 : frameRateVelocityMapping.size());
++        if (frameRateVelocityMapping != null) {
++            for (FrameRateVelocityPoint point : frameRateVelocityMapping) {
++                dest.writeTypedObject(point, flags);
++            }
++        }
+         dest.writeInt(defaultModeId);
+         dest.writeInt(userPreferredModeId);
+         dest.writeInt(supportedModes.length);
+@@ -697,9 +694,25 @@
+         dest.writeTypedObject(displayShape, flags);
+         dest.writeTypedObject(layoutLimitedRefreshRate, flags);
+         dest.writeFloat(hdrSdrRatio);
+-        dest.writeSparseArray(thermalRefreshRateThrottling);
++        dest.writeInt(thermalRefreshRateThrottling.size());
++        for (int i = 0; i < thermalRefreshRateThrottling.size(); i++) {
++            dest.writeInt(thermalRefreshRateThrottling.keyAt(i));
++            dest.writeTypedObject(thermalRefreshRateThrottling.valueAt(i), flags);
++        }
+         dest.writeString8(thermalBrightnessThrottlingDataId);
+         dest.writeBoolean(canHostTasks);
++    }
++
++    private static List<FrameRateVelocityPoint> readFrameRateVelocityMapping(Parcel source) {
++        final int size = source.readInt();
++        if (size < 0) {
++            return null;
++        }
++        final ArrayList<FrameRateVelocityPoint> points = new ArrayList<>(size);
++        for (int i = 0; i < size; i++) {
++            points.add(source.readTypedObject(FrameRateVelocityPoint.CREATOR));
++        }
++        return points;
+     }
+ 
+     @Override
+@@ -1093,17 +1106,13 @@
+                 || brightnessMaximum != other.brightnessMaximum
+                 || brightnessDefault != other.brightnessDefault
+                 || brightnessDim != other.brightnessDim
+-                || !BrightnessSynchronizer.floatEquals(hdrSdrRatio, other.hdrSdrRatio)
++                || Float.compare(hdrSdrRatio, other.hdrSdrRatio) != 0
+                 || !Objects.equals(thermalBrightnessThrottlingDataId,
+                 other.thermalBrightnessThrottlingDataId);
+     }
+ 
+     private boolean hasStateChanged(@NonNull DisplayInfo other) {
+-        boolean stateChanged = state != other.state;
+-        if (!Flags.committedStateSeparateEvent()) {
+-            stateChanged |= (committedState != other.committedState);
+-        }
+-        return stateChanged;
++        return state != other.state || committedState != other.committedState;
+     }
+ 
+     // For debugging purposes
+@@ -1142,7 +1151,7 @@
+         sb.append(", frameRateCategoryRate ");
+         sb.append(frameRateCategoryRate);
+         sb.append(", supportedRefreshRates ");
+-        sb.append(Arrays.toString(supportedRefreshRates));
++        sb.append(Display.formatPrimitiveArray(supportedRefreshRates));
+         sb.append(", frameRateVelocityMapping ");
+         sb.append(frameRateVelocityMapping);
+         sb.append(", defaultMode ");
+@@ -1156,7 +1165,7 @@
+         sb.append(", isForceSdr ");
+         sb.append(isForceSdr);
+         sb.append(", userDisabledHdrTypes ");
+-        sb.append(Arrays.toString(userDisabledHdrTypes));
++        sb.append(Display.formatPrimitiveArray(userDisabledHdrTypes));
+         sb.append(", minimalPostProcessingSupported ");
+         sb.append(minimalPostProcessingSupported);
+         sb.append(", rotation ");
+@@ -1190,7 +1199,7 @@
+         sb.append(", colorMode ");
+         sb.append(colorMode);
+         sb.append(", supportedColorModes ");
+-        sb.append(Arrays.toString(supportedColorModes));
++        sb.append(Display.formatPrimitiveArray(supportedColorModes));
+         if (address != null) {
+             sb.append(", address ").append(address);
+         }
+@@ -1213,7 +1222,7 @@
+         sb.append(", brightnessDim ");
+         sb.append(brightnessDim);
+         sb.append(", installOrientation ");
+-        sb.append(Surface.rotationToString(installOrientation));
++        sb.append(installOrientation);
+         sb.append(", layoutLimitedRefreshRate ");
+         sb.append(layoutLimitedRefreshRate);
+         sb.append(", hdrSdrRatio ");
+@@ -1241,18 +1250,6 @@
+      * @param fieldId           Field Id of the DisplayInfoProto as defined in the parent message
+      */
+     public void dumpDebug(ProtoOutputStream protoOutputStream, long fieldId) {
+-        final long token = protoOutputStream.start(fieldId);
+-        protoOutputStream.write(LOGICAL_WIDTH, logicalWidth);
+-        protoOutputStream.write(LOGICAL_HEIGHT, logicalHeight);
+-        protoOutputStream.write(APP_WIDTH, appWidth);
+-        protoOutputStream.write(APP_HEIGHT, appHeight);
+-        protoOutputStream.write(NAME, name);
+-        protoOutputStream.write(FLAGS, flags);
+-        protoOutputStream.write(TYPE, type);
+-        if (displayCutout != null) {
+-            displayCutout.dumpDebug(protoOutputStream, CUTOUT);
+-        }
+-        protoOutputStream.end(token);
+     }
+ 
+     private static String flagsToString(int flags) {
+--- a/frameworks/base/core/java/android/view/FrameRateVelocityPoint.java
++++ b/frameworks/base/core/java/android/view/FrameRateVelocityPoint.java
+@@ -16,7 +16,6 @@
+ 
+ package android.view;
+ 
+-import static com.android.server.display.feature.flags.Flags.FLAG_FRAME_RATE_MAPPING_API;
+ 
+ import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+@@ -32,7 +31,7 @@
+  * For example, if the velocity is greater than 300 dp (density-independent pixels) per second,
+  * then we need frame rate to be 120 to ensure the smoothness.
+  */
+-@FlaggedApi(FLAG_FRAME_RATE_MAPPING_API)
++@FlaggedApi("com.android.server.display.feature.flags.frame_rate_mapping_api")
+ public final class FrameRateVelocityPoint implements Parcelable {
+     private final float mFramePerSecond;
+     private final float mDpPerSecond;
+--- a/frameworks/base/core/java/android/hardware/display/DeviceProductInfo.java
++++ b/frameworks/base/core/java/android/hardware/display/DeviceProductInfo.java
+@@ -16,7 +16,6 @@
+ 
+ package android.hardware.display;
+ 
+-import static com.android.graphics.surfaceflinger.flags.Flags.FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2;
+ 
+ import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+@@ -55,32 +54,28 @@
+     public @interface VideoInputType {}
+ 
+     /** The device input type is unknown. */
+-    @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++    @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+     public static final int VIDEO_INPUT_TYPE_UNKNOWN = -1;
+ 
+     /** The device has an analog input. */
+-    @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++    @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+     public static final int VIDEO_INPUT_TYPE_ANALOG = 0;
+ 
+     /** The device has a digital input. */
+-    @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++    @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+     public static final int VIDEO_INPUT_TYPE_DIGITAL = 1;
+ 
+     /** The device connection to the display sink is unknown. */
+-    public static final int CONNECTION_TO_SINK_UNKNOWN =
+-            IDeviceProductInfoConstants.CONNECTION_TO_SINK_UNKNOWN;
++    public static final int CONNECTION_TO_SINK_UNKNOWN = 0;
+ 
+     /** The display sink is built-in to the device */
+-    public static final int CONNECTION_TO_SINK_BUILT_IN =
+-            IDeviceProductInfoConstants.CONNECTION_TO_SINK_BUILT_IN;
++    public static final int CONNECTION_TO_SINK_BUILT_IN = 1;
+ 
+     /** The device is directly connected to the display sink. */
+-    public static final int CONNECTION_TO_SINK_DIRECT =
+-            IDeviceProductInfoConstants.CONNECTION_TO_SINK_DIRECT;
++    public static final int CONNECTION_TO_SINK_DIRECT = 2;
+ 
+     /** The device is transitively connected to the display sink. */
+-    public static final int CONNECTION_TO_SINK_TRANSITIVE =
+-            IDeviceProductInfoConstants.CONNECTION_TO_SINK_TRANSITIVE;
++    public static final int CONNECTION_TO_SINK_TRANSITIVE = 3;
+ 
+     private final String mName;
+     private final String mManufacturerPnpId;
+@@ -137,9 +132,9 @@
+     private DeviceProductInfo(Parcel in) {
+         mName = in.readString();
+         mManufacturerPnpId = in.readString();
+-        mProductId = (String) in.readValue(null);
+-        mModelYear = (Integer) in.readValue(null);
+-        mManufactureDate = (ManufactureDate) in.readValue(null);
++        mProductId = in.readString();
++        mModelYear = in.readBoolean() ? in.readInt() : null;
++        mManufactureDate = in.readTypedObject(ManufactureDate.CREATOR);
+         mConnectionToSinkType = in.readInt();
+         mEdidStructureMetadata = in.readTypedObject(EdidStructureMetadata.CREATOR);
+         mVideoInputType = in.readInt();
+@@ -148,7 +143,7 @@
+     /**
+      * Builder for {@link DeviceProductInfo}.
+      */
+-    @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++    @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+     public static final class Builder {
+         private String mName;
+         private String mManufacturerPnpId;
+@@ -165,7 +160,7 @@
+          * @param manufacturerPnpId The Manufacturer Plug and Play ID.
+          * @param productId The product ID.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         public Builder(@NonNull String manufacturerPnpId, @NonNull String productId) {
+             mManufacturerPnpId = Objects.requireNonNull(manufacturerPnpId);
+             mProductId = Objects.requireNonNull(productId);
+@@ -177,7 +172,7 @@
+          * @param name The display name.
+          * @return This builder.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @NonNull
+         public Builder setName(@Nullable String name) {
+             mName = name;
+@@ -190,7 +185,7 @@
+          * @param manufacturerPnpId The Manufacturer Plug and Play ID.
+          * @return This builder.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @NonNull
+         public Builder setManufacturerPnpId(@NonNull String manufacturerPnpId) {
+             mManufacturerPnpId = Objects.requireNonNull(manufacturerPnpId);
+@@ -203,7 +198,7 @@
+          * @param productId The product ID.
+          * @return This builder.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @NonNull
+         public Builder setProductId(@NonNull String productId) {
+             mProductId = Objects.requireNonNull(productId);
+@@ -216,7 +211,7 @@
+          * @param modelYear The model year, must be >= 1990, or -1 if not available.
+          * @return This builder.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @NonNull
+         public Builder setModelYear(@IntRange(from = -1) int modelYear) {
+             if (modelYear != -1 && modelYear < 1990) {
+@@ -234,7 +229,7 @@
+          *         available.
+          * @param manufactureYear Year of manufacturing, must be >= 1990, or -1 if not available.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         // Getters are already public and are split to getManufactureWeek and getManufactureYear
+         @SuppressLint("MissingGetterMatchingBuilder")
+         @NonNull
+@@ -266,7 +261,7 @@
+          * @see #CONNECTION_TO_SINK_TRANSITIVE
+          * @return This builder.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @NonNull
+         public Builder setConnectionToSinkType(@ConnectionToSinkType int connectionToSinkType) {
+             mConnectionToSinkType = connectionToSinkType;
+@@ -281,7 +276,7 @@
+          * @param edidStructureRevision The EDID revision, must be >= 0.
+          * @return This builder.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @NonNull
+         public Builder setEdidStructureMetadata(@IntRange(from = 0) int edidStructureVersion,
+                 @IntRange(from = 0) int edidStructureRevision) {
+@@ -306,7 +301,7 @@
+          * @see #VIDEO_INPUT_TYPE_DIGITAL
+          * @return This builder.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @NonNull
+         public Builder setVideoInputType(@VideoInputType int videoInputType) {
+             mVideoInputType = videoInputType;
+@@ -318,7 +313,7 @@
+          *
+          * @return A new {@link DeviceProductInfo}.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @NonNull
+         public DeviceProductInfo build() {
+             return new DeviceProductInfo(mName, mManufacturerPnpId, mProductId, mModelYear,
+@@ -410,7 +405,7 @@
+      * @return An {@link EdidStructureMetadata} containing the EDID major version and minor
+      * revision (e.g., version 1, revision 4 for EDID 1.4), or null if unavailable.
+      */
+-    @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++    @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+     @Nullable
+     public EdidStructureMetadata getEdidStructureMetadata() {
+         return mEdidStructureMetadata;
+@@ -422,7 +417,7 @@
+      * @see #VIDEO_INPUT_TYPE_ANALOG
+      * @see #VIDEO_INPUT_TYPE_DIGITAL
+      */
+-    @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++    @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+     @VideoInputType
+     public int getVideoInputType() {
+         return mVideoInputType;
+@@ -480,9 +475,10 @@
+     public void writeToParcel(@NonNull Parcel dest, int flags) {
+         dest.writeString(mName);
+         dest.writeString(mManufacturerPnpId);
+-        dest.writeValue(mProductId);
+-        dest.writeValue(mModelYear);
+-        dest.writeValue(mManufactureDate);
++        dest.writeString(mProductId);
++        dest.writeBoolean(mModelYear != null);
++        if (mModelYear != null) dest.writeInt(mModelYear);
++        dest.writeTypedObject(mManufactureDate, flags);
+         dest.writeInt(mConnectionToSinkType);
+         dest.writeTypedObject(mEdidStructureMetadata, flags);
+         dest.writeInt(mVideoInputType);
+@@ -503,14 +499,16 @@
+         }
+ 
+         protected ManufactureDate(Parcel in) {
+-            mWeek = (Integer) in.readValue(null);
+-            mYear = (Integer) in.readValue(null);
++            mWeek = in.readBoolean() ? in.readInt() : null;
++            mYear = in.readBoolean() ? in.readInt() : null;
+         }
+ 
+         @Override
+         public void writeToParcel(Parcel dest, int flags) {
+-            dest.writeValue(mWeek);
+-            dest.writeValue(mYear);
++            dest.writeBoolean(mWeek != null);
++            if (mWeek != null) dest.writeInt(mWeek);
++            dest.writeBoolean(mYear != null);
++            if (mYear != null) dest.writeInt(mYear);
+         }
+ 
+         @Override
+@@ -561,7 +559,7 @@
+     /**
+      * Encapsulates the EDID version, parsed from bytes 18 (version) and 19 (revision).
+      */
+-    @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++    @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+     public static final class EdidStructureMetadata implements Parcelable {
+         private final int mVersion;
+         private final int mRevision;
+@@ -607,7 +605,7 @@
+         /**
+          * @return The EDID version. For example, if the EDID version is 1.4, this will return 1.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @IntRange(from = 0)
+         public int getVersion() {
+             return mVersion;
+@@ -616,7 +614,7 @@
+         /**
+          * @return The EDID revision. For example, if the EDID version is 1.4, this will return 4.
+          */
+-        @FlaggedApi(FLAG_PARSE_EDID_VERSION_AND_INPUT_TYPE_V2)
++        @FlaggedApi("com.android.graphics.surfaceflinger.flags.parse_edid_version_and_input_type_v2")
+         @IntRange(from = 0)
+         public int getRevision() {
+             return mRevision;
+--- a/frameworks/base/core/java/android/hardware/OverlayProperties.java
++++ b/frameworks/base/core/java/android/hardware/OverlayProperties.java
+@@ -23 +22,0 @@
+-import android.hardware.flags.Flags;
+@@ -27 +25,0 @@
+-import libcore.util.NativeAllocationRegistry;
+@@ -42 +40 @@
+-@FlaggedApi(Flags.FLAG_OVERLAYPROPERTIES_CLASS_API)
++@FlaggedApi("android.hardware.flags.overlayproperties_class_api")
+@@ -45,3 +43 @@
+-    private static final NativeAllocationRegistry sRegistry =
+-            NativeAllocationRegistry.createMalloced(OverlayProperties.class.getClassLoader(),
+-            nGetDestructor());
++    private static final OverlayProperties DEFAULT = new OverlayProperties();
+@@ -49,14 +45 @@
+-    private long mNativeObject;
+-    // only for virtual displays
+-    private static OverlayProperties sDefaultOverlayProperties;
+-    // Invoked on destruction
+-    private Runnable mCloser;
+-
+-    private LutProperties[] mLutProperties;
+-
+-    private OverlayProperties(long nativeObject) {
+-        if (nativeObject != 0) {
+-            mCloser = sRegistry.registerNativeAllocation(this, nativeObject);
+-        }
+-        mNativeObject = nativeObject;
+-    }
++    private OverlayProperties() {}
+@@ -65,2 +48 @@
+-     * For virtual displays, we provide an overlay properties object
+-     * with RGBA 8888 only, sRGB only, true for mixed color spaces.
++     * Returns the capabilities of the software compositor.
+@@ -70,4 +52 @@
+-        if (sDefaultOverlayProperties == null) {
+-            sDefaultOverlayProperties = new OverlayProperties(nCreateDefault());
+-        }
+-        return sDefaultOverlayProperties;
++        return DEFAULT;
+@@ -79 +58 @@
+-    @FlaggedApi(Flags.FLAG_LUTS_API)
++    @FlaggedApi("android.hardware.flags.luts_api")
+@@ -83,7 +62 @@
+-        if (mNativeObject == 0) {
+-            return null;
+-        }
+-        if (mLutProperties == null) {
+-            mLutProperties = nGetLutProperties(mNativeObject);
+-        }
+-        return mLutProperties;
++        return null;
+@@ -99,8 +72,4 @@
+-    @FlaggedApi(Flags.FLAG_OVERLAYPROPERTIES_CLASS_API)
+-    public boolean isCombinationSupported(@DataSpace.ColorDataSpace int dataspace,
+-            @HardwareBuffer.Format int format) {
+-        if (mNativeObject == 0) {
+-            return false;
+-        }
+-
+-        return nIsCombinationSupported(mNativeObject, dataspace, format);
++    @FlaggedApi("android.hardware.flags.overlayproperties_class_api")
++    public boolean isCombinationSupported(int dataspace,
++            int format) {
++        return false;
+@@ -116 +85 @@
+-    @FlaggedApi(Flags.FLAG_OVERLAYPROPERTIES_CLASS_API)
++    @FlaggedApi("android.hardware.flags.overlayproperties_class_api")
+@@ -118,4 +87 @@
+-        if (mNativeObject == 0) {
+-            return false;
+-        }
+-        return nSupportMixedColorSpaces(mNativeObject);
++        return false;
+@@ -124 +90 @@
+-    @FlaggedApi(Flags.FLAG_OVERLAYPROPERTIES_CLASS_API)
++    @FlaggedApi("android.hardware.flags.overlayproperties_class_api")
+@@ -130 +96 @@
+-    @FlaggedApi(Flags.FLAG_OVERLAYPROPERTIES_CLASS_API)
++    @FlaggedApi("android.hardware.flags.overlayproperties_class_api")
+@@ -133,6 +99 @@
+-        if (mNativeObject == 0) {
+-            dest.writeInt(0);
+-            return;
+-        }
+-        dest.writeInt(1);
+-        nWriteOverlayPropertiesToParcel(mNativeObject, dest);
++        dest.writeInt(0);
+@@ -141 +102 @@
+-    @FlaggedApi(Flags.FLAG_OVERLAYPROPERTIES_CLASS_API)
++    @FlaggedApi("android.hardware.flags.overlayproperties_class_api")
+@@ -146 +107 @@
+-                return new OverlayProperties(nReadOverlayPropertiesFromParcel(in));
++                throw new android.os.BadParcelableException("Hardware overlays are unavailable");
+@@ -148 +109 @@
+-            return null;
++            return DEFAULT;
+@@ -156,8 +116,0 @@
+-    private static native long nGetDestructor();
+-    private static native long nCreateDefault();
+-    private static native boolean nSupportMixedColorSpaces(long nativeObject);
+-    private static native boolean nIsCombinationSupported(
+-            long nativeObject, int dataspace, int format);
+-    private static native void nWriteOverlayPropertiesToParcel(long nativeObject, Parcel dest);
+-    private static native long nReadOverlayPropertiesFromParcel(Parcel in);
+-    private static native LutProperties[] nGetLutProperties(long nativeObject);

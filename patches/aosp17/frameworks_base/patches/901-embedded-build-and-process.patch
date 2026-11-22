@@ -1,0 +1,1703 @@
+--- a/frameworks/base/core/java/android/os/Build.java
++++ b/frameworks/base/core/java/android/os/Build.java
+@@ -16,33 +16,18 @@
+ 
+ package android.os;
+ 
+-import android.Manifest;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.RequiresPermission;
+-import android.annotation.SuppressAutoDoc;
+ import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+-import android.app.ActivityThread;
+-import android.app.Application;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.sysprop.BackportedFixesProperties;
+-import android.sysprop.DeviceProperties;
+-import android.sysprop.SocProperties;
+-import android.sysprop.TelephonyProperties;
+ import android.text.TextUtils;
+ import android.util.ArraySet;
+-import android.util.Slog;
+ import android.view.View;
+-
+-import com.android.internal.util.FrameworkStatsLog;
+-
+-import dalvik.system.VMRuntime;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -156,18 +141,18 @@
+ 
+     /** The manufacturer of the device's primary system-on-chip. */
+     @NonNull
+-    public static final String SOC_MANUFACTURER = SocProperties.soc_manufacturer().orElse(UNKNOWN);
++    public static final String SOC_MANUFACTURER = getString("ro.soc.manufacturer");
+ 
+     /** The model name of the device's primary system-on-chip. */
+     @NonNull
+-    public static final String SOC_MODEL = SocProperties.soc_model().orElse(UNKNOWN);
++    public static final String SOC_MODEL = getString("ro.soc.model");
+ 
+     /**
+      * The manufacturer of the device's StrongBox chip. If the device does not use StrongBox, this
+      * should be set to "unsupported".
+      */
+     @NonNull
+-    @FlaggedApi(android.os.Flags.FLAG_STRONGBOX_PROPERTIES_API)
++
+     public static final String STRONGBOX_MANUFACTURER =
+             SystemProperties.get("ro.strongbox.manufacturer", "unsupported");
+ 
+@@ -176,7 +161,7 @@
+      * should be set to "unsupported".
+      */
+     @NonNull
+-    @FlaggedApi(android.os.Flags.FLAG_STRONGBOX_PROPERTIES_API)
++
+     public static final String STRONGBOX_MODEL =
+             SystemProperties.get("ro.strongbox.model", "unsupported");
+ 
+@@ -206,8 +191,7 @@
+      * {@link #getRadioVersion} instead.
+      */
+     @Deprecated
+-    public static final String RADIO = joinListOrElse(
+-            TelephonyProperties.baseband_version(), UNKNOWN);
++    public static final String RADIO = UNKNOWN;
+ 
+     /** The name of the hardware (from the kernel command line or /proc). */
+     public static final String HARDWARE = getString("ro.hardware");
+@@ -294,18 +278,9 @@
+      *
+      * @return The serial number if specified.
+      */
+-    @SuppressAutoDoc // No support for device / profile owner.
+-    @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
++    // No support for device / profile owner.
++
+     public static String getSerial() {
+-        IDeviceIdentifiersPolicyService service = IDeviceIdentifiersPolicyService.Stub
+-                .asInterface(ServiceManager.getService(Context.DEVICE_IDENTIFIERS_SERVICE));
+-        try {
+-            Application application = ActivityThread.currentApplication();
+-            String callingPackage = application != null ? application.getPackageName() : null;
+-            return service.getSerialForPackage(callingPackage, null);
+-        } catch (RemoteException e) {
+-            e.rethrowFromSystemServer();
+-        }
+         return UNKNOWN;
+     }
+ 
+@@ -338,7 +313,7 @@
+     /** @hide */
+     @TestApi
+     public static boolean is64BitAbi(String abi) {
+-        return VMRuntime.is64BitAbi(abi);
++        return abi.endsWith("64") || abi.contains("64-");
+     }
+ 
+     static {
+@@ -354,7 +329,7 @@
+             abiList = SUPPORTED_32_BIT_ABIS;
+         }
+ 
+-        CPU_ABI = abiList[0];
++        CPU_ABI = abiList.length == 0 ? UNKNOWN : abiList[0];
+         if (abiList.length > 1) {
+             CPU_ABI2 = abiList[1];
+         } else {
+@@ -378,7 +353,7 @@
+          * has any particular structure or that values of RELEASE from
+          * different releases can be somehow ordered.
+          */
+-        public static final String RELEASE = getString("ro.build.version.release");
++        public static final String RELEASE = SystemProperties.get("ro.build.version.release", "17");
+ 
+         /**
+          * The version string.  May be {@link #RELEASE} or {@link #CODENAME} if
+@@ -417,7 +392,7 @@
+          * {@link Build.VERSION_CODES#R}.
+          */
+         public static final int MEDIA_PERFORMANCE_CLASS =
+-                DeviceProperties.media_performance_class().orElse(0);
++                0;
+ 
+         /**
+          * The user-visible SDK version of the framework in its raw String
+@@ -426,7 +401,7 @@
+          * @deprecated Use {@link #SDK_INT} to easily get this as an integer.
+          */
+         @Deprecated
+-        public static final String SDK = getString("ro.build.version.sdk");
++        public static final String SDK = SystemProperties.get("ro.build.version.sdk", "37");
+ 
+         /**
+          * The SDK version of the software currently running on this hardware
+@@ -440,8 +415,7 @@
+          * Possible values are defined in {@link Build.VERSION_CODES}.
+          * @see #SDK_INT_FULL
+          */
+-        public static final int SDK_INT = SystemProperties.getInt(
+-                "ro.build.version.sdk", 0);
++        public static final int SDK_INT = getInt("ro.build.version.sdk", VERSION_CODES.CINNAMON_BUN);
+ 
+         /**
+          * The major and minor SDK version of the software currently running on
+@@ -461,8 +435,7 @@
+          * Possible values are defined in {@link
+          * android.os.Build.VERSION_CODES_FULL}.
+          */
+-        public static final int SDK_INT_FULL = parseFullVersion(SystemProperties.get(
+-                    "ro.build.version.sdk_full", ""));
++        public static final int SDK_INT_FULL = parseFullVersion(SystemProperties.get("ro.build.version.sdk_full", "37.0"));
+ 
+         /**
+          * The SDK version of the software that <em>initially</em> shipped on
+@@ -477,8 +450,7 @@
+          */
+         @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+         @TestApi
+-        public static final int DEVICE_INITIAL_SDK_INT = SystemProperties
+-                .getInt("ro.product.first_api_level", 0);
++        public static final int DEVICE_INITIAL_SDK_INT = getInt("ro.product.first_api_level", 0);
+ 
+         /**
+          * The developer preview revision of a prerelease SDK. This value will always
+@@ -498,7 +470,7 @@
+          * the previously published API level only to avoid unwanted runtime exceptions.
+          * </p>
+          */
+-        public static final int PREVIEW_SDK_INT = SystemProperties.getInt(
++        public static final int PREVIEW_SDK_INT = getInt(
+                 "ro.build.version.preview_sdk", 0);
+ 
+         /**
+@@ -525,7 +497,7 @@
+          * The current development codename, or the string "REL" if this is
+          * a release build.
+          */
+-        public static final String CODENAME = getString("ro.build.version.codename");
++        public static final String CODENAME = SystemProperties.get("ro.build.version.codename", "REL");
+ 
+         /**
+          * All known codenames that are present in {@link VERSION_CODES}.
+@@ -541,7 +513,15 @@
+          */
+         @SystemApi
+         @NonNull public static final Set<String> KNOWN_CODENAMES =
+-                new ArraySet<>(getStringList("ro.build.version.known_codenames", ","));
++                getKnownCodenames();
++
++        private static Set<String> getKnownCodenames() {
++            Set<String> codenames = new ArraySet<>();
++            for (String codename : getStringList("ro.build.version.known_codenames", ",")) {
++                codenames.add(codename);
++            }
++            return codenames;
++        }
+ 
+         private static final String[] ALL_CODENAMES
+                 = getStringList("ro.build.version.all_codenames", ",");
+@@ -551,8 +531,9 @@
+          */
+         @UnsupportedAppUsage
+         @TestApi
+-        public static final String[] ACTIVE_CODENAMES = "REL".equals(ALL_CODENAMES[0])
+-                ? new String[0] : ALL_CODENAMES;
++        public static final String[] ACTIVE_CODENAMES =
++                ALL_CODENAMES.length == 0 || "REL".equals(ALL_CODENAMES[0])
++                        ? new String[0] : ALL_CODENAMES;
+ 
+         /**
+          * The SDK version to use when accessing resources.
+@@ -579,7 +560,7 @@
+          *
+          * @hide
+          */
+-        public static final int MIN_SUPPORTED_TARGET_SDK_INT = SystemProperties.getInt(
++        public static final int MIN_SUPPORTED_TARGET_SDK_INT = getInt(
+                 "ro.build.version.min_supported_target_sdk", 0);
+     }
+ 
+@@ -1346,7 +1327,6 @@
+         private static final int CUR_DEVELOPMENT =
+                 VERSION_CODES.CUR_DEVELOPMENT * SDK_INT_MULTIPLIER;
+ 
+-
+         /**
+          * Android 1.0.
+          */
+@@ -1649,10 +1629,10 @@
+     public static final String FINGERPRINT = deriveFingerprint();
+ 
+     /** The status of the known issue on this device is not known. */
+-    @FlaggedApi(android.os.Flags.FLAG_API_FOR_BACKPORTED_FIXES)
++
+     public static final int BACKPORTED_FIX_STATUS_UNKNOWN = 0;
+     /** The known issue is fixed on this device. */
+-    @FlaggedApi(android.os.Flags.FLAG_API_FOR_BACKPORTED_FIXES)
++
+     public static final int BACKPORTED_FIX_STATUS_FIXED = 1;
+     /**
+      * The known issue is not applicable to this device.
+@@ -1660,10 +1640,10 @@
+      * <p>For example if the issue only affects a specific brand, devices
+      * from other brands would report not applicable.
+      */
+-    @FlaggedApi(android.os.Flags.FLAG_API_FOR_BACKPORTED_FIXES)
++
+     public static final int BACKPORTED_FIX_STATUS_NOT_APPLICABLE = 2;
+     /** The known issue is not fixed on this device. */
+-    @FlaggedApi(android.os.Flags.FLAG_API_FOR_BACKPORTED_FIXES)
++
+     public static final int BACKPORTED_FIX_STATUS_NOT_FIXED = 3;
+ 
+     /**
+@@ -1695,28 +1675,9 @@
+      * is not applicable on this device,
+      * otherwise {@link #BACKPORTED_FIX_STATUS_UNKNOWN}.
+      */
+-    @FlaggedApi(android.os.Flags.FLAG_API_FOR_BACKPORTED_FIXES)
++
+     public static @BackportedFixStatus int getBackportedFixStatus(long id) {
+-        @BackportedFixStatus int status = BACKPORTED_FIX_STATUS_UNKNOWN;
+-        int uid = Binder.getCallingUid();
+-        if (id > 0 && id <= 1023) {
+-            status = isBitSet(BackportedFixesProperties.alias_bitset(), (int) id)
+-                    ? BACKPORTED_FIX_STATUS_FIXED : BACKPORTED_FIX_STATUS_UNKNOWN;
+-        }
+-        FrameworkStatsLog.write(FrameworkStatsLog.BACKPORTED_FIX_STATUS_REPORTED, uid, id, status);
+-        return status;
+-    }
+-
+-    private static boolean isBitSet(List<Long> bitsetLongArray, int bitIndex) {
+-        // Because java.util.BitSet is not threadsafe do the calculations here instead.
+-        if (bitIndex < 0) {
+-            return false;
+-        }
+-        int arrayIndex = bitIndex >> 6;
+-        if (bitsetLongArray.size() <= arrayIndex) {
+-            return false;
+-        }
+-        return (bitsetLongArray.get(arrayIndex) & (1L << bitIndex)) != 0;
++        return BACKPORTED_FIX_STATUS_UNKNOWN;
+     }
+ 
+     /**
+@@ -1724,7 +1685,7 @@
+      * partitions, so we might derive the fingerprint at runtime.
+      */
+     private static String deriveFingerprint() {
+-        String finger = SystemProperties.get("ro.build.fingerprint");
++        String finger = SystemProperties.get("ro.build.fingerprint", "");
+         if (TextUtils.isEmpty(finger)) {
+             finger = getString("ro.product.brand") + '/' +
+                     getString("ro.product.name") + '/' +
+@@ -1745,15 +1706,7 @@
+      *
+      * @hide
+      */
+-    public static void ensureFingerprintProperty() {
+-        if (TextUtils.isEmpty(SystemProperties.get("ro.build.fingerprint"))) {
+-            try {
+-                SystemProperties.set("ro.build.fingerprint", FINGERPRINT);
+-            } catch (IllegalArgumentException e) {
+-                Slog.e(TAG, "Failed to set fingerprint property", e);
+-            }
+-        }
+-    }
++    public static void ensureFingerprintProperty() {}
+ 
+     /**
+      * A multiplier for various timeouts on the system.
+@@ -1765,7 +1718,7 @@
+      * @hide
+      */
+     public static final int HW_TIMEOUT_MULTIPLIER =
+-        SystemProperties.getInt("ro.hw_timeout_multiplier", 1);
++        getInt("ro.hw_timeout_multiplier", 1);
+ 
+     /**
+      * Verifies the current flash of the device is consistent with what
+@@ -1781,15 +1734,6 @@
+      * @hide
+      */
+     public static boolean isBuildConsistent() {
+-        // Don't care on eng builds.  Incremental build may trigger false negative.
+-        if (IS_ENG) return true;
+-
+-        int result = VintfObject.verifyBuildAtBoot();
+-        if (result != 0) {
+-            Slog.e(TAG, "Vendor interface is incompatible, error=" + result);
+-           return false;
+-        }
+-
+         return true;
+     }
+ 
+@@ -1873,7 +1817,7 @@
+                 Partition.PARTITION_NAME_VENDOR
+         };
+         for (String name : names) {
+-            String fingerprint = SystemProperties.get("ro." + name + ".build.fingerprint");
++            String fingerprint = SystemProperties.get("ro." + name + ".build.fingerprint", "");
+             if (TextUtils.isEmpty(fingerprint)) {
+                 continue;
+             }
+@@ -1901,7 +1845,7 @@
+      */
+     @UnsupportedAppUsage
+     public static final boolean IS_DEBUGGABLE =
+-            SystemProperties.getInt("ro.debuggable", 0) == 1;
++            getInt("ro.debuggable", 0) == 1;
+ 
+     /**
+      * Returns true if the device is running a debuggable build such as "userdebug" or "eng".
+@@ -1941,7 +1885,7 @@
+      * @hide
+      */
+     public static final boolean IS_ARC =
+-            SystemProperties.getBoolean("ro.boot.container", false);
++            "true".equals(SystemProperties.get("ro.boot.container", "false"));
+ 
+     /**
+      * Specifies whether the permissions needed by a legacy app should be
+@@ -1961,7 +1905,7 @@
+      * null (if, for instance, the radio is not currently on).
+      */
+     public static String getRadioVersion() {
+-        return joinListOrElse(TelephonyProperties.baseband_version(), null);
++        return null;
+     }
+ 
+     @UnsupportedAppUsage
+@@ -1975,13 +1919,13 @@
+      */
+     private static String getVendorDeviceIdProperty(String property) {
+         String attestProp = getString(
+-                TextUtils.formatSimple("ro.product.%s_for_attestation", property));
++                "ro.product." + property + "_for_attestation");
+         return attestProp.equals(UNKNOWN)
+-                ? getString(TextUtils.formatSimple("ro.product.vendor.%s", property)) : attestProp;
++                ? getString("ro.product.vendor." + property) : attestProp;
+     }
+ 
+     private static String[] getStringList(String property, String separator) {
+-        String value = SystemProperties.get(property);
++        String value = SystemProperties.get(property, "");
+         if (value.isEmpty()) {
+             return new String[0];
+         } else {
+@@ -1992,7 +1936,7 @@
+     @UnsupportedAppUsage
+     private static long getLong(String property) {
+         try {
+-            return Long.parseLong(SystemProperties.get(property));
++            return Long.parseLong(SystemProperties.get(property, ""));
+         } catch (NumberFormatException e) {
+             return -1;
+         }
+@@ -2003,4 +1947,12 @@
+                 .collect(Collectors.joining(","));
+         return ret.isEmpty() ? defaultValue : ret;
+     }
++
++    private static int getInt(String key, int fallback) {
++        try {
++            return Integer.parseInt(SystemProperties.get(key, ""));
++        } catch (NumberFormatException e) {
++            return fallback;
++        }
++    }
+ }
+--- a/frameworks/base/core/java/android/os/Process.java
++++ b/frameworks/base/core/java/android/os/Process.java
+@@ -16,53 +16,16 @@
+ 
+ package android.os;
+ 
+-import static android.annotation.SystemApi.Client.MODULE_LIBRARIES;
+-
+-import android.annotation.ElapsedRealtimeLong;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntRange;
+ import android.annotation.NonNull;
+-import android.annotation.Nullable;
+ import android.annotation.SuppressLint;
+-import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+-import android.annotation.UptimeMillisLong;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.os.Build.VERSION_CODES;
+-import android.ravenwood.annotation.RavenwoodIgnore;
+-import android.ravenwood.annotation.RavenwoodKeep;
+-import android.ravenwood.annotation.RavenwoodKeepPartialClass;
+-import android.ravenwood.annotation.RavenwoodRedirect;
+-import android.ravenwood.annotation.RavenwoodRedirectionClass;
+-import android.ravenwood.annotation.RavenwoodReplace;
+-import android.sysprop.MemoryProperties;
+-import android.system.ErrnoException;
+-import android.system.Os;
+-import android.system.OsConstants;
+-import android.system.StructPollfd;
+-import android.util.Pair;
+-import android.webkit.WebViewZygote;
+-
+-import com.android.sdksandbox.flags.Flags;
+-
+-import dalvik.annotation.optimization.CriticalNative;
+-import dalvik.annotation.optimization.FastNative;
+-import dalvik.system.VMDebug;
+-import dalvik.system.VMRuntime;
+-
+-import libcore.io.IoUtils;
+-
+-import java.io.FileDescriptor;
+-import java.io.IOException;
+-import java.util.Map;
+-import java.util.NoSuchElementException;
+-import java.util.concurrent.TimeoutException;
+ 
+ /**
+  * Tools for managing OS processes.
+  */
+-@RavenwoodKeepPartialClass
+-@RavenwoodRedirectionClass("Process_ravenwood")
++
+ public class Process {
+     private static final String LOG_TAG = "Process";
+ 
+@@ -129,7 +92,7 @@
+      * @hide
+      */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    @SystemApi(client = MODULE_LIBRARIES)
++
+     public static final int VPN_UID = 1016;
+ 
+     /**
+@@ -150,7 +113,7 @@
+      */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     @TestApi
+-    @SystemApi(client = MODULE_LIBRARIES)
++
+     public static final int NFC_UID = 1027;
+ 
+     /**
+@@ -655,11 +618,6 @@
+     private static final int PIDFD_UNSUPPORTED = 2;
+ 
+     /**
+-     * Whether or not the underlying OS supports pidfd
+-     */
+-    private static int sPidFdSupported = PIDFD_UNKNOWN;
+-
+-    /**
+      * Value used to indicate that there is no special information about an application launch.  App
+      * launches with this policy will occur through the primary or secondary Zygote with no special
+      * treatment.
+@@ -701,171 +659,19 @@
+     public static final int ZYGOTE_POLICY_FLAG_NATIVE_PROCESS = 1 << 3;
+ 
+     /**
+-     * State associated with the zygote process.
+-     * @hide
+-     */
+-    public static final ZygoteProcess ZYGOTE_PROCESS = new ZygoteProcess();
+-
+-    /**
+-     * State associated with the native zygote process.
+-     * @hide
+-     */
+-    public static final NativeZygoteProcess NATIVE_ZYGOTE_PROCESS = new NativeZygoteProcess();
+-
+-    /**
+-     * The process name set via {@link #setArgV0(String)}.
+-     */
+-    private static String sArgV0;
+-
+-    /**
+-     * Start a new process.
+-     *
+-     * <p>If processes are enabled, a new process is created and the
+-     * static main() function of a <var>processClass</var> is executed there.
+-     * The process will continue running after this function returns.
+-     *
+-     * <p>If processes are not enabled, a new thread in the caller's
+-     * process is created and main() of <var>processClass</var> called there.
+-     *
+-     * <p>The niceName parameter, if not an empty string, is a custom name to
+-     * give to the process instead of using processClass.  This allows you to
+-     * make easily identifyable processes even if you are using the same base
+-     * <var>processClass</var> to start them.
+-     *
+-     * When invokeWith is not null, the process will be started as a fresh app
+-     * and not a zygote fork. Note that this is only allowed for uid 0 or when
+-     * runtimeFlags contains DEBUG_ENABLE_DEBUGGER.
+-     *
+-     * @param processClass The class to use as the process's main entry
+-     *                     point.
+-     * @param niceName A more readable name to use for the process.
+-     * @param uid The user-id under which the process will run.
+-     * @param gid The group-id under which the process will run.
+-     * @param gids Additional group-ids associated with the process.
+-     * @param runtimeFlags Additional flags for the runtime.
+-     * @param targetSdkVersion The target SDK version for the app.
+-     * @param seInfo null-ok SELinux information for the new process.
+-     * @param abi non-null the ABI this app should be started with.
+-     * @param instructionSet null-ok the instruction set to use.
+-     * @param appDataDir null-ok the data directory of the app.
+-     * @param invokeWith null-ok the command to invoke with.
+-     * @param packageName null-ok the name of the package this process belongs to.
+-     * @param zygotePolicyFlags Flags used to determine how to launch the application
+-     * @param isTopApp whether the process starts for high priority application.
+-     * @param disabledCompatChanges null-ok list of disabled compat changes for the process being
+-     *                             started.
+-     * @param pkgDataInfoMap Map from related package names to private data directory
+-     *                       volume UUID and inode number.
+-     * @param whitelistedDataInfoMap Map from allowlisted package names to private data directory
+-     *                       volume UUID and inode number.
+-     * @param bindMountAppsData whether zygote needs to mount CE and DE data.
+-     * @param bindMountAppStorageDirs whether zygote needs to mount Android/obb and Android/data.
+-     * @param zygoteArgs Additional arguments to supply to the zygote process.
+-     * @return An object that describes the result of the attempt to start the process.
+-     * @throws RuntimeException on fatal start failure
+-     *
+-     * @hide
+-     */
+-    public static ProcessStartResult start(@NonNull final String processClass,
+-                                           @Nullable final String niceName,
+-                                           int uid, int gid, @Nullable int[] gids,
+-                                           int runtimeFlags,
+-                                           int mountExternal,
+-                                           int targetSdkVersion,
+-                                           @Nullable String seInfo,
+-                                           @NonNull String abi,
+-                                           @Nullable String instructionSet,
+-                                           @Nullable String appDataDir,
+-                                           @Nullable String invokeWith,
+-                                           @Nullable String packageName,
+-                                           int zygotePolicyFlags,
+-                                           boolean isTopApp,
+-                                           @Nullable long[] disabledCompatChanges,
+-                                           @Nullable long[] enabledCompatChanges,
+-                                           boolean useDeliQueue,
+-                                           @Nullable Map<String, Pair<String, Long>>
+-                                                   pkgDataInfoMap,
+-                                           @Nullable Map<String, Pair<String, Long>>
+-                                                   whitelistedDataInfoMap,
+-                                           boolean bindMountAppsData,
+-                                           boolean bindMountAppStorageDirs,
+-                                           boolean bindMountSystemOverrides,
+-                                           long startSeq,
+-                                           @Nullable String[] zygoteArgs) {
+-        boolean isNative = android.os.Flags.nativeFrameworkPrototype()
+-                && (zygotePolicyFlags & ZYGOTE_POLICY_FLAG_NATIVE_PROCESS) != 0;
+-        IZygoteProcess process = isNative ? NATIVE_ZYGOTE_PROCESS : ZYGOTE_PROCESS;
+-        return process.start(processClass, niceName, uid, gid, gids,
+-                    runtimeFlags, mountExternal, targetSdkVersion, seInfo,
+-                    abi, instructionSet, appDataDir, invokeWith, packageName,
+-                    zygotePolicyFlags, isTopApp, disabledCompatChanges,
+-                    enabledCompatChanges, useDeliQueue,
+-                    pkgDataInfoMap, whitelistedDataInfoMap, bindMountAppsData,
+-                    bindMountAppStorageDirs, bindMountSystemOverrides, startSeq, zygoteArgs);
+-    }
+-
+-    /** @hide */
+-    public static ProcessStartResult startWebView(@NonNull final String processClass,
+-                                                  @Nullable final String niceName,
+-                                                  int uid, int gid, @Nullable int[] gids,
+-                                                  int runtimeFlags,
+-                                                  int mountExternal,
+-                                                  int targetSdkVersion,
+-                                                  @Nullable String seInfo,
+-                                                  @NonNull String abi,
+-                                                  @Nullable String instructionSet,
+-                                                  @Nullable String appDataDir,
+-                                                  @Nullable String invokeWith,
+-                                                  @Nullable String packageName,
+-                                                  @Nullable long[] disabledCompatChanges,
+-                                                  @Nullable long[] enabledCompatChanges,
+-                                                  boolean useDeliQueue,
+-                                                  long startSeq,
+-                                                  @Nullable String[] zygoteArgs) {
+-        // Webview zygote can't access app private data files, so doesn't need to know its data
+-        // info.
+-        return WebViewZygote.getProcess()
+-                .start(
+-                        processClass,
+-                        niceName,
+-                        uid,
+-                        gid,
+-                        gids,
+-                        runtimeFlags,
+-                        mountExternal,
+-                        targetSdkVersion,
+-                        seInfo,
+-                        abi,
+-                        instructionSet,
+-                        appDataDir,
+-                        invokeWith,
+-                        packageName,
+-                        /* zygotePolicyFlags= */ ZYGOTE_POLICY_FLAG_EMPTY,
+-                        /* isTopApp= */ false,
+-                        disabledCompatChanges,
+-                        enabledCompatChanges,
+-                        useDeliQueue, /* pkgDataInfoMap */
+-                        null,
+-                        /* whitelistedDataInfoMap */ null, /* bindMountAppsData */
+-                        false,
+-                        /* bindMountAppStorageDirs */ false, /* bindMountSyspropOverrides */
+-                        false,
+-                        startSeq,
+-                        zygoteArgs);
+-    }
+-
+-    /**
+      * Returns elapsed milliseconds of the time this process has run.
+      * @return  Returns the number of milliseconds this process has return.
+      */
+-    @CriticalNative
+-    public static final native long getElapsedCpuTime();
++
++    public static final long getElapsedCpuTime() {
++        return SystemClock.uptimeMillis();
++    }
+ 
+     /**
+      * Return the {@link SystemClock#elapsedRealtime()} at which this process was started,
+      * but before any of the application code was executed.
+      */
+-    @ElapsedRealtimeLong
++
+     public static long getStartElapsedRealtime() {
+         return sStartElapsedRealtime;
+     }
+@@ -874,7 +680,7 @@
+      * Return the {@link SystemClock#uptimeMillis()} at which this process was started,
+      * but before any of the application code was executed.
+      */
+-    @UptimeMillisLong
++
+     public static long getStartUptimeMillis() {
+         return sStartUptimeMillis;
+     }
+@@ -887,7 +693,7 @@
+      * in order to reduce the process start up latency, in which case this is set when the system
+      * decides to "specialize" the process into a requested app.
+      */
+-    @ElapsedRealtimeLong
++
+     public static long getStartRequestedElapsedRealtime() {
+         return sStartRequestedElapsedRealtime;
+     }
+@@ -900,7 +706,7 @@
+      * in order to reduce the process start up latency, in which case this is set when the system
+      * decides to "specialize" the process into a requested app.
+      */
+-    @UptimeMillisLong
++
+     public static long getStartRequestedUptimeMillis() {
+         return sStartRequestedUptimeMillis;
+     }
+@@ -917,18 +723,18 @@
+     /**
+      * Returns true if the current process is a 64-bit runtime.
+      */
+-    @RavenwoodKeep
++
+     public static final boolean is64Bit() {
+-        return VMRuntime.getRuntime().is64Bit();
++        return false;
+     }
+ 
+     /**
+      * Returns the identifier of this process, which can be used with
+      * {@link #killProcess} and {@link #sendSignal}.
+      */
+-    @RavenwoodKeep
++
+     public static final int myPid() {
+-        return Os.getpid();
++        return 1;
+     }
+ 
+     /**
+@@ -937,16 +743,17 @@
+      */
+     @UnsupportedAppUsage(trackingBug = 171962076)
+     public static final int myPpid() {
+-        return Os.getppid();
++        return 0;
+     }
+ 
+     /**
+      * Returns the identifier of the calling thread, which be used with
+      * {@link #setThreadPriority(int, int)}.
+      */
+-    @RavenwoodKeep
++
+     public static final int myTid() {
+-        return Os.gettid();
++        Looper looper = Looper.myLooper();
++        return (int) (looper == null ? Thread.currentThread() : looper.getThread()).getId();
+     }
+ 
+     /**
+@@ -955,9 +762,9 @@
+      * app-specific sandbox.  It is different from {@link #myUserHandle} in that
+      * a uid identifies a specific app sandbox in a specific user.
+      */
+-    @RavenwoodKeep
++
+     public static final int myUid() {
+-        return Os.getuid();
++        return FIRST_APPLICATION_UID;
+     }
+ 
+     /**
+@@ -966,18 +773,18 @@
+      * {@link #myUid()} in that a particular user will have multiple
+      * distinct apps running under it each with their own uid.
+      */
+-    @RavenwoodKeep
++
+     public static UserHandle myUserHandle() {
+-        return UserHandle.of(UserHandle.getUserId(myUid()));
++        return UserHandle.getUserHandleForUid(myUid());
+     }
+ 
+     /**
+      * Returns whether the given uid belongs to a system core component or not.
+      * @hide
+      */
+-    @RavenwoodKeep
++
+     public static boolean isCoreUid(int uid) {
+-        return UserHandle.isCore(uid);
++        return uid >= 0 && uid % 100000 < FIRST_APPLICATION_UID;
+     }
+ 
+     /**
+@@ -986,15 +793,15 @@
+      * @return Whether the uid corresponds to an application sandbox running in
+      *     a specific user.
+      */
+-    @RavenwoodKeep
++
+     public static boolean isApplicationUid(int uid) {
+-        return UserHandle.isApp(uid);
++        return uid >= 0 && uid % 100000 >= FIRST_APPLICATION_UID && uid % 100000 <= LAST_APPLICATION_UID;
+     }
+ 
+     /**
+      * Returns whether the current process is in an isolated sandbox.
+      */
+-    @RavenwoodKeep
++
+     public static final boolean isIsolated() {
+         return isIsolated(myUid());
+     }
+@@ -1006,7 +813,7 @@
+     @Deprecated
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.TIRAMISU,
+             publicAlternatives = "Use {@link #isIsolatedUid(int)} instead.")
+-    @RavenwoodKeep
++
+     public static final boolean isIsolated(int uid) {
+         return isIsolatedUid(uid);
+     }
+@@ -1014,9 +821,9 @@
+     /**
+      * Returns whether the process with the given {@code uid} is an isolated sandbox.
+      */
+-    @RavenwoodKeep
++
+     public static final boolean isIsolatedUid(int uid) {
+-        uid = UserHandle.getAppId(uid);
++        uid = uid % 100000;
+         return (uid >= FIRST_ISOLATED_UID && uid <= LAST_ISOLATED_UID)
+                 || (uid >= FIRST_APP_ZYGOTE_ISOLATED_UID && uid <= LAST_APP_ZYGOTE_ISOLATED_UID);
+     }
+@@ -1025,10 +832,10 @@
+      * Returns whether the provided UID belongs to an  sdk sandbox process
+      * @see android.app.sdksandbox.SdkSandboxManager
+      */
+-    @SuppressLint("UnflaggedApi") // promoting from @SystemApi.
+-    @RavenwoodKeep
++    @SuppressLint("UnflaggedApi") // promoting from .
++
+     public static final boolean isSdkSandboxUid(int uid) {
+-        uid = UserHandle.getAppId(uid);
++        uid = uid % 100000;
+         return (uid >= FIRST_SDK_SANDBOX_UID && uid <= LAST_SDK_SANDBOX_UID);
+     }
+ 
+@@ -1041,8 +848,8 @@
+      *
+      * @throws IllegalArgumentException if input is not an sdk sandbox uid
+      */
+-    @SuppressLint("UnflaggedApi") // promoting from @SystemApi.
+-    @RavenwoodKeep
++    @SuppressLint("UnflaggedApi") // promoting from .
++
+     public static final int getAppUidForSdkSandboxUid(int uid) {
+         if (!isSdkSandboxUid(uid)) {
+             throw new IllegalArgumentException("Input UID is not an SDK sandbox UID");
+@@ -1058,7 +865,7 @@
+      * @throws IllegalArgumentException if input is not a Private Compute Core UID
+      * @hide
+      */
+-    @RavenwoodKeep
++
+     public static final int getAppUidForPrivateComputeCoreUid(int uid) {
+         if (!isPrivateComputeCoreUid(uid)) {
+             throw new IllegalArgumentException("Input UID is not a Private Compute Core UID");
+@@ -1074,7 +881,7 @@
+      * @throws IllegalArgumentException if input is not an app UID
+      * @hide
+      */
+-    @RavenwoodKeep
++
+     public static final int getPrivateComputeCoreUidForAppUid(int uid) {
+         if (!isApplicationUid(uid)) {
+             throw new IllegalArgumentException("Input UID is not an app UID");
+@@ -1088,9 +895,9 @@
+      *
+      * @hide
+      */
+-    @SystemApi(client = MODULE_LIBRARIES)
++
+     @TestApi
+-    @RavenwoodKeep
++
+     // TODO(b/318651609): Deprecate once Process#getSdkSandboxUidForAppUid is rolled out to 100%
+     public static final int toSdkSandboxUid(int uid) {
+         return uid + (FIRST_SDK_SANDBOX_UID - FIRST_APPLICATION_UID);
+@@ -1105,8 +912,7 @@
+      *
+      * @throws IllegalArgumentException if input is not an app uid
+      */
+-    @FlaggedApi(Flags.FLAG_SDK_SANDBOX_UID_TO_APP_UID_API)
+-    @RavenwoodKeep
++
+     public static final int getSdkSandboxUidForAppUid(int uid) {
+         if (!isApplicationUid(uid)) {
+             throw new IllegalArgumentException("Input UID is not an app UID");
+@@ -1117,7 +923,7 @@
+     /**
+      * Returns whether the current process is a sdk sandbox process.
+      */
+-    @RavenwoodKeep
++
+     public static final boolean isSdkSandbox() {
+         return isSdkSandboxUid(myUid());
+     }
+@@ -1127,10 +933,9 @@
+      * Private Compute Core sandbox process.
+      *
+      */
+-    @FlaggedApi(android.app.privatecompute.flags.Flags.FLAG_ENABLE_PCC_FRAMEWORK_SUPPORT)
+-    @RavenwoodKeep
++
+     public static final boolean isPrivateComputeCoreUid(int uid) {
+-        uid = UserHandle.getAppId(uid);
++        uid = uid % 100000;
+         return uid >= FIRST_PCC_UID && uid <= LAST_PCC_UID;
+     }
+ 
+@@ -1139,58 +944,17 @@
+      * none.  If the given string consists of only numbers, it is converted
+      * directly to a uid.
+      */
+-    public static final native int getUidForName(String name);
++    public static final int getUidForName(String name) {
++        return "root".equals(name) ? ROOT_UID : "system".equals(name) ? SYSTEM_UID : INVALID_UID;
++    }
+ 
+     /**
+      * Returns the GID assigned to a particular user name, or -1 if there is
+      * none.  If the given string consists of only numbers, it is converted
+      * directly to a gid.
+      */
+-    public static final native int getGidForName(String name);
+-
+-    /**
+-     * Returns a uid for a currently running process.
+-     * @param pid the process id
+-     * @return the uid of the process, or -1 if the process is not running.
+-     * @hide pending API council review
+-     */
+-    @UnsupportedAppUsage
+-    public static final int getUidForPid(int pid) {
+-        String[] procStatusLabels = { "Uid:" };
+-        long[] procStatusValues = new long[1];
+-        procStatusValues[0] = -1;
+-        Process.readProcLines("/proc/" + pid + "/status", procStatusLabels, procStatusValues);
+-        return (int) procStatusValues[0];
+-    }
+-
+-    /**
+-     * Returns the parent process id for a currently running process.
+-     * @param pid the process id
+-     * @return the parent process id of the process, or -1 if the process is not running.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public static final int getParentPid(int pid) {
+-        String[] procStatusLabels = { "PPid:" };
+-        long[] procStatusValues = new long[1];
+-        procStatusValues[0] = -1;
+-        Process.readProcLines("/proc/" + pid + "/status", procStatusLabels, procStatusValues);
+-        return (int) procStatusValues[0];
+-    }
+-
+-    /**
+-     * Returns the thread group leader id for a currently running thread.
+-     * @param tid the thread id
+-     * @return the thread group leader id of the thread, or -1 if the thread is not running.
+-     *         This is same as what getpid(2) would return if called by tid.
+-     * @hide
+-     */
+-    public static final int getThreadGroupLeader(int tid) {
+-        String[] procStatusLabels = { "Tgid:" };
+-        long[] procStatusValues = new long[1];
+-        procStatusValues[0] = -1;
+-        Process.readProcLines("/proc/" + tid + "/status", procStatusLabels, procStatusValues);
+-        return (int) procStatusValues[0];
++    public static final int getGidForName(String name) {
++        return getUidForName(name);
+     }
+ 
+     /**
+@@ -1213,181 +977,10 @@
+      * not have permission to modify the given thread, or to use the given
+      * priority.
+      */
+-    @RavenwoodRedirect
++
+     public static final void setThreadPriority(int tid,
+             @IntRange(from = -20, to = THREAD_PRIORITY_LOWEST) int priority)
+-            throws IllegalArgumentException, SecurityException {
+-        if (com.android.libcore.Flags.nicenessApis() && Process.myTid() == tid) {
+-            // Prefer the same thread version that informs ART of the priority change.
+-            setThreadPriority(priority);
+-        } else {
+-            if (priority < -20 || priority > THREAD_PRIORITY_LOWEST) {
+-                throw new IllegalArgumentException("Priority/niceness " + priority + " is invalid");
+-            }
+-            setThreadPriorityNative(tid, priority);
+-        }
+-    }
+-
+-    @FastNative
+-    private static native void setThreadPriorityNative(int tid,
+-            @IntRange(from = -20, to = THREAD_PRIORITY_LOWEST) int priority)
+-            throws IllegalArgumentException, SecurityException;
+-
+-    /**
+-     * No-op stub, kept only for app compat purposes.
+-     *
+-     * Historical description:
+-     * Call with 'false' to cause future calls to {@link #setThreadPriority(int)} to
+-     * throw an exception if passed a background-level thread priority.  This is only
+-     * effective if the JNI layer is built with GUARD_THREAD_PRIORITY defined to 1.
+-     * This does not prevent a thread from backgrounding itself via other means, such
+-     * as a call to Thread.setPriority() or a native setpriority() call.
+-     *
+-     * @deprecated This method does nothing.  Do not use.
+-     *
+-     * @hide
+-     */
+-    @Deprecated
+-    public static final void setCanSelfBackground(boolean backgroundOk) {}
+-
+-    /**
+-     * Sets the scheduling group for a thread.
+-     * @hide
+-     * @param tid The identifier of the thread to change.
+-     * @param group The target group for this thread from THREAD_GROUP_*.
+-     *
+-     * @throws IllegalArgumentException Throws IllegalArgumentException if
+-     * <var>tid</var> does not exist.
+-     * @throws SecurityException Throws SecurityException if your process does
+-     * not have permission to modify the given thread, or to use the given
+-     * priority.
+-     * If the thread is a thread group leader, that is it's gettid() == getpid(),
+-     * then the other threads in the same thread group are _not_ affected.
+-     *
+-     * Does not set cpuset for some historical reason, just calls
+-     * libcutils::set_sched_policy().
+-     */
+-    @RavenwoodIgnore
+-    public static final native void setThreadGroup(int tid, int group)
+-            throws IllegalArgumentException, SecurityException;
+-
+-    /**
+-     * Sets the scheduling group and the corresponding cpuset group
+-     * @hide
+-     * @param tid The identifier of the thread to change.
+-     * @param group The target group for this thread from THREAD_GROUP_*.
+-     *
+-     * @throws IllegalArgumentException Throws IllegalArgumentException if
+-     * <var>tid</var> does not exist.
+-     * @throws SecurityException Throws SecurityException if your process does
+-     * not have permission to modify the given thread, or to use the given
+-     * priority.
+-     */
+-    public static final native void setThreadGroupAndCpuset(int tid, int group)
+-            throws IllegalArgumentException, SecurityException;
+-
+-    /**
+-     * Sets the scheduling group for a process and all child threads
+-     * @hide
+-     * @param pid The identifier of the process to change.
+-     * @param group The target group for this process from THREAD_GROUP_*.
+-     *
+-     * @throws IllegalArgumentException Throws IllegalArgumentException if
+-     * <var>tid</var> does not exist.
+-     * @throws SecurityException Throws SecurityException if your process does
+-     * not have permission to modify the given thread, or to use the given
+-     * priority.
+-     *
+-     * group == THREAD_GROUP_DEFAULT means to move all non-background priority
+-     * threads to the foreground scheduling group, but to leave background
+-     * priority threads alone.  group == THREAD_GROUP_BACKGROUND moves all
+-     * threads, regardless of priority, to the background scheduling group.
+-     * group == THREAD_GROUP_FOREGROUND is not allowed.
+-     *
+-     * Always sets cpusets.
+-     */
+-    @UnsupportedAppUsage
+-    public static final native void setProcessGroup(int pid, int group)
+-            throws IllegalArgumentException, SecurityException;
+-
+-    /**
+-     * Freeze or unfreeze the specified process.
+-     *
+-     * @param pid Identifier of the process to freeze or unfreeze.
+-     * @param uid Identifier of the user the process is running under.
+-     * @param frozen Specify whether to free (true) or unfreeze (false).
+-     *
+-     * @hide
+-     */
+-    public static final native void setProcessFrozen(int pid, int uid, boolean frozen);
+-
+-    /**
+-     * Return true if the process is frozen.  It returns false if the pid/uid combination is not
+-     * found or if the caller does not have permission to query the pid.
+-     *
+-     * @param pid Identifier of the process to query.
+-     * @param uid Identifier of the user the process is running under.
+-     * @return true if the process is frozen, false otherwise.
+-     * @throws IllegalArgumentException if the uid is negative.
+-     *
+-     * @hide
+-     */
+-    public static final native boolean isProcessFrozen(int pid, int uid)
+-            throws IllegalArgumentException;
+-
+-    /**
+-     * Return the scheduling group of requested process.
+-     *
+-     * @hide
+-     */
+-    public static final native int getProcessGroup(int pid)
+-            throws IllegalArgumentException, SecurityException;
+-
+-    /**
+-     *
+-     * Create a new process group in the cgroup uid/pid hierarchy
+-     *
+-     * @return <0 in case of error
+-     *
+-     * @hide
+-     */
+-    public static final native int createProcessGroup(int uid, int pid);
+-
+-    /**
+-     * On some devices, the foreground process may have one or more CPU
+-     * cores exclusively reserved for it. This method can be used to
+-     * retrieve which cores that are (if any), so the calling process
+-     * can then use sched_setaffinity() to lock a thread to these cores.
+-     * Note that the calling process must currently be running in the
+-     * foreground for this method to return any cores.
+-     *
+-     * The CPU core(s) exclusively reserved for the foreground process will
+-     * stay reserved for as long as the process stays in the foreground.
+-     *
+-     * As soon as a process leaves the foreground, those CPU cores will
+-     * no longer be reserved for it, and will most likely be reserved for
+-     * the new foreground process. It's not necessary to change the affinity
+-     * of your process when it leaves the foreground (if you had previously
+-     * set it to use a reserved core); the OS will automatically take care
+-     * of resetting the affinity at that point.
+-     *
+-     * @return an array of integers, indicating the CPU cores exclusively
+-     * reserved for this process. The array will have length zero if no
+-     * CPU cores are exclusively reserved for this process at this point
+-     * in time.
+-     */
+-    public static final native int[] getExclusiveCores();
+-
+-
+-    /**
+-     * Get the CPU affinity masks from sched_getaffinity.
+-     *
+-     * @param tid The identifier of the thread/process to get the sched affinity.
+-     * @return an array of CPU affinity masks, of which the size will be dynamic and just enough to
+-     *         include all bit masks for all currently online and possible CPUs of the device.
+-     * @hide
+-     */
+-    public static final native long[] getSchedAffinity(int tid);
++            throws IllegalArgumentException, SecurityException {}
+ 
+     /**
+      * Set the priority of the calling thread, based on Linux niceness priorities.  See
+@@ -1404,24 +997,10 @@
+      * not have permission to modify the given thread, or to use the given
+      * priority.
+      */
+-    @RavenwoodRedirect
++
+     public static final void setThreadPriority(
+             @IntRange(from = -20, to = THREAD_PRIORITY_LOWEST) int priority)
+-            throws IllegalArgumentException, SecurityException {
+-        if (!com.android.libcore.Flags.nicenessApis()) {
+-            // Fall back to not updating the cached priority if we don't have libcore support.
+-            setThreadPriority(myTid(), priority);
+-            return;
+-        }
+-        boolean succ = VMRuntime.getRuntime().setThreadNiceness(Thread.currentThread(), priority);
+-        // VMRuntime.setThreadNiceness() just returns false for out-of-range priority.
+-        if (!succ) {
+-            if (priority < -20 || priority > THREAD_PRIORITY_LOWEST) {
+-                throw new IllegalArgumentException("Priority/niceness " + priority + " is invalid");
+-            }
+-            throw new SecurityException("Cannot set priority to " + priority);
+-        }
+-    }
++            throws IllegalArgumentException, SecurityException {}
+ 
+     /**
+      * Return the current priority of a thread, based on Linux priorities.
+@@ -1438,48 +1017,13 @@
+      * @throws IllegalArgumentException Throws IllegalArgumentException if
+      * <var>tid</var> does not exist.
+      */
+-    @RavenwoodRedirect
++
+     @IntRange(from = -20, to = THREAD_PRIORITY_LOWEST)
+-    @FastNative
+-    public static final native int getThreadPriority(int tid)
+-            throws IllegalArgumentException;
+-
+-    /**
+-     * Return the current scheduling policy of a thread, based on Linux.
+-     *
+-     * @param tid The identifier of the thread/process to get the scheduling policy.
+-     *
+-     * @throws IllegalArgumentException Throws IllegalArgumentException if
+-     * <var>tid</var> does not exist, or if <var>priority</var> is out of range for the policy.
+-     * @throws SecurityException Throws SecurityException if your process does
+-     * not have permission to modify the given thread, or to use the given
+-     * scheduling policy or priority.
+-     *
+-     * @hide
+-     */
+-
+-    @TestApi
+-    public static final native int getThreadScheduler(int tid)
+-            throws IllegalArgumentException;
+-
+-    /**
+-     * Set the scheduling policy and priority of a thread, based on Linux.
+-     *
+-     * @param tid The identifier of the thread/process to change.
+-     * @param policy A Linux scheduling policy such as SCHED_OTHER etc.
+-     * @param priority A Linux priority level in a range appropriate for the given policy.
+-     *
+-     * @throws IllegalArgumentException Throws IllegalArgumentException if
+-     * <var>tid</var> does not exist, or if <var>priority</var> is out of range for the policy.
+-     * @throws SecurityException Throws SecurityException if your process does
+-     * not have permission to modify the given thread, or to use the given
+-     * scheduling policy or priority.
+-     *
+-     * @hide
+-     */
+-
+-    public static final native void setThreadScheduler(int tid, int policy, int priority)
+-            throws IllegalArgumentException;
++
++    public static final int getThreadPriority(int tid)
++            throws IllegalArgumentException {
++        return THREAD_PRIORITY_DEFAULT;
++    }
+ 
+     /**
+      * Determine whether the current environment supports multiple processes.
+@@ -1491,45 +1035,17 @@
+      */
+     @Deprecated
+     public static final boolean supportsProcesses() {
+-        return true;
+-    }
+-
+-    /**
+-     * Change this process's argv[0] parameter.  This can be useful to show
+-     * more descriptive information in things like the 'ps' command.
+-     *
+-     * @param text The new name of this process.
+-     *
+-     * @hide
+-     */
+-    @UnsupportedAppUsage(maxTargetSdk = VERSION_CODES.S, publicAlternatives = "Do not try to "
+-            + "change the process name. (If you must, you could use {@code pthread_setname_np(3)}, "
+-            + "but this could confuse the system)")
+-    public static void setArgV0(@NonNull String text) {
+-        sArgV0 = text;
+-        setArgV0Native(text);
+-        VMDebug.setCurrentProcessName(text);
+-    }
+-
+-    private static native void setArgV0Native(String text);
++        return false;
++    }
+ 
+     /**
+      * Return the name of this process. By default, the process name is the same as the app's
+      * package name, but this can be changed using {@code android:process}.
+      */
+-    @RavenwoodReplace
++
+     @NonNull
+     public static String myProcessName() {
+-        // Note this could be different from the actual process name if someone changes the
+-        // process name using native code (using pthread_setname_np()). But sArgV0
+-        // is the name that the system thinks this process has.
+-        return sArgV0;
+-    }
+-
+-    /** @hide */
+-    @NonNull
+-    public static String myProcessName$ravenwood() {
+-        return "ravenwood";
++        return "wasmandroid";
+     }
+ 
+     /**
+@@ -1543,58 +1059,7 @@
+      * sharing a common UID will also be able to kill each
+      * other's processes.
+      */
+-    public static final void killProcess(int pid) {
+-        sendSignal(pid, SIGNAL_KILL);
+-    }
+-
+-    /**
+-     * Check the tgid and tid pair to see if the tid still exists and belong to the tgid.
+-     *
+-     * TOCTOU warning: the status of the tid can change at the time this method returns. This should
+-     * be used in very rare cases such as checking if a (tid, tgid) pair that is known to exist
+-     * recently no longer exists now. As the possibility of the same tid to be reused under the same
+-     * tgid during a short window is rare. And even if it happens the caller logic should be robust
+-     * to handle it without error.
+-     *
+-     * @throws IllegalArgumentException if tgid or tid is not positive.
+-     * @throws SecurityException if the caller doesn't have the permission, this method is expected
+-     *                           to be used by system process with {@link #SYSTEM_UID} because it
+-     *                           internally uses tkill(2).
+-     * @throws NoSuchElementException if the Linux process with pid as the tid has exited or it
+-     *                                doesn't belong to the tgid.
+-     * @hide
+-     */
+-    public static final void checkTid(int tgid, int tid)
+-            throws IllegalArgumentException, SecurityException, NoSuchElementException {
+-        sendTgSignalThrows(tgid, tid, SIGNAL_DEFAULT);
+-    }
+-
+-    /**
+-     * Check if the pid still exists.
+-     *
+-     * TOCTOU warning: the status of the pid can change at the time this method returns. This should
+-     * be used in very rare cases such as checking if a pid that belongs to an isolated process of a
+-     * uid known to exist recently no longer exists now. As the possibility of the same pid to be
+-     * reused again under the same uid during a short window is rare. And even if it happens the
+-     * caller logic should be robust to handle it without error.
+-     *
+-     * @throws IllegalArgumentException if pid is not positive.
+-     * @throws SecurityException if the caller doesn't have the permission, this method is expected
+-     *                           to be used by system process with {@link #SYSTEM_UID} because it
+-     *                           internally uses kill(2).
+-     * @throws NoSuchElementException if the Linux process with the pid has exited.
+-     * @hide
+-     */
+-    public static final void checkPid(int pid)
+-            throws IllegalArgumentException, SecurityException, NoSuchElementException {
+-        sendSignalThrows(pid, SIGNAL_DEFAULT);
+-    }
+-
+-    /** @hide */
+-    public static final native int setUid(int uid);
+-
+-    /** @hide */
+-    public static final native int setGid(int uid);
++    public static final void killProcess(int pid) {}
+ 
+     /**
+      * Send a signal to the given process.
+@@ -1602,76 +1067,7 @@
+      * @param pid The pid of the target process.
+      * @param signal The signal to send.
+      */
+-    public static final native void sendSignal(int pid, int signal);
+-
+-    private static native void sendSignalThrows(int pid, int signal)
+-            throws IllegalArgumentException, SecurityException, NoSuchElementException;
+-
+-    private static native void sendTgSignalThrows(int pid, int tgid, int signal)
+-            throws IllegalArgumentException, SecurityException, NoSuchElementException;
+-
+-    /**
+-     * @hide
+-     * Private impl for avoiding a log message...  DO NOT USE without doing
+-     * your own log, or the Android Illuminati will find you some night and
+-     * beat you up.
+-     */
+-    public static final void killProcessQuiet(int pid) {
+-        sendSignalQuiet(pid, SIGNAL_KILL);
+-    }
+-
+-    /**
+-     * @hide
+-     * Private impl for avoiding a log message...  DO NOT USE without doing
+-     * your own log, or the Android Illuminati will find you some night and
+-     * beat you up.
+-     */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+-    public static final native void sendSignalQuiet(int pid, int signal);
+-
+-    /**
+-     * @return The advertised memory of the system, as the end user would encounter in a retail
+-     * display environment. If the advertised memory is not defined, it returns
+-     * {@code getTotalMemory()} rounded.
+-     *
+-     * @hide
+-     */
+-    public static final long getAdvertisedMem() {
+-        String formatSize = MemoryProperties.memory_ddr_size().orElse("0KB");
+-        long memSize = FileUtils.parseSize(formatSize);
+-
+-        if (memSize <= 0) {
+-            return FileUtils.roundStorageSize(getTotalMemory());
+-        }
+-
+-        return memSize;
+-    }
+-
+-    /** @hide */
+-    public static final native long getMemAvailable();
+-
+-    /** @hide */
+-    public static final native long getMemFree();
+-
+-    /**
+-     * This function returns available memory. Use getMemAvailable instead.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public static final native long getFreeMemory();
+-
+-    /** @hide */
+-    @UnsupportedAppUsage
+-    public static final native long getTotalMemory();
+-
+-    /** @hide */
+-    @UnsupportedAppUsage
+-    public static final native void readProcLines(String path,
+-            String[] reqFields, long[] outSizes);
+-
+-    /** @hide */
+-    @UnsupportedAppUsage
+-    public static final native int[] getPids(String path, int[] lastArray);
++    public static final void sendSignal(int pid, int signal) {}
+ 
+     /** @hide */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+@@ -1707,122 +1103,6 @@
+     /** @hide */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public static final int PROC_OUT_FLOAT = 0x4000;
+-
+-    /**
+-     * Read and parse a {@code proc} file in the given format.
+-     *
+-     * <p>The format is a list of integers, where every integer describes a variable in the file. It
+-     * specifies how the variable is syntactically terminated (e.g. {@link Process#PROC_SPACE_TERM},
+-     * {@link Process#PROC_TAB_TERM}, {@link Process#PROC_ZERO_TERM}, {@link
+-     * Process#PROC_NEWLINE_TERM}).
+-     *
+-     * <p>If the variable should be parsed and returned to the caller, the termination type should
+-     * be binary OR'd with the type of output (e.g. {@link Process#PROC_OUT_STRING}, {@link
+-     * Process#PROC_OUT_LONG}, {@link Process#PROC_OUT_FLOAT}.
+-     *
+-     * <p>If the variable is wrapped in quotation marks it should be binary OR'd with {@link
+-     * Process#PROC_QUOTES}. If the variable is wrapped in parentheses it should be binary OR'd with
+-     * {@link Process#PROC_PARENS}.
+-     *
+-     * <p>If the variable is not formatted as a string and should be cast directly from characters
+-     * to a long, the {@link Process#PROC_CHAR} integer should be binary OR'd.
+-     *
+-     * <p>If the terminating character can be repeated, the {@link Process#PROC_COMBINE} integer
+-     * should be binary OR'd.
+-     *
+-     * @param file the path of the {@code proc} file to read
+-     * @param format the format of the file
+-     * @param outStrings the parsed {@code String}s from the file
+-     * @param outLongs the parsed {@code long}s from the file
+-     * @param outFloats the parsed {@code float}s from the file
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public static final native boolean readProcFile(String file, int[] format,
+-            String[] outStrings, long[] outLongs, float[] outFloats);
+-
+-    /** @hide */
+-    @UnsupportedAppUsage
+-    public static final native boolean parseProcLine(byte[] buffer, int startIndex,
+-            int endIndex, int[] format, String[] outStrings, long[] outLongs, float[] outFloats);
+-
+-    /** @hide */
+-    @UnsupportedAppUsage
+-    public static final native int[] getPidsForCommands(String[] cmds);
+-
+-    /**
+-     * Gets the total Pss value for a given process, in bytes.
+-     *
+-     * @param pid the process to the Pss for
+-     * @return the total Pss value for the given process in bytes,
+-     *  or -1 if the value cannot be determined
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public static final native long getPss(int pid);
+-
+-    /**
+-     * Gets the total Rss value for a given process, in bytes.
+-     *
+-     * @param pid the process to the Rss for
+-     * @return an ordered array containing multiple values, they are:
+-     *  [total_rss, file, anon, swap, shmem].
+-     *  or NULL if the value cannot be determined
+-     * @hide
+-     */
+-    public static final native long[] getRss(int pid);
+-
+-    /**
+-     * Specifies the outcome of having started a process.
+-     * @hide
+-     */
+-    public static final class ProcessStartResult {
+-        /**
+-         * The PID of the newly started process.
+-         * Always >= 0.  (If the start failed, an exception will have been thrown instead.)
+-         */
+-        public int pid;
+-
+-        /**
+-         * True if the process was started with a wrapper attached.
+-         */
+-        public boolean usingWrapper;
+-    }
+-
+-    /**
+-     * Kill all processes in a process group started for the given
+-     * pid.
+-     * @hide
+-     */
+-    public static final native boolean killProcessGroup(int uid, int pid);
+-
+-    /**
+-     * Send a signal to all processes in a group under the given PID, but do not wait for the
+-     * processes to be fully cleaned up, or for the cgroup to be removed before returning.
+-     * Callers should also ensure that killProcessGroup is called later to ensure the cgroup is
+-     * fully removed, otherwise system resources may leak.
+-     * @hide
+-     */
+-    public static final native boolean sendSignalToProcessGroup(int uid, int pid, int signal);
+-
+-    /**
+-      * Freeze the cgroup for the given UID.
+-      * This cgroup may contain child cgroups which will also be frozen. If this cgroup or its
+-      * children contain processes with Binder interfaces, those interfaces should be frozen before
+-      * the cgroup to avoid blocking synchronous callers indefinitely.
+-      *
+-      * @param uid The UID to be frozen
+-      * @param freeze true = freeze; false = unfreeze
+-      * @hide
+-      */
+-    public static final native void freezeCgroupUid(int uid, boolean freeze);
+-
+-    /**
+-     * Remove all process groups.  Expected to be called when ActivityManager
+-     * is restarted.
+-     * @hide
+-     */
+-    public static final native void removeAllProcessGroups();
+ 
+     /**
+      * Check to see if a thread belongs to a given process. This may require
+@@ -1831,141 +1111,7 @@
+      * @hide
+      */
+     public static final boolean isThreadInProcess(int tid, int pid) {
+-        StrictMode.ThreadPolicy oldPolicy = StrictMode.allowThreadDiskReads();
+-        try {
+-            if (Os.access("/proc/" + tid + "/task/" + pid, OsConstants.F_OK)) {
+-                return true;
+-            } else {
+-                return false;
+-            }
+-        } catch (Exception e) {
+-            return false;
+-        } finally {
+-            StrictMode.setThreadPolicy(oldPolicy);
+-        }
+-
+-    }
+-
+-    /**
+-     * Wait for the death of the given process.
+-     *
+-     * @param pid The process ID to be waited on
+-     * @param timeout The maximum time to wait in milliseconds, or -1 to wait forever
+-     * @hide
+-     */
+-    public static void waitForProcessDeath(int pid, int timeout)
+-            throws InterruptedException, TimeoutException {
+-        boolean fallback = supportsPidFd();
+-        if (!fallback) {
+-            FileDescriptor pidfd = null;
+-            try {
+-                final int fd = nativePidFdOpen(pid, 0);
+-                if (fd >= 0) {
+-                    pidfd = new FileDescriptor();
+-                    pidfd.setInt$(fd);
+-                } else {
+-                    fallback = true;
+-                }
+-                if (pidfd != null) {
+-                    StructPollfd[] fds = new StructPollfd[] {
+-                        new StructPollfd()
+-                    };
+-                    fds[0].fd = pidfd;
+-                    fds[0].events = (short) OsConstants.POLLIN;
+-                    fds[0].revents = 0;
+-                    fds[0].userData = null;
+-                    int res = Os.poll(fds, timeout);
+-                    if (res > 0) {
+-                        return;
+-                    } else if (res == 0) {
+-                        throw new TimeoutException();
+-                    } else {
+-                        // We should get an ErrnoException now
+-                    }
+-                }
+-            } catch (ErrnoException e) {
+-                if (e.errno == OsConstants.EINTR) {
+-                    throw new InterruptedException();
+-                }
+-                fallback = true;
+-            } finally {
+-                if (pidfd != null) {
+-                    IoUtils.closeQuietly(pidfd);
+-                }
+-            }
+-        }
+-        if (fallback) {
+-            boolean infinity = timeout < 0;
+-            long now = System.currentTimeMillis();
+-            final long end = now + timeout;
+-            while (infinity || now < end) {
+-                try {
+-                    Os.kill(pid, 0);
+-                } catch (ErrnoException e) {
+-                    if (e.errno == OsConstants.ESRCH) {
+-                        return;
+-                    }
+-                }
+-                Thread.sleep(1);
+-                now = System.currentTimeMillis();
+-            }
+-        }
+-        throw new TimeoutException();
+-    }
+-
+-    /**
+-     * Determine whether the system supports pidfd APIs
+-     *
+-     * @return Returns true if the system supports pidfd APIs
+-     * @hide
+-     */
+-    public static boolean supportsPidFd() {
+-        if (sPidFdSupported == PIDFD_UNKNOWN) {
+-            int fd = -1;
+-            try {
+-                fd = nativePidFdOpen(myPid(), 0);
+-                sPidFdSupported = PIDFD_SUPPORTED;
+-            } catch (ErrnoException e) {
+-                sPidFdSupported = e.errno != OsConstants.ENOSYS
+-                        ? PIDFD_SUPPORTED : PIDFD_UNSUPPORTED;
+-            } finally {
+-                if (fd >= 0) {
+-                    final FileDescriptor f = new FileDescriptor();
+-                    f.setInt$(fd);
+-                    IoUtils.closeQuietly(f);
+-                }
+-            }
+-        }
+-        return sPidFdSupported == PIDFD_SUPPORTED;
+-    }
+-
+-    /**
+-     * Open process file descriptor for given pid.
+-     *
+-     * @param pid The process ID to open for
+-     * @param flags Reserved, unused now, must be 0
+-     * @return The process file descriptor for given pid
+-     * @throws IOException if it can't be opened
+-     *
+-     * @hide
+-     */
+-    public static @Nullable FileDescriptor openPidFd(int pid, int flags) throws IOException {
+-        if (!supportsPidFd()) {
+-            return null;
+-        }
+-        if (flags != 0) {
+-            throw new IllegalArgumentException();
+-        }
+-        try {
+-            FileDescriptor pidfd = new FileDescriptor();
+-            pidfd.setInt$(nativePidFdOpen(pid, flags));
+-            return pidfd;
+-        } catch (ErrnoException e) {
+-            IOException ex = new IOException();
+-            ex.initCause(e);
+-            throw ex;
+-        }
+-    }
+-
+-    private static native int nativePidFdOpen(int pid, int flags) throws ErrnoException;
++        return pid == myPid() && tid == myTid();
++    }
++
+ }

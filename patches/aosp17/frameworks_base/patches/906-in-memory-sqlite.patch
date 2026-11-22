@@ -1,0 +1,2337 @@
+--- a/frameworks/base/core/java/android/database/sqlite/SQLiteDatabase.java
++++ b/frameworks/base/core/java/android/database/sqlite/SQLiteDatabase.java
+@@ -16,59 +16,36 @@
+ 
+ package android.database.sqlite;
+ 
+-import android.annotation.FlaggedApi;
++import android.database.MatrixCursor;
++import java.util.LinkedHashMap;
++
+ import android.annotation.IntDef;
+ import android.annotation.IntRange;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.StringDef;
+ import android.annotation.SuppressLint;
+-import android.app.ActivityManager;
+-import android.app.ActivityThread;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.ContentResolver;
+ import android.content.ContentValues;
+ import android.database.Cursor;
+ import android.database.DatabaseErrorHandler;
+-import android.database.DatabaseUtils;
+-import android.database.DefaultDatabaseErrorHandler;
+ import android.database.SQLException;
+-import android.database.sqlite.SQLiteDebug.DbStats;
+-import android.os.Build;
+ import android.os.CancellationSignal;
+-import android.os.Looper;
+-import android.os.OperationCanceledException;
+-import android.os.SystemProperties;
+ import android.text.TextUtils;
+-import android.util.ArraySet;
+-import android.util.EventLog;
+ import android.util.Log;
+ import android.util.Pair;
+-import android.util.Printer;
+ 
+ import com.android.internal.util.Preconditions;
+ 
+-import dalvik.annotation.optimization.NeverCompile;
+-import dalvik.system.CloseGuard;
+-
+ import java.io.File;
+-import java.io.FileFilter;
+-import java.io.IOException;
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+-import java.nio.file.FileSystems;
+-import java.nio.file.Files;
+-import java.nio.file.attribute.BasicFileAttributes;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+-import java.util.HashMap;
+ import java.util.List;
+ import java.util.Locale;
+ import java.util.Map;
+ import java.util.Objects;
+-import java.util.WeakHashMap;
+-import java.util.function.BinaryOperator;
+-import java.util.function.UnaryOperator;
+ 
+ /**
+  * Exposes methods to manage a SQLite database.
+@@ -97,28 +74,20 @@
+     private static final int EVENT_DB_CORRUPT = 75004;
+ 
+     // By default idle connections are not closed
+-    private static final boolean DEBUG_CLOSE_IDLE_CONNECTIONS = SystemProperties
+-            .getBoolean("persist.debug.sqlite.close_idle_connections", false);
+ 
+     // Stores reference to all databases opened in the current process.
+     // (The referent Object is not used at this time.)
+     // INVARIANT: Guarded by sActiveDatabases.
+-    private static WeakHashMap<SQLiteDatabase, Object> sActiveDatabases = new WeakHashMap<>();
+ 
+     // Thread-local for database sessions that belong to this database.
+     // Each thread has its own database session.
+     // INVARIANT: Immutable.
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    private final ThreadLocal<SQLiteSession> mThreadSession = ThreadLocal
+-            .withInitial(this::createSession);
+ 
+     // The optional factory to use when creating new Cursors.  May be null.
+     // INVARIANT: Immutable.
+-    private final CursorFactory mCursorFactory;
+ 
+     // Error handler to be used when SQLite returns corruption errors.
+     // INVARIANT: Immutable.
+-    private final DatabaseErrorHandler mErrorHandler;
+ 
+     // Shared database state lock.
+     // This lock guards all of the shared state of the database, such as its
+@@ -134,27 +103,20 @@
+     //
+     // Basic rule: grab the lock, access or modify global state, release the lock, then
+     // do the required SQL work.
+-    private final Object mLock = new Object();
+ 
+     // Warns if the database is finalized without being closed properly.
+     // INVARIANT: Guarded by mLock.
+-    private final CloseGuard mCloseGuardLocked = CloseGuard.get();
+ 
+     // The database configuration.
+     // INVARIANT: Guarded by mLock.
+-    @UnsupportedAppUsage
+-    private final SQLiteDatabaseConfiguration mConfigurationLocked;
+ 
+     // The connection pool for the database, null when closed.
+     // The pool itself is thread-safe, but the reference to it can only be acquired
+     // when the lock is held.
+     // INVARIANT: Guarded by mLock.
+-    @UnsupportedAppUsage
+-    private SQLiteConnectionPool mConnectionPoolLocked;
+ 
+     // True if the database has attached databases.
+     // INVARIANT: Guarded by mLock.
+-    private boolean mHasAttachedDbsLocked;
+ 
+     /**
+      * When a constraint violation occurs, an immediate ROLLBACK occurs,
+@@ -298,7 +260,6 @@
+      */
+     public static final int ENABLE_WRITE_AHEAD_LOGGING = 0x20000000;
+ 
+-
+     // Note: The below value was only used on Android Pie.
+     // public static final int DISABLE_COMPATIBILITY_WAL = 0x40000000;
+ 
+@@ -484,81 +445,10 @@
+      */
+     public static final String SYNC_MODE_OFF = "OFF";
+ 
+-    private SQLiteDatabase(@Nullable final String path, @Nullable final int openFlags,
+-            @Nullable CursorFactory cursorFactory, @Nullable DatabaseErrorHandler errorHandler,
+-            int lookasideSlotSize, int lookasideSlotCount, long idleConnectionTimeoutMs,
+-            @Nullable String journalMode, @Nullable String syncMode) {
+-        mTrackClosure = true;
+-        mCursorFactory = cursorFactory;
+-        mErrorHandler = errorHandler != null ? errorHandler : new DefaultDatabaseErrorHandler();
+-        mConfigurationLocked = new SQLiteDatabaseConfiguration(path, openFlags);
+-        mConfigurationLocked.lookasideSlotSize = lookasideSlotSize;
+-        mConfigurationLocked.lookasideSlotCount = lookasideSlotCount;
+-
+-        // Disable lookaside allocator on low-RAM devices
+-        if (ActivityManager.isLowRamDeviceStatic()) {
+-            mConfigurationLocked.lookasideSlotCount = 0;
+-            mConfigurationLocked.lookasideSlotSize = 0;
+-        }
+-        long effectiveTimeoutMs = Long.MAX_VALUE;
+-        // Never close idle connections for in-memory databases
+-        if (!mConfigurationLocked.isInMemoryDb()) {
+-            // First, check app-specific value. Otherwise use defaults
+-            // -1 in idleConnectionTimeoutMs indicates unset value
+-            if (idleConnectionTimeoutMs >= 0) {
+-                effectiveTimeoutMs = idleConnectionTimeoutMs;
+-            } else if (DEBUG_CLOSE_IDLE_CONNECTIONS) {
+-                effectiveTimeoutMs = SQLiteGlobal.getIdleConnectionTimeout();
+-            }
+-        }
+-        mConfigurationLocked.idleConnectionTimeoutMs = effectiveTimeoutMs;
+-        if (SQLiteCompatibilityWalFlags.isLegacyCompatibilityWalEnabled()) {
+-            mConfigurationLocked.openFlags |= ENABLE_LEGACY_COMPATIBILITY_WAL;
+-        }
+-        if (SQLiteDebug.NoPreloadHolder.NO_DOUBLE_QUOTED_STRS) {
+-            mConfigurationLocked.openFlags |= NO_DOUBLE_QUOTED_STRS;
+-        }
+-        mConfigurationLocked.journalMode = journalMode;
+-        mConfigurationLocked.syncMode = syncMode;
+-    }
+-
+-    @Override
+-    protected void finalize() throws Throwable {
+-        try {
+-            dispose(true);
+-        } finally {
+-            super.finalize();
+-        }
+-    }
+-
+     @Override
+     protected void onAllReferencesReleased() {
+-        dispose(false);
+-    }
+-
+-    private void dispose(boolean finalized) {
+-        final SQLiteConnectionPool pool;
+-        synchronized (mLock) {
+-            if (mCloseGuardLocked != null) {
+-                if (finalized) {
+-                    mCloseGuardLocked.warnIfOpen();
+-                }
+-                mCloseGuardLocked.close();
+-            }
+-
+-            pool = mConnectionPoolLocked;
+-            mConnectionPoolLocked = null;
+-        }
+-
+-        if (!finalized) {
+-            synchronized (sActiveDatabases) {
+-                sActiveDatabases.remove(this);
+-            }
+-
+-            if (pool != null) {
+-                pool.close();
+-            }
+-        }
++        if (inTransaction()) endTransaction();
++        open = false;
+     }
+ 
+     /**
+@@ -568,7 +458,7 @@
+      * @return the number of bytes actually released
+      */
+     public static int releaseMemory() {
+-        return SQLiteGlobal.releaseMemory();
++        return 0;
+     }
+ 
+     /**
+@@ -589,71 +479,7 @@
+      * @return The label.
+      */
+     String getLabel() {
+-        synchronized (mLock) {
+-            return mConfigurationLocked.label;
+-        }
+-    }
+-
+-    /**
+-     * Sends a corruption message to the database error handler.
+-     */
+-    void onCorruption() {
+-        EventLog.writeEvent(EVENT_DB_CORRUPT, getLabel());
+-        mErrorHandler.onCorruption(this);
+-    }
+-
+-    /**
+-     * Gets the {@link SQLiteSession} that belongs to this thread for this database.
+-     * Once a thread has obtained a session, it will continue to obtain the same
+-     * session even after the database has been closed (although the session will not
+-     * be usable).  However, a thread that does not already have a session cannot
+-     * obtain one after the database has been closed.
+-     *
+-     * The idea is that threads that have active connections to the database may still
+-     * have work to complete even after the call to {@link #close}.  Active database
+-     * connections are not actually disposed until they are released by the threads
+-     * that own them.
+-     *
+-     * @return The session, never null.
+-     *
+-     * @throws IllegalStateException if the thread does not yet have a session and
+-     * the database is not open.
+-     */
+-    @UnsupportedAppUsage
+-    SQLiteSession getThreadSession() {
+-        return mThreadSession.get(); // initialValue() throws if database closed
+-    }
+-
+-    SQLiteSession createSession() {
+-        final SQLiteConnectionPool pool;
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-            pool = mConnectionPoolLocked;
+-        }
+-        return new SQLiteSession(pool);
+-    }
+-
+-    /**
+-     * Gets default connection flags that are appropriate for this thread, taking into
+-     * account whether the thread is acting on behalf of the UI.
+-     *
+-     * @param readOnly True if the connection should be read-only.
+-     * @return The connection flags.
+-     */
+-    int getThreadDefaultConnectionFlags(boolean readOnly) {
+-        int flags = readOnly ? SQLiteConnectionPool.CONNECTION_FLAG_READ_ONLY :
+-                SQLiteConnectionPool.CONNECTION_FLAG_PRIMARY_CONNECTION_AFFINITY;
+-        if (isMainThread()) {
+-            flags |= SQLiteConnectionPool.CONNECTION_FLAG_INTERACTIVE;
+-        }
+-        return flags;
+-    }
+-
+-    private static boolean isMainThread() {
+-        // FIXME: There should be a better way to do this.
+-        // Would also be nice to have something that would work across Binder calls.
+-        Looper looper = Looper.myLooper();
+-        return looper != null && looper == Looper.getMainLooper();
++        return path;
+     }
+ 
+     /**
+@@ -678,7 +504,10 @@
+      * </pre>
+      */
+     public void beginTransaction() {
+-        beginTransaction(null /* transactionStatusCallback */, true);
++        checkWritable();
++        if (snapshot != null) throw new IllegalStateException("Nested database transaction");
++        snapshot = data.copy();
++        successful = false;
+     }
+ 
+     /**
+@@ -702,151 +531,7 @@
+      * </pre>
+      */
+     public void beginTransactionNonExclusive() {
+-        beginTransaction(null /* transactionStatusCallback */, false);
+-    }
+-
+-    /**
+-     * Begins a transaction in DEFERRED mode, with the android-specific constraint that the
+-     * transaction is read-only. The database may not be modified inside a read-only transaction.
+-     * <p>
+-     * Read-only transactions may run concurrently with other read-only transactions, and if the
+-     * database is in WAL mode, they may also run concurrently with IMMEDIATE or EXCLUSIVE
+-     * transactions. The {@code temp} schema may be modified during a read-only transaction;
+-     * if the transaction is {@link #setTransactionSuccessful}, modifications to temp tables may
+-     * be visible to some subsequent transactions.
+-     * <p>
+-     * Transactions can be nested.  However, the behavior of the transaction is not altered by
+-     * nested transactions.  A nested transaction may be any of the three transaction types but if
+-     * the outermost type is read-only then nested transactions remain read-only, regardless of how
+-     * they are started.
+-     * <p>
+-     * Here is the standard idiom for read-only transactions:
+-     *
+-     * <pre>
+-     *   db.beginTransactionReadOnly();
+-     *   try {
+-     *     ...
+-     *   } finally {
+-     *     db.endTransaction();
+-     *   }
+-     * </pre>
+-     */
+-    public void beginTransactionReadOnly() {
+-        beginTransactionWithListenerReadOnly(null);
+-    }
+-
+-    /**
+-     * Begins a transaction in EXCLUSIVE mode.
+-     * <p>
+-     * Transactions can be nested.
+-     * When the outer transaction is ended all of
+-     * the work done in that transaction and all of the nested transactions will be committed or
+-     * rolled back. The changes will be rolled back if any transaction is ended without being
+-     * marked as clean (by calling setTransactionSuccessful). Otherwise they will be committed.
+-     * </p>
+-     * <p>Here is the standard idiom for transactions:
+-     *
+-     * <pre>
+-     *   db.beginTransactionWithListener(listener);
+-     *   try {
+-     *     ...
+-     *     db.setTransactionSuccessful();
+-     *   } finally {
+-     *     db.endTransaction();
+-     *   }
+-     * </pre>
+-     *
+-     * @param transactionListener listener that should be notified when the transaction begins,
+-     * commits, or is rolled back, either explicitly or by a call to
+-     * {@link #yieldIfContendedSafely}.
+-     */
+-    @SuppressLint("ExecutorRegistration")
+-    public void beginTransactionWithListener(
+-            @Nullable SQLiteTransactionListener transactionListener) {
+-        beginTransaction(transactionListener, true);
+-    }
+-
+-    /**
+-     * Begins a transaction in IMMEDIATE mode. Transactions can be nested. When
+-     * the outer transaction is ended all of the work done in that transaction
+-     * and all of the nested transactions will be committed or rolled back. The
+-     * changes will be rolled back if any transaction is ended without being
+-     * marked as clean (by calling setTransactionSuccessful). Otherwise they
+-     * will be committed.
+-     * <p>
+-     * Here is the standard idiom for transactions:
+-     *
+-     * <pre>
+-     *   db.beginTransactionWithListenerNonExclusive(listener);
+-     *   try {
+-     *     ...
+-     *     db.setTransactionSuccessful();
+-     *   } finally {
+-     *     db.endTransaction();
+-     *   }
+-     * </pre>
+-     *
+-     * @param transactionListener listener that should be notified when the
+-     *            transaction begins, commits, or is rolled back, either
+-     *            explicitly or by a call to {@link #yieldIfContendedSafely}.
+-     */
+-    @SuppressLint("ExecutorRegistration")
+-    public void beginTransactionWithListenerNonExclusive(
+-            @Nullable SQLiteTransactionListener transactionListener) {
+-        beginTransaction(transactionListener, false);
+-    }
+-
+-    /**
+-     * Begins a transaction in read-only mode with a {@link SQLiteTransactionListener} listener.
+-     * The database may not be updated inside a read-only transaction.
+-     * <p>
+-     * Transactions can be nested.  However, the behavior of the transaction is not altered by
+-     * nested transactions.  A nested transaction may be any of the three transaction types but if
+-     * the outermost type is read-only then nested transactions remain read-only, regardless of how
+-     * they are started.
+-     * <p>
+-     * Here is the standard idiom for read-only transactions:
+-     *
+-     * <pre>
+-     *   db.beginTransactionWightListenerReadOnly(listener);
+-     *   try {
+-     *     ...
+-     *   } finally {
+-     *     db.endTransaction();
+-     *   }
+-     * </pre>
+-     */
+-    @SuppressLint("ExecutorRegistration")
+-    public void beginTransactionWithListenerReadOnly(
+-            @Nullable SQLiteTransactionListener transactionListener) {
+-        beginTransaction(transactionListener, SQLiteSession.TRANSACTION_MODE_DEFERRED);
+-    }
+-
+-    @UnsupportedAppUsage
+-    private void beginTransaction(SQLiteTransactionListener transactionListener,
+-            boolean exclusive) {
+-        beginTransaction(transactionListener,
+-                exclusive ? SQLiteSession.TRANSACTION_MODE_EXCLUSIVE :
+-                SQLiteSession.TRANSACTION_MODE_IMMEDIATE);
+-    }
+-
+-    /**
+-     * Begin a transaction with the specified mode.  Valid modes are
+-     * {@link SQLiteSession.TRANSACTION_MODE_DEFERRED},
+-     * {@link SQLiteSession.TRANSACTION_MODE_IMMEDIATE}, and
+-     * {@link SQLiteSession.TRANSACTION_MODE_EXCLUSIVE}.
+-     */
+-    private void beginTransaction(@Nullable SQLiteTransactionListener listener, int mode) {
+-        acquireReference();
+-        try {
+-            // DEFERRED transactions are read-only to allows concurrent read-only transactions.
+-            // Others are read/write.
+-            boolean readOnly = (mode == SQLiteSession.TRANSACTION_MODE_DEFERRED);
+-            getThreadSession().beginTransaction(mode, listener,
+-                    getThreadDefaultConnectionFlags(readOnly), null);
+-        } finally {
+-            releaseReference();
+-        }
++        beginTransaction();
+     }
+ 
+     /**
+@@ -854,12 +539,12 @@
+      * are committed and rolled back.
+      */
+     public void endTransaction() {
+-        acquireReference();
+-        try {
+-            getThreadSession().endTransaction(null);
+-        } finally {
+-            releaseReference();
+-        }
++        if (snapshot == null) throw new IllegalStateException("No database transaction");
++        if (!successful) {
++            data.version = snapshot.version;
++            data.tables = snapshot.tables;
++        }
++        snapshot = null;
+     }
+ 
+     /**
+@@ -872,12 +557,8 @@
+      * transaction is already marked as successful.
+      */
+     public void setTransactionSuccessful() {
+-        acquireReference();
+-        try {
+-            getThreadSession().setTransactionSuccessful();
+-        } finally {
+-            releaseReference();
+-        }
++        if (snapshot == null) throw new IllegalStateException("No database transaction");
++        successful = true;
+     }
+ 
+     /**
+@@ -885,14 +566,7 @@
+      *
+      * @return True if the current thread is in a transaction.
+      */
+-    public boolean inTransaction() {
+-        acquireReference();
+-        try {
+-            return getThreadSession().hasTransaction();
+-        } finally {
+-            releaseReference();
+-        }
+-    }
++    public boolean inTransaction() { return snapshot != null; }
+ 
+     /**
+      * Returns true if the current thread is holding an active connection to the database.
+@@ -907,12 +581,7 @@
+      * @return True if the current thread is holding an active connection to the database.
+      */
+     public boolean isDbLockedByCurrentThread() {
+-        acquireReference();
+-        try {
+-            return getThreadSession().hasConnection();
+-        } finally {
+-            releaseReference();
+-        }
++        return inTransaction();
+     }
+ 
+     /**
+@@ -939,8 +608,7 @@
+      */
+     @Deprecated
+     public boolean yieldIfContended() {
+-        return yieldIfContendedHelper(false /* do not check yielding */,
+-                -1 /* sleepAfterYieldDelay */);
++        return false;
+     }
+ 
+     /**
+@@ -952,7 +620,7 @@
+      * @return true if the transaction was yielded
+      */
+     public boolean yieldIfContendedSafely() {
+-        return yieldIfContendedHelper(true /* check yielding */, -1 /* sleepAfterYieldDelay*/);
++        return false;
+     }
+ 
+     /**
+@@ -967,16 +635,7 @@
+      * @return true if the transaction was yielded
+      */
+     public boolean yieldIfContendedSafely(long sleepAfterYieldDelay) {
+-        return yieldIfContendedHelper(true /* check yielding */, sleepAfterYieldDelay);
+-    }
+-
+-    private boolean yieldIfContendedHelper(boolean throwIfUnsafe, long sleepAfterYieldDelay) {
+-        acquireReference();
+-        try {
+-            return getThreadSession().yieldTransaction(sleepAfterYieldDelay, throwIfUnsafe, null);
+-        } finally {
+-            releaseReference();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -985,7 +644,7 @@
+      */
+     @Deprecated
+     public Map<String, String> getSyncedTables() {
+-        return new HashMap<String, String>(0);
++        return java.util.Collections.emptyMap();
+     }
+ 
+     /**
+@@ -1025,13 +684,19 @@
+     @UnsupportedAppUsage
+     private static SQLiteDatabase openDatabase(@NonNull String path,
+             @NonNull OpenParams openParams) {
+-        Preconditions.checkArgument(openParams != null, "OpenParams cannot be null");
+-        SQLiteDatabase db = new SQLiteDatabase(path, openParams.mOpenFlags,
+-                openParams.mCursorFactory, openParams.mErrorHandler,
+-                openParams.mLookasideSlotSize, openParams.mLookasideSlotCount,
+-                openParams.mIdleConnectionTimeout, openParams.mJournalMode, openParams.mSyncMode);
+-        db.open();
+-        return db;
++        Objects.requireNonNull(openParams, "openParams");
++        if (":memory:".equals(path)) return createInMemory(openParams);
++        synchronized (databases) {
++            Data data = databases.get(path);
++            if (data == null) {
++                if ((openParams.mOpenFlags & CREATE_IF_NECESSARY) == 0 || (openParams.mOpenFlags & OPEN_READONLY) != 0) {
++                    throw new SQLiteException("No database at " + path);
++                }
++                data = new Data();
++                databases.put(path, data);
++            }
++            return new SQLiteDatabase(path, data, openParams);
++        }
+     }
+ 
+     /**
+@@ -1055,10 +720,9 @@
+      */
+     public static SQLiteDatabase openDatabase(@NonNull String path, @Nullable CursorFactory factory,
+             @DatabaseOpenFlags int flags, @Nullable DatabaseErrorHandler errorHandler) {
+-        SQLiteDatabase db = new SQLiteDatabase(path, flags, factory, errorHandler, -1, -1, -1, null,
+-                null);
+-        db.open();
+-        return db;
++        return openDatabase(path,
++                new OpenParams.Builder().setCursorFactory(factory).setOpenFlags(flags)
++                        .setErrorHandler(errorHandler).build());
+     }
+ 
+     /**
+@@ -1093,41 +757,9 @@
+      * @return True if the database was successfully deleted.
+      */
+     public static boolean deleteDatabase(@NonNull File file) {
+-        return deleteDatabase(file, /*removeCheckFile=*/ true);
+-    }
+-
+-
+-    /** @hide */
+-    public static boolean deleteDatabase(@NonNull File file, boolean removeCheckFile) {
+-        if (file == null) {
+-            throw new IllegalArgumentException("file must not be null");
+-        }
+-
+-        boolean deleted = false;
+-        deleted |= file.delete();
+-        deleted |= new File(file.getPath() + "-journal").delete();
+-        deleted |= new File(file.getPath() + "-shm").delete();
+-        deleted |= new File(file.getPath() + "-wal").delete();
+-
+-        // This file is not a standard SQLite file, so don't update the deleted flag.
+-        new File(file.getPath() + SQLiteGlobal.WIPE_CHECK_FILE_SUFFIX).delete();
+-
+-        File dir = file.getParentFile();
+-        if (dir != null) {
+-            final String prefix = file.getName() + "-mj";
+-            File[] files = dir.listFiles(new FileFilter() {
+-                @Override
+-                public boolean accept(File candidate) {
+-                    return candidate.getName().startsWith(prefix);
+-                }
+-            });
+-            if (files != null) {
+-                for (File masterJournal : files) {
+-                    deleted |= masterJournal.delete();
+-                }
+-            }
+-        }
+-        return deleted;
++        synchronized (databases) {
++            return databases.remove(file.getPath()) != null;
++        }
+     }
+ 
+     /**
+@@ -1142,58 +774,7 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    public void reopenReadWrite() {
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            if (!isReadOnlyLocked()) {
+-                return; // nothing to do
+-            }
+-
+-            // Reopen the database in read-write mode.
+-            final int oldOpenFlags = mConfigurationLocked.openFlags;
+-            mConfigurationLocked.openFlags = (mConfigurationLocked.openFlags & ~OPEN_READ_MASK)
+-                    | OPEN_READWRITE;
+-            try {
+-                mConnectionPoolLocked.reconfigure(mConfigurationLocked);
+-            } catch (RuntimeException ex) {
+-                mConfigurationLocked.openFlags = oldOpenFlags;
+-                throw ex;
+-            }
+-        }
+-    }
+-
+-    private void open() {
+-        try {
+-            try {
+-                openInner();
+-            } catch (RuntimeException ex) {
+-                if (SQLiteDatabaseCorruptException.isCorruptException(ex)) {
+-                    Log.e(TAG, "Database corruption detected in open()", ex);
+-                    onCorruption();
+-                    openInner();
+-                } else {
+-                    throw ex;
+-                }
+-            }
+-        } catch (SQLiteException ex) {
+-            Log.e(TAG, "Failed to open database '" + getLabel() + "'.", ex);
+-            close();
+-            throw ex;
+-        }
+-    }
+-
+-    private void openInner() {
+-        synchronized (mLock) {
+-            assert mConnectionPoolLocked == null;
+-            mConnectionPoolLocked = SQLiteConnectionPool.open(mConfigurationLocked);
+-            mCloseGuardLocked.open("close");
+-        }
+-
+-        synchronized (sActiveDatabases) {
+-            sActiveDatabases.put(this, null);
+-        }
+-    }
++    public void reopenReadWrite() { readOnly = false; }
+ 
+     /**
+      * Create a memory backed SQLite database.  Its contents will be destroyed
+@@ -1209,9 +790,7 @@
+      */
+     @NonNull
+     public static SQLiteDatabase create(@Nullable CursorFactory factory) {
+-        // This is a magic string with special meaning for SQLite.
+-        return openDatabase(SQLiteDatabaseConfiguration.MEMORY_DB_PATH,
+-                factory, CREATE_IF_NECESSARY);
++        return createInMemory(new OpenParams.Builder().setCursorFactory(factory).build());
+     }
+ 
+     /**
+@@ -1225,202 +804,21 @@
+      * @throws SQLException if the database cannot be created
+      */
+     @NonNull
+-    public static SQLiteDatabase createInMemory(@NonNull OpenParams openParams) {
+-        return openDatabase(SQLiteDatabaseConfiguration.MEMORY_DB_PATH,
+-                openParams.toBuilder().addOpenFlags(CREATE_IF_NECESSARY).build());
+-    }
+-
+-    /**
+-     * Register a custom scalar function that can be called from SQL
+-     * expressions.
+-     * <p>
+-     * For example, registering a custom scalar function named {@code REVERSE}
+-     * could be used in a query like
+-     * {@code SELECT REVERSE(name) FROM employees}.
+-     * <p>
+-     * When attempting to register multiple functions with the same function
+-     * name, SQLite will replace any previously defined functions with the
+-     * latest definition, regardless of what function type they are. SQLite does
+-     * not support unregistering functions.
+-     *
+-     * @param functionName Case-insensitive name to register this function
+-     *            under, limited to 255 UTF-8 bytes in length.
+-     * @param scalarFunction Functional interface that will be invoked when the
+-     *            function name is used by a SQL statement. The argument values
+-     *            from the SQL statement are passed to the functional interface,
+-     *            and the return values from the functional interface are
+-     *            returned back into the SQL statement.
+-     * @throws SQLiteException if the custom function could not be registered.
+-     * @see #setCustomAggregateFunction(String, BinaryOperator)
+-     */
+-    public void setCustomScalarFunction(@NonNull String functionName,
+-            @NonNull UnaryOperator<String> scalarFunction) throws SQLiteException {
+-        Objects.requireNonNull(functionName);
+-        Objects.requireNonNull(scalarFunction);
+-
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            mConfigurationLocked.customScalarFunctions.put(functionName, scalarFunction);
+-            try {
+-                mConnectionPoolLocked.reconfigure(mConfigurationLocked);
+-            } catch (RuntimeException ex) {
+-                mConfigurationLocked.customScalarFunctions.remove(functionName);
+-                throw ex;
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Register a custom aggregate function that can be called from SQL
+-     * expressions.
+-     * <p>
+-     * For example, registering a custom aggregation function named
+-     * {@code LONGEST} could be used in a query like
+-     * {@code SELECT LONGEST(name) FROM employees}.
+-     * <p>
+-     * The implementation of this method follows the reduction flow outlined in
+-     * {@link java.util.stream.Stream#reduce(BinaryOperator)}, and the custom
+-     * aggregation function is expected to be an associative accumulation
+-     * function, as defined by that class.
+-     * <p>
+-     * When attempting to register multiple functions with the same function
+-     * name, SQLite will replace any previously defined functions with the
+-     * latest definition, regardless of what function type they are. SQLite does
+-     * not support unregistering functions.
+-     *
+-     * @param functionName Case-insensitive name to register this function
+-     *            under, limited to 255 UTF-8 bytes in length.
+-     * @param aggregateFunction Functional interface that will be invoked when
+-     *            the function name is used by a SQL statement. The argument
+-     *            values from the SQL statement are passed to the functional
+-     *            interface, and the return values from the functional interface
+-     *            are returned back into the SQL statement.
+-     * @throws SQLiteException if the custom function could not be registered.
+-     * @see #setCustomScalarFunction(String, UnaryOperator)
+-     */
+-    public void setCustomAggregateFunction(@NonNull String functionName,
+-            @NonNull BinaryOperator<String> aggregateFunction) throws SQLiteException {
+-        Objects.requireNonNull(functionName);
+-        Objects.requireNonNull(aggregateFunction);
+-
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            mConfigurationLocked.customAggregateFunctions.put(functionName, aggregateFunction);
+-            try {
+-                mConnectionPoolLocked.reconfigure(mConfigurationLocked);
+-            } catch (RuntimeException ex) {
+-                mConfigurationLocked.customAggregateFunctions.remove(functionName);
+-                throw ex;
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Execute the given SQL statement on all connections to this database.
+-     * <p>
+-     * This statement will be immediately executed on all existing connections,
+-     * and will be automatically executed on all future connections.
+-     * <p>
+-     * Some example usages are changes like {@code PRAGMA trusted_schema=OFF} or
+-     * functions like {@code SELECT icu_load_collation()}. If you execute these
+-     * statements using {@link #execSQL} then they will only apply to a single
+-     * database connection; using this method will ensure that they are
+-     * uniformly applied to all current and future connections.
+-     *
+-     * @param sql The SQL statement to be executed. Multiple statements
+-     *            separated by semicolons are not supported.
+-     * @param bindArgs The arguments that should be bound to the SQL statement.
+-     */
+-    public void execPerConnectionSQL(@NonNull String sql, @Nullable Object[] bindArgs)
+-            throws SQLException {
+-        Objects.requireNonNull(sql);
+-
+-        // Copy arguments to ensure that the caller doesn't accidentally change
+-        // the values used by future connections
+-        bindArgs = DatabaseUtils.deepCopyOf(bindArgs);
+-
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            final int index = mConfigurationLocked.perConnectionSql.size();
+-            mConfigurationLocked.perConnectionSql.add(Pair.create(sql, bindArgs));
+-            try {
+-                mConnectionPoolLocked.reconfigure(mConfigurationLocked);
+-            } catch (RuntimeException ex) {
+-                mConfigurationLocked.perConnectionSql.remove(index);
+-                throw ex;
+-            }
+-        }
+-    }
++    public static SQLiteDatabase createInMemory(@NonNull OpenParams openParams) { return new SQLiteDatabase(":memory:", new Data(), openParams); }
+ 
+     /**
+      * Gets the database version.
+      *
+      * @return the database version
+      */
+-    public int getVersion() {
+-        return ((Long) DatabaseUtils.longForQuery(this, "PRAGMA user_version;", null)).intValue();
+-    }
++    public int getVersion() { checkOpen(); return data.version; }
+ 
+     /**
+      * Sets the database version.
+      *
+      * @param version the new database version
+      */
+-    public void setVersion(int version) {
+-        execSQL("PRAGMA user_version = " + version);
+-    }
+-
+-    /**
+-     * Returns the maximum size the database may grow to.
+-     *
+-     * @return the new maximum database size
+-     */
+-    public long getMaximumSize() {
+-        long pageCount = DatabaseUtils.longForQuery(this, "PRAGMA max_page_count;", null);
+-        return pageCount * getPageSize();
+-    }
+-
+-    /**
+-     * Sets the maximum size the database will grow to. The maximum size cannot
+-     * be set below the current size.
+-     *
+-     * @param numBytes the maximum database size, in bytes
+-     * @return the new maximum database size
+-     */
+-    public long setMaximumSize(long numBytes) {
+-        long pageSize = getPageSize();
+-        long numPages = numBytes / pageSize;
+-        // If numBytes isn't a multiple of pageSize, bump up a page
+-        if ((numBytes % pageSize) != 0) {
+-            numPages++;
+-        }
+-        long newPageCount = DatabaseUtils.longForQuery(this, "PRAGMA max_page_count = " + numPages,
+-                null);
+-        return newPageCount * pageSize;
+-    }
+-
+-    /**
+-     * Returns the current database page size, in bytes.
+-     *
+-     * @return the database page size, in bytes
+-     */
+-    public long getPageSize() {
+-        return DatabaseUtils.longForQuery(this, "PRAGMA page_size;", null);
+-    }
+-
+-    /**
+-     * Sets the database page size. The page size must be a power of two. This
+-     * method does not work if any data has been written to the database file,
+-     * and must be called right after the database has been created.
+-     *
+-     * @param numBytes the database page size, in bytes
+-     */
+-    public void setPageSize(long numBytes) {
+-        execSQL("PRAGMA page_size = " + numBytes);
+-    }
++    public void setVersion(int version) { checkWritable(); data.version = version; }
+ 
+     /**
+      * Mark this table as syncable. When an update occurs in this table the
+@@ -1489,12 +887,8 @@
+      * {@link SQLiteStatement}s are not synchronized, see the documentation for more details.
+      */
+     public SQLiteStatement compileStatement(String sql) throws SQLException {
+-        acquireReference();
+-        try {
+-            return new SQLiteStatement(this, sql, null);
+-        } finally {
+-            releaseReference();
+-        }
++        checkOpen();
++        return new SQLiteStatement(this, sql, null);
+     }
+ 
+     /**
+@@ -1673,16 +1067,7 @@
+             @Nullable String selection, @Nullable String[] selectionArgs, @Nullable String groupBy,
+             @Nullable String having, @Nullable String orderBy, @Nullable String limit,
+             @Nullable CancellationSignal cancellationSignal) {
+-        acquireReference();
+-        try {
+-            String sql = SQLiteQueryBuilder.buildQueryString(
+-                    distinct, table, columns, selection, groupBy, having, orderBy, limit);
+-
+-            return rawQueryWithFactory(cursorFactory, sql, selectionArgs,
+-                    findEditTable(table), cancellationSignal);
+-        } finally {
+-            releaseReference();
+-        }
++        return queryTables(distinct, table, columns, selection, selectionArgs, groupBy, having, orderBy, limit, cancellationSignal);
+     }
+ 
+     /**
+@@ -1766,94 +1151,6 @@
+     }
+ 
+     /**
+-     * Runs the provided SQL and returns a {@link Cursor} over the result set.
+-     *
+-     * @param sql the SQL query. The SQL string must not be ; terminated
+-     * @param selectionArgs You may include ?s in where clause in the query,
+-     *     which will be replaced by the values from selectionArgs. The
+-     *     values will be bound as Strings. If selection is null or does not contain ?s then
+-     *     selectionArgs may be null.
+-     * @return A {@link Cursor} object, which is positioned before the first entry. Note that
+-     * {@link Cursor}s are not synchronized, see the documentation for more details.
+-     */
+-    @NonNull
+-    public Cursor rawQuery(@NonNull String sql, @Nullable String[] selectionArgs) {
+-        return rawQueryWithFactory(null, sql, selectionArgs, null, null);
+-    }
+-
+-    /**
+-     * Runs the provided SQL and returns a {@link Cursor} over the result set.
+-     *
+-     * @param sql the SQL query. The SQL string must not be ; terminated
+-     * @param selectionArgs You may include ?s in where clause in the query,
+-     *     which will be replaced by the values from selectionArgs. The
+-     *     values will be bound as Strings. If selection is null or does not contain ?s then
+-     *     selectionArgs may be null.
+-     * @param cancellationSignal A signal to cancel the operation in progress, or null if none.
+-     * If the operation is canceled, then {@link OperationCanceledException} will be thrown
+-     * when the query is executed.
+-     * @return A {@link Cursor} object, which is positioned before the first entry. Note that
+-     * {@link Cursor}s are not synchronized, see the documentation for more details.
+-     */
+-    @NonNull
+-    public Cursor rawQuery(@NonNull String sql, @Nullable String[] selectionArgs,
+-            @Nullable CancellationSignal cancellationSignal) {
+-        return rawQueryWithFactory(null, sql, selectionArgs, null, cancellationSignal);
+-    }
+-
+-    /**
+-     * Runs the provided SQL and returns a cursor over the result set.
+-     *
+-     * @param cursorFactory the cursor factory to use, or null for the default factory
+-     * @param sql the SQL query. The SQL string must not be ; terminated
+-     * @param selectionArgs You may include ?s in where clause in the query,
+-     *     which will be replaced by the values from selectionArgs. The
+-     *     values will be bound as Strings. If selection is null or does not contain ?s then
+-     *     selectionArgs may be null.
+-     * @param editTable the name of the first table, which is editable
+-     * @return A {@link Cursor} object, which is positioned before the first entry. Note that
+-     * {@link Cursor}s are not synchronized, see the documentation for more details.
+-     */
+-    @NonNull
+-    public Cursor rawQueryWithFactory(
+-            @Nullable CursorFactory cursorFactory, @NonNull String sql,
+-            @Nullable String[] selectionArgs, @NonNull String editTable) {
+-        return rawQueryWithFactory(cursorFactory, sql, selectionArgs, editTable, null);
+-    }
+-
+-    /**
+-     * Runs the provided SQL and returns a cursor over the result set.
+-     *
+-     * @param cursorFactory the cursor factory to use, or null for the default factory
+-     * @param sql the SQL query. The SQL string must not be ; terminated
+-     * @param selectionArgs You may include ?s in where clause in the query,
+-     *     which will be replaced by the values from selectionArgs. The
+-     *     values will be bound as Strings. If selection is null or does not contain ?s then
+-     *     selectionArgs may be null.
+-     * @param editTable the name of the first table, which is editable
+-     * @param cancellationSignal A signal to cancel the operation in progress, or null if none.
+-     * If the operation is canceled, then {@link OperationCanceledException} will be thrown
+-     * when the query is executed.
+-     * @return A {@link Cursor} object, which is positioned before the first entry. Note that
+-     * {@link Cursor}s are not synchronized, see the documentation for more details.
+-     */
+-    @NonNull
+-    public Cursor rawQueryWithFactory(
+-            @Nullable CursorFactory cursorFactory, @NonNull String sql,
+-            @Nullable String[] selectionArgs, @NonNull String editTable,
+-            @Nullable CancellationSignal cancellationSignal) {
+-        acquireReference();
+-        try {
+-            SQLiteCursorDriver driver = new SQLiteDirectCursorDriver(this, sql, editTable,
+-                    cancellationSignal);
+-            return driver.query(cursorFactory != null ? cursorFactory : mCursorFactory,
+-                    selectionArgs);
+-        } finally {
+-            releaseReference();
+-        }
+-    }
+-
+-    /**
+      * Convenience method for inserting a row into the database.
+      *
+      * @param table the table to insert the row into
+@@ -1972,45 +1269,32 @@
+      */
+     public long insertWithOnConflict(@NonNull String table, @Nullable String nullColumnHack,
+             @Nullable ContentValues initialValues, int conflictAlgorithm) {
+-        acquireReference();
+-        try {
+-            StringBuilder sql = new StringBuilder();
+-            sql.append("INSERT");
+-            sql.append(CONFLICT_VALUES[conflictAlgorithm]);
+-            sql.append(" INTO ");
+-            sql.append(table);
+-            sql.append('(');
+-
+-            Object[] bindArgs = null;
+-            int size = (initialValues != null && !initialValues.isEmpty())
+-                    ? initialValues.size() : 0;
+-            if (size > 0) {
+-                bindArgs = new Object[size];
+-                int i = 0;
+-                for (String colName : initialValues.keySet()) {
+-                    sql.append((i > 0) ? "," : "");
+-                    sql.append(colName);
+-                    bindArgs[i++] = initialValues.get(colName);
+-                }
+-                sql.append(')');
+-                sql.append(" VALUES (");
+-                for (i = 0; i < size; i++) {
+-                    sql.append((i > 0) ? ",?" : "?");
+-                }
+-            } else {
+-                sql.append(nullColumnHack).append(") VALUES (NULL");
+-            }
+-            sql.append(')');
+-
+-            SQLiteStatement statement = new SQLiteStatement(this, sql.toString(), bindArgs);
+-            try {
+-                return statement.executeInsert();
+-            } finally {
+-                statement.close();
+-            }
+-        } finally {
+-            releaseReference();
+-        }
++        checkWritable();
++        Table rows = table(table);
++        ContentValues row = new ContentValues(rows.defaults);
++        if (initialValues != null) row.putAll(initialValues);
++        if ((initialValues == null || initialValues.size() == 0) && nullColumnHack != null) {
++            row.putNull(nullColumnHack);
++        }
++        if (rows.keys.size() == 1 && "_id".equals(rows.keys.get(0)) && row.get("_id") == null) {
++            row.put("_id", rows.nextId);
++        }
++        if (!rows.keys.isEmpty()) {
++            for (int i = 0; i < rows.rows.size(); ++i) {
++                ContentValues existing = rows.rows.get(i);
++                boolean equal = true;
++                for (String key : rows.keys) equal &= Objects.equals(row.getAsString(key), existing.getAsString(key));
++                if (!equal) continue;
++                if (conflictAlgorithm != CONFLICT_REPLACE) return -1;
++                rows.rows.remove(i);
++                break;
++            }
++        }
++        Long id = row.getAsLong("_id");
++        long rowId = id != null ? id : rows.nextId;
++        rows.nextId = Math.max(rows.nextId, rowId + 1);
++        rows.rows.add(row);
++        return rowId;
+     }
+ 
+     /**
+@@ -2029,18 +1313,16 @@
+      */
+     public int delete(@NonNull String table, @Nullable String whereClause,
+             @Nullable String[] whereArgs) {
+-        acquireReference();
+-        try {
+-            SQLiteStatement statement =  new SQLiteStatement(this, "DELETE FROM " + table +
+-                    (!TextUtils.isEmpty(whereClause) ? " WHERE " + whereClause : ""), whereArgs);
+-            try {
+-                return statement.executeUpdateDelete();
+-            } finally {
+-                statement.close();
+-            }
+-        } finally {
+-            releaseReference();
+-        }
++        checkWritable();
++        Table rows = table(table);
++        int removed = 0;
++        for (int i = rows.rows.size() - 1; i >= 0; --i) {
++            if (matches(rows.rows.get(i), whereClause, whereArgs)) {
++                rows.rows.remove(i);
++                removed++;
++            }
++        }
++        return removed;
+     }
+ 
+     /**
+@@ -2059,7 +1341,15 @@
+      */
+     public int update(@NonNull String table, @Nullable ContentValues values,
+             @Nullable String whereClause, @Nullable String[] whereArgs) {
+-        return updateWithOnConflict(table, values, whereClause, whereArgs, CONFLICT_NONE);
++        checkWritable();
++        int updated = 0;
++        for (ContentValues row : table(table).rows) {
++            if (matches(row, whereClause, whereArgs)) {
++                row.putAll(values);
++                updated++;
++            }
++        }
++        return updated;
+     }
+ 
+     /**
+@@ -2079,48 +1369,7 @@
+      */
+     public int updateWithOnConflict(@NonNull String table, @Nullable ContentValues values,
+             @Nullable String whereClause, @Nullable String[] whereArgs, int conflictAlgorithm) {
+-        if (values == null || values.isEmpty()) {
+-            throw new IllegalArgumentException("Empty values");
+-        }
+-
+-        acquireReference();
+-        try {
+-            StringBuilder sql = new StringBuilder(120);
+-            sql.append("UPDATE ");
+-            sql.append(CONFLICT_VALUES[conflictAlgorithm]);
+-            sql.append(table);
+-            sql.append(" SET ");
+-
+-            // move all bind args to one array
+-            int setValuesSize = values.size();
+-            int bindArgsSize = (whereArgs == null) ? setValuesSize : (setValuesSize + whereArgs.length);
+-            Object[] bindArgs = new Object[bindArgsSize];
+-            int i = 0;
+-            for (String colName : values.keySet()) {
+-                sql.append((i > 0) ? "," : "");
+-                sql.append(colName);
+-                bindArgs[i++] = values.get(colName);
+-                sql.append("=?");
+-            }
+-            if (whereArgs != null) {
+-                for (i = setValuesSize; i < bindArgsSize; i++) {
+-                    bindArgs[i] = whereArgs[i - setValuesSize];
+-                }
+-            }
+-            if (!TextUtils.isEmpty(whereClause)) {
+-                sql.append(" WHERE ");
+-                sql.append(whereClause);
+-            }
+-
+-            SQLiteStatement statement = new SQLiteStatement(this, sql.toString(), bindArgs);
+-            try {
+-                return statement.executeUpdateDelete();
+-            } finally {
+-                statement.close();
+-            }
+-        } finally {
+-            releaseReference();
+-        }
++        return update(table, values, whereClause, whereArgs);
+     }
+ 
+     /**
+@@ -2149,7 +1398,37 @@
+      * @throws SQLException if the SQL string is invalid
+      */
+     public void execSQL(String sql) throws SQLException {
+-        executeSql(sql, null);
++        checkWritable();
++        String trimmed = sql.trim();
++        if (trimmed.endsWith(";")) trimmed = trimmed.substring(0, trimmed.length() - 1).trim();
++        String upper = trimmed.toUpperCase(Locale.ROOT);
++        if (upper.startsWith("DROP TABLE IF EXISTS ")) {
++            data.tables.remove(trimmed.substring(21).trim());
++            return;
++        }
++        if (!upper.startsWith("CREATE TABLE ")) throw new SQLiteException("Unsupported SQL " + sql);
++        int body = trimmed.indexOf('(');
++        int end = trimmed.lastIndexOf(')');
++        if (body < 0 || end < body) throw new SQLiteException("Invalid CREATE TABLE");
++        String name = trimmed.substring(13, body).trim();
++        boolean optional = name.toUpperCase(Locale.ROOT).startsWith("IF NOT EXISTS ");
++        if (optional) name = name.substring(14).trim();
++        if (data.tables.containsKey(name)) {
++            if (optional) return;
++            throw new SQLiteException("Table already exists " + name);
++        }
++        Table table = new Table();
++        int start = body + 1, depth = 0;
++        for (int i = start; i <= end; ++i) {
++            char ch = trimmed.charAt(i);
++            if (i == end || ch == ',' && depth == 0) {
++                String definition = trimmed.substring(start, i).trim();
++                addColumn(table, definition);
++                start = i + 1;
++            } else if (ch == '(') depth++;
++            else if (ch == ')') depth--;
++        }
++        data.tables.put(name, table);
+     }
+ 
+     /**
+@@ -2203,134 +1482,9 @@
+      */
+     public void execSQL(@NonNull String sql, @NonNull Object[] bindArgs)
+             throws SQLException {
+-        if (bindArgs == null) {
+-            throw new IllegalArgumentException("Empty bindArgs");
+-        }
+-        executeSql(sql, bindArgs);
+-    }
+-
+-    /** @hide */
+-    public int executeSql(@NonNull String sql, @NonNull Object[] bindArgs)
+-            throws SQLException {
+-        acquireReference();
+-        try {
+-            final int statementType = DatabaseUtils.getSqlStatementType(sql);
+-            if (statementType == DatabaseUtils.STATEMENT_ATTACH) {
+-                boolean disableWal = false;
+-                synchronized (mLock) {
+-                    if (!mHasAttachedDbsLocked) {
+-                        mHasAttachedDbsLocked = true;
+-                        disableWal = true;
+-                        mConnectionPoolLocked.disableIdleConnectionHandler();
+-                    }
+-                }
+-                if (disableWal) {
+-                    disableWriteAheadLogging();
+-                }
+-            }
+-
+-            try (SQLiteStatement statement = new SQLiteStatement(this, sql, bindArgs)) {
+-                return statement.executeUpdateDelete();
+-            } finally {
+-                // If schema was updated, close non-primary connections and clear prepared
+-                // statement caches of active connections, otherwise they might have outdated
+-                // schema information.
+-                if (statementType == DatabaseUtils.STATEMENT_DDL) {
+-                    mConnectionPoolLocked.closeAvailableNonPrimaryConnectionsAndLogExceptions();
+-                    mConnectionPoolLocked.clearAcquiredConnectionsPreparedStatementCache();
+-                }
+-            }
+-        } finally {
+-            releaseReference();
+-        }
+-    }
+-
+-    /**
+-     * Return a {@link SQLiteRawStatement} connected to the database.  A transaction must be in
+-     * progress or an exception will be thrown.  The resulting object will be closed automatically
+-     * when the current transaction closes.
+-     *
+-     * @param sql The SQL string to be compiled into a prepared statement.
+-     * @return A {@link SQLiteRawStatement} holding the compiled SQL.
+-     * @throws IllegalStateException if a transaction is not in progress.
+-     * @throws SQLiteException if the SQL cannot be compiled.
+-     */
+-    @NonNull
+-    public SQLiteRawStatement createRawStatement(@NonNull String sql) {
+-        Objects.requireNonNull(sql);
+-        return new SQLiteRawStatement(this, sql);
+-    }
+-
+-    /**
+-     * Return the "rowid" of the last row to be inserted on the current connection. This method must
+-     * only be called when inside a transaction. {@link IllegalStateException} is thrown if the
+-     * method is called outside a transaction. If the function is called before any inserts in the
+-     * current transaction, the value returned will be from a previous transaction, which may be
+-     * from a different thread. If no inserts have occurred on the current connection, the function
+-     * returns 0. See the SQLite documentation for the specific details.
+-     *
+-     * @see <a href="https://sqlite.org/c3ref/last_insert_rowid.html">sqlite3_last_insert_rowid</a>
+-     *
+-     * @return The ROWID of the last row to be inserted under this connection.
+-     * @throws IllegalStateException if there is no current transaction.
+-     */
+-    public long getLastInsertRowId() {
+-        return getThreadSession().getLastInsertRowId();
+-    }
+-
+-    /**
+-     * Return the number of database rows that were inserted, updated, or deleted by the most recent
+-     * SQL statement within the current transaction.
+-     *
+-     * @see <a href="https://sqlite.org/c3ref/changes.html">sqlite3_changes64</a>
+-     *
+-     * @return The number of rows changed by the most recent sql statement
+-     * @throws IllegalStateException if there is no current transaction.
+-     */
+-    public long getLastChangedRowCount() {
+-        return getThreadSession().getLastChangedRowCount();
+-    }
+-
+-    /**
+-     * Return the total number of database rows that have been inserted, updated, or deleted on
+-     * the current connection since it was created.  Due to Android's internal management of
+-     * SQLite connections, the value may, or may not, include changes made in earlier
+-     * transactions. Best practice is to compare values returned within a single transaction.
+-     *
+-     * <code><pre>
+-     *    database.beginTransaction();
+-     *    try {
+-     *        long initialValue = database.getTotalChangedRowCount();
+-     *        // Execute SQL statements
+-     *        long changedRows = database.getTotalChangedRowCount() - initialValue;
+-     *        // changedRows counts the total number of rows updated in the transaction.
+-     *    } finally {
+-     *        database.endTransaction();
+-     *    }
+-     * </pre></code>
+-     *
+-     * @see <a href="https://sqlite.org/c3ref/changes.html">sqlite3_total_changes64</a>
+-     *
+-     * @return The number of rows changed on the current connection.
+-     * @throws IllegalStateException if there is no current transaction.
+-     */
+-    public long getTotalChangedRowCount() {
+-        return getThreadSession().getTotalChangedRowCount();
+-    }
+-
+-    /**
+-     * Verifies that a SQL SELECT statement is valid by compiling it.
+-     * If the SQL statement is not valid, this method will throw a {@link SQLiteException}.
+-     *
+-     * @param sql SQL to be validated
+-     * @param cancellationSignal A signal to cancel the operation in progress, or null if none.
+-     * If the operation is canceled, then {@link OperationCanceledException} will be thrown
+-     * when the query is executed.
+-     * @throws SQLiteException if {@code sql} is invalid
+-     */
+-    public void validateSql(@NonNull String sql, @Nullable CancellationSignal cancellationSignal) {
+-        getThreadSession().prepare(sql,
+-                getThreadDefaultConnectionFlags(/* readOnly =*/ true), cancellationSignal, null);
++        if (bindArgs == null) throw new IllegalArgumentException("Empty bind arguments");
++        if (bindArgs.length != 0) throw new SQLiteException("Unsupported SQL bindings: " + sql);
++        execSQL(sql);
+     }
+ 
+     /**
+@@ -2338,15 +1492,7 @@
+      *
+      * @return True if database is opened as read only.
+      */
+-    public boolean isReadOnly() {
+-        synchronized (mLock) {
+-            return isReadOnlyLocked();
+-        }
+-    }
+-
+-    private boolean isReadOnlyLocked() {
+-        return (mConfigurationLocked.openFlags & OPEN_READ_MASK) == OPEN_READONLY;
+-    }
++    public boolean isReadOnly() { return readOnly; }
+ 
+     /**
+      * Returns true if the database is in-memory db.
+@@ -2355,9 +1501,7 @@
+      * @hide
+      */
+     public boolean isInMemoryDatabase() {
+-        synchronized (mLock) {
+-            return mConfigurationLocked.isInMemoryDb();
+-        }
++        return true;
+     }
+ 
+     /**
+@@ -2365,11 +1509,7 @@
+      *
+      * @return True if the database is currently open (has not been closed).
+      */
+-    public boolean isOpen() {
+-        synchronized (mLock) {
+-            return mConnectionPoolLocked != null;
+-        }
+-    }
++    public boolean isOpen() { return open; }
+ 
+     /**
+      * Returns true if the new version code is greater than the current database version.
+@@ -2386,11 +1526,7 @@
+      *
+      * @return The path to the database file.
+      */
+-    public final String getPath() {
+-        synchronized (mLock) {
+-            return mConfigurationLocked.path;
+-        }
+-    }
++    public final String getPath() { return ":memory:"; }
+ 
+     /**
+      * Sets the locale for this database.  Does nothing if this database has
+@@ -2403,22 +1539,7 @@
+      * In this case the database remains unchanged.
+      */
+     public void setLocale(Locale locale) {
+-        if (locale == null) {
+-            throw new IllegalArgumentException("locale must not be null.");
+-        }
+-
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            final Locale oldLocale = mConfigurationLocked.locale;
+-            mConfigurationLocked.locale = locale;
+-            try {
+-                mConnectionPoolLocked.reconfigure(mConfigurationLocked);
+-            } catch (RuntimeException ex) {
+-                mConfigurationLocked.locale = oldLocale;
+-                throw ex;
+-            }
+-        }
++        Objects.requireNonNull(locale);
+     }
+ 
+     /**
+@@ -2435,33 +1556,7 @@
+      * @throws IllegalStateException if input cacheSize > {@link #MAX_SQL_CACHE_SIZE}.
+      */
+     public void setMaxSqlCacheSize(int cacheSize) {
+-        if (cacheSize > MAX_SQL_CACHE_SIZE || cacheSize < 0) {
+-            throw new IllegalStateException(
+-                    "expected value between 0 and " + MAX_SQL_CACHE_SIZE);
+-        }
+-
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            final int oldMaxSqlCacheSize = mConfigurationLocked.maxSqlCacheSize;
+-            mConfigurationLocked.maxSqlCacheSize = cacheSize;
+-            try {
+-                mConnectionPoolLocked.reconfigure(mConfigurationLocked);
+-            } catch (RuntimeException ex) {
+-                mConfigurationLocked.maxSqlCacheSize = oldMaxSqlCacheSize;
+-                throw ex;
+-            }
+-        }
+-    }
+-
+-    /** @hide */
+-    @NeverCompile
+-    public double getStatementCacheMissRate() {
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            return mConnectionPoolLocked.getStatementCacheMissRate();
+-        }
++        if (cacheSize < 0 || cacheSize > MAX_SQL_CACHE_SIZE) throw new IllegalStateException();
+     }
+ 
+     /**
+@@ -2494,21 +1589,7 @@
+      * when this method is called.
+      */
+     public void setForeignKeyConstraintsEnabled(boolean enable) {
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            if (mConfigurationLocked.foreignKeyConstraintsEnabled == enable) {
+-                return;
+-            }
+-
+-            mConfigurationLocked.foreignKeyConstraintsEnabled = enable;
+-            try {
+-                mConnectionPoolLocked.reconfigure(mConfigurationLocked);
+-            } catch (RuntimeException ex) {
+-                mConfigurationLocked.foreignKeyConstraintsEnabled = !enable;
+-                throw ex;
+-            }
+-        }
++        checkOpen();
+     }
+ 
+     /**
+@@ -2589,46 +1670,7 @@
+      * @see #ENABLE_WRITE_AHEAD_LOGGING
+      * @see #disableWriteAheadLogging
+      */
+-    public boolean enableWriteAheadLogging() {
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            if (mConfigurationLocked.resolveJournalMode().equalsIgnoreCase(
+-                        SQLiteDatabase.JOURNAL_MODE_WAL)) {
+-                return true;
+-            }
+-
+-            if (isReadOnlyLocked()) {
+-                // WAL doesn't make sense for readonly-databases.
+-                // TODO: True, but connection pooling does still make sense...
+-                return false;
+-            }
+-
+-            if (mConfigurationLocked.isInMemoryDb()) {
+-                Log.i(TAG, "can't enable WAL for memory databases.");
+-                return false;
+-            }
+-
+-            // make sure this database has NO attached databases because sqlite's write-ahead-logging
+-            // doesn't work for databases with attached databases
+-            if (mHasAttachedDbsLocked) {
+-                if (Log.isLoggable(TAG, Log.DEBUG)) {
+-                    Log.d(TAG, "this database: " + mConfigurationLocked.label
+-                            + " has attached databases. can't  enable WAL.");
+-                }
+-                return false;
+-            }
+-
+-            mConfigurationLocked.openFlags |= ENABLE_WRITE_AHEAD_LOGGING;
+-            try {
+-                mConnectionPoolLocked.reconfigure(mConfigurationLocked);
+-            } catch (RuntimeException ex) {
+-                mConfigurationLocked.openFlags &= ~ENABLE_WRITE_AHEAD_LOGGING;
+-                throw ex;
+-            }
+-        }
+-        return true;
+-    }
++    public boolean enableWriteAheadLogging() { return false; }
+ 
+     /**
+      * This method disables the features enabled by {@link #enableWriteAheadLogging()}.
+@@ -2639,30 +1681,7 @@
+      *
+      * @see #enableWriteAheadLogging
+      */
+-    public void disableWriteAheadLogging() {
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            final int oldFlags = mConfigurationLocked.openFlags;
+-            // WAL was never enabled for this database, so there's nothing left to do.
+-            if (!mConfigurationLocked.resolveJournalMode().equalsIgnoreCase(
+-                        SQLiteDatabase.JOURNAL_MODE_WAL)) {
+-                return;
+-            }
+-
+-            // If an app explicitly disables WAL, it takes priority over any directive
+-            // to use the legacy "compatibility WAL" mode.
+-            mConfigurationLocked.openFlags &= ~ENABLE_WRITE_AHEAD_LOGGING;
+-            mConfigurationLocked.openFlags &= ~ENABLE_LEGACY_COMPATIBILITY_WAL;
+-
+-            try {
+-                mConnectionPoolLocked.reconfigure(mConfigurationLocked);
+-            } catch (RuntimeException ex) {
+-                mConfigurationLocked.openFlags = oldFlags;
+-                throw ex;
+-            }
+-        }
+-    }
++    public void disableWriteAheadLogging() {}
+ 
+     /**
+      * Returns true if write-ahead logging has been enabled for this database.
+@@ -2673,143 +1692,7 @@
+      * @see #ENABLE_WRITE_AHEAD_LOGGING
+      */
+     public boolean isWriteAheadLoggingEnabled() {
+-        synchronized (mLock) {
+-            throwIfNotOpenLocked();
+-
+-            return mConfigurationLocked.resolveJournalMode().equalsIgnoreCase(
+-                    SQLiteDatabase.JOURNAL_MODE_WAL);
+-        }
+-    }
+-
+-    /**
+-     * Collect statistics about all open databases in the current process.
+-     * Used by bug report.
+-     */
+-    static ArrayList<DbStats> getDbStats() {
+-        ArrayList<DbStats> dbStatsList = new ArrayList<DbStats>();
+-        for (SQLiteDatabase db : getActiveDatabases()) {
+-            db.collectDbStats(dbStatsList);
+-        }
+-        return dbStatsList;
+-    }
+-
+-    @UnsupportedAppUsage
+-    private void collectDbStats(ArrayList<DbStats> dbStatsList) {
+-        synchronized (mLock) {
+-            if (mConnectionPoolLocked != null) {
+-                mConnectionPoolLocked.collectDbStats(dbStatsList);
+-            }
+-        }
+-    }
+-
+-    @UnsupportedAppUsage
+-    private static ArrayList<SQLiteDatabase> getActiveDatabases() {
+-        ArrayList<SQLiteDatabase> databases = new ArrayList<SQLiteDatabase>();
+-        synchronized (sActiveDatabases) {
+-            databases.addAll(sActiveDatabases.keySet());
+-        }
+-        return databases;
+-    }
+-
+-    private static ArrayList<SQLiteConnectionPool> getActiveDatabasePools() {
+-        ArrayList<SQLiteConnectionPool> connectionPools = new ArrayList<SQLiteConnectionPool>();
+-        synchronized (sActiveDatabases) {
+-            for (SQLiteDatabase db : sActiveDatabases.keySet()) {
+-                synchronized (db.mLock) {
+-                    if (db.mConnectionPoolLocked != null) {
+-                        connectionPools.add(db.mConnectionPoolLocked);
+-                    }
+-                }
+-            }
+-        }
+-        return connectionPools;
+-    }
+-
+-    /**
+-     * Dump detailed information about all open databases in the current process.
+-     * Used by bug report.
+-     */
+-    static void dumpAll(Printer printer, boolean verbose, boolean isSystem) {
+-        // Use this ArraySet to collect file paths.
+-        final ArraySet<String> directories = new ArraySet<>();
+-
+-        // Accounting across all databases
+-        long totalStatementsTimeInMs = 0;
+-        long totalStatementsCount = 0;
+-
+-        ArrayList<SQLiteConnectionPool> activeConnectionPools = getActiveDatabasePools();
+-
+-        activeConnectionPools.sort(
+-                (a, b) -> Long.compare(b.getTotalStatementsCount(), a.getTotalStatementsCount()));
+-        for (SQLiteConnectionPool dbPool : activeConnectionPools) {
+-            dbPool.dump(printer, verbose, directories);
+-            totalStatementsTimeInMs += dbPool.getTotalStatementsTime();
+-            totalStatementsCount += dbPool.getTotalStatementsCount();
+-        }
+-
+-        if (totalStatementsCount > 0) {
+-            // Only print when there is information available
+-
+-            // Sorted statements per database
+-            printer.println("Statements Executed per Database");
+-            for (SQLiteConnectionPool dbPool : activeConnectionPools) {
+-                printer.println(
+-                        "  " + dbPool.getPath() + " :    " + dbPool.getTotalStatementsCount());
+-            }
+-            printer.println("");
+-            printer.println(
+-                    "Total Statements Executed for all Active Databases: " + totalStatementsCount);
+-
+-            // Sorted execution time per database
+-            activeConnectionPools.sort(
+-                    (a, b) -> Long.compare(b.getTotalStatementsTime(), a.getTotalStatementsTime()));
+-            printer.println("");
+-            printer.println("");
+-            printer.println("Statement Time per Database (ms)");
+-            for (SQLiteConnectionPool dbPool : activeConnectionPools) {
+-                printer.println(
+-                        "  " + dbPool.getPath() + " :    " + dbPool.getTotalStatementsTime());
+-            }
+-            printer.println("Total Statements Time for all Active Databases (ms): "
+-                    + totalStatementsTimeInMs);
+-        }
+-
+-        // Dump DB files in the directories.
+-        if (directories.size() > 0) {
+-            final String[] dirs = directories.toArray(new String[directories.size()]);
+-            Arrays.sort(dirs);
+-            for (String dir : dirs) {
+-                dumpDatabaseDirectory(printer, new File(dir), isSystem);
+-            }
+-        }
+-    }
+-
+-    private static void dumpDatabaseDirectory(Printer pw, File dir, boolean isSystem) {
+-        pw.println("");
+-        pw.println("Database files in " + dir.getAbsolutePath() + ":");
+-        final File[] files = dir.listFiles();
+-        if (files == null || files.length == 0) {
+-            pw.println("  [none]");
+-            return;
+-        }
+-        Arrays.sort(files, (a, b) -> a.getName().compareTo(b.getName()));
+-
+-        for (File f : files) {
+-            if (isSystem) {
+-                // If called within the system server, the directory contains other files too, so
+-                // filter by file extensions.
+-                // (If it's an app, just print all files because they may not use *.db
+-                // extension.)
+-                final String name = f.getName();
+-                if (!(name.endsWith(".db") || name.endsWith(".db-wal")
+-                        || name.endsWith(".db-journal")
+-                        || name.endsWith(SQLiteGlobal.WIPE_CHECK_FILE_SUFFIX))) {
+-                    continue;
+-                }
+-            }
+-            pw.println(String.format("  %-40s %7db %s", f.getName(), f.length(),
+-                    SQLiteDatabase.getFileTimestamps(f.getAbsolutePath())));
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -2820,51 +1703,7 @@
+      * is not open.
+      */
+     public List<Pair<String, String>> getAttachedDbs() {
+-        ArrayList<Pair<String, String>> attachedDbs = new ArrayList<Pair<String, String>>();
+-        synchronized (mLock) {
+-            if (mConnectionPoolLocked == null) {
+-                return null; // not open
+-            }
+-
+-            if (!mHasAttachedDbsLocked) {
+-                // No attached databases.
+-                // There is a small window where attached databases exist but this flag is not
+-                // set yet.  This can occur when this thread is in a race condition with another
+-                // thread that is executing the SQL statement: "attach database <blah> as <foo>"
+-                // If this thread is NOT ok with such a race condition (and thus possibly not
+-                // receivethe entire list of attached databases), then the caller should ensure
+-                // that no thread is executing any SQL statements while a thread is calling this
+-                // method.  Typically, this method is called when 'adb bugreport' is done or the
+-                // caller wants to collect stats on the database and all its attached databases.
+-                attachedDbs.add(new Pair<String, String>("main", mConfigurationLocked.path));
+-                return attachedDbs;
+-            }
+-
+-            acquireReference();
+-        }
+-
+-        try {
+-            // has attached databases. query sqlite to get the list of attached databases.
+-            Cursor c = null;
+-            try {
+-                c = rawQuery("pragma database_list;", null);
+-                while (c.moveToNext()) {
+-                    // sqlite returns a row for each database in the returned list of databases.
+-                    //   in each row,
+-                    //       1st column is the database name such as main, or the database
+-                    //                              name specified on the "ATTACH" command
+-                    //       2nd column is the database file path.
+-                    attachedDbs.add(new Pair<String, String>(c.getString(1), c.getString(2)));
+-                }
+-            } finally {
+-                if (c != null) {
+-                    c.close();
+-                }
+-            }
+-            return attachedDbs;
+-        } finally {
+-            releaseReference();
+-        }
++        return isOpen() ? java.util.Collections.singletonList(Pair.create("main", getPath())) : null;
+     }
+ 
+     /**
+@@ -2881,55 +1720,13 @@
+      * false otherwise.
+      */
+     public boolean isDatabaseIntegrityOk() {
+-        acquireReference();
+-        try {
+-            List<Pair<String, String>> attachedDbs = null;
+-            try {
+-                attachedDbs = getAttachedDbs();
+-                if (attachedDbs == null) {
+-                    throw new IllegalStateException(
+-                            "databaselist for: "
+-                                    + getPath()
+-                                    + " couldn't "
+-                                    + "be retrieved. probably because the database is closed");
+-                }
+-            } catch (SQLiteException e) {
+-                // can't get attachedDb list. do integrity check on the main database
+-                attachedDbs = new ArrayList<Pair<String, String>>();
+-                attachedDbs.add(new Pair<String, String>("main", getPath()));
+-            }
+-
+-            for (int i = 0; i < attachedDbs.size(); i++) {
+-                Pair<String, String> p = attachedDbs.get(i);
+-                SQLiteStatement prog = null;
+-                try {
+-                    prog = compileStatement("PRAGMA " + p.first + ".integrity_check(1);");
+-                    String rslt = prog.simpleQueryForString();
+-                    if (!rslt.equalsIgnoreCase("ok")) {
+-                        // integrity_checker failed on main or attached databases
+-                        Log.e(TAG, "PRAGMA integrity_check on " + p.second + " returned: " + rslt);
+-                        return false;
+-                    }
+-                } finally {
+-                    if (prog != null) prog.close();
+-                }
+-            }
+-        } finally {
+-            releaseReference();
+-        }
++        checkOpen();
+         return true;
+     }
+ 
+     @Override
+     public String toString() {
+         return "SQLiteDatabase: " + getPath();
+-    }
+-
+-    private void throwIfNotOpenLocked() {
+-        if (mConnectionPoolLocked == null) {
+-            throw new IllegalStateException("The database '" + mConfigurationLocked.label
+-                    + "' is not open.");
+-        }
+     }
+ 
+     /**
+@@ -3200,7 +1997,6 @@
+                 mCursorFactory = cursorFactory;
+                 return this;
+             }
+-
+ 
+             /**
+              * Sets {@link DatabaseErrorHandler} object to handle db corruption errors
+@@ -3295,33 +2091,186 @@
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface DatabaseOpenFlags {}
+ 
+-    /** @hide */
+-    public static void wipeDetected(String filename, String reason) {
+-        wtfAsSystemServer(TAG, "DB wipe detected:"
+-                + " package=" + ActivityThread.currentPackageName()
+-                + " reason=" + reason
+-                + " file=" + filename
+-                + " " + getFileTimestamps(filename)
+-                + " checkfile " + getFileTimestamps(filename + SQLiteGlobal.WIPE_CHECK_FILE_SUFFIX),
+-                new Throwable("STACKTRACE"));
+-    }
+-
+-    /** @hide */
+-    public static String getFileTimestamps(String path) {
+-        try {
+-            BasicFileAttributes attr = Files.readAttributes(
+-                    FileSystems.getDefault().getPath(path), BasicFileAttributes.class);
+-            return "ctime=" + attr.creationTime()
+-                    + " mtime=" + attr.lastModifiedTime()
+-                    + " atime=" + attr.lastAccessTime();
+-        } catch (IOException e) {
+-            return "[unable to obtain timestamp]";
+-        }
+-    }
+-
+-    /** @hide */
+-    static void wtfAsSystemServer(String tag, String message, Throwable stacktrace) {
+-        Log.e(tag, message, stacktrace);
+-        ContentResolver.onDbCorruption(tag, message, stacktrace);
++    private static final class Table {
++        final ArrayList<String> columns = new ArrayList<>();
++        final ArrayList<String> keys = new ArrayList<>();
++        final ArrayList<ContentValues> rows = new ArrayList<>();
++        final ContentValues defaults = new ContentValues();
++        long nextId = 1;
++        Table copy() {
++            Table copy = new Table();
++            copy.columns.addAll(columns);
++            copy.keys.addAll(keys);
++            copy.defaults.putAll(defaults);
++            for (ContentValues row : rows) copy.rows.add(new ContentValues(row));
++            copy.nextId = nextId;
++            return copy;
++        }
++    }
++
++    private static final class Data {
++        int version;
++        Map<String, Table> tables = new LinkedHashMap<>();
++        Data copy() {
++            Data copy = new Data();
++            copy.version = version;
++            for (Map.Entry<String, Table> entry : tables.entrySet()) {
++                copy.tables.put(entry.getKey(), entry.getValue().copy());
++            }
++            return copy;
++        }
++    }
++
++    private static final Map<String, Data> databases = new LinkedHashMap<>();
++    private final String path;
++    private final Data data;
++    private boolean open = true;
++    private boolean readOnly;
++    private Data snapshot;
++    private boolean successful;
++
++    private SQLiteDatabase(String path, Data data, OpenParams params) {
++        this.path = path;
++        this.data = data;
++        readOnly = (params.getOpenFlags() & OPEN_READONLY) != 0;
++    }
++
++    private void checkOpen() {
++        if (!open) throw new IllegalStateException("Database is closed");
++    }
++    private void checkWritable() {
++        checkOpen();
++        if (readOnly) throw new SQLiteException("Database is read-only");
++    }
++    private Table table(String name) {
++        checkOpen();
++        Table table = data.tables.get(name);
++        if (table == null) throw new SQLiteException("No such table " + name);
++        return table;
++    }
++
++    private static void addColumn(Table table, String definition) {
++        String upper = definition.toUpperCase(Locale.ROOT);
++        if (upper.startsWith("PRIMARY KEY")) {
++            String keys = definition.substring(definition.indexOf('(') + 1, definition.lastIndexOf(')'));
++            for (String key : keys.split(",")) table.keys.add(key.trim());
++            return;
++        }
++        int space = definition.indexOf(' ');
++        if (space < 0) throw new SQLiteException("Invalid column " + definition);
++        String name = definition.substring(0, space);
++        table.columns.add(name);
++        if (upper.contains(" PRIMARY KEY")) table.keys.add(name);
++        int defaultAt = upper.indexOf(" DEFAULT ");
++        if (defaultAt >= 0) {
++            String expression = definition.substring(defaultAt + 9).trim();
++            if (expression.startsWith("'") && expression.endsWith("'")) {
++                table.defaults.put(name, expression.substring(1, expression.length() - 1));
++            } else if (!"NULL".equalsIgnoreCase(expression)) {
++                table.defaults.put(name, Long.parseLong(expression));
++            }
++        }
++    }
++
++    private Cursor queryTables(boolean distinct, String name, String[] columns, String selection, String[] args,
++                        String group, String having, String order, String limit, CancellationSignal signal) {
++        if (signal != null) signal.throwIfCanceled();
++        if (group != null || having != null || order != null) throw new SQLiteException("Unsupported query clauses");
++        Table table = "sqlite_master".equals(name) ? schemaTable() : table(name);
++        String[] projection = columns != null ? columns : table.columns.toArray(new String[0]);
++        MatrixCursor cursor = new MatrixCursor(projection);
++        java.util.Set<java.util.List<Object>> seen = distinct ? new java.util.HashSet<>() : null;
++        int maximum = limit == null ? Integer.MAX_VALUE : Integer.parseInt(limit);
++        for (ContentValues row : table.rows) {
++            if (cursor.getCount() >= maximum) break;
++            if (!matches(row, selection, args)) continue;
++            Object[] values = new Object[projection.length];
++            for (int i = 0; i < projection.length; ++i) values[i] = row.get(projection[i]);
++            if (seen == null || seen.add(Arrays.asList(values))) cursor.addRow(values);
++        }
++        return cursor;
++    }
++
++    private Table schemaTable() {
++        checkOpen();
++        Table schema = new Table();
++        schema.columns.addAll(Arrays.asList("type", "name", "tbl_name"));
++        for (String tableName : data.tables.keySet()) {
++            ContentValues row = new ContentValues();
++            row.put("type", "table");
++            row.put("name", tableName);
++            row.put("tbl_name", tableName);
++            schema.rows.add(row);
++        }
++        return schema;
++    }
++
++    long queryLong(String sql, String[] args) {
++        String query = sql.trim();
++        String upper = query.toUpperCase(Locale.ROOT);
++        int close = query.indexOf(')');
++        int from = upper.indexOf(" FROM ", close);
++        if (!upper.startsWith("SELECT MAX(") || close <= 11 || from < 0) {
++            throw new SQLiteException("Unsupported scalar query " + sql);
++        }
++        String column = query.substring(11, close).trim();
++        int where = upper.indexOf(" WHERE ", from);
++        String name = query.substring(from + 6, where < 0 ? query.length() : where).trim();
++        String selection = where < 0 ? null : query.substring(where + 7);
++        Long largest = null;
++        for (ContentValues row : table(name).rows) {
++            if (!matches(row, selection, args)) continue;
++            Long value = row.getAsLong(column);
++            if (value != null && (largest == null || value > largest)) largest = value;
++        }
++        return largest == null ? 0 : largest;
++    }
++
++    private static boolean matches(ContentValues row, String selection, String[] args) {
++        if (selection == null || selection.isEmpty()) return true;
++        int argument = 0;
++        for (String term : selection.split("\\s+[Aa][Nn][Dd]\\s+")) {
++            int in = term.toUpperCase(Locale.ROOT).indexOf(" IN (");
++            if (in > 0 && term.endsWith(")")) {
++                String key = term.substring(0, in).trim();
++                String stored = row.getAsString(key);
++                String candidates = term.substring(in + 5, term.length() - 1).trim();
++                boolean found = false;
++                if (candidates.isEmpty()) return false;
++                for (String candidate : candidates.split(",")) {
++                    String value = candidate.trim();
++                    if ("?".equals(value)) {
++                        if (args == null || argument >= args.length) throw new SQLiteException("Missing selection argument");
++                        value = args[argument++];
++                    } else if (value.length() >= 2 && value.charAt(0) == '\'' && value.endsWith("'")) {
++                        value = value.substring(1, value.length() - 1);
++                    }
++                    found |= stored != null && stored.equals(value);
++                }
++                if (!found) return false;
++                continue;
++            }
++            int equal = term.indexOf('=');
++            if (equal < 1) throw new SQLiteException("Unsupported selection " + selection);
++            String key = term.substring(0, equal).trim();
++            char comparison = key.charAt(key.length() - 1);
++            if (comparison == '!' || comparison == '<' || comparison == '>') key = key.substring(0, key.length() - 1).trim();
++            String value = term.substring(equal + (term.startsWith("==", equal) ? 2 : 1)).trim();
++            if ("?".equals(value)) {
++                if (args == null || argument >= args.length) throw new SQLiteException("Missing selection argument");
++                value = args[argument++];
++            } else if (value.length() >= 2 && value.charAt(0) == '\'' && value.endsWith("'")) {
++                value = value.substring(1, value.length() - 1);
++            }
++            String stored = row.getAsString(key);
++            if (comparison == '<' || comparison == '>') {
++                if (stored == null || value == null) return false;
++                long left = Long.parseLong(stored), right = Long.parseLong(value);
++                if (comparison == '<' ? left > right : left < right) return false;
++            } else if ((comparison != '!') != Objects.equals(value, stored)) {
++                return false;
++            }
++        }
++        return true;
+     }
+ }
+--- a/frameworks/base/core/java/android/database/sqlite/SQLiteProgram.java
++++ b/frameworks/base/core/java/android/database/sqlite/SQLiteProgram.java
+@@ -17,7 +17,6 @@
+ package android.database.sqlite;
+ 
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.database.DatabaseUtils;
+ import android.os.Build;
+ import android.os.CancellationSignal;
+ 
+@@ -35,7 +34,6 @@
+     private final SQLiteDatabase mDatabase;
+     @UnsupportedAppUsage
+     private final String mSql;
+-    private final boolean mReadOnly;
+     private final String[] mColumnNames;
+     private final int mNumParameters;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+@@ -43,44 +41,24 @@
+ 
+     SQLiteProgram(SQLiteDatabase db, String sql, Object[] bindArgs,
+             CancellationSignal cancellationSignalForPrepare) {
++        if (cancellationSignalForPrepare != null) cancellationSignalForPrepare.throwIfCanceled();
+         mDatabase = db;
+         mSql = sql.trim();
+-
+-        int n = DatabaseUtils.getSqlStatementType(mSql);
+-        switch (n) {
+-            case DatabaseUtils.STATEMENT_BEGIN:
+-            case DatabaseUtils.STATEMENT_COMMIT:
+-            case DatabaseUtils.STATEMENT_ABORT:
+-                mReadOnly = false;
+-                mColumnNames = EMPTY_STRING_ARRAY;
+-                mNumParameters = 0;
+-                break;
+-
+-            default:
+-                boolean assumeReadOnly = (n == DatabaseUtils.STATEMENT_SELECT);
+-                SQLiteStatementInfo info = new SQLiteStatementInfo();
+-                db.getThreadSession().prepare(mSql,
+-                        db.getThreadDefaultConnectionFlags(assumeReadOnly),
+-                        cancellationSignalForPrepare, info);
+-                mReadOnly = info.readOnly;
+-                mColumnNames = info.columnNames;
+-                mNumParameters = info.numParameters;
+-                break;
++        mColumnNames = EMPTY_STRING_ARRAY;
++        int parameters = 0;
++        boolean quoted = false;
++        for (int i = 0; i < mSql.length(); i++) {
++            char ch = mSql.charAt(i);
++            if (ch == '\'') quoted = !quoted;
++            if (ch == '?' && !quoted) ++parameters;
+         }
+-
++        mNumParameters = parameters;
+         if (bindArgs != null && bindArgs.length > mNumParameters) {
+-            throw new IllegalArgumentException("Too many bind arguments.  "
+-                    + bindArgs.length + " arguments were provided but the statement needs "
+-                    + mNumParameters + " arguments.");
++            throw new IllegalArgumentException("Too many bind arguments for " + mSql);
+         }
+-
+-        if (mNumParameters != 0) {
+-            mBindArgs = new Object[mNumParameters];
+-            if (bindArgs != null) {
+-                System.arraycopy(bindArgs, 0, mBindArgs, 0, bindArgs.length);
+-            }
+-        } else {
+-            mBindArgs = null;
++        mBindArgs = mNumParameters == 0 ? null : new Object[mNumParameters];
++        if (bindArgs != null && bindArgs.length != 0) {
++            System.arraycopy(bindArgs, 0, mBindArgs, 0, bindArgs.length);
+         }
+     }
+ 
+@@ -98,21 +76,6 @@
+ 
+     final String[] getColumnNames() {
+         return mColumnNames;
+-    }
+-
+-    /** @hide */
+-    protected final SQLiteSession getSession() {
+-        return mDatabase.getThreadSession();
+-    }
+-
+-    /** @hide */
+-    protected final int getConnectionFlags() {
+-        return mDatabase.getThreadDefaultConnectionFlags(mReadOnly);
+-    }
+-
+-    /** @hide */
+-    protected final void onCorruption() {
+-        mDatabase.onCorruption();
+     }
+ 
+     /**
+@@ -201,7 +164,9 @@
+     public void bindAllArgsAsStrings(String[] bindArgs) {
+         if (bindArgs != null) {
+             for (int i = bindArgs.length; i != 0; i--) {
+-                bindString(i, bindArgs[i - 1]);
++                String value = bindArgs[i - 1];
++                if (value == null) bindNull(i);
++                else bindString(i, value);
+             }
+         }
+     }
+@@ -212,11 +177,14 @@
+     }
+ 
+     private void bind(int index, Object value) {
+-        if (index < 1 || index > mNumParameters) {
+-            throw new IllegalArgumentException("Cannot bind argument at index "
+-                    + index + " because the index is out of range.  "
+-                    + "The statement has " + mNumParameters + " parameters.");
++        acquireReference();
++        try {
++            if (index < 1 || index > mNumParameters) {
++                throw new IllegalArgumentException("The statement has " + mNumParameters + " parameters");
++            }
++            mBindArgs[index - 1] = value;
++        } finally {
++            releaseReference();
+         }
+-        mBindArgs[index - 1] = value;
+     }
+ }
+--- a/frameworks/base/core/java/android/database/sqlite/SQLiteStatement.java
++++ b/frameworks/base/core/java/android/database/sqlite/SQLiteStatement.java
+@@ -44,10 +44,8 @@
+     public void execute() {
+         acquireReference();
+         try {
+-            getSession().execute(getSql(), getBindArgs(), getConnectionFlags(), null);
+-        } catch (SQLiteDatabaseCorruptException ex) {
+-            onCorruption();
+-            throw ex;
++            if (getBindArgs() == null) getDatabase().execSQL(getSql());
++            else getDatabase().execSQL(getSql(), getBindArgs());
+         } finally {
+             releaseReference();
+         }
+@@ -62,16 +60,7 @@
+      *         some reason
+      */
+     public int executeUpdateDelete() {
+-        acquireReference();
+-        try {
+-            return getSession().executeForChangedRowCount(
+-                    getSql(), getBindArgs(), getConnectionFlags(), null);
+-        } catch (SQLiteDatabaseCorruptException ex) {
+-            onCorruption();
+-            throw ex;
+-        } finally {
+-            releaseReference();
+-        }
++        throw new SQLiteException("Use SQLiteDatabase.update or delete for this store");
+     }
+ 
+     /**
+@@ -84,16 +73,7 @@
+      *         some reason
+      */
+     public long executeInsert() {
+-        acquireReference();
+-        try {
+-            return getSession().executeForLastInsertedRowId(
+-                    getSql(), getBindArgs(), getConnectionFlags(), null);
+-        } catch (SQLiteDatabaseCorruptException ex) {
+-            onCorruption();
+-            throw ex;
+-        } finally {
+-            releaseReference();
+-        }
++        throw new SQLiteException("Use SQLiteDatabase.insert for this store");
+     }
+ 
+     /**
+@@ -107,11 +87,14 @@
+     public long simpleQueryForLong() {
+         acquireReference();
+         try {
+-            return getSession().executeForLong(
+-                    getSql(), getBindArgs(), getConnectionFlags(), null);
+-        } catch (SQLiteDatabaseCorruptException ex) {
+-            onCorruption();
+-            throw ex;
++            Object[] args = getBindArgs();
++            String[] values = args == null ? null : new String[args.length];
++            if (args != null) {
++                for (int i = 0; i < args.length; ++i) {
++                    values[i] = args[i] == null ? null : args[i].toString();
++                }
++            }
++            return getDatabase().queryLong(getSql(), values);
+         } finally {
+             releaseReference();
+         }
+@@ -126,16 +109,7 @@
+      * @throws android.database.sqlite.SQLiteDoneException if the query returns zero rows
+      */
+     public String simpleQueryForString() {
+-        acquireReference();
+-        try {
+-            return getSession().executeForString(
+-                    getSql(), getBindArgs(), getConnectionFlags(), null);
+-        } catch (SQLiteDatabaseCorruptException ex) {
+-            onCorruption();
+-            throw ex;
+-        } finally {
+-            releaseReference();
+-        }
++        return Long.toString(simpleQueryForLong());
+     }
+ 
+     /**
+@@ -147,16 +121,7 @@
+      * @throws android.database.sqlite.SQLiteDoneException if the query returns zero rows
+      */
+     public ParcelFileDescriptor simpleQueryForBlobFileDescriptor() {
+-        acquireReference();
+-        try {
+-            return getSession().executeForBlobFileDescriptor(
+-                    getSql(), getBindArgs(), getConnectionFlags(), null);
+-        } catch (SQLiteDatabaseCorruptException ex) {
+-            onCorruption();
+-            throw ex;
+-        } finally {
+-            releaseReference();
+-        }
++        throw new SQLiteException("Blob file descriptors are unavailable");
+     }
+ 
+     @Override
