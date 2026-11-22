@@ -1,0 +1,15 @@
+--- a/frameworks/base/core/java/android/widget/EditText.java
++++ b/frameworks/base/core/java/android/widget/EditText.java
+@@ -18,3 +18,2 @@
+ 
+-import android.app.compat.CompatChanges;
+ import android.compat.annotation.ChangeId;
+@@ -147,3 +146,3 @@
+             useLocalePreferredLineHeightForMinimumInt =
+-                    CompatChanges.isChangeEnabled(LINE_HEIGHT_FOR_LOCALE);
++                    context.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.VANILLA_ICE_CREAM;
+         }
+@@ -239,3 +238,2 @@
+     /** @hide */
+-    @Override
+     protected boolean supportsAutoSizeText() {

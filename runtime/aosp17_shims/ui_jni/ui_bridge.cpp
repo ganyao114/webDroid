@@ -12,6 +12,10 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "view_input_jni.cpp"
+// Both framework targets compile this bridge.
+#include "text_layout_jni.cpp"
+
 namespace wa::ui_jni::detail {
 namespace {
 
@@ -514,8 +518,10 @@ UiBridge::UiBridge() : state_(std::make_unique<detail::State>()) {}
 
 UiBridge::~UiBridge() {
     state_->Abort();
-    if (state_->env)
+    if (state_->env) {
+        detail::UnregisterTextLayout(state_->env);
         detail::bindings.erase(state_->env);
+    }
 }
 
 void UiBridge::RegisterNatives(interp::Vm& vm) {
@@ -537,7 +543,7 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     Register(vm, "android/app/UiRuntime",
              Method<detail::CreateActivity>(vm, "nativeCreateActivity",
                                             "(Ljava/lang/String;)Landroid/app/Activity;"));
-    Register(vm, "android/view/Window",
+    Register(vm, "android/view/EmbeddedWindow",
              Method<detail::SetSystemBars>(vm, "nativeSetSystemBars", "(III)V"));
     Register(vm, "android/view/ViewRootImpl", Method<detail::BeginDraw>(vm, "nativeBeginDraw", "()V"));
     Register(
@@ -574,6 +580,8 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     detail::RegisterPath(vm);
     detail::RegisterBitmaps(vm);
     detail::RegisterVectors(vm);
+    detail::RegisterViewInput(vm);
+    detail::RegisterTextLayout(vm);
     detail::bindings.emplace(env, state_.get());
     state_->env = env;
     state_->vm = &vm;

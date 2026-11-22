@@ -15,9 +15,6 @@ frameworks/base/core/java/android/view/animation/AccelerateInterpolator.java
 frameworks/base/core/java/android/view/animation/BounceInterpolator.java
 frameworks/base/core/java/android/view/animation/OvershootInterpolator.java
 frameworks/base/core/java/android/view/animation/PathInterpolator.java
-frameworks/base/core/java/android/widget/OverScroller.java
-frameworks/base/core/java/android/widget/Scroller.java
-frameworks/base/core/java/android/widget/Advanceable.java
 libcore/ojluni/src/main/java/java/lang/Void.java
 libcore/ojluni/src/main/java/java/io/ByteArrayOutputStream.java
 libcore/ojluni/src/main/java/java/io/Flushable.java
@@ -43,8 +40,6 @@ libcore/ojluni/src/main/java/java/util/AbstractMap.java
 libcore/ojluni/src/main/java/java/util/AbstractCollection.java
 libcore/ojluni/src/main/java/java/util/AbstractSet.java
 libcore/ojluni/src/main/java/java/util/WeakHashMap.java
-frameworks/base/core/java/android/view/RemotableViewMethod.java
-frameworks/base/core/java/android/widget/RelativeLayout.java
 libcore/ojluni/src/main/java/java/util/ArrayDeque.java
 libcore/ojluni/src/main/java/java/util/Deque.java
 libcore/ojluni/src/main/java/java/util/Queue.java
@@ -62,7 +57,6 @@ frameworks/base/core/java/android/view/accessibility/AccessibilityNodeProvider.j
 @patch 0003-handler-executor-sdk.patch
 @patch 0004-trace-ravenwood.patch
 @patch 0005-local-broadcast-receiver.patch
-@patch 0006-relative-layout.patch
 @patch 0007-weak-hash-map-jdk17.patch
 @patch 0008-reverse-deque-jdk17.patch
 @patch 0009-local-cancellation-signal.patch
@@ -72,7 +66,6 @@ libcore/ojluni/src/main/java/java/util/PrimitiveIterator.java
 libcore/ojluni/src/main/java/java/util/Spliterator.java
 libcore/ojluni/src/main/java/java/util/Spliterators.java
 frameworks/base/core/java/android/content/pm/InstallSourceInfo.java
-frameworks/base/core/java/android/view/WindowInsetsAnimation.java
 libcore/ojluni/src/main/java/java/util/function/ToIntFunction.java
 frameworks/base/core/java/android/content/ContentValues.java
 frameworks/base/core/java/android/database/AbstractCursor.java

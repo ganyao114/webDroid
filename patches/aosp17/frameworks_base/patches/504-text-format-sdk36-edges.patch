@@ -1,0 +1,167 @@
+--- a/frameworks/base/core/java/android/text/Html.java
++++ b/frameworks/base/core/java/android/text/Html.java
+@@ -16,14 +16,12 @@
+ 
+ package android.text;
+ 
+-import android.app.ActivityThread;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.res.Resources;
+ import android.graphics.Color;
+ import android.graphics.Typeface;
+ import android.graphics.drawable.Drawable;
+ import android.os.Build;
+-import android.ravenwood.annotation.RavenwoodReplace;
+ import android.text.style.AbsoluteSizeSpan;
+ import android.text.style.AlignmentSpan;
+ import android.text.style.BackgroundColorSpan;
+@@ -507,12 +505,7 @@
+         out.append("</p>\n");
+     }
+ 
+-    @RavenwoodReplace(blockedBy = ActivityThread.class)
+     private static float getDisplayMetricsDensity() {
+-        return ActivityThread.currentApplication().getResources().getDisplayMetrics().density;
+-    }
+-
+-    private static float getDisplayMetricsDensity$ravenwood() {
+         return Resources.getSystem().getDisplayMetrics().density;
+     }
+ 
+@@ -853,13 +846,7 @@
+         }
+     }
+ 
+-    @RavenwoodReplace(blockedBy = ActivityThread.class)
+     private static int getFontWeightAdjustment() {
+-        return ActivityThread.currentApplication().getResources()
+-                .getConfiguration().fontWeightAdjustment;
+-    }
+-
+-    private static int getFontWeightAdjustment$ravenwood() {
+         return Resources.getSystem().getConfiguration().fontWeightAdjustment;
+     }
+ 
+--- a/frameworks/base/core/java/android/text/format/DateFormat.java
++++ b/frameworks/base/core/java/android/text/format/DateFormat.java
+@@ -17,7 +17,6 @@
+ package android.text.format;
+ 
+ import android.annotation.NonNull;
+-import android.app.compat.CompatChanges;
+ import android.compat.annotation.ChangeId;
+ import android.compat.annotation.EnabledSince;
+ import android.compat.annotation.UnsupportedAppUsage;
+@@ -181,7 +180,7 @@
+      * @return true if 24 hour time format is selected, false otherwise.
+      */
+     public static boolean is24HourFormat(Context context) {
+-        return is24HourFormat(context, context.getUserId());
++        return is24HourFormat(context, 0);
+     }
+ 
+     /**
+@@ -195,8 +194,7 @@
+      */
+     @UnsupportedAppUsage
+     public static boolean is24HourFormat(Context context, int userHandle) {
+-        final String value = Settings.System.getStringForUser(context.getContentResolver(),
+-                Settings.System.TIME_12_24, userHandle);
++        final String value = Settings.System.getString(context.getContentResolver(), Settings.System.TIME_12_24);
+         if (value != null) {
+             return value.equals("24");
+         }
+@@ -268,10 +266,7 @@
+     public static String getBestDateTimePattern(Locale locale, String skeleton) {
+         ULocale uLocale = ULocale.forLocale(locale);
+         DateTimePatternGenerator dtpg = DateTimePatternGenerator.getInstance(uLocale);
+-        boolean allowDuplicateFields = !CompatChanges.isChangeEnabled(
+-                DISALLOW_DUPLICATE_FIELD_IN_SKELETON);
+-        String pattern = dtpg.getBestPattern(skeleton, DateTimePatternGenerator.MATCH_NO_OPTIONS,
+-                allowDuplicateFields);
++        String pattern = dtpg.getBestPattern(skeleton, DateTimePatternGenerator.MATCH_NO_OPTIONS);
+         return getCompatibleEnglishPattern(uLocale, pattern);
+     }
+ 
+@@ -294,7 +289,7 @@
+      */
+     @UnsupportedAppUsage
+     public static String getTimeFormatString(Context context) {
+-        return getTimeFormatString(context, context.getUserId());
++        return getTimeFormatString(context, 0);
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/text/format/DateIntervalFormat.java
++++ b/frameworks/base/core/java/android/text/format/DateIntervalFormat.java
+@@ -26,7 +26,6 @@
+ import android.util.LruCache;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.libcore.Flags;
+ 
+ import java.text.FieldPosition;
+ import java.util.TimeZone;
+@@ -129,10 +128,6 @@
+ 
+     @VisibleForTesting(visibility = PACKAGE)
+     public static boolean isLibcoreVFlagEnabled() {
+-        // Note that the Flags class is expected to be jarjar-ed in the build-time.
+-        // See go/repackage_flags
+-        // The full-qualified name should be like
+-        // com.android.internal.hidden_from_bootclasspath.com.android.libcore.Flags
+-        return Flags.vApis();
++        return true;
+     }
+ }
+--- a/frameworks/base/core/java/android/text/util/Linkify.java
++++ b/frameworks/base/core/java/android/text/util/Linkify.java
+@@ -19,7 +19,6 @@
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.app.ActivityThread;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.os.Build;
+@@ -41,7 +40,7 @@
+ import com.android.i18n.phonenumbers.PhoneNumberUtil;
+ import com.android.i18n.phonenumbers.PhoneNumberUtil.Leniency;
+ 
+-import libcore.util.EmptyArray;
++import android.util.EmptyArray;
+ 
+ import java.io.UnsupportedEncodingException;
+ import java.lang.annotation.Retention;
+@@ -294,7 +293,7 @@
+     private static boolean addLinks(@NonNull Spannable text, @LinkifyMask int mask,
+             @Nullable Context context, @Nullable Function<String, URLSpan> urlSpanFactory) {
+         if (text != null && containsUnsupportedCharacters(text.toString())) {
+-            android.util.EventLog.writeEvent(0x534e4554, "116321860", -1, "");
++            android.util.Log.w("Linkify", "Discarded unsafe characters in link text");
+             return false;
+         }
+ 
+@@ -569,7 +568,7 @@
+             @Nullable MatchFilter matchFilter, @Nullable TransformFilter transformFilter,
+             @Nullable Function<String, URLSpan> urlSpanFactory) {
+         if (spannable != null && containsUnsupportedCharacters(spannable.toString())) {
+-            android.util.EventLog.writeEvent(0x534e4554, "116321860", -1, "");
++            android.util.Log.w("Linkify", "Discarded unsafe characters in link text");
+             return false;
+         }
+ 
+@@ -672,10 +671,11 @@
+     private static void gatherTelLinks(ArrayList<LinkSpec> links, Spannable s,
+             @Nullable Context context) {
+         PhoneNumberUtil phoneUtil = PhoneNumberUtil.getInstance();
+-        final Context ctx = (context != null) ? context : ActivityThread.currentApplication();
++        final Context ctx = context;
+         String regionCode = Locale.getDefault().getCountry();
+         if (ctx != null) {
+-          String simCountryIso = ctx.getSystemService(TelephonyManager.class).getSimCountryIso();
++          TelephonyManager telephony = ctx.getSystemService(TelephonyManager.class);
++          String simCountryIso = telephony == null ? null : telephony.getSimCountryIso();
+           if (!TextUtils.isEmpty(simCountryIso)) {
+             // Assign simCountryIso if it is available
+             regionCode = simCountryIso.toUpperCase(Locale.US);

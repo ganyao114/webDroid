@@ -1,6 +1,75 @@
 # Upstream program sources are relative to the android-17.0.0_r1 checkout.
 # @dir includes all Java sources recursively. @exclude omits one named file.
 [framework]
+# Predictive back
+frameworks/base/core/java/android/window/BackEvent.java
+frameworks/base/core/java/android/window/BackMotionEvent.java
+frameworks/base/core/java/android/window/OnBackAnimationCallback.java
+frameworks/base/core/java/android/window/OnBackInvokedCallback.java
+
+# Window insets
+frameworks/base/core/java/android/view/InsetsBoundingRect.java
+frameworks/base/core/java/android/view/InsetsFlags.java
+frameworks/base/core/java/android/view/InsetsFrameProvider.java
+frameworks/base/core/java/android/view/InsetsSource.java
+frameworks/base/core/java/android/view/ViewParent.java
+frameworks/base/core/java/android/view/Window.java
+frameworks/base/core/java/android/view/WindowInsetsAnimation.java
+frameworks/base/core/java/android/view/WindowInsetsAnimationControlListener.java
+frameworks/base/core/java/android/view/WindowInsetsAnimationController.java
+frameworks/base/core/java/android/view/WindowInsetsController.java
+frameworks/base/core/java/android/view/WindowManager.java
+frameworks/base/core/java/android/window/TaskFpsCallback.java
+
+# In-process accessibility data
+frameworks/base/core/java/android/view/accessibility/AccessibilityEvent.java
+frameworks/base/core/java/android/view/accessibility/AccessibilityNodeIdManager.java
+frameworks/base/core/java/android/view/accessibility/AccessibilityNodeInfo.java
+frameworks/base/core/java/android/view/accessibility/AccessibilityRecord.java
+frameworks/base/core/java/android/view/accessibility/WeakSparseArray.java
+frameworks/base/core/java/com/android/internal/util/BitUtils.java
+
+# Phase 2 W3: upstream android.widget
+frameworks/base/core/java/android/widget/AbsListView.java
+frameworks/base/core/java/android/widget/AbsSeekBar.java
+frameworks/base/core/java/android/widget/Adapter.java
+frameworks/base/core/java/android/widget/AdapterView.java
+frameworks/base/core/java/android/widget/Advanceable.java
+frameworks/base/core/java/android/widget/ArrayAdapter.java
+frameworks/base/core/java/android/widget/BaseAdapter.java
+frameworks/base/core/java/android/widget/CheckBox.java
+frameworks/base/core/java/android/widget/CompoundButton.java
+frameworks/base/core/java/android/widget/EdgeEffect.java
+frameworks/base/core/java/android/widget/Filter.java
+frameworks/base/core/java/android/widget/Filterable.java
+frameworks/base/core/java/android/widget/FrameLayout.java
+frameworks/base/core/java/android/widget/GridView.java
+frameworks/base/core/java/android/widget/HeaderViewListAdapter.java
+frameworks/base/core/java/android/widget/HorizontalScrollView.java
+frameworks/base/core/java/android/widget/ImageButton.java
+frameworks/base/core/java/android/widget/ImageView.java
+frameworks/base/core/java/android/widget/LinearLayout.java
+frameworks/base/core/java/android/widget/ListAdapter.java
+frameworks/base/core/java/android/widget/ListView.java
+frameworks/base/core/java/android/widget/OverScroller.java
+frameworks/base/core/java/android/widget/ProgressBar.java
+frameworks/base/core/java/android/widget/RadioButton.java
+frameworks/base/core/java/android/widget/RelativeLayout.java
+frameworks/base/core/java/android/widget/ScrollView.java
+frameworks/base/core/java/android/widget/Scroller.java
+frameworks/base/core/java/android/widget/SectionIndexer.java
+frameworks/base/core/java/android/widget/SeekBar.java
+frameworks/base/core/java/android/widget/Space.java
+frameworks/base/core/java/android/widget/SpinnerAdapter.java
+frameworks/base/core/java/android/widget/Switch.java
+frameworks/base/core/java/android/widget/Toast.java
+frameworks/base/core/java/android/widget/WrapperListAdapter.java
+
+# Widget interfaces and annotations shared with layout inflation and adapters.
+frameworks/base/core/java/android/view/inspector/InspectableProperty.java
+frameworks/base/core/java/android/widget/Checkable.java
+frameworks/base/core/java/android/widget/ThemedSpinnerAdapter.java
+
 frameworks/base/core/java/android/animation/TimeInterpolator.java
 frameworks/base/core/java/android/content/ComponentName.java
 frameworks/base/core/java/android/content/IntentFilter.java
@@ -24,7 +93,6 @@ frameworks/base/core/java/android/os/SimpleClock.java
 frameworks/base/core/java/android/os/SystemClock.java
 frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
 frameworks/base/core/java/android/os/TraceNameSupplier.java
-frameworks/base/core/java/android/text/GraphicsOperations.java
 frameworks/base/core/java/android/util/ArrayMap.java
 frameworks/base/core/java/android/util/AttributeSet.java
 frameworks/base/core/java/android/util/ContainerHelpers.java
@@ -111,7 +179,6 @@ libcore/luni/src/main/java/libcore/util/FP16.java
 libcore/luni/src/main/java/libcore/util/HexEncoding.java
 
 frameworks/base/core/java/android/app/WindowConfiguration.java
-frameworks/base/core/java/android/text/FontConfig.java
 frameworks/base/core/java/android/util/ArraySet.java
 frameworks/base/core/java/android/util/PathParser.java
 frameworks/base/core/java/android/util/SparseIntArray.java
@@ -119,6 +186,50 @@ frameworks/base/core/java/com/android/internal/util/Parcelling.java
 frameworks/base/core/java/com/android/internal/util/VirtualRefBasePtr.java
 frameworks/base/graphics/java/android/graphics/CanvasProperty.java
 frameworks/base/graphics/java/android/graphics/FontFamily.java
+
+# Phase 2 W1: upstream android.view
+frameworks/base/core/java/android/util/DisplayUtils.java
+frameworks/base/core/java/android/util/RotationUtils.java
+frameworks/base/core/java/android/view/Choreographer.java
+frameworks/base/core/java/android/view/ContextThemeWrapper.java
+frameworks/base/core/java/android/view/CutoutSpecification.java
+frameworks/base/core/java/android/view/DisplayCutout.java
+frameworks/base/core/java/android/view/DisplayEventReceiver.java
+frameworks/base/core/java/android/view/DisplayShape.java
+frameworks/base/core/java/android/view/InflateException.java
+frameworks/base/core/java/android/view/KeyEvent.java
+frameworks/base/core/java/android/view/MotionEvent.java
+frameworks/base/core/java/android/view/PrivacyIndicatorBounds.java
+frameworks/base/core/java/android/view/RemotableViewMethod.java
+frameworks/base/core/java/android/view/RoundedCorner.java
+frameworks/base/core/java/android/view/RoundedCorners.java
+frameworks/base/core/java/android/view/VelocityTracker.java
+frameworks/base/core/java/android/view/ViewConfiguration.java
+frameworks/base/core/java/android/view/ViewManager.java
+frameworks/base/core/java/android/view/ViewOutlineProvider.java
+frameworks/base/core/java/android/view/ViewStub.java
+frameworks/base/core/java/android/view/WindowId.java
+frameworks/base/core/java/android/view/WindowInsets.java
+frameworks/base/core/java/android/view/WindowMetrics.java
+frameworks/base/core/java/com/android/internal/util/DataClass.java
+frameworks/base/graphics/java/android/graphics/FrameInfo.java
+@dir frameworks/base/core/java/android/view/animation
+@dir frameworks/base/graphics/java/android/graphics/animation
+@exclude frameworks/base/graphics/java/android/graphics/animation/RenderNodeAnimator.java
+# Phase 2 W2: upstream android.text & TextView
+@dir frameworks/base/core/java/android/text
+@dir frameworks/base/graphics/java/android/graphics/text
+frameworks/base/core/java/android/widget/Button.java
+frameworks/base/core/java/android/widget/EditText.java
+
+frameworks/base/core/java/android/util/Patterns.java
+frameworks/base/core/java/android/util/TimeFormatException.java
+frameworks/base/graphics/java/android/graphics/LeakyTypefaceStorage.java
+libcore/luni/src/main/java/android/compat/Compatibility.java
+libcore/luni/src/main/java/libcore/api/CorePlatformApi.java
+libcore/luni/src/main/java/libcore/api/IntraCoreApi.java
+libcore/luni/src/main/java/libcore/util/NonNull.java
+libcore/luni/src/main/java/libcore/util/Nullable.java
 
 [sdk-support]
 # The SDK supplies the color appearance model used by ColorStateList lStar.
@@ -135,6 +246,76 @@ com/android/internal/util/XmlUtils.java
 com/android/modules/utils/TypedXmlPullParser.java
 com/android/modules/utils/TypedXmlSerializer.java
 org/xmlpull/v1/XmlSerializer.java
+
+# Phase 2 W2 text dependencies
+android/icu/platform/AndroidDataFiles.java
+com/android/i18n/phonenumbers/AsYouTypeFormatter.java
+com/android/i18n/phonenumbers/CountryCodeToRegionCodeMap.java
+com/android/i18n/phonenumbers/MetadataLoader.java
+com/android/i18n/phonenumbers/MissingMetadataException.java
+com/android/i18n/phonenumbers/NumberParseException.java
+com/android/i18n/phonenumbers/PhoneNumberMatch.java
+com/android/i18n/phonenumbers/PhoneNumberMatcher.java
+com/android/i18n/phonenumbers/PhoneNumberToTimeZonesMapper.java
+com/android/i18n/phonenumbers/PhoneNumberUtil.java
+com/android/i18n/phonenumbers/Phonemetadata.java
+com/android/i18n/phonenumbers/Phonenumber.java
+com/android/i18n/phonenumbers/ShortNumberInfo.java
+com/android/i18n/phonenumbers/geocoding/PhoneNumberOfflineGeocoder.java
+com/android/i18n/phonenumbers/internal/GeoEntityUtility.java
+com/android/i18n/phonenumbers/internal/MatcherApi.java
+com/android/i18n/phonenumbers/internal/RegexBasedMatcher.java
+com/android/i18n/phonenumbers/internal/RegexCache.java
+com/android/i18n/phonenumbers/metadata/DefaultMetadataDependenciesProvider.java
+com/android/i18n/phonenumbers/metadata/init/ClassPathResourceMetadataLoader.java
+com/android/i18n/phonenumbers/metadata/init/MetadataParser.java
+com/android/i18n/phonenumbers/metadata/source/BlockingMetadataBootstrappingGuard.java
+com/android/i18n/phonenumbers/metadata/source/CompositeMetadataContainer.java
+com/android/i18n/phonenumbers/metadata/source/FormattingMetadataSource.java
+com/android/i18n/phonenumbers/metadata/source/FormattingMetadataSourceImpl.java
+com/android/i18n/phonenumbers/metadata/source/MapBackedMetadataContainer.java
+com/android/i18n/phonenumbers/metadata/source/MetadataBootstrappingGuard.java
+com/android/i18n/phonenumbers/metadata/source/MetadataContainer.java
+com/android/i18n/phonenumbers/metadata/source/MetadataSource.java
+com/android/i18n/phonenumbers/metadata/source/MetadataSourceImpl.java
+com/android/i18n/phonenumbers/metadata/source/MultiFileModeFileNameProvider.java
+com/android/i18n/phonenumbers/metadata/source/NonGeographicalEntityMetadataSource.java
+com/android/i18n/phonenumbers/metadata/source/PhoneMetadataFileNameProvider.java
+com/android/i18n/phonenumbers/metadata/source/RegionMetadataSource.java
+com/android/i18n/phonenumbers/metadata/source/RegionMetadataSourceImpl.java
+com/android/i18n/phonenumbers/metadata/source/SingleFileModeFileNameProvider.java
+com/android/i18n/phonenumbers/prefixmapper/DefaultMapStorage.java
+com/android/i18n/phonenumbers/prefixmapper/FlyweightMapStorage.java
+com/android/i18n/phonenumbers/prefixmapper/MappingFileProvider.java
+com/android/i18n/phonenumbers/prefixmapper/PhonePrefixMap.java
+com/android/i18n/phonenumbers/prefixmapper/PhonePrefixMapStorageStrategy.java
+com/android/i18n/phonenumbers/prefixmapper/PrefixFileReader.java
+com/android/i18n/phonenumbers/prefixmapper/PrefixTimeZonesMap.java
+com/android/i18n/timezone/TimeZoneDataFiles.java
+com/android/i18n/timezone/TzDataSetVersion.java
+com/android/i18n/timezone/WallTime.java
+com/android/i18n/timezone/ZoneInfoData.java
+com/android/i18n/timezone/ZoneInfoDb.java
+com/android/i18n/timezone/internal/BasicLruCache.java
+com/android/i18n/timezone/internal/BufferIterator.java
+com/android/i18n/timezone/internal/ByteBufferIterator.java
+com/android/i18n/timezone/internal/Memory.java
+com/android/i18n/timezone/internal/MemoryMappedFile.java
+com/android/i18n/timezone/internal/NioBufferIterator.java
+com/android/net/module/util/Inet4AddressUtils.java
+dalvik/annotation/optimization/ReachabilitySensitive.java
+org/ccil/cowan/tagsoup/AttributesImpl.java
+org/ccil/cowan/tagsoup/AutoDetector.java
+org/ccil/cowan/tagsoup/Element.java
+org/ccil/cowan/tagsoup/ElementType.java
+org/ccil/cowan/tagsoup/HTMLModels.java
+org/ccil/cowan/tagsoup/HTMLScanner.java
+org/ccil/cowan/tagsoup/HTMLSchema.java
+org/ccil/cowan/tagsoup/PYXWriter.java
+org/ccil/cowan/tagsoup/Parser.java
+org/ccil/cowan/tagsoup/ScanHandler.java
+org/ccil/cowan/tagsoup/Scanner.java
+org/ccil/cowan/tagsoup/Schema.java
 
 [java-base]
 libcore/ojluni/src/main/java/java/io/InputStream.java
@@ -178,8 +359,10 @@ android/annotation/FloatRange.java
 android/annotation/FontRes.java
 android/annotation/FractionRes.java
 android/annotation/HalfFloat.java
+android/annotation/IdRes.java
 android/annotation/IntDef.java
 android/annotation/IntRange.java
+android/annotation/InterpolatorRes.java
 android/annotation/IntegerRes.java
 android/annotation/LayoutRes.java
 android/annotation/LongDef.java
@@ -189,6 +372,7 @@ android/annotation/PluralsRes.java
 android/annotation/Px.java
 android/annotation/RawRes.java
 android/annotation/Size.java
+android/annotation/StringDef.java
 android/annotation/StringRes.java
 android/annotation/StyleRes.java
 android/annotation/StyleableRes.java
@@ -217,9 +401,16 @@ android/ravenwood/annotation/RavenwoodReplace.java
 android/ravenwood/annotation/RavenwoodThrow.java
 com/android/internal/annotations/GuardedBy.java
 com/android/internal/annotations/VisibleForTesting.java
+com/android/internal/annotations/WeaklyReferencedCallback.java
 dalvik/annotation/optimization/CriticalNative.java
 dalvik/annotation/optimization/FastNative.java
 dalvik/annotation/optimization/NeverCompile.java
+
+# Phase 2 W2 text dependencies
+android/annotation/CallSuper.java
+android/annotation/CallbackExecutor.java
+android/annotation/RequiresPermission.java
+dalvik/annotation/optimization/NeverInline.java
 
 [aconfig]
 frameworks/base/core/java/android/app/privatecompute/flags/flags.aconfig
@@ -228,7 +419,16 @@ frameworks/base/core/java/android/content/res/flags.aconfig
 frameworks/base/core/java/android/os/flags.aconfig
 frameworks/base/core/java/android/text/flags/24Q3.aconfig
 frameworks/base/core/java/android/text/flags/flags.aconfig
+frameworks/base/core/java/android/view/flags/refresh_rate_flags.aconfig
+frameworks/base/core/java/android/view/flags/scroll_feedback_flags.aconfig
+frameworks/base/core/java/android/view/flags/view_flags.aconfig
+frameworks/base/core/java/android/view/flags/window_insets.aconfig
 frameworks/base/graphics/java/android/framework_graphics.aconfig
+
+# Phase 2 W2 text dependencies
+frameworks/base/core/java/android/view/accessibility/flags/accessibility_flags.aconfig
+frameworks/base/core/java/android/view/inputmethod/flags.aconfig
+frameworks/base/core/java/android/widget/flags/flags.aconfig
 
 [aidl]
 frameworks/base/core/java/android/content/UriRelativeFilterGroupParcel.aidl
@@ -236,6 +436,24 @@ frameworks/base/core/java/android/content/UriRelativeFilterParcel.aidl
 frameworks/base/core/java/android/os/IMessenger.aidl
 
 [patches]
+patches/701-back-motion-event-sdk-boundary.patch
+patches/702-window-insets-host-boundary.patch
+patches/703-embedded-view-parent.patch
+patches/704-edit-text-sdk-boundary.patch
+patches/705-local-accessibility-data.patch
+patches/706-window-manager-host-boundary.patch
+patches/707-embedded-window.patch
+
+patches/601-layout-view-boundary.patch
+patches/602-image-view-boundary.patch
+patches/603-edge-effect-canvas-boundary.patch
+patches/604-adapter-view-sdk-boundary.patch
+patches/605-scroller-sdk-boundary.patch
+patches/606-scroll-view-platform-boundaries.patch
+patches/607-control-view-boundaries.patch
+patches/608-list-view-platform-boundaries.patch
+patches/609-toast-window-boundary.patch
+
 01-offline-proto-diagnostics.patch
 02-interpreter-arrays.patch
 04-long-array-validation.patch
@@ -289,3 +507,16 @@ patches/212-adaptive-icon-software-mask.patch
 patches/213-solid-ripple-on-host.patch
 patches/214-host-resource-drawables.patch
 patches/215-flush-mounted-layout-cache.patch
+patches/401-view-animation-platform-boundary.patch
+patches/402-view-sdk36-declarations.patch
+patches/403-display-geometry-sdk36.patch
+patches/404-browser-vsync.patch
+patches/405-input-host-jni.patch
+patches/406-host-view-configuration.patch
+patches/407-local-window-focus.patch
+patches/501-calibrated-text-layout-jni.patch
+patches/502-text-sdk36-platform-edges.patch
+patches/503-text-input-sdk36-edges.patch
+patches/504-text-format-sdk36-edges.patch
+patches/505-guest-bidi-boundary.patch
+patches/506-button-sdk36-platform-edges.patch

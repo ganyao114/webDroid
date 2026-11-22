@@ -1,6 +1,8 @@
 package android.view;
 
 import android.graphics.Canvas;
+import android.graphics.Point;
+import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -10,12 +12,11 @@ public final class ViewRootImpl implements ViewParent {
     private final View decor;
     private final android.os.IBinder windowToken = new android.os.IBinder() {};
     private final WindowId windowId = new WindowId(windowToken);
-    private final Window window;
+    private final EmbeddedWindow window;
     private final ViewTreeObserver treeObserver;
     private boolean requested = true;
     private boolean insetsRequested = true;
     private boolean drawRequested = true;
-    private boolean windowFocused;
     private Canvas canvas;
     private int width, height, density;
 
@@ -25,7 +26,7 @@ public final class ViewRootImpl implements ViewParent {
 
     public ViewRootImpl(View decor, Window window) {
         this.decor = decor;
-        this.window = window;
+        this.window = window instanceof EmbeddedWindow embedded ? embedded : null;
         treeObserver = new ViewTreeObserver(decor.getContext());
         decor.assignParent(this);
         decor.attach(this);
@@ -33,8 +34,16 @@ public final class ViewRootImpl implements ViewParent {
 
     public View getView() { return decor; }
     public Handler getHandler() { return handler; }
-    public boolean hasWindowFocus() { return windowFocused; }
-    public void setWindowFocus(boolean focused) { windowFocused = focused; }
+    public boolean hasWindowFocus() { return windowId.isFocused(); }
+    public void setWindowFocus(boolean focused) {
+        final boolean deactivating = !focused && windowId.isFocused();
+        windowId.dispatchFocusChanged(focused);
+        if (deactivating) {
+            // The host pauses collection while rendering a frame. Deactivation can reclaim
+            // discarded input and graphics peers between frames.
+            System.gc();
+        }
+    }
     ViewTreeObserver getTreeObserver() { return treeObserver; }
     android.os.IBinder getWindowToken() { return windowToken; }
     WindowId getWindowId() { return windowId; }
@@ -104,6 +113,12 @@ public final class ViewRootImpl implements ViewParent {
     void requestApplyInsets() { insetsRequested = true; }
     @Override public boolean isLayoutRequested() { return requested; }
     @Override public ViewParent getParent() { return null; }
+    @Override public int getLayoutDirection() { return decor.getLayoutDirection(); }
+    @Override public void bringChildToFront(View child) {}
+    @Override public void requestFitSystemWindows() { requestApplyInsets(); }
+    @Override public boolean getChildVisibleRect(View child, Rect bounds, Point offset) {
+        return child == decor && bounds.intersect(0, 0, width, height);
+    }
     @Override public void requestDisallowInterceptTouchEvent(boolean disallowIntercept) {}
     @Override public void requestChildFocus(View child, View focused) {}
     @Override public void clearChildFocus(View child) {}

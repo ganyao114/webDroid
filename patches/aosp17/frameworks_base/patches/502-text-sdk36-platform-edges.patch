@@ -1,0 +1,344 @@
+--- a/frameworks/base/core/java/android/text/Highlights.java
++++ b/frameworks/base/core/java/android/text/Highlights.java
+@@ -19,8 +19,8 @@
+ import android.graphics.Paint;
+ import android.util.Pair;
+ 
+-import androidx.annotation.IntRange;
+-import androidx.annotation.NonNull;
++import android.annotation.IntRange;
++import android.annotation.NonNull;
+ 
+ import java.util.ArrayList;
+ import java.util.Arrays;
+--- a/frameworks/base/core/java/android/text/SegmentFinder.java
++++ b/frameworks/base/core/java/android/text/SegmentFinder.java
+@@ -19,7 +19,7 @@
+ import android.annotation.IntRange;
+ import android.graphics.RectF;
+ 
+-import androidx.annotation.NonNull;
++import android.annotation.NonNull;
+ 
+ import com.android.internal.util.Preconditions;
+ 
+--- a/frameworks/base/core/java/android/text/TextUtils.java
++++ b/frameworks/base/core/java/android/text/TextUtils.java
+@@ -28,14 +28,10 @@
+ import android.content.Context;
+ import android.content.res.Resources;
+ import android.graphics.Typeface;
+-import android.icu.lang.UCharacter;
+-import android.icu.text.CaseMap;
+-import android.icu.text.Edits;
+ import android.icu.util.ULocale;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.sysprop.DisplayProperties;
+ import android.text.style.AbsoluteSizeSpan;
+ import android.text.style.AccessibilityClickableSpan;
+ import android.text.style.AccessibilityReplacementSpan;
+@@ -706,14 +702,14 @@
+         }
+ 
+         public char charAt(int off) {
+-            return (char) UCharacter.getMirror(mSource.charAt(mEnd - 1 - off));
++            return AndroidCharacter.getMirror(mSource.charAt(mEnd - 1 - off));
+         }
+ 
+         @SuppressWarnings("deprecation")
+         public void getChars(int start, int end, char[] dest, int destoff) {
+             TextUtils.getChars(mSource, start + mStart, end + mStart,
+                                dest, destoff);
+-            AndroidCharacter.mirror(dest, 0, end - start);
++            AndroidCharacter.mirror(dest, destoff, end - start);
+ 
+             int len = end - start;
+             int n = (end - start) / 2;
+@@ -1260,61 +1256,31 @@
+     @NonNull
+     public static CharSequence toUpperCase(@Nullable Locale locale, @NonNull CharSequence source,
+             boolean copySpans) {
+-        final Edits edits = new Edits();
+-        if (!copySpans) { // No spans. Just uppercase the characters.
+-            final StringBuilder result = CaseMap.toUpper().apply(
+-                    locale, source, new StringBuilder(), edits);
+-            return edits.hasChanges() ? result : source;
+-        }
+-
+-        final SpannableStringBuilder result = CaseMap.toUpper().apply(
+-                locale, source, new SpannableStringBuilder(), edits);
+-        if (!edits.hasChanges()) {
+-            // No changes happened while capitalizing. We can return the source as it was.
++        Locale casingLocale = locale == null ? Locale.getDefault() : locale;
++        String original = source.toString();
++        String upper = original.toUpperCase(casingLocale);
++        if (upper.equals(original)) {
+             return source;
+         }
+-
+-        final Edits.Iterator iterator = edits.getFineIterator();
+-        final int sourceLength = source.length();
++        if (!copySpans) {
++            return upper;
++        }
++
+         final Spanned spanned = (Spanned) source;
+-        final Object[] spans = spanned.getSpans(0, sourceLength, Object.class);
+-        for (Object span : spans) {
+-            final int sourceStart = spanned.getSpanStart(span);
+-            final int sourceEnd = spanned.getSpanEnd(span);
+-            final int flags = spanned.getSpanFlags(span);
+-            // Make sure the indices are not at the end of the string, since in that case
+-            // iterator.findSourceIndex() would fail.
+-            final int destStart = sourceStart == sourceLength ? result.length() :
+-                    toUpperMapToDest(iterator, sourceStart);
+-            final int destEnd = sourceEnd == sourceLength ? result.length() :
+-                    toUpperMapToDest(iterator, sourceEnd);
+-            result.setSpan(span, destStart, destEnd, flags);
++        final SpannableStringBuilder result = new SpannableStringBuilder(upper);
++        for (Object span : spanned.getSpans(0, spanned.length(), Object.class)) {
++            final int start = spanned.getSpanStart(span);
++            final int end = spanned.getSpanEnd(span);
++            result.setSpan(span, upperCaseOffset(original, casingLocale, start, upper.length()),
++                    upperCaseOffset(original, casingLocale, end, upper.length()),
++                    spanned.getSpanFlags(span));
+         }
+         return result;
+     }
+ 
+-    // helper method for toUpperCase()
+-    private static int toUpperMapToDest(Edits.Iterator iterator, int sourceIndex) {
+-        // Guaranteed to succeed if sourceIndex < source.length().
+-        iterator.findSourceIndex(sourceIndex);
+-        if (sourceIndex == iterator.sourceIndex()) {
+-            return iterator.destinationIndex();
+-        }
+-        // We handle the situation differently depending on if we are in the changed slice or an
+-        // unchanged one: In an unchanged slice, we can find the exact location the span
+-        // boundary was before and map there.
+-        //
+-        // But in a changed slice, we need to treat the whole destination slice as an atomic unit.
+-        // We adjust the span boundary to the end of that slice to reduce of the chance of adjacent
+-        // spans in the source overlapping in the result. (The choice for the end vs the beginning
+-        // is somewhat arbitrary, but was taken because we except to see slightly more spans only
+-        // affecting a base character compared to spans only affecting a combining character.)
+-        if (iterator.hasChange()) {
+-            return iterator.destinationIndex() + iterator.newLength();
+-        } else {
+-            // Move the index 1:1 along with this unchanged piece of text.
+-            return iterator.destinationIndex() + (sourceIndex - iterator.sourceIndex());
+-        }
++    private static int upperCaseOffset(String source, Locale locale, int offset, int length) {
++        return offset == source.length() ? length
++                : Math.min(length, source.substring(0, offset).toUpperCase(locale).length());
+     }
+ 
+     public enum TruncateAt {
+@@ -2129,12 +2095,21 @@
+      * Be careful: this code will need to be updated when vertical scripts will be supported
+      */
+     public static int getLayoutDirectionFromLocale(Locale locale) {
+-        return ((locale != null && !locale.equals(Locale.ROOT)
+-                        && ULocale.forLocale(locale).isRightToLeft())
+-                // If forcing into RTL layout mode, return RTL as default
+-                || DisplayProperties.debug_force_rtl().orElse(false))
+-            ? View.LAYOUT_DIRECTION_RTL
+-            : View.LAYOUT_DIRECTION_LTR;
++        if (locale == null || locale.equals(Locale.ROOT)) {
++            return View.LAYOUT_DIRECTION_LTR;
++        }
++        String script = ULocale.addLikelySubtags(ULocale.forLocale(locale)).getScript();
++        switch (script) {
++            case "Adlm": case "Arab": case "Armi": case "Avst": case "Chrs": case "Elym":
++            case "Hatr": case "Hebr": case "Hung": case "Khar": case "Lydi": case "Mand":
++            case "Mani": case "Mend": case "Merc": case "Mero": case "Narb": case "Nbat":
++            case "Nkoo": case "Orkh": case "Ougr": case "Palm": case "Phli": case "Phlp":
++            case "Phnx": case "Prti": case "Rohg": case "Samr": case "Sarb": case "Sogd":
++            case "Sogo": case "Syrc": case "Thaa": case "Yezi":
++                return View.LAYOUT_DIRECTION_RTL;
++            default:
++                return View.LAYOUT_DIRECTION_LTR;
++        }
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/text/Layout.java
++++ b/frameworks/base/core/java/android/text/Layout.java
+@@ -1108,8 +1108,8 @@
+                         // variation selectors within emoji sequences, they should not affect
+                         // highlighting due to their zero-width nature.
+                         var codePoint = Character.codePointAt(mText, index);
+-                        var isEmoji = Character.isEmojiComponent(codePoint)
+-                                || Character.isExtendedPictographic(codePoint);
++                        var isEmoji = Emoji.isEmoji(codePoint) || Emoji.isRegionalIndicatorSymbol(codePoint)
++                                || codePoint == 0x200d || codePoint == 0xfe0f;
+                         if (isEmoji && !isStandardNumber(index)) {
+                             mNumCharactersToSkip = Character.charCount(codePoint) - 1;
+                             return;
+--- a/frameworks/base/core/java/android/text/AutoGrowArray.java
++++ b/frameworks/base/core/java/android/text/AutoGrowArray.java
+@@ -21,7 +21,7 @@
+ 
+ import com.android.internal.util.ArrayUtils;
+ 
+-import libcore.util.EmptyArray;
++import android.util.EmptyArray;
+ 
+ /**
+  * Implements a growing array of int primitives.
+--- a/frameworks/base/core/java/android/text/PackedObjectVector.java
++++ b/frameworks/base/core/java/android/text/PackedObjectVector.java
+@@ -19,7 +19,7 @@
+ import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.GrowingArrayUtils;
+ 
+-import libcore.util.EmptyArray;
++import android.util.EmptyArray;
+ 
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+ class PackedObjectVector<E>
+--- a/frameworks/base/core/java/android/text/SpannableStringBuilder.java
++++ b/frameworks/base/core/java/android/text/SpannableStringBuilder.java
+@@ -27,7 +27,7 @@
+ import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.GrowingArrayUtils;
+ 
+-import libcore.util.EmptyArray;
++import android.util.EmptyArray;
+ 
+ import java.lang.reflect.Array;
+ import java.util.IdentityHashMap;
+--- a/frameworks/base/core/java/android/text/SpannableStringInternal.java
++++ b/frameworks/base/core/java/android/text/SpannableStringInternal.java
+@@ -23,7 +23,7 @@
+ import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.GrowingArrayUtils;
+ 
+-import libcore.util.EmptyArray;
++import android.util.EmptyArray;
+ 
+ import java.lang.reflect.Array;
+ 
+--- a/frameworks/base/core/java/android/text/style/AccessibilityClickableSpan.java
++++ b/frameworks/base/core/java/android/text/style/AccessibilityClickableSpan.java
+@@ -15,22 +15,15 @@
+  */
+ package android.text.style;
+ 
+-import static android.view.accessibility.AccessibilityNodeInfo.ACTION_ARGUMENT_ACCESSIBLE_CLICKABLE_SPAN;
+-import static android.view.accessibility.AccessibilityNodeInfo.UNDEFINED_CONNECTION_ID;
+-import static android.view.accessibility.AccessibilityNodeInfo.UNDEFINED_NODE_ID;
+-import static android.view.accessibility.AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
+-
+-import android.os.Bundle;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.text.ParcelableSpan;
+ import android.text.Spanned;
+ import android.text.TextUtils;
+ import android.view.View;
+-import android.view.accessibility.AccessibilityInteractionClient;
+ import android.view.accessibility.AccessibilityNodeInfo;
+ 
+-import com.android.internal.R;
++import android.widget.TextView;
+ 
+ /**
+  * {@link ClickableSpan} cannot be parceled, but accessibility services need to be able to cause
+@@ -48,10 +41,6 @@
+         implements ParcelableSpan {
+     // The id of the span this one replaces
+     private final int mOriginalClickableSpanId;
+-
+-    private int mWindowId = UNDEFINED_WINDOW_ID;
+-    private long mSourceNodeId = UNDEFINED_NODE_ID;
+-    private int mConnectionId = UNDEFINED_CONNECTION_ID;
+ 
+     /**
+      * @param originalClickableSpanId The id of the span this one replaces
+@@ -117,32 +106,22 @@
+      *                              span.
+      */
+     public void copyConnectionDataFrom(AccessibilityNodeInfo accessibilityNodeInfo) {
+-        mConnectionId = accessibilityNodeInfo.getConnectionId();
+-        mWindowId = accessibilityNodeInfo.getRealWindowId();
+-        mSourceNodeId = accessibilityNodeInfo.getSourceNodeId();
++        // Clicks in the embedded accessibility tree are dispatched to the owning view.
+     }
+ 
+     /**
+-     * Perform the click from an accessibility service. Will not work unless
+-     * setAccessibilityNodeInfo is called with a properly initialized node.
++     * Perform the click on the view that contains the original span.
+      *
+-     * @param unused This argument is required by the superclass but is unused. The real view will
+-     * be determined by the AccessibilityNodeInfo.
++     * @param view the view that contains the original span
+      */
+     @Override
+-    public void onClick(View unused) {
+-        Bundle arguments = new Bundle();
+-        arguments.putParcelable(ACTION_ARGUMENT_ACCESSIBLE_CLICKABLE_SPAN, this);
+-
+-        if ((mWindowId == UNDEFINED_WINDOW_ID) || (mSourceNodeId == UNDEFINED_NODE_ID)
+-                || (mConnectionId == UNDEFINED_CONNECTION_ID)) {
+-            throw new RuntimeException(
+-                    "ClickableSpan for accessibility service not properly initialized");
++    public void onClick(View view) {
++        if (view instanceof TextView textView) {
++            ClickableSpan span = findClickableSpan(textView.getText());
++            if (span != null && span != this) {
++                span.onClick(view);
++            }
+         }
+-
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        client.performAccessibilityAction(mConnectionId, mWindowId, mSourceNodeId,
+-                R.id.accessibilityActionClickOnClickableSpan, arguments);
+     }
+ 
+     public static final @android.annotation.NonNull Parcelable.Creator<AccessibilityClickableSpan> CREATOR =
+--- a/frameworks/base/core/java/android/text/style/AccessibilityReplacementSpan.java
++++ b/frameworks/base/core/java/android/text/style/AccessibilityReplacementSpan.java
+@@ -50,7 +50,7 @@
+      * @param p The parcel to de-serialize from
+      */
+     public AccessibilityReplacementSpan(Parcel p) {
+-        final CharSequence contentDescription = p.readCharSequence();
++        final CharSequence contentDescription = TextUtils.CHAR_SEQUENCE_CREATOR.createFromParcel(p);
+         this.setContentDescription(contentDescription);
+     }
+ 
+@@ -76,7 +76,7 @@
+ 
+     @Override
+     public void writeToParcelInternal(Parcel dest, int flags) {
+-        dest.writeCharSequence(this.getContentDescription());
++        TextUtils.writeToParcel(getContentDescription(), dest, flags);
+     }
+ 
+     @Override
+--- a/frameworks/base/core/java/android/text/style/SuggestionSpan.java
++++ b/frameworks/base/core/java/android/text/style/SuggestionSpan.java
+@@ -249,7 +249,7 @@
+     }
+ 
+     public SuggestionSpan(Parcel src) {
+-        this(/* suggestions= */ src.readStringArray(), /* flags= */ src.readInt(),
++        this(/* suggestions= */ src.createStringArray(), /* flags= */ src.readInt(),
+                 /* localStringForCompatibility= */ src.readString(),
+                 /* languageTag= */ src.readString(), /* hashCode= */ src.readInt(),
+                 /* easyCorrectUnderlineColor= */ src.readInt(),
+--- a/frameworks/base/core/java/android/text/style/TextAppearanceSpan.java
++++ b/frameworks/base/core/java/android/text/style/TextAppearanceSpan.java
+@@ -115,7 +115,7 @@
+                                         TextAppearance_textSize, -1);
+ 
+         mStyle = a.getInt(com.android.internal.R.styleable.TextAppearance_textStyle, 0);
+-        if (!context.isRestricted() && context.canLoadUnsafeResources()) {
++        if (!context.isRestricted()) {
+             mTypeface = a.getFont(com.android.internal.R.styleable.TextAppearance_fontFamily);
+         } else {
+             mTypeface = null;

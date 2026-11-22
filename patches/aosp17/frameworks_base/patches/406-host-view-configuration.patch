@@ -1,0 +1,222 @@
+--- a/frameworks/base/core/java/android/view/ViewConfiguration.java
++++ b/frameworks/base/core/java/android/view/ViewConfiguration.java
+@@ -22,20 +22,13 @@
+ import android.annotation.TestApi;
+ import android.annotation.UiContext;
+ import android.app.Activity;
+-import android.app.ActivityThread;
+-import android.app.AppGlobals;
+-import android.app.Application;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.content.res.Configuration;
+ import android.content.res.Resources;
+-import android.graphics.Rect;
+ import android.hardware.input.InputManager;
+-import android.hardware.input.InputManagerGlobal;
+ import android.os.Build;
+ import android.os.Bundle;
+-import android.os.RemoteException;
+-import android.provider.Settings;
+ import android.util.DisplayMetrics;
+ import android.util.LongSparseArray;
+ import android.util.TypedValue;
+@@ -414,7 +407,6 @@
+     private final int mDoubleTapMinTimeMillis;
+     private final float mScrollFriction;
+ 
+-    private int mDeviceId = Context.DEVICE_ID_INVALID;
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 123768915)
+     private boolean sHasPermanentMenuKey;
+@@ -512,8 +504,7 @@
+         mAmbiguousGestureMultiplier = Math.max(1.0f, multiplierValue.getFloat());
+ 
+         // Size of the screen in bytes, in ARGB_8888 format
+-        final Rect maxBounds = config.windowConfiguration.getMaxBounds();
+-        mMaximumDrawingCacheSize = 4 * maxBounds.width() * maxBounds.height();
++        mMaximumDrawingCacheSize = 4 * metrics.widthPixels * metrics.heightPixels;
+ 
+         mOverscrollDistance = (int) (sizeAndDensity * OVERSCROLL_DISTANCE + 0.5f);
+         mOverflingDistance = (int) (sizeAndDensity * OVERFLING_DISTANCE + 0.5f);
+@@ -523,16 +514,11 @@
+ 
+             switch (configVal) {
+                 default:
+-                case HAS_PERMANENT_MENU_KEY_AUTODETECT: {
+-                    IWindowManager wm = WindowManagerGlobal.getWindowManagerService();
+-                    try {
+-                        sHasPermanentMenuKey = !wm.hasNavigationBar(context.getDisplayId());
+-                        sHasPermanentMenuKeySet = true;
+-                    } catch (RemoteException ex) {
+-                        sHasPermanentMenuKey = false;
+-                    }
+-                }
+-                break;
++                case HAS_PERMANENT_MENU_KEY_AUTODETECT:
++                    // The host provides navigation controls on its single display.
++                    sHasPermanentMenuKey = false;
++                    sHasPermanentMenuKeySet = true;
++                    break;
+ 
+                 case HAS_PERMANENT_MENU_KEY_TRUE:
+                     sHasPermanentMenuKey = true;
+@@ -614,7 +600,6 @@
+         mDoubleTapMinTimeMillis = res.getInteger(R.integer.config_doubleTapMinTimeMillis);
+         mScrollFriction = res.getFloat(R.dimen.config_scrollFriction);
+ 
+-        mDeviceId = context.getDeviceId();
+     }
+ 
+     /**
+@@ -733,17 +718,16 @@
+      * a long press
+      */
+     public static int getLongPressTimeout() {
+-        return AppGlobals.getIntCoreSetting(Settings.Secure.LONG_PRESS_TIMEOUT,
+-                DEFAULT_LONG_PRESS_TIMEOUT);
++        return DEFAULT_LONG_PRESS_TIMEOUT;
+     }
+ 
+     /**
+      * @return the duration in milliseconds before a press turns into
+      * a long press.
+      */
+-    @FlaggedApi(android.companion.virtualdevice.flags.Flags.FLAG_VIEWCONFIGURATION_APIS)
++    @FlaggedApi("android.companion.virtualdevice.flags.viewconfiguration_apis")
+     public int getLongPressTimeoutMillis() {
+-        return getSettingValue(Settings.Secure.LONG_PRESS_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT);
++        return DEFAULT_LONG_PRESS_TIMEOUT;
+     }
+ 
+     /**
+@@ -751,33 +735,30 @@
+      * down event for an interaction to be considered part of the same multi-press.
+      */
+     public static int getMultiPressTimeout() {
+-        return AppGlobals.getIntCoreSetting(Settings.Secure.MULTI_PRESS_TIMEOUT,
+-                DEFAULT_MULTI_PRESS_TIMEOUT);
++        return DEFAULT_MULTI_PRESS_TIMEOUT;
+     }
+ 
+     /**
+      * @return the duration in milliseconds between the first tap's up event and the second tap's
+      * down event for an interaction to be considered part of the same multi-press.
+      */
+-    @FlaggedApi(android.companion.virtualdevice.flags.Flags.FLAG_VIEWCONFIGURATION_APIS)
++    @FlaggedApi("android.companion.virtualdevice.flags.viewconfiguration_apis")
+     public int getMultiPressTimeoutMillis() {
+-        return getSettingValue(Settings.Secure.MULTI_PRESS_TIMEOUT, DEFAULT_MULTI_PRESS_TIMEOUT);
++        return DEFAULT_MULTI_PRESS_TIMEOUT;
+     }
+ 
+     /**
+      * @return the time before the first key repeat in milliseconds.
+      */
+     public static int getKeyRepeatTimeout() {
+-        return AppGlobals.getIntCoreSetting(Settings.Secure.KEY_REPEAT_TIMEOUT_MS,
+-                DEFAULT_KEY_REPEAT_TIMEOUT_MS);
++        return DEFAULT_KEY_REPEAT_TIMEOUT_MS;
+     }
+ 
+     /**
+      * @return the time between successive key repeats in milliseconds.
+      */
+     public static int getKeyRepeatDelay() {
+-        return AppGlobals.getIntCoreSetting(Settings.Secure.KEY_REPEAT_DELAY_MS,
+-                DEFAULT_KEY_REPEAT_DELAY_MS);
++        return DEFAULT_KEY_REPEAT_DELAY_MS;
+     }
+ 
+     /**
+@@ -794,8 +775,7 @@
+      * @return the duration in milliseconds of the text cursor blink interval
+      */
+     public int getTextCursorBlinkIntervalMillis() {
+-        int value = getSettingValue(Settings.Secure.ACCESSIBILITY_TEXT_CURSOR_BLINK_INTERVAL_MS,
+-                sResourceCache.getDefaultTextCursorBlinkInterval());
++        int value = sResourceCache.getDefaultTextCursorBlinkInterval();
+         int noBlink = sResourceCache.getNoBlinkTextCursorBlinkInterval();
+         int minBlink = sResourceCache.getMinTextCursorBlinkInterval();
+ 
+@@ -824,7 +804,7 @@
+      * is a tap or a scroll. If the user does not move within this interval, it is
+      * considered to be a tap.
+      */
+-    @FlaggedApi(android.companion.virtualdevice.flags.Flags.FLAG_VIEWCONFIGURATION_APIS)
++    @FlaggedApi("android.companion.virtualdevice.flags.viewconfiguration_apis")
+     public int getTapTimeoutMillis() {
+         return mTapTimeoutMillis;
+     }
+@@ -852,7 +832,7 @@
+      * the second tap's down event for an interaction to be considered a
+      * double-tap.
+      */
+-    @FlaggedApi(android.companion.virtualdevice.flags.Flags.FLAG_VIEWCONFIGURATION_APIS)
++    @FlaggedApi("android.companion.virtualdevice.flags.viewconfiguration_apis")
+     public int getDoubleTapTimeoutMillis() {
+         return mDoubleTapTimeoutMillis;
+     }
+@@ -1207,7 +1187,7 @@
+      * @return A scalar dimensionless value representing the coefficient of
+      *         friction.
+      */
+-    @FlaggedApi(android.companion.virtualdevice.flags.Flags.FLAG_VIEWCONFIGURATION_APIS)
++    @FlaggedApi("android.companion.virtualdevice.flags.viewconfiguration_apis")
+     public float getScrollFrictionAmount() {
+         return mScrollFriction;
+     }
+@@ -1458,8 +1438,13 @@
+     }
+ 
+     private static boolean isInputDeviceInfoValid(int id, int axis, int source) {
+-        InputDevice device = InputManagerGlobal.getInstance().getInputDevice(id);
+-        return device != null && device.getMotionRange(axis, source) != null;
++        if (id != 0) return false;
++        if (source == InputDevice.SOURCE_TOUCHSCREEN) {
++            return axis == MotionEvent.AXIS_X || axis == MotionEvent.AXIS_Y;
++        }
++        return source == InputDevice.SOURCE_MOUSE
++                && (axis == MotionEvent.AXIS_X || axis == MotionEvent.AXIS_Y
++                || axis == MotionEvent.AXIS_HSCROLL || axis == MotionEvent.AXIS_VSCROLL);
+     }
+ 
+     /**
+@@ -1567,24 +1552,17 @@
+         return HOVER_TOOLTIP_HIDE_SHORT_TIMEOUT;
+     }
+ 
+-    private int getSettingValue(String key, int defaultValue) {
+-        if (mDeviceId != Context.DEVICE_ID_INVALID) {
+-            return AppGlobals.getIntCoreSetting(key, defaultValue, mDeviceId);
+-        }
+-        return AppGlobals.getIntCoreSetting(key, defaultValue);
+-    }
+-
+     private static int getDisplayDensity(Context context) {
+         final DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+         return (int) (100.0f * metrics.density);
+     }
+ 
+     /**
+-     * Returns a key of type long using the display density and deviceId from the {@link Context}.
++     * Returns the density cache key for the browser display.
+      */
+     private static long createKey(Context context) {
+         int displayDensity = getDisplayDensity(context);
+-        return (((long) displayDensity) << 32) | (context.getDeviceId() & 0xffffffffL);
++        return displayDensity;
+     }
+ 
+     /**
+@@ -1735,9 +1713,7 @@
+         }
+ 
+         private static Resources getCurrentResources() {
+-            Application application = ActivityThread.currentApplication();
+-            Context context = application != null ? application.getApplicationContext() : null;
+-            return context != null ? context.getResources() : null;
++            return Resources.getSystem();
+         }
+     }
+ }

@@ -1,0 +1,55 @@
+--- a/frameworks/base/core/java/android/view/Window.java
++++ b/frameworks/base/core/java/android/view/Window.java
+@@ -938,8 +938,4 @@
+         }
+-        if (createLocalWindowManager) {
+-            mWindowManager = wm.createLocalWindowManager(this);
+-        } else {
+-            mWindowManager = wm;
+-            wm.setParentWindow(this);
+-        }
++        // The embedded window manager is scoped to its host window at construction.
++        mWindowManager = wm;
+     }
+@@ -1054,3 +1050,3 @@
+ 
+-        decorView.addFrameMetricsListener(this, listener, handler);
++        throw new UnsupportedOperationException("Frame metrics are owned by the host");
+     }
+@@ -1061,6 +1057,3 @@
+     public final void removeOnFrameMetricsAvailableListener(OnFrameMetricsAvailableListener listener) {
+-        final View decorView = getDecorView();
+-        if (decorView != null) {
+-            getDecorView().removeFrameMetricsListener(listener);
+-        }
++        // No hardware renderer observer was installed.
+     }
+@@ -1412,3 +1405,3 @@
+      */
+-    public void setColorMode(@ActivityInfo.ColorMode int colorMode) {
++    public void setColorMode(int colorMode) {
+         final WindowManager.LayoutParams attrs = getAttributes();
+@@ -1579,3 +1572,2 @@
+      */
+-    @ActivityInfo.ColorMode
+     public int getColorMode() {
+@@ -1619,3 +1611,2 @@
+      */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_SUPPORT_CUSTOM_DIM_COLOR)
+     public void setDimColor(@ColorLong long color) {
+@@ -2295,3 +2286,2 @@
+     /** @hide */
+-    @FlaggedApi(com.android.window.flags.Flags.FLAG_SUPPORT_CUSTOM_DIM_COLOR)
+     protected boolean hasDimColor() {
+@@ -2993,11 +2983,2 @@
+     /**
+-     * System request to begin scroll capture.
+-     *
+-     * @param listener to receive the response
+-     * @hide
+-     */
+-    public void requestScrollCapture(IScrollCaptureResponseListener listener) {
+-    }
+-
+-    /**
+      * Used to provide scroll capture support for an arbitrary window. This registeres the given

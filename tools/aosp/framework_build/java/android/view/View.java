@@ -21,6 +21,7 @@ import android.util.FloatProperty;
 import android.util.Property;
 import android.util.SparseArray;
 import android.view.accessibility.AccessibilityEvent;
+import android.view.accessibility.AccessibilityNodeIdManager;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityNodeProvider;
 import java.util.ArrayList;
@@ -204,6 +205,8 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     private Boolean forcedOverlappingRendering;
     private int[] drawableState;
     private boolean hapticFeedbackEnabled = true, defaultFocusHighlightEnabled = true;
+    private static int nextAccessibilityViewId = 1;
+    private int accessibilityViewId = NO_ID;
     private int id = NO_ID, visibility = VISIBLE, layoutDirection = LAYOUT_DIRECTION_INHERIT;
     private int left, top, right, bottom, measuredWidth, measuredHeight;
     private int paddingLeft, paddingTop, paddingRight, paddingBottom, paddingStart, paddingEnd;
@@ -362,6 +365,9 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     void attach(ViewRootImpl root) {
         if (this.root == root) return;
         this.root = root;
+        if (accessibilityViewId != NO_ID) {
+            AccessibilityNodeIdManager.getInstance().registerViewWithId(this, accessibilityViewId);
+        }
         if (floatingObserver != null) {
             root.getTreeObserver().merge(floatingObserver);
             floatingObserver = null;
@@ -382,6 +388,9 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
             for (OnAttachStateChangeListener listener : new ArrayList<>(attachListeners)) {
                 listener.onViewDetachedFromWindow(this);
             }
+        }
+        if (accessibilityViewId != NO_ID) {
+            AccessibilityNodeIdManager.getInstance().unregisterViewWithId(accessibilityViewId);
         }
         root = null;
     }
@@ -404,6 +413,26 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     }
     public void setImportantForAccessibility(int mode) { accessibilityImportance = mode; }
     public int getImportantForAccessibility() { return accessibilityImportance; }
+    public boolean isImportantForAccessibility() {
+        if (accessibilityImportance == IMPORTANT_FOR_ACCESSIBILITY_NO
+                || accessibilityImportance == IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return false;
+        for (ViewParent owner = parent; owner instanceof View view; owner = view.parent) {
+            if (view.accessibilityImportance == IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS) return false;
+        }
+        return true;
+    }
+    public boolean includeForAccessibility() { return isImportantForAccessibility(); }
+    public boolean isAccessibilityDataSensitive() { return false; }
+    public int getAccessibilityViewId() {
+        if (accessibilityViewId == NO_ID) {
+            synchronized (View.class) {
+                accessibilityViewId = nextAccessibilityViewId++;
+            }
+            AccessibilityNodeIdManager.getInstance().registerViewWithId(this, accessibilityViewId);
+        }
+        return accessibilityViewId;
+    }
+    public int getAccessibilityWindowId() { return root == null ? -1 : root.getView().getAccessibilityViewId(); }
     public void setElevation(float value) { if (elevation != value) { elevation = value; invalidate(); } }
     public float getElevation() { return elevation; }
     public void setOutlineProvider(ViewOutlineProvider provider) { outlineProvider = provider; invalidateOutline(); }
@@ -509,6 +538,7 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     public void onInitializeAccessibilityEventInternal(AccessibilityEvent event) {
         event.setClassName(getAccessibilityClassName());
         event.setPackageName(context.getPackageName());
+        event.setSource(this);
     }
     public CharSequence getAccessibilityClassName() { return getClass().getName(); }
     public boolean dispatchPopulateAccessibilityEvent(AccessibilityEvent event) {
@@ -753,8 +783,12 @@ public class View implements Drawable.Callback, KeyEvent.Callback {
     public boolean getGlobalVisibleRect(Rect out, Point origin) {
         int width = getWidth(), height = getHeight();
         if (width <= 0 || height <= 0) return false;
-        RectF bounds = new RectF(0, 0, width, height);
+        out.set(0, 0, width, height);
         if (origin != null) origin.set(-scrollX, -scrollY);
+        return mapVisibleRectToWindow(out, origin);
+    }
+    boolean mapVisibleRectToWindow(Rect out, Point origin) {
+        RectF bounds = new RectF(out);
         for (View child = this; child.parent instanceof ViewGroup group; child = group) {
             float dx = child.getX() - group.getScrollX(), dy = child.getY() - group.getScrollY();
             double angle = Math.toRadians(child.getRotation());

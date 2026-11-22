@@ -1,0 +1,796 @@
+--- a/frameworks/base/core/java/android/widget/FrameLayout.java
++++ b/frameworks/base/core/java/android/widget/FrameLayout.java
+@@ -30,7 +30,6 @@
+ import android.view.View;
+ import android.view.ViewDebug;
+ import android.view.ViewGroup;
+-import android.view.ViewHierarchyEncoder;
+ import android.view.inspector.InspectableProperty;
+ import android.widget.RemoteViews.RemoteView;
+ 
+@@ -79,6 +78,21 @@
+     @UnsupportedAppUsage
+     private int mForegroundPaddingBottom = 0;
+ 
++    // The embedded View stores the foreground drawable but does not expose its policy.
++    private int mForegroundGravity = Gravity.FILL;
++    private boolean mForegroundInsidePadding = true;
++
++    static final boolean HAS_NESTED_SCROLL = hasNestedScrollSupport();
++
++    private static boolean hasNestedScrollSupport() {
++        try {
++            ViewGroup.class.getDeclaredMethod("getNestedScrollAxes");
++            return true;
++        } catch (NoSuchMethodException unavailable) {
++            return false;
++        }
++    }
++
+     private final ArrayList<View> mMatchParentChildren = new ArrayList<>(1);
+ 
+     public FrameLayout(@NonNull Context context) {
+@@ -108,6 +122,13 @@
+         }
+ 
+         a.recycle();
++        try (TypedArray foreground = context.obtainStyledAttributes(
++                attrs, R.styleable.View, defStyleAttr, defStyleRes)) {
++            mForegroundInsidePadding = foreground.getBoolean(
++                    R.styleable.View_foregroundInsidePadding, true);
++            setForegroundGravity(foreground.getInt(R.styleable.View_foregroundGravity,
++                    Gravity.FILL));
++        }
+     }
+ 
+     /**
+@@ -121,28 +142,43 @@
+      */
+     @android.view.RemotableViewMethod
+     public void setForegroundGravity(int foregroundGravity) {
+-        if (getForegroundGravity() != foregroundGravity) {
+-            super.setForegroundGravity(foregroundGravity);
+-
+-            // calling get* again here because the set above may apply default constraints
+-            final Drawable foreground = getForeground();
+-            if (getForegroundGravity() == Gravity.FILL && foreground != null) {
+-                Rect padding = new Rect();
+-                if (foreground.getPadding(padding)) {
+-                    mForegroundPaddingLeft = padding.left;
+-                    mForegroundPaddingTop = padding.top;
+-                    mForegroundPaddingRight = padding.right;
+-                    mForegroundPaddingBottom = padding.bottom;
+-                }
+-            } else {
+-                mForegroundPaddingLeft = 0;
+-                mForegroundPaddingTop = 0;
+-                mForegroundPaddingRight = 0;
+-                mForegroundPaddingBottom = 0;
++        if ((foregroundGravity & Gravity.RELATIVE_HORIZONTAL_GRAVITY_MASK) == 0) {
++            foregroundGravity |= Gravity.START;
++        }
++        if ((foregroundGravity & Gravity.VERTICAL_GRAVITY_MASK) == 0) {
++            foregroundGravity |= Gravity.TOP;
++        }
++        mForegroundGravity = foregroundGravity;
++        updateForegroundPadding();
++    }
++
++    @Override
++    public int getForegroundGravity() {
++        return mForegroundGravity;
++    }
++
++    @Override
++    public void setForeground(Drawable foreground) {
++        super.setForeground(foreground);
++        updateForegroundPadding();
++    }
++
++    private void updateForegroundPadding() {
++        mForegroundPaddingLeft = 0;
++        mForegroundPaddingTop = 0;
++        mForegroundPaddingRight = 0;
++        mForegroundPaddingBottom = 0;
++        final Drawable foreground = getForeground();
++        if (getForegroundGravity() == Gravity.FILL && foreground != null) {
++            Rect padding = new Rect();
++            if (foreground.getPadding(padding)) {
++                mForegroundPaddingLeft = padding.left;
++                mForegroundPaddingTop = padding.top;
++                mForegroundPaddingRight = padding.right;
++                mForegroundPaddingBottom = padding.bottom;
+             }
+-
+-            requestLayout();
+-        }
++        }
++        requestLayout();
+     }
+ 
+     /**
+@@ -156,23 +192,23 @@
+     }
+ 
+     int getPaddingLeftWithForeground() {
+-        return isForegroundInsidePadding() ? Math.max(mPaddingLeft, mForegroundPaddingLeft) :
+-            mPaddingLeft + mForegroundPaddingLeft;
++        return mForegroundInsidePadding ? Math.max(getPaddingLeft(), mForegroundPaddingLeft) :
++            getPaddingLeft() + mForegroundPaddingLeft;
+     }
+ 
+     int getPaddingRightWithForeground() {
+-        return isForegroundInsidePadding() ? Math.max(mPaddingRight, mForegroundPaddingRight) :
+-            mPaddingRight + mForegroundPaddingRight;
++        return mForegroundInsidePadding ? Math.max(getPaddingRight(), mForegroundPaddingRight) :
++            getPaddingRight() + mForegroundPaddingRight;
+     }
+ 
+     private int getPaddingTopWithForeground() {
+-        return isForegroundInsidePadding() ? Math.max(mPaddingTop, mForegroundPaddingTop) :
+-            mPaddingTop + mForegroundPaddingTop;
++        return mForegroundInsidePadding ? Math.max(getPaddingTop(), mForegroundPaddingTop) :
++            getPaddingTop() + mForegroundPaddingTop;
+     }
+ 
+     private int getPaddingBottomWithForeground() {
+-        return isForegroundInsidePadding() ? Math.max(mPaddingBottom, mForegroundPaddingBottom) :
+-            mPaddingBottom + mForegroundPaddingBottom;
++        return mForegroundInsidePadding ? Math.max(getPaddingBottom(), mForegroundPaddingBottom) :
++            getPaddingBottom() + mForegroundPaddingBottom;
+     }
+ 
+     @Override
+@@ -392,12 +428,10 @@
+ 
+     @Override
+     protected ViewGroup.LayoutParams generateLayoutParams(ViewGroup.LayoutParams lp) {
+-        if (sPreserveMarginParamsInLayoutParamConversion) {
+-            if (lp instanceof LayoutParams) {
+-                return new LayoutParams((LayoutParams) lp);
+-            } else if (lp instanceof MarginLayoutParams) {
+-                return new LayoutParams((MarginLayoutParams) lp);
+-            }
++        if (lp instanceof LayoutParams) {
++            return new LayoutParams((LayoutParams) lp);
++        } else if (lp instanceof MarginLayoutParams) {
++            return new LayoutParams((MarginLayoutParams) lp);
+         }
+         return new LayoutParams(lp);
+     }
+@@ -405,18 +439,6 @@
+     @Override
+     public CharSequence getAccessibilityClassName() {
+         return FrameLayout.class.getName();
+-    }
+-
+-    /** @hide */
+-    @Override
+-    protected void encodeProperties(@NonNull ViewHierarchyEncoder encoder) {
+-        super.encodeProperties(encoder);
+-
+-        encoder.addProperty("measurement:measureAllChildren", mMeasureAllChildren);
+-        encoder.addProperty("padding:foregroundPaddingLeft", mForegroundPaddingLeft);
+-        encoder.addProperty("padding:foregroundPaddingTop", mForegroundPaddingTop);
+-        encoder.addProperty("padding:foregroundPaddingRight", mForegroundPaddingRight);
+-        encoder.addProperty("padding:foregroundPaddingBottom", mForegroundPaddingBottom);
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/widget/LinearLayout.java
++++ b/frameworks/base/core/java/android/widget/LinearLayout.java
+@@ -30,7 +30,6 @@
+ import android.view.View;
+ import android.view.ViewDebug;
+ import android.view.ViewGroup;
+-import android.view.ViewHierarchyEncoder;
+ import android.view.inspector.InspectableProperty;
+ import android.widget.RemoteViews.RemoteView;
+ 
+@@ -225,7 +224,7 @@
+     private int mShowDividers;
+     private int mDividerPadding;
+ 
+-    private int mLayoutDirection = View.LAYOUT_DIRECTION_UNDEFINED;
++    private int mLayoutDirection = -1;
+ 
+     /**
+      * Signals that compatibility booleans have been initialized according to
+@@ -474,7 +473,7 @@
+ 
+     void drawDividersHorizontal(Canvas canvas) {
+         final int count = getVirtualChildCount();
+-        final boolean isLayoutRtl = isLayoutRtl();
++        final boolean isLayoutRtl = (getLayoutDirection() == LAYOUT_DIRECTION_RTL);
+         for (int i = 0; i < count; i++) {
+             final View child = getVirtualChildAt(i);
+             if (child != null && child.getVisibility() != GONE) {
+@@ -619,11 +618,11 @@
+             if (majorGravity != Gravity.TOP) {
+                switch (majorGravity) {
+                    case Gravity.BOTTOM:
+-                       childTop = mBottom - mTop - mPaddingBottom - mTotalLength;
++                       childTop = getHeight() - getPaddingBottom() - mTotalLength;
+                        break;
+ 
+                    case Gravity.CENTER_VERTICAL:
+-                       childTop += ((mBottom - mTop - mPaddingTop - mPaddingBottom) -
++                       childTop += ((getHeight() - getPaddingTop() - getPaddingBottom()) -
+                                mTotalLength) / 2;
+                        break;
+                }
+@@ -975,7 +974,7 @@
+         }
+ 
+         // Add in our padding
+-        mTotalLength += mPaddingTop + mPaddingBottom;
++        mTotalLength += getPaddingTop() + getPaddingBottom();
+ 
+         int heightSize = mTotalLength;
+ 
+@@ -1026,7 +1025,7 @@
+                     final int childHeightMeasureSpec = MeasureSpec.makeMeasureSpec(
+                             Math.max(0, childHeight), MeasureSpec.EXACTLY);
+                     final int childWidthMeasureSpec = getChildMeasureSpec(widthMeasureSpec,
+-                            mPaddingLeft + mPaddingRight + lp.leftMargin + lp.rightMargin,
++                            getPaddingLeft() + getPaddingRight() + lp.leftMargin + lp.rightMargin,
+                             lp.width);
+                     child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
+ 
+@@ -1053,7 +1052,7 @@
+             }
+ 
+             // Add in our padding
+-            mTotalLength += mPaddingTop + mPaddingBottom;
++            mTotalLength += getPaddingTop() + getPaddingBottom();
+             // TODO: Should we recompute the heightSpec based on the new total length?
+         } else {
+             alternativeMaxWidth = Math.max(alternativeMaxWidth,
+@@ -1088,7 +1087,7 @@
+             maxWidth = alternativeMaxWidth;
+         }
+ 
+-        maxWidth += mPaddingLeft + mPaddingRight;
++        maxWidth += getPaddingLeft() + getPaddingRight();
+ 
+         // Check against our minimum width
+         maxWidth = Math.max(maxWidth, getSuggestedMinimumWidth());
+@@ -1214,9 +1213,9 @@
+                 // use as much space as it wants because we can shrink things
+                 // later (and re-measure).
+                 if (baselineAligned) {
+-                    final int freeWidthSpec = MeasureSpec.makeSafeMeasureSpec(
++                    final int freeWidthSpec = MeasureSpec.makeMeasureSpec(
+                             MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.UNSPECIFIED);
+-                    final int freeHeightSpec = MeasureSpec.makeSafeMeasureSpec(
++                    final int freeHeightSpec = MeasureSpec.makeMeasureSpec(
+                             MeasureSpec.getSize(heightMeasureSpec), MeasureSpec.UNSPECIFIED);
+                     child.measure(freeWidthSpec, freeHeightSpec);
+                 } else {
+@@ -1368,7 +1367,7 @@
+         }
+ 
+         // Add in our padding
+-        mTotalLength += mPaddingLeft + mPaddingRight;
++        mTotalLength += getPaddingLeft() + getPaddingRight();
+ 
+         int widthSize = mTotalLength;
+ 
+@@ -1430,7 +1429,7 @@
+                     final int childWidthMeasureSpec = MeasureSpec.makeMeasureSpec(
+                             Math.max(0, childWidth), MeasureSpec.EXACTLY);
+                     final int childHeightMeasureSpec = getChildMeasureSpec(heightMeasureSpec,
+-                            mPaddingTop + mPaddingBottom + lp.topMargin + lp.bottomMargin,
++                            getPaddingTop() + getPaddingBottom() + lp.topMargin + lp.bottomMargin,
+                             lp.height);
+                     child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
+ 
+@@ -1480,7 +1479,7 @@
+             }
+ 
+             // Add in our padding
+-            mTotalLength += mPaddingLeft + mPaddingRight;
++            mTotalLength += getPaddingLeft() + getPaddingRight();
+             // TODO: Should we update widthSize with the new total length?
+ 
+             // Check mMaxAscent[INDEX_TOP] first because it maps to Gravity.TOP,
+@@ -1527,7 +1526,7 @@
+             maxHeight = alternativeMaxHeight;
+         }
+ 
+-        maxHeight += mPaddingTop + mPaddingBottom;
++        maxHeight += getPaddingTop() + getPaddingBottom();
+ 
+         // Check against our minimum height
+         maxHeight = Math.max(maxHeight, getSuggestedMinimumHeight());
+@@ -1654,17 +1653,17 @@
+      * @param bottom
+      */
+     void layoutVertical(int left, int top, int right, int bottom) {
+-        final int paddingLeft = mPaddingLeft;
++        final int paddingLeft = getPaddingLeft();
+ 
+         int childTop;
+         int childLeft;
+ 
+         // Where right end of child should go
+         final int width = right - left;
+-        int childRight = width - mPaddingRight;
++        int childRight = width - getPaddingRight();
+ 
+         // Space available for child
+-        int childSpace = width - paddingLeft - mPaddingRight;
++        int childSpace = width - paddingLeft - getPaddingRight();
+ 
+         final int count = getVirtualChildCount();
+ 
+@@ -1674,17 +1673,17 @@
+         switch (majorGravity) {
+            case Gravity.BOTTOM:
+                // mTotalLength contains the padding already
+-               childTop = mPaddingTop + bottom - top - mTotalLength;
++               childTop = getPaddingTop() + bottom - top - mTotalLength;
+                break;
+ 
+                // mTotalLength contains the padding already
+            case Gravity.CENTER_VERTICAL:
+-               childTop = mPaddingTop + (bottom - top - mTotalLength) / 2;
++               childTop = getPaddingTop() + (bottom - top - mTotalLength) / 2;
+                break;
+ 
+            case Gravity.TOP:
+            default:
+-               childTop = mPaddingTop;
++               childTop = getPaddingTop();
+                break;
+         }
+ 
+@@ -1736,7 +1735,7 @@
+     }
+ 
+     @Override
+-    public void onRtlPropertiesChanged(@ResolvedLayoutDir int layoutDirection) {
++    public void onRtlPropertiesChanged(int layoutDirection) {
+         super.onRtlPropertiesChanged(layoutDirection);
+         if (layoutDirection != mLayoutDirection) {
+             mLayoutDirection = layoutDirection;
+@@ -1759,18 +1758,18 @@
+      * @param bottom
+      */
+     void layoutHorizontal(int left, int top, int right, int bottom) {
+-        final boolean isLayoutRtl = isLayoutRtl();
+-        final int paddingTop = mPaddingTop;
++        final boolean isLayoutRtl = (getLayoutDirection() == LAYOUT_DIRECTION_RTL);
++        final int paddingTop = getPaddingTop();
+ 
+         int childTop;
+         int childLeft;
+ 
+         // Where bottom of child should go
+         final int height = bottom - top;
+-        int childBottom = height - mPaddingBottom;
++        int childBottom = height - getPaddingBottom();
+ 
+         // Space available for child
+-        int childSpace = height - paddingTop - mPaddingBottom;
++        int childSpace = height - paddingTop - getPaddingBottom();
+ 
+         final int count = getVirtualChildCount();
+ 
+@@ -1786,17 +1785,17 @@
+         switch (Gravity.getAbsoluteGravity(majorGravity, layoutDirection)) {
+             case Gravity.RIGHT:
+                 // mTotalLength contains the padding already
+-                childLeft = mPaddingLeft + right - left - mTotalLength;
++                childLeft = getPaddingLeft() + right - left - mTotalLength;
+                 break;
+ 
+             case Gravity.CENTER_HORIZONTAL:
+                 // mTotalLength contains the padding already
+-                childLeft = mPaddingLeft + (right - left - mTotalLength) / 2;
++                childLeft = getPaddingLeft() + (right - left - mTotalLength) / 2;
+                 break;
+ 
+             case Gravity.LEFT:
+             default:
+-                childLeft = mPaddingLeft;
++                childLeft = getPaddingLeft();
+                 break;
+         }
+ 
+@@ -1999,12 +1998,10 @@
+ 
+     @Override
+     protected LayoutParams generateLayoutParams(ViewGroup.LayoutParams lp) {
+-        if (sPreserveMarginParamsInLayoutParamConversion) {
+-            if (lp instanceof LayoutParams) {
+-                return new LayoutParams((LayoutParams) lp);
+-            } else if (lp instanceof MarginLayoutParams) {
+-                return new LayoutParams((MarginLayoutParams) lp);
+-            }
++        if (lp instanceof LayoutParams) {
++            return new LayoutParams((LayoutParams) lp);
++        } else if (lp instanceof MarginLayoutParams) {
++            return new LayoutParams((MarginLayoutParams) lp);
+         }
+         return new LayoutParams(lp);
+     }
+@@ -2019,20 +2016,6 @@
+     @Override
+     public CharSequence getAccessibilityClassName() {
+         return LinearLayout.class.getName();
+-    }
+-
+-    /** @hide */
+-    @Override
+-    protected void encodeProperties(@NonNull ViewHierarchyEncoder encoder) {
+-        super.encodeProperties(encoder);
+-        encoder.addProperty("layout:baselineAligned", mBaselineAligned);
+-        encoder.addProperty("layout:baselineAlignedChildIndex", mBaselineAlignedChildIndex);
+-        encoder.addProperty("measurement:baselineChildTop", mBaselineChildTop);
+-        encoder.addProperty("measurement:orientation", mOrientation);
+-        encoder.addProperty("measurement:gravity", mGravity);
+-        encoder.addProperty("measurement:totalLength", mTotalLength);
+-        encoder.addProperty("layout:totalLength", mTotalLength);
+-        encoder.addProperty("layout:useLargestChild", mUseLargestChild);
+     }
+ 
+     /**
+@@ -2142,20 +2125,10 @@
+             this.gravity = source.gravity;
+         }
+ 
+-        @Override
+         public String debug(String output) {
+-            return output + "LinearLayout.LayoutParams={width=" + sizeToString(width) +
+-                    ", height=" + sizeToString(height) + " weight=" + weight +  "}";
+-        }
+-
+-        /** @hide */
+-        @Override
+-        @UnsupportedAppUsage
+-        protected void encodeProperties(@NonNull ViewHierarchyEncoder encoder) {
+-            super.encodeProperties(encoder);
+-
+-            encoder.addProperty("layout:weight", weight);
+-            encoder.addProperty("layout:gravity", gravity);
+-        }
++            return output + "LinearLayout.LayoutParams={width=" + (width == MATCH_PARENT ? "match-parent" : width == WRAP_CONTENT ? "wrap-content" : width) +
++                    ", height=" + (height == MATCH_PARENT ? "match-parent" : height == WRAP_CONTENT ? "wrap-content" : height) + " weight=" + weight +  "}";
++        }
++
+     }
+ }
+--- a/frameworks/base/core/java/android/widget/RelativeLayout.java
++++ b/frameworks/base/core/java/android/widget/RelativeLayout.java
+@@ -33,7 +33,6 @@
+ import android.view.View;
+ import android.view.ViewDebug;
+ import android.view.ViewGroup;
+-import android.view.ViewHierarchyEncoder;
+ import android.view.accessibility.AccessibilityEvent;
+ import android.view.inspector.InspectableProperty;
+ import android.view.inspector.InspectionCompanion;
+@@ -404,6 +403,7 @@
+ 
+     @Override
+     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
++        ViewGroup.LayoutParams ownParams = getLayoutParams();
+         if (mDirtyHierarchy) {
+             mDirtyHierarchy = false;
+             sortChildren();
+@@ -464,7 +464,7 @@
+         // before the computation and then, as a last pass, we will update their real position with
+         // an offset equals to "DEFAULT_WIDTH - width".
+         final int layoutDirection = getLayoutDirection();
+-        if (isLayoutRtl() && myWidth == -1) {
++        if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL) && myWidth == -1) {
+             myWidth = DEFAULT_WIDTH;
+         }
+ 
+@@ -502,7 +502,7 @@
+                 }
+ 
+                 if (isWrapContentWidth) {
+-                    if (isLayoutRtl()) {
++                    if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
+                         if (targetSdkVersion < Build.VERSION_CODES.KITKAT) {
+                             width = Math.max(width, myWidth - params.mLeft);
+                         } else {
+@@ -557,10 +557,10 @@
+         if (isWrapContentWidth) {
+             // Width already has left padding in it since it was calculated by looking at
+             // the right of each child view
+-            width += mPaddingRight;
+-
+-            if (mLayoutParams != null && mLayoutParams.width >= 0) {
+-                width = Math.max(width, mLayoutParams.width);
++            width += getPaddingRight();
++
++            if (ownParams != null && ownParams.width >= 0) {
++                width = Math.max(width, ownParams.width);
+             }
+ 
+             width = Math.max(width, getSuggestedMinimumWidth());
+@@ -576,7 +576,7 @@
+                             centerHorizontal(child, params, width);
+                         } else if (rules[ALIGN_PARENT_RIGHT] != 0) {
+                             final int childWidth = child.getMeasuredWidth();
+-                            params.mLeft = width - mPaddingRight - childWidth;
++                            params.mLeft = width - getPaddingRight() - childWidth;
+                             params.mRight = params.mLeft + childWidth;
+                         }
+                     }
+@@ -587,10 +587,10 @@
+         if (isWrapContentHeight) {
+             // Height already has top padding in it since it was calculated by looking at
+             // the bottom of each child view
+-            height += mPaddingBottom;
+-
+-            if (mLayoutParams != null && mLayoutParams.height >= 0) {
+-                height = Math.max(height, mLayoutParams.height);
++            height += getPaddingBottom();
++
++            if (ownParams != null && ownParams.height >= 0) {
++                height = Math.max(height, ownParams.height);
+             }
+ 
+             height = Math.max(height, getSuggestedMinimumHeight());
+@@ -606,7 +606,7 @@
+                             centerVertical(child, params, height);
+                         } else if (rules[ALIGN_PARENT_BOTTOM] != 0) {
+                             final int childHeight = child.getMeasuredHeight();
+-                            params.mTop = height - mPaddingBottom - childHeight;
++                            params.mTop = height - getPaddingBottom() - childHeight;
+                             params.mBottom = params.mTop + childHeight;
+                         }
+                     }
+@@ -616,8 +616,8 @@
+ 
+         if (horizontalGravity || verticalGravity) {
+             final Rect selfBounds = mSelfBounds;
+-            selfBounds.set(mPaddingLeft, mPaddingTop, width - mPaddingRight,
+-                    height - mPaddingBottom);
++            selfBounds.set(getPaddingLeft(), getPaddingTop(), width - getPaddingRight(),
++                    height - getPaddingBottom());
+ 
+             final Rect contentBounds = mContentBounds;
+             Gravity.apply(mGravity, right - left, bottom - top, selfBounds, contentBounds,
+@@ -643,7 +643,7 @@
+             }
+         }
+ 
+-        if (isLayoutRtl()) {
++        if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
+             final int offsetWidth = myWidth - width;
+             for (int i = 0; i < count; i++) {
+                 final View child = views[i];
+@@ -686,12 +686,12 @@
+         int childWidthMeasureSpec = getChildMeasureSpec(params.mLeft,
+                 params.mRight, params.width,
+                 params.leftMargin, params.rightMargin,
+-                mPaddingLeft, mPaddingRight,
++                getPaddingLeft(), getPaddingRight(),
+                 myWidth);
+         int childHeightMeasureSpec = getChildMeasureSpec(params.mTop,
+                 params.mBottom, params.height,
+                 params.topMargin, params.bottomMargin,
+-                mPaddingTop, mPaddingBottom,
++                getPaddingTop(), getPaddingBottom(),
+                 myHeight);
+         child.measure(childWidthMeasureSpec, childHeightMeasureSpec);
+     }
+@@ -699,7 +699,7 @@
+     private void measureChildHorizontal(
+             View child, LayoutParams params, int myWidth, int myHeight) {
+         final int childWidthMeasureSpec = getChildMeasureSpec(params.mLeft, params.mRight,
+-                params.width, params.leftMargin, params.rightMargin, mPaddingLeft, mPaddingRight,
++                params.width, params.leftMargin, params.rightMargin, getPaddingLeft(), getPaddingRight(),
+                 myWidth);
+ 
+         final int childHeightMeasureSpec;
+@@ -717,7 +717,7 @@
+         } else {
+             final int maxHeight;
+             if (mMeasureVerticalWithPaddingMargin) {
+-                maxHeight = Math.max(0, myHeight - mPaddingTop - mPaddingBottom
++                maxHeight = Math.max(0, myHeight - getPaddingTop() - getPaddingBottom()
+                         - params.topMargin - params.bottomMargin);
+             } else {
+                 maxHeight = Math.max(0, myHeight);
+@@ -746,8 +746,8 @@
+      *        the child's layout params)
+      * @param startMargin The left or top margin
+      * @param endMargin The right or bottom margin
+-     * @param startPadding mPaddingLeft or mPaddingTop
+-     * @param endPadding mPaddingRight or mPaddingBottom
++     * @param startPadding getPaddingLeft() or getPaddingTop()
++     * @param endPadding getPaddingRight() or getPaddingBottom()
+      * @param mySize The width or height of this view (the RelativeLayout)
+      * @return MeasureSpec for the child
+      */
+@@ -866,11 +866,11 @@
+     }
+ 
+     private void positionAtEdge(View child, LayoutParams params, int myWidth) {
+-        if (isLayoutRtl()) {
+-            params.mRight = myWidth - mPaddingRight - params.rightMargin;
++        if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
++            params.mRight = myWidth - getPaddingRight() - params.rightMargin;
+             params.mLeft = params.mRight - child.getMeasuredWidth();
+         } else {
+-            params.mLeft = mPaddingLeft + params.leftMargin;
++            params.mLeft = getPaddingLeft() + params.leftMargin;
+             params.mRight = params.mLeft + child.getMeasuredWidth();
+         }
+     }
+@@ -892,12 +892,12 @@
+                 if (!wrapContent) {
+                     centerVertical(child, params, myHeight);
+                 } else {
+-                    params.mTop = mPaddingTop + params.topMargin;
++                    params.mTop = getPaddingTop() + params.topMargin;
+                     params.mBottom = params.mTop + child.getMeasuredHeight();
+                 }
+                 return true;
+             } else {
+-                params.mTop = mPaddingTop + params.topMargin;
++                params.mTop = getPaddingTop() + params.topMargin;
+                 params.mBottom = params.mTop + child.getMeasuredHeight();
+             }
+         }
+@@ -922,7 +922,7 @@
+                     childParams.rightMargin);
+         } else if (childParams.alignWithParent && rules[LEFT_OF] != 0) {
+             if (myWidth >= 0) {
+-                childParams.mRight = myWidth - mPaddingRight - childParams.rightMargin;
++                childParams.mRight = myWidth - getPaddingRight() - childParams.rightMargin;
+             }
+         }
+ 
+@@ -931,14 +931,14 @@
+             childParams.mLeft = anchorParams.mRight + (anchorParams.rightMargin +
+                     childParams.leftMargin);
+         } else if (childParams.alignWithParent && rules[RIGHT_OF] != 0) {
+-            childParams.mLeft = mPaddingLeft + childParams.leftMargin;
++            childParams.mLeft = getPaddingLeft() + childParams.leftMargin;
+         }
+ 
+         anchorParams = getRelatedViewParams(rules, ALIGN_LEFT);
+         if (anchorParams != null) {
+             childParams.mLeft = anchorParams.mLeft + childParams.leftMargin;
+         } else if (childParams.alignWithParent && rules[ALIGN_LEFT] != 0) {
+-            childParams.mLeft = mPaddingLeft + childParams.leftMargin;
++            childParams.mLeft = getPaddingLeft() + childParams.leftMargin;
+         }
+ 
+         anchorParams = getRelatedViewParams(rules, ALIGN_RIGHT);
+@@ -946,17 +946,17 @@
+             childParams.mRight = anchorParams.mRight - childParams.rightMargin;
+         } else if (childParams.alignWithParent && rules[ALIGN_RIGHT] != 0) {
+             if (myWidth >= 0) {
+-                childParams.mRight = myWidth - mPaddingRight - childParams.rightMargin;
++                childParams.mRight = myWidth - getPaddingRight() - childParams.rightMargin;
+             }
+         }
+ 
+         if (0 != rules[ALIGN_PARENT_LEFT]) {
+-            childParams.mLeft = mPaddingLeft + childParams.leftMargin;
++            childParams.mLeft = getPaddingLeft() + childParams.leftMargin;
+         }
+ 
+         if (0 != rules[ALIGN_PARENT_RIGHT]) {
+             if (myWidth >= 0) {
+-                childParams.mRight = myWidth - mPaddingRight - childParams.rightMargin;
++                childParams.mRight = myWidth - getPaddingRight() - childParams.rightMargin;
+             }
+         }
+     }
+@@ -986,7 +986,7 @@
+                     childParams.bottomMargin);
+         } else if (childParams.alignWithParent && rules[ABOVE] != 0) {
+             if (myHeight >= 0) {
+-                childParams.mBottom = myHeight - mPaddingBottom - childParams.bottomMargin;
++                childParams.mBottom = myHeight - getPaddingBottom() - childParams.bottomMargin;
+             }
+         }
+ 
+@@ -995,14 +995,14 @@
+             childParams.mTop = anchorParams.mBottom + (anchorParams.bottomMargin +
+                     childParams.topMargin);
+         } else if (childParams.alignWithParent && rules[BELOW] != 0) {
+-            childParams.mTop = mPaddingTop + childParams.topMargin;
++            childParams.mTop = getPaddingTop() + childParams.topMargin;
+         }
+ 
+         anchorParams = getRelatedViewParams(rules, ALIGN_TOP);
+         if (anchorParams != null) {
+             childParams.mTop = anchorParams.mTop + childParams.topMargin;
+         } else if (childParams.alignWithParent && rules[ALIGN_TOP] != 0) {
+-            childParams.mTop = mPaddingTop + childParams.topMargin;
++            childParams.mTop = getPaddingTop() + childParams.topMargin;
+         }
+ 
+         anchorParams = getRelatedViewParams(rules, ALIGN_BOTTOM);
+@@ -1010,17 +1010,17 @@
+             childParams.mBottom = anchorParams.mBottom - childParams.bottomMargin;
+         } else if (childParams.alignWithParent && rules[ALIGN_BOTTOM] != 0) {
+             if (myHeight >= 0) {
+-                childParams.mBottom = myHeight - mPaddingBottom - childParams.bottomMargin;
++                childParams.mBottom = myHeight - getPaddingBottom() - childParams.bottomMargin;
+             }
+         }
+ 
+         if (0 != rules[ALIGN_PARENT_TOP]) {
+-            childParams.mTop = mPaddingTop + childParams.topMargin;
++            childParams.mTop = getPaddingTop() + childParams.topMargin;
+         }
+ 
+         if (0 != rules[ALIGN_PARENT_BOTTOM]) {
+             if (myHeight >= 0) {
+-                childParams.mBottom = myHeight - mPaddingBottom - childParams.bottomMargin;
++                childParams.mBottom = myHeight - getPaddingBottom() - childParams.bottomMargin;
+             }
+         }
+     }
+@@ -1128,19 +1128,16 @@
+ 
+     @Override
+     protected ViewGroup.LayoutParams generateLayoutParams(ViewGroup.LayoutParams lp) {
+-        if (sPreserveMarginParamsInLayoutParamConversion) {
+-            if (lp instanceof LayoutParams) {
+-                return new LayoutParams((LayoutParams) lp);
+-            } else if (lp instanceof MarginLayoutParams) {
+-                return new LayoutParams((MarginLayoutParams) lp);
+-            }
++        if (lp instanceof LayoutParams) {
++            return new LayoutParams((LayoutParams) lp);
++        } else if (lp instanceof MarginLayoutParams) {
++            return new LayoutParams((MarginLayoutParams) lp);
+         }
+         return new LayoutParams(lp);
+     }
+ 
+-    /** @hide */
+     @Override
+-    public boolean dispatchPopulateAccessibilityEventInternal(AccessibilityEvent event) {
++    public boolean dispatchPopulateAccessibilityEvent(AccessibilityEvent event) {
+         if (mTopToBottomLeftToRightSet == null) {
+             mTopToBottomLeftToRightSet = new TreeSet<View>(new TopToBottomLeftToRightComparator());
+         }
+@@ -1300,7 +1297,7 @@
+ 
+             final int targetSdkVersion = c.getApplicationInfo().targetSdkVersion;
+             mIsRtlCompatibilityMode = (targetSdkVersion < JELLY_BEAN_MR1 ||
+-                    !c.getApplicationInfo().hasRtlSupport());
++                    (c.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_SUPPORTS_RTL) == 0);
+ 
+             final int[] rules = mRules;
+             //noinspection MismatchedReadAndWriteOfArray
+@@ -1423,10 +1420,9 @@
+                     source.mInitialRules, LEFT_OF, this.mInitialRules, LEFT_OF, VERB_COUNT);
+         }
+ 
+-        @Override
+         public String debug(String output) {
+-            return output + "ViewGroup.LayoutParams={ width=" + sizeToString(width) +
+-                    ", height=" + sizeToString(height) + " }";
++            return output + "ViewGroup.LayoutParams={ width=" + (width == MATCH_PARENT ? "match-parent" : width == WRAP_CONTENT ? "wrap-content" : width) +
++                    ", height=" + (height == MATCH_PARENT ? "match-parent" : height == WRAP_CONTENT ? "wrap-content" : height) + " }";
+         }
+ 
+         /**
+@@ -1721,13 +1717,6 @@
+         }
+ 
+         /** @hide */
+-        @Override
+-        protected void encodeProperties(@NonNull ViewHierarchyEncoder encoder) {
+-            super.encodeProperties(encoder);
+-            encoder.addProperty("layout:alignWithParent", alignWithParent);
+-        }
+-
+-        /** @hide */
+         public static final class InspectionCompanion
+                 implements android.view.inspector.InspectionCompanion<LayoutParams> {
+             private boolean mPropertiesMapped;

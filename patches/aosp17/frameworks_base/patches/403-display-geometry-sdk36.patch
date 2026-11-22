@@ -1,0 +1,296 @@
+--- a/frameworks/base/core/java/android/view/DisplayCutout.java
++++ b/frameworks/base/core/java/android/view/DisplayCutout.java
+@@ -17,13 +17,6 @@
+ package android.view;
+ 
+ import static android.content.res.Resources.ID_NULL;
+-import static android.internal.perfetto.protos.Displaycutout.DisplayCutoutProto.BOUND_BOTTOM;
+-import static android.internal.perfetto.protos.Displaycutout.DisplayCutoutProto.BOUND_LEFT;
+-import static android.internal.perfetto.protos.Displaycutout.DisplayCutoutProto.BOUND_RIGHT;
+-import static android.internal.perfetto.protos.Displaycutout.DisplayCutoutProto.BOUND_TOP;
+-import static android.internal.perfetto.protos.Displaycutout.DisplayCutoutProto.INSETS;
+-import static android.internal.perfetto.protos.Displaycutout.DisplayCutoutProto.SIDE_OVERRIDES;
+-import static android.internal.perfetto.protos.Displaycutout.DisplayCutoutProto.WATERFALL_INSETS;
+ import static android.util.DisplayMetrics.DENSITY_DEFAULT;
+ import static android.util.DisplayMetrics.DENSITY_DEVICE_STABLE;
+ import static android.view.Surface.ROTATION_0;
+@@ -46,8 +39,6 @@
+ import android.util.DisplayUtils;
+ import android.util.Pair;
+ import android.util.RotationUtils;
+-import android.util.proto.ProtoOutputStream;
+-import android.view.Surface.Rotation;
+ 
+ import com.android.internal.R;
+ import com.android.internal.annotations.GuardedBy;
+@@ -281,13 +272,13 @@
+         private final int mPhysicalDisplayHeight;
+         private final float mDensity;
+         private final String mCutoutSpec;
+-        private final @Rotation int mRotation;
++        private final int mRotation;
+         private final float mScale;
+         private final float mPhysicalPixelDisplaySizeRatio;
+ 
+         public CutoutPathParserInfo(int displayWidth, int displayHeight, int physicalDisplayWidth,
+                 int physicalDisplayHeight, float density, @Nullable String cutoutSpec,
+-                @Rotation int rotation, float scale, float physicalPixelDisplaySizeRatio) {
++                int rotation, float scale, float physicalPixelDisplaySizeRatio) {
+             mDisplayWidth = displayWidth;
+             mDisplayHeight = displayHeight;
+             mPhysicalDisplayWidth = physicalDisplayWidth;
+@@ -892,7 +883,7 @@
+                 if (hasContent) {
+                     sb.append(", ");
+                 }
+-                sb.append(Surface.rotationToString(i)).append(": ");
++                sb.append(i * 90).append("°: ");
+                 switch(override) {
+                     case BOUNDS_POSITION_LEFT:
+                         sb.append(SIDE_STRING_LEFT);
+@@ -916,22 +907,6 @@
+     /**
+      * @hide
+      */
+-    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-        mSafeInsets.dumpDebug(proto, INSETS);
+-        mBounds.getRect(BOUNDS_POSITION_LEFT).dumpDebug(proto, BOUND_LEFT);
+-        mBounds.getRect(BOUNDS_POSITION_TOP).dumpDebug(proto, BOUND_TOP);
+-        mBounds.getRect(BOUNDS_POSITION_RIGHT).dumpDebug(proto, BOUND_RIGHT);
+-        mBounds.getRect(BOUNDS_POSITION_BOTTOM).dumpDebug(proto, BOUND_BOTTOM);
+-        mWaterfallInsets.toRect().dumpDebug(proto, WATERFALL_INSETS);
+-        if (mSideOverrides != null) {
+-            for (int sideOverride : mSideOverrides) {
+-                proto.write(SIDE_OVERRIDES, sideOverride);
+-            }
+-        }
+-        proto.end(token);
+-    }
+-
+     /**
+      * Insets the reference frame of the cutout in the given directions.
+      *
+@@ -1342,7 +1317,7 @@
+         return tmp.replaceSafeInsets(safeInsets);
+     }
+ 
+-    private static int getSideOverride(int[] sideOverrides, @Rotation int rotation) {
++    private static int getSideOverride(int[] sideOverrides, int rotation) {
+         if (sideOverrides == null || sideOverrides.length != 4) {
+             return INVALID_SIDE_OVERRIDE;
+         }
+@@ -1350,8 +1325,8 @@
+     }
+ 
+     /** @return the rotation needed to rotate from the original side to the overridden one. */
+-    private static @Rotation int getRotationToOverride(int sideOverride, Rect[] bounds,
+-            @Rotation int defaultRotation) {
++    private static int getRotationToOverride(int sideOverride, Rect[] bounds,
++            int defaultRotation) {
+         if (sideOverride == INVALID_SIDE_OVERRIDE) {
+             return defaultRotation;
+         }
+--- a/frameworks/base/core/java/android/view/PrivacyIndicatorBounds.java
++++ b/frameworks/base/core/java/android/view/PrivacyIndicatorBounds.java
+@@ -47,7 +47,7 @@
+         mRotation = ROTATION_0;
+     }
+ 
+-    public PrivacyIndicatorBounds(@NonNull Rect[] staticBounds, @Surface.Rotation int rotation) {
++    public PrivacyIndicatorBounds(@NonNull Rect[] staticBounds, int rotation) {
+         mStaticBounds = staticBounds;
+         mRotation = rotation;
+     }
+@@ -64,7 +64,7 @@
+      * rotation integer isn't found
+      */
+     public PrivacyIndicatorBounds updateBoundsForRotation(@Nullable Rect bounds,
+-            @Surface.Rotation int rotation) {
++            int rotation) {
+         if (rotation >= mStaticBounds.length || rotation < 0) {
+             return this;
+         }
+@@ -104,7 +104,7 @@
+     /**
+      * Return a PrivacyIndicatorBounds with the static position rotated.
+      */
+-    public PrivacyIndicatorBounds rotate(@Surface.Rotation int rotation) {
++    public PrivacyIndicatorBounds rotate(int rotation) {
+         if (rotation == ROTATION_0) {
+             return this;
+         }
+@@ -214,9 +214,7 @@
+         Rect[] staticBounds = (Rect[]) in.createTypedArray(Rect.CREATOR);
+         int rotation = in.readInt();
+ 
+-        this.mStaticBounds = staticBounds;
+-        com.android.internal.util.AnnotationValidations.validate(
+-                NonNull.class, null, mStaticBounds);
++        this.mStaticBounds = java.util.Objects.requireNonNull(staticBounds);
+         this.mRotation = rotation;
+ 
+         // onConstructed(); // You can define this method to get a callback
+--- a/frameworks/base/core/java/android/view/RoundedCorners.java
++++ b/frameworks/base/core/java/android/view/RoundedCorners.java
+@@ -496,7 +496,7 @@
+     /**
+      * Returns a rotated RoundedCorners.
+      */
+-    public RoundedCorners rotate(@Surface.Rotation int rotation, int initialDisplayWidth,
++    public RoundedCorners rotate(int rotation, int initialDisplayWidth,
+             int initialDisplayHeight) {
+         if (rotation == ROTATION_0) {
+             return this;
+--- a/frameworks/base/core/java/android/util/RotationUtils.java
++++ b/frameworks/base/core/java/android/util/RotationUtils.java
+@@ -28,8 +28,6 @@
+ import android.graphics.PointF;
+ import android.graphics.Rect;
+ import android.view.Surface;
+-import android.view.Surface.Rotation;
+-import android.view.SurfaceControl;
+ 
+ /**
+  * A class containing utility methods related to rotation.
+@@ -42,7 +40,7 @@
+     /**
+      * Rotates an Insets according to the given rotation.
+      */
+-    public static Insets rotateInsets(Insets insets, @Rotation int rotation) {
++    public static Insets rotateInsets(Insets insets, int rotation) {
+         if (insets == null || insets == Insets.NONE) {
+             return insets;
+         }
+@@ -85,8 +83,8 @@
+      *
+      * Only 'inOutBounds' is mutated.
+      */
+-    public static void rotateBounds(Rect inOutBounds, Rect parentBounds, @Rotation int oldRotation,
+-            @Rotation int newRotation) {
++    public static void rotateBounds(Rect inOutBounds, Rect parentBounds, int oldRotation,
++            int newRotation) {
+         rotateBounds(inOutBounds, parentBounds, deltaRotation(oldRotation, newRotation));
+     }
+ 
+@@ -98,7 +96,7 @@
+      * Only 'inOutBounds' is mutated.
+      */
+     public static void rotateBounds(Rect inOutBounds, int parentWidth, int parentHeight,
+-            @Rotation int rotation) {
++            int rotation) {
+         final int origLeft = inOutBounds.left;
+         final int origTop = inOutBounds.top;
+         switch (rotation) {
+@@ -132,50 +130,23 @@
+      *
+      * Only 'inOutBounds' is mutated.
+      */
+-    public static void rotateBounds(Rect inOutBounds, Rect parentBounds, @Rotation int rotation) {
++    public static void rotateBounds(Rect inOutBounds, Rect parentBounds, int rotation) {
+         rotateBounds(inOutBounds, parentBounds.right, parentBounds.bottom, rotation);
+     }
+ 
+     /** @return the rotation needed to rotate from oldRotation to newRotation. */
+-    @Rotation
+-    public static int deltaRotation(@Rotation int oldRotation, @Rotation int newRotation) {
++    public static int deltaRotation(int oldRotation, int newRotation) {
+         int delta = newRotation - oldRotation;
+         if (delta < 0) delta += 4;
+         return delta;
+     }
+ 
+     /**
+-     * Rotates a surface CCW around the origin (eg. a 90-degree rotation will result in the
+-     * bottom-left being at the origin). Use {@link #rotatePoint} to transform the top-left
+-     * corner appropriately.
+-     */
+-    public static void rotateSurface(SurfaceControl.Transaction t, SurfaceControl sc,
+-            @Rotation int rotation) {
+-        // Note: the matrix values look inverted, but they aren't because our coordinate-space
+-        // is actually left-handed.
+-        // Note: setMatrix expects values in column-major order.
+-        switch (rotation) {
+-            case ROTATION_0:
+-                t.setMatrix(sc, 1.f, 0.f, 0.f, 1.f);
+-                break;
+-            case ROTATION_90:
+-                t.setMatrix(sc, 0.f, -1.f, 1.f, 0.f);
+-                break;
+-            case ROTATION_180:
+-                t.setMatrix(sc, -1.f, 0.f, 0.f, -1.f);
+-                break;
+-            case ROTATION_270:
+-                t.setMatrix(sc, 0.f, 1.f, -1.f, 0.f);
+-                break;
+-        }
+-    }
+-
+-    /**
+      * Rotates a point CCW within a rectangle of size parentW x parentH with top/left at the
+      * origin as if the point is stuck to the rectangle. The rectangle is transformed such that
+      * it's top/left remains at the origin after the rotation.
+      */
+-    public static void rotatePoint(Point inOutPoint, @Rotation int rotation,
++    public static void rotatePoint(Point inOutPoint, int rotation,
+             int parentW, int parentH) {
+         int origX = inOutPoint.x;
+         switch (rotation) {
+@@ -198,7 +169,7 @@
+     /**
+      * Same as {@link #rotatePoint}, but for float coordinates.
+      */
+-    public static void rotatePointF(PointF inOutPoint, @Rotation int rotation,
++    public static void rotatePointF(PointF inOutPoint, int rotation,
+             float parentW, float parentH) {
+         float origX = inOutPoint.x;
+         switch (rotation) {
+@@ -225,7 +196,7 @@
+      * @param rotation the rotation to which the matrix should transform
+      * @param out the matrix to be set
+      */
+-    public static void transformPhysicalToLogicalCoordinates(@Rotation int rotation,
++    public static void transformPhysicalToLogicalCoordinates(int rotation,
+             @Dimension int physicalWidth, @Dimension int physicalHeight, Matrix out) {
+         switch (rotation) {
+             case ROTATION_0:
+@@ -255,8 +226,7 @@
+      * @param rotation the original rotation.
+      * @return the new rotation that should be applied.
+      */
+-    @Surface.Rotation
+-    public static int reverseRotationDirectionAroundZAxis(@Surface.Rotation int rotation) {
++    public static int reverseRotationDirectionAroundZAxis(int rotation) {
+         // Flipping 270 and 90 has the same effect as changing the direction which rotation is
+         // applied.
+         if (rotation == Surface.ROTATION_90) {
+--- a/frameworks/base/core/java/android/view/DisplayShape.java
++++ b/frameworks/base/core/java/android/view/DisplayShape.java
+@@ -18,6 +18,7 @@
+ 
+ import static android.view.Surface.ROTATION_0;
+ 
++import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.TestApi;
+ import android.content.res.Resources;
+@@ -29,8 +30,6 @@
+ import android.util.DisplayUtils;
+ import android.util.PathParser;
+ import android.util.RotationUtils;
+-
+-import androidx.annotation.NonNull;
+ 
+ import com.android.internal.R;
+ import com.android.internal.annotations.GuardedBy;
+--- a/frameworks/base/core/java/android/view/CutoutSpecification.java
++++ b/frameworks/base/core/java/android/view/CutoutSpecification.java
+@@ -390,7 +390,7 @@
+         }
+ 
+         private void parseSvgPathSpec(Region region, String spec) {
+-            if (TextUtils.length(spec) < MINIMAL_ACCEPTABLE_PATH_LENGTH) {
++            if (spec == null || spec.length() < MINIMAL_ACCEPTABLE_PATH_LENGTH) {
+                 Log.e(TAG, "According to SVG definition, it shouldn't happen");
+                 return;
+             }

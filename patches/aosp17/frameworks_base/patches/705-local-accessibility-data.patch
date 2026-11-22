@@ -1,0 +1,350 @@
+--- a/frameworks/base/core/java/android/view/accessibility/AccessibilityEvent.java
++++ b/frameworks/base/core/java/android/view/accessibility/AccessibilityEvent.java
+@@ -26,3 +26,2 @@
+ import android.text.TextUtils;
+-import android.util.Log;
+ import android.view.View;
+@@ -433,5 +432,3 @@
+ public final class AccessibilityEvent extends AccessibilityRecord implements Parcelable {
+-    private static final String LOG_TAG = "AccessibilityEvent";
+-
+-    private static final boolean DEBUG = Log.isLoggable(LOG_TAG, Log.DEBUG) && Build.IS_DEBUGGABLE;
++    private static final boolean DEBUG = false;
+ 
+@@ -1803,3 +1800,3 @@
+         record.mBeforeText = TextUtils.CHAR_SEQUENCE_CREATOR.createFromParcel(parcel);
+-        record.mParcelableData = parcel.readParcelable(null);
++        record.mParcelableData = parcel.readParcelable(null, Parcelable.class);
+         parcel.readList(record.mText, null, java.lang.CharSequence.class);
+--- a/frameworks/base/core/java/android/view/accessibility/AccessibilityRecord.java
++++ b/frameworks/base/core/java/android/view/accessibility/AccessibilityRecord.java
+@@ -18,4 +18,2 @@
+ 
+-import static com.android.internal.util.CollectionUtils.isEmpty;
+-
+ import android.annotation.NonNull;
+@@ -24,5 +22,3 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.os.Build;
+ import android.os.Parcelable;
+-import android.os.Process;
+ import android.view.Display;
+@@ -70,2 +66,3 @@
+     private static final int UNDEFINED = -1;
++    static final int UNDEFINED_WINDOW_ID = -1;
+ 
+@@ -103,4 +100,4 @@
+     long mSourceNodeId = AccessibilityNodeInfo.UNDEFINED_NODE_ID;
+-    int mSourceWindowId = AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
+-    int mEmbeddingHostWindowId = AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
++    int mSourceWindowId = UNDEFINED_WINDOW_ID;
++    int mEmbeddingHostWindowId = UNDEFINED_WINDOW_ID;
+     int mSourceDisplayId = Display.INVALID_DISPLAY;
+@@ -161,3 +158,3 @@
+         int rootViewId = AccessibilityNodeInfo.UNDEFINED_ITEM_ID;
+-        mSourceWindowId = AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
++        mSourceWindowId = UNDEFINED_WINDOW_ID;
+         if (root != null) {
+@@ -207,11 +204,3 @@
+         enforceSealed();
+-        if ((mConnectionId == UNDEFINED)
+-                || (mSourceWindowId == AccessibilityWindowInfo.UNDEFINED_WINDOW_ID)
+-                || (AccessibilityNodeInfo.getAccessibilityViewId(mSourceNodeId)
+-                == AccessibilityNodeInfo.UNDEFINED_ITEM_ID)) {
+-            return null;
+-        }
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        return client.findAccessibilityNodeInfoByAccessibilityId(mConnectionId, mSourceWindowId,
+-                mSourceNodeId, false, prefetchingStrategy, null);
++        return AccessibilityNodeInfo.getLocalNode(mSourceWindowId, mSourceNodeId);
+     }
+@@ -262,7 +251,3 @@
+         if (Flags.embeddedUiUsesHostWindowId()) {
+-            if (Build.isDebuggable() && Process.myUid() == Process.SYSTEM_UID) {
+-                throw new IllegalStateException(
+-                        "Internal implementation logic should use getRealWindowId");
+-            }
+-            if (mEmbeddingHostWindowId != AccessibilityWindowInfo.UNDEFINED_WINDOW_ID) {
++            if (mEmbeddingHostWindowId != UNDEFINED_WINDOW_ID) {
+                 return mEmbeddingHostWindowId;
+@@ -981,4 +966,4 @@
+         mSourceNodeId = AccessibilityNodeInfo.UNDEFINED_ITEM_ID;
+-        mSourceWindowId = AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
+-        mEmbeddingHostWindowId = AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
++        mSourceWindowId = UNDEFINED_WINDOW_ID;
++        mEmbeddingHostWindowId = UNDEFINED_WINDOW_ID;
+         mSourceDisplayId = Display.INVALID_DISPLAY;
+@@ -994,3 +979,3 @@
+         builder.append(" [ ClassName: ").append(mClassName);
+-        if (!DEBUG_CONCISE_TOSTRING || !isEmpty(mText)) {
++        if (!DEBUG_CONCISE_TOSTRING || !mText.isEmpty()) {
+             appendPropName(builder, "Text").append(mText);
+--- a/frameworks/base/core/java/android/view/accessibility/AccessibilityNodeInfo.java
++++ b/frameworks/base/core/java/android/view/accessibility/AccessibilityNodeInfo.java
+@@ -17,2 +17,4 @@
+ package android.view.accessibility;
++
++import static android.view.accessibility.AccessibilityRecord.UNDEFINED_WINDOW_ID;
+ 
+@@ -64,4 +66,4 @@
+ import android.view.View;
++import android.view.ViewParent;
+ import android.view.ViewGroup;
+-import android.view.ViewRootImpl;
+ import android.widget.TextView;
+@@ -69,3 +71,2 @@
+ import com.android.internal.R;
+-import com.android.internal.util.CollectionUtils;
+ import com.android.internal.util.Preconditions;
+@@ -118,3 +119,3 @@
+ 
+-    private static final boolean DEBUG = Log.isLoggable(TAG, Log.DEBUG) && Build.IS_DEBUGGABLE;
++    private static final boolean DEBUG = false;
+ 
+@@ -1142,4 +1143,4 @@
+     // Data.
+-    private int mWindowId = AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
+-    private int mEmbeddingHostWindowId = AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
++    private int mWindowId = UNDEFINED_WINDOW_ID;
++    private int mEmbeddingHostWindowId = UNDEFINED_WINDOW_ID;
+     @UnsupportedAppUsage
+@@ -1317,7 +1318,8 @@
+         enforceValidFocusType(focus);
+-        if (!canPerformRequestOverConnection(mConnectionId, mWindowId, mSourceNodeId)) {
+-            return null;
+-        }
+-        return AccessibilityInteractionClient.getInstance().findFocus(mConnectionId, mWindowId,
+-                mSourceNodeId, focus);
++        View root = getLocalView(mWindowId, mSourceNodeId);
++        if (root == null) return null;
++        AccessibilityNodeProvider provider = root.getAccessibilityNodeProvider();
++        if (provider != null) return provider.findFocus(focus);
++        View focused = focus == FOCUS_INPUT ? root.findFocus() : null;
++        return focused == null ? null : focused.createAccessibilityNodeInfo();
+     }
+@@ -1349,7 +1351,6 @@
+         enforceValidFocusDirection(direction);
+-        if (!canPerformRequestOverConnection(mConnectionId, mWindowId, mSourceNodeId)) {
+-            return null;
+-        }
+-        return AccessibilityInteractionClient.getInstance().focusSearch(mConnectionId, mWindowId,
+-                mSourceNodeId, direction);
++        View source = getLocalView(mWindowId, mSourceNodeId);
++        ViewParent parent = source == null ? null : source.getParent();
++        View next = parent == null ? null : parent.focusSearch(source, direction);
++        return next == null ? null : next.createAccessibilityNodeInfo();
+     }
+@@ -1371,3 +1372,3 @@
+         if (Flags.embeddedUiUsesHostWindowId()) {
+-            if (mEmbeddingHostWindowId != AccessibilityWindowInfo.UNDEFINED_WINDOW_ID) {
++            if (mEmbeddingHostWindowId != UNDEFINED_WINDOW_ID) {
+                 return mEmbeddingHostWindowId;
+@@ -1413,12 +1414,5 @@
+         enforceSealed();
+-        if (!canPerformRequestOverConnection(mConnectionId, mWindowId, mSourceNodeId)) {
+-            return false;
+-        }
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        AccessibilityNodeInfo refreshedInfo = client.findAccessibilityNodeInfoByAccessibilityId(
+-                mConnectionId, mWindowId, mSourceNodeId, bypassCache, 0, arguments);
+-        if (refreshedInfo == null) {
+-            return false;
+-        }
+-        init(refreshedInfo);
++        AccessibilityNodeInfo refreshed = getLocalNode(mWindowId, mSourceNodeId);
++        if (refreshed == null) return false;
++        init(refreshed);
+         return true;
+@@ -1526,17 +1520,4 @@
+         enforceSealed();
+-        if (mChildNodeIds == null) {
+-            return null;
+-        }
+-        if (!canPerformRequestOverConnection(mConnectionId, mWindowId, mSourceNodeId)) {
+-            return null;
+-        }
+-        final long childId = mChildNodeIds.get(index);
+-        final AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        if (mLeashedChild != null && childId == LEASHED_NODE_ID) {
+-            return client.findAccessibilityNodeInfoByAccessibilityId(mConnectionId, mLeashedChild,
+-                    ROOT_NODE_ID, false, prefetchingStrategy, null);
+-        }
+-
+-        return client.findAccessibilityNodeInfoByAccessibilityId(mConnectionId, mWindowId,
+-                childId, false, prefetchingStrategy, null);
++        if (mChildNodeIds == null) return null;
++        return getLocalNode(mWindowId, mChildNodeIds.get(index));
+     }
+@@ -1727,3 +1708,3 @@
+     public List<AccessibilityAction> getActionList() {
+-        return CollectionUtils.emptyIfNull(mActions);
++        return mActions == null ? Collections.emptyList() : mActions;
+     }
+@@ -2199,13 +2180,3 @@
+     public boolean performAction(int action) {
+-        enforceSealed();
+-        if (!canPerformRequestOverConnection(mConnectionId, mWindowId, mSourceNodeId)) {
+-            return false;
+-        }
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        Bundle arguments = null;
+-        if (mExtras != null) {
+-            arguments = mExtras;
+-        }
+-        return client.performAccessibilityAction(mConnectionId, mWindowId, mSourceNodeId,
+-                action, arguments);
++        return performAction(action, mExtras);
+     }
+@@ -2226,9 +2197,10 @@
+     public boolean performAction(int action, Bundle arguments) {
+-        enforceSealed();
+-        if (!canPerformRequestOverConnection(mConnectionId, mWindowId, mSourceNodeId)) {
+-            return false;
+-        }
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        return client.performAccessibilityAction(mConnectionId, mWindowId, mSourceNodeId,
+-                action, arguments);
++        View source = getLocalView(mWindowId, mSourceNodeId);
++        if (source == null) return false;
++        int childId = getVirtualDescendantId(mSourceNodeId);
++        if (childId == AccessibilityNodeProvider.HOST_VIEW_ID) {
++            return source.performAccessibilityAction(action, arguments);
++        }
++        AccessibilityNodeProvider provider = source.getAccessibilityNodeProvider();
++        return provider != null && provider.performAction(childId, action, arguments);
+     }
+@@ -2253,8 +2225,8 @@
+         enforceSealed();
+-        if (!canPerformRequestOverConnection(mConnectionId, mWindowId, mSourceNodeId)) {
+-            return Collections.emptyList();
+-        }
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        return client.findAccessibilityNodeInfosByText(mConnectionId, mWindowId, mSourceNodeId,
+-                text);
++        View source = getLocalView(mWindowId, mSourceNodeId);
++        AccessibilityNodeProvider provider = source == null ? null : source.getAccessibilityNodeProvider();
++        if (provider == null) return Collections.emptyList();
++        List<AccessibilityNodeInfo> results = provider.findAccessibilityNodeInfosByText(
++                text, getVirtualDescendantId(mSourceNodeId));
++        return results == null ? Collections.emptyList() : results;
+     }
+@@ -2286,12 +2258,8 @@
+         enforceSealed();
+-        if (viewId == null) {
+-            Log.e(TAG, "returns empty list due to null viewId.");
+-            return Collections.emptyList();
+-        }
+-        if (!canPerformRequestOverConnection(mConnectionId, mWindowId, mSourceNodeId)) {
+-            return Collections.emptyList();
+-        }
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        return client.findAccessibilityNodeInfosByViewId(mConnectionId, mWindowId, mSourceNodeId,
+-                viewId);
++        View source = getLocalView(mWindowId, mSourceNodeId);
++        if (source == null || viewId == null) return Collections.emptyList();
++        int id = source.getResources().getIdentifier(viewId, null, null);
++        View match = id == 0 ? null : source.findViewById(id);
++        return match == null ? Collections.emptyList() : Collections.singletonList(
++                match.createAccessibilityNodeInfo());
+     }
+@@ -2310,17 +2278,4 @@
+         enforceSealed();
+-        final int windowId;
+-        if (Flags.embeddedUiUsesHostWindowId()) {
+-            if (mEmbeddingHostWindowId != AccessibilityWindowInfo.UNDEFINED_WINDOW_ID) {
+-                windowId = mEmbeddingHostWindowId;
+-            } else {
+-                windowId = mWindowId;
+-            }
+-        } else {
+-            windowId = mWindowId;
+-        }
+-        if (!canPerformRequestOverConnection(mConnectionId, windowId, mSourceNodeId)) {
+-            return null;
+-        }
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        return client.getWindow(mConnectionId, windowId);
++        // Window enumeration is owned by the host.
++        return null;
+     }
+@@ -4736,18 +4691,6 @@
+         enforceNotSealed();
+-
+-        if (!enabled) {
+-            setConnectionId(UNDEFINED_CONNECTION_ID);
+-            return;
+-        }
+-
+-        if (mConnectionId != UNDEFINED_CONNECTION_ID) {
+-            return;
+-        }
+-
+-        ViewRootImpl viewRootImpl = view.getViewRootImpl();
+-        if (viewRootImpl == null) {
+-            throw new IllegalStateException(
+-                    "Cannot link a node to a view that is not attached to a window.");
+-        }
+-        setConnectionId(viewRootImpl.getDirectAccessibilityConnectionId());
++        if (enabled && !view.isAttachedToWindow()) {
++            throw new IllegalStateException("Cannot link a node to a view that is not attached.");
++        }
++        setConnectionId(enabled ? view.getAccessibilityWindowId() : UNDEFINED_CONNECTION_ID);
+     }
+@@ -4783,4 +4726,3 @@
+     private static boolean usingDirectConnection(int connectionId) {
+-        return AccessibilityInteractionClient.getConnection(
+-                connectionId) instanceof DirectAccessibilityConnection;
++        return connectionId != UNDEFINED_CONNECTION_ID;
+     }
+@@ -5810,10 +5752,2 @@
+ 
+-    private static boolean canPerformRequestOverConnection(int connectionId,
+-            int windowId, long accessibilityNodeId) {
+-        final boolean hasWindowId = windowId != AccessibilityWindowInfo.UNDEFINED_WINDOW_ID;
+-        return ((usingDirectConnection(connectionId) || hasWindowId)
+-                && (getAccessibilityViewId(accessibilityNodeId) != UNDEFINED_ITEM_ID)
+-                && (connectionId != UNDEFINED_CONNECTION_ID));
+-    }
+-
+     @Override
+@@ -5945,8 +5879,3 @@
+             int windowId, long accessibilityId, @PrefetchingStrategy int prefetchingStrategy) {
+-        if (!canPerformRequestOverConnection(connectionId, windowId, accessibilityId)) {
+-            return null;
+-        }
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        return client.findAccessibilityNodeInfoByAccessibilityId(connectionId,
+-                windowId, accessibilityId, false, prefetchingStrategy, null);
++        return getLocalNode(windowId, accessibilityId);
+     }
+@@ -5963,10 +5892,22 @@
+             @PrefetchingStrategy int prefetchingStrategy) {
+-        if (!((leashToken != null)
+-                && (getAccessibilityViewId(accessibilityId) != UNDEFINED_ITEM_ID)
+-                && (connectionId != UNDEFINED_CONNECTION_ID))) {
+-            return null;
+-        }
+-        AccessibilityInteractionClient client = AccessibilityInteractionClient.getInstance();
+-        return client.findAccessibilityNodeInfoByAccessibilityId(connectionId,
+-                leashToken, accessibilityId, false, prefetchingStrategy, null);
++        // There are no cross-window Binder connections in the embedded runtime.
++        return null;
++    }
++
++    static AccessibilityNodeInfo getLocalNode(int windowId, long nodeId) {
++        View view = getLocalView(windowId, nodeId);
++        if (view == null) return null;
++        int childId = getVirtualDescendantId(nodeId);
++        if (childId == AccessibilityNodeProvider.HOST_VIEW_ID) {
++            return view.createAccessibilityNodeInfo();
++        }
++        AccessibilityNodeProvider provider = view.getAccessibilityNodeProvider();
++        return provider == null ? null : provider.createAccessibilityNodeInfo(childId);
++    }
++
++    private static View getLocalView(int windowId, long nodeId) {
++        int viewId = getAccessibilityViewId(nodeId);
++        if (viewId == UNDEFINED_ITEM_ID) return null;
++        View view = AccessibilityNodeIdManager.getInstance().findView(viewId);
++        return view != null && view.getAccessibilityWindowId() == windowId ? view : null;
+     }

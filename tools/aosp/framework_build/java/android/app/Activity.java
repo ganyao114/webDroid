@@ -13,6 +13,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewRootImpl;
+import android.view.EmbeddedWindow;
 import android.view.Window;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
@@ -21,7 +22,7 @@ import java.util.function.Consumer;
 
 public class Activity extends ContextThemeWrapper implements KeyEvent.Callback, ComponentCallbacks2 {
     private Intent intent;
-    private Window window;
+    private EmbeddedWindow window;
     private ViewRootImpl root;
     private ComponentName component;
     private CharSequence title;
@@ -41,7 +42,7 @@ public class Activity extends ContextThemeWrapper implements KeyEvent.Callback, 
         this.intent = intent;
         component = intent.getComponent();
         if (theme != 0) setTheme(theme);
-        window = new Window(this);
+        window = new EmbeddedWindow(this);
         try (TypedArray a = obtainStyledAttributes(new int[] {android.R.attr.windowBackground})) {
             if (a.hasValue(0)) window.setBackgroundDrawable(a.getDrawable(0));
         }

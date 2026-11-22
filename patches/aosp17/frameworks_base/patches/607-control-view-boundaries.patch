@@ -1,0 +1,911 @@
+--- a/frameworks/base/core/java/android/widget/CompoundButton.java
++++ b/frameworks/base/core/java/android/widget/CompoundButton.java
+@@ -16,7 +16,6 @@
+ 
+ package android.widget;
+ 
+-import static android.view.accessibility.Flags.triStateChecked;
+ 
+ import android.annotation.DrawableRes;
+ import android.annotation.NonNull;
+@@ -38,11 +37,9 @@
+ import android.view.RemotableViewMethod;
+ import android.view.SoundEffectConstants;
+ import android.view.ViewDebug;
+-import android.view.ViewHierarchyEncoder;
+ import android.view.ViewStructure;
+ import android.view.accessibility.AccessibilityEvent;
+ import android.view.accessibility.AccessibilityNodeInfo;
+-import android.view.autofill.AutofillManager;
+ import android.view.autofill.AutofillValue;
+ import android.view.inspector.InspectableProperty;
+ 
+@@ -211,10 +208,6 @@
+             mCheckedFromResource = false;
+             mChecked = checked;
+             refreshDrawableState();
+-            if (triStateChecked()) {
+-                notifyViewAccessibilityStateChangedIfNeeded(
+-                        AccessibilityEvent.CONTENT_CHANGE_TYPE_CHECKED);
+-            }
+ 
+             // Avoid infinite recursions if setChecked() is called from a listener
+             if (mBroadcasting) {
+@@ -229,10 +222,6 @@
+             }
+             if (mOnCheckedChangeWidgetListener != null) {
+                 mOnCheckedChangeWidgetListener.onCheckedChanged(this, mChecked);
+-            }
+-            final AutofillManager afm = mContext.getSystemService(AutofillManager.class);
+-            if (afm != null) {
+-                afm.notifyValueChanged(this);
+             }
+ 
+             mBroadcasting = false;
+@@ -319,7 +308,7 @@
+                 drawable.setCallback(this);
+                 drawable.setLayoutDirection(getLayoutDirection());
+                 if (drawable.isStateful()) {
+-                    drawable.setState(getDrawableState());
++                    drawable.setState(getButtonDrawableState());
+                 }
+                 drawable.setVisible(getVisibility() == VISIBLE, false);
+                 setMinHeight(drawable.getIntrinsicHeight());
+@@ -332,8 +321,8 @@
+      * @hide
+      */
+     @Override
+-    public void onResolveDrawables(@ResolvedLayoutDir int layoutDirection) {
+-        super.onResolveDrawables(layoutDirection);
++    public void onRtlPropertiesChanged(int layoutDirection) {
++        super.onRtlPropertiesChanged(layoutDirection);
+         if (mButtonDrawable != null) {
+             mButtonDrawable.setLayoutDirection(layoutDirection);
+         }
+@@ -474,7 +463,7 @@
+             // The drawable (or one of its children) may not have been
+             // stateful before applying the tint, so let's try again.
+             if (mButtonDrawable.isStateful()) {
+-                mButtonDrawable.setState(getDrawableState());
++                mButtonDrawable.setState(getButtonDrawableState());
+             }
+         }
+     }
+@@ -486,28 +475,23 @@
+ 
+     /** @hide */
+     @Override
+-    public void onInitializeAccessibilityEventInternal(AccessibilityEvent event) {
+-        super.onInitializeAccessibilityEventInternal(event);
++    public void onInitializeAccessibilityEvent(AccessibilityEvent event) {
++        super.onInitializeAccessibilityEvent(event);
+         event.setChecked(mChecked);
+     }
+ 
+     /** @hide */
+     @Override
+-    public void onInitializeAccessibilityNodeInfoInternal(AccessibilityNodeInfo info) {
+-        super.onInitializeAccessibilityNodeInfoInternal(info);
++    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
++        super.onInitializeAccessibilityNodeInfo(info);
+         info.setCheckable(true);
+-        if (triStateChecked()) {
+-            info.setChecked(mChecked ? AccessibilityNodeInfo.CHECKED_STATE_TRUE :
+-                    AccessibilityNodeInfo.CHECKED_STATE_FALSE);
+-        } else {
+-            info.setChecked(mChecked);
+-        }
++        info.setChecked(mChecked);
+     }
+ 
+     @Override
+     public int getCompoundPaddingLeft() {
+         int padding = super.getCompoundPaddingLeft();
+-        if (!isLayoutRtl()) {
++        if (!(getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
+             final Drawable buttonDrawable = mButtonDrawable;
+             if (buttonDrawable != null) {
+                 padding += buttonDrawable.getIntrinsicWidth();
+@@ -519,7 +503,7 @@
+     @Override
+     public int getCompoundPaddingRight() {
+         int padding = super.getCompoundPaddingRight();
+-        if (isLayoutRtl()) {
++        if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
+             final Drawable buttonDrawable = mButtonDrawable;
+             if (buttonDrawable != null) {
+                 padding += buttonDrawable.getIntrinsicWidth();
+@@ -531,7 +515,6 @@
+     /**
+      * @hide
+      */
+-    @Override
+     public int getHorizontalOffsetForDrawables() {
+         final Drawable buttonDrawable = mButtonDrawable;
+         return (buttonDrawable != null) ? buttonDrawable.getIntrinsicWidth() : 0;
+@@ -557,8 +540,8 @@
+                     top = 0;
+             }
+             final int bottom = top + drawableHeight;
+-            final int left = isLayoutRtl() ? getWidth() - drawableWidth : 0;
+-            final int right = isLayoutRtl() ? getWidth() : drawableWidth;
++            final int left = (getLayoutDirection() == LAYOUT_DIRECTION_RTL) ? getWidth() - drawableWidth : 0;
++            final int right = (getLayoutDirection() == LAYOUT_DIRECTION_RTL) ? getWidth() : drawableWidth;
+ 
+             buttonDrawable.setBounds(left, top, right, bottom);
+ 
+@@ -571,8 +554,8 @@
+         super.onDraw(canvas);
+ 
+         if (buttonDrawable != null) {
+-            final int scrollX = mScrollX;
+-            final int scrollY = mScrollY;
++            final int scrollX = getScrollX();
++            final int scrollY = getScrollY();
+             if (scrollX == 0 && scrollY == 0) {
+                 buttonDrawable.draw(canvas);
+             } else {
+@@ -598,9 +581,23 @@
+ 
+         final Drawable buttonDrawable = mButtonDrawable;
+         if (buttonDrawable != null && buttonDrawable.isStateful()
+-                && buttonDrawable.setState(getDrawableState())) {
++                && buttonDrawable.setState(getButtonDrawableState())) {
+             invalidateDrawable(buttonDrawable);
+         }
++    }
++
++    // The embedded View's drawable state omits widget-specific state bits.
++    final int[] getButtonDrawableState() {
++        final int[] state = getDrawableState();
++        if (!isChecked()) return state;
++        int count = 0;
++        while (count < state.length && state[count] != 0) {
++            if (state[count] == android.R.attr.state_checked) return state;
++            count++;
++        }
++        final int[] checked = java.util.Arrays.copyOf(state, count + 1);
++        checked[count] = android.R.attr.state_checked;
++        return checked;
+     }
+ 
+     @Override
+@@ -688,23 +685,12 @@
+         requestLayout();
+     }
+ 
++
+     /** @hide */
+     @Override
+-    protected void encodeProperties(@NonNull ViewHierarchyEncoder stream) {
+-        super.encodeProperties(stream);
+-        stream.addProperty("checked", isChecked());
+-    }
+-
+-
+-    /** @hide */
+-    @Override
+-    protected void onProvideStructure(@NonNull ViewStructure structure,
+-            @ViewStructureType int viewFor, int flags) {
+-        super.onProvideStructure(structure, viewFor, flags);
+-
+-        if (viewFor == VIEW_STRUCTURE_FOR_AUTOFILL) {
+-            structure.setDataIsSensitive(!mCheckedFromResource);
+-        }
++    public void onProvideAutofillStructure(@NonNull ViewStructure structure, int flags) {
++        super.onProvideAutofillStructure(structure, flags);
++        structure.setDataIsSensitive(!mCheckedFromResource);
+     }
+ 
+     @Override
+@@ -720,7 +706,7 @@
+     }
+ 
+     @Override
+-    public @AutofillType int getAutofillType() {
++    public int getAutofillType() {
+         return isEnabled() ? AUTOFILL_TYPE_TOGGLE : AUTOFILL_TYPE_NONE;
+     }
+ 
+--- a/frameworks/base/core/java/android/widget/RadioButton.java
++++ b/frameworks/base/core/java/android/widget/RadioButton.java
+@@ -95,13 +95,28 @@
+             RadioGroup radioGroup = (RadioGroup) getParent();
+             if (radioGroup.getOrientation() == LinearLayout.HORIZONTAL) {
+                 info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain(0, 1,
+-                        radioGroup.getIndexWithinVisibleButtons(this), 1, false, isChecked()));
++                        getVisibleButtonIndex(radioGroup), 1, false, isChecked()));
+             } else {
+                 info.setCollectionItemInfo(AccessibilityNodeInfo.CollectionItemInfo.obtain(
+-                        radioGroup.getIndexWithinVisibleButtons(this), 1, 0, 1,
++                        getVisibleButtonIndex(radioGroup), 1, 0, 1,
+                         false, isChecked()));
+             }
+         }
++    }
++
++    private int getVisibleButtonIndex(LinearLayout group) {
++        int index = 0;
++        for (int i = 0; i < group.getChildCount(); i++) {
++            final android.view.View child = group.getChildAt(i);
++            if (child == this) {
++                return index;
++            }
++            if (child instanceof RadioButton && child.getVisibility() == VISIBLE
++                    && !android.text.TextUtils.isEmpty(((RadioButton) child).getText())) {
++                index++;
++            }
++        }
++        return -1;
+     }
+ 
+     /** @hide **/
+--- a/frameworks/base/core/java/android/widget/ProgressBar.java
++++ b/frameworks/base/core/java/android/widget/ProgressBar.java
+@@ -16,7 +16,6 @@
+ 
+ package android.widget;
+ 
+-import static android.view.accessibility.Flags.indeterminateRangeInfo;
+ 
+ import android.animation.Animator;
+ import android.animation.AnimatorListenerAdapter;
+@@ -54,7 +53,6 @@
+ import android.view.RemotableViewMethod;
+ import android.view.View;
+ import android.view.ViewDebug;
+-import android.view.ViewHierarchyEncoder;
+ import android.view.accessibility.AccessibilityEvent;
+ import android.view.accessibility.AccessibilityManager;
+ import android.view.accessibility.AccessibilityNodeInfo;
+@@ -241,7 +239,7 @@
+     private boolean mNoInvalidate;
+     private Interpolator mInterpolator;
+     private RefreshProgressRunnable mRefreshProgressRunnable;
+-    private long mUiThreadId;
++    private Thread mUiThread;
+     private boolean mShouldStartAnimationDrawable;
+ 
+     private boolean mInDrawing;
+@@ -282,7 +280,7 @@
+     public ProgressBar(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
+         super(context, attrs, defStyleAttr, defStyleRes);
+ 
+-        mUiThreadId = Thread.currentThread().getId();
++        mUiThread = Thread.currentThread();
+         initProgressBar();
+ 
+         final TypedArray a = context.obtainStyledAttributes(
+@@ -695,8 +693,7 @@
+                 stopAnimation();
+             }
+ 
+-            notifyViewAccessibilityStateChangedIfNeeded(
+-                    AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED);
++            sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+         }
+     }
+ 
+@@ -1496,7 +1493,7 @@
+      * @hide
+      */
+     @Override
+-    public void onResolveDrawables(int layoutDirection) {
++    public void onRtlPropertiesChanged(int layoutDirection) {
+         final Drawable d = mCurrentDrawable;
+         if (d != null) {
+             d.setLayoutDirection(layoutDirection);
+@@ -1613,7 +1610,7 @@
+         // Cache the locale-appropriate NumberFormat.  Configuration locale is guaranteed
+         // non-null, so the first time this is called we will always get the appropriate
+         // NumberFormat, then never regenerate it unless the locale changes on the fly.
+-        final Locale curLocale = mContext.getResources().getConfiguration().getLocales().get(0);
++        final Locale curLocale = getContext().getResources().getConfiguration().getLocales().get(0);
+         if (!curLocale.equals(mCachedLocale)) {
+             mCachedLocale = curLocale;
+             mPercentFormat = NumberFormat.getPercentInstance(curLocale);
+@@ -1643,7 +1640,8 @@
+     }
+ 
+     void onProgressRefresh(float scale, boolean fromUser, int progress) {
+-        if (AccessibilityManager.getInstance(mContext).isEnabled()
++        final AccessibilityManager manager = getContext().getSystemService(AccessibilityManager.class);
++        if (manager != null && manager.isEnabled()
+                 && getStateDescription() == null && !isIndeterminate()) {
+             AccessibilityEvent event = AccessibilityEvent.obtain();
+             event.setEventType(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
+@@ -1697,7 +1695,7 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     private synchronized void refreshProgress(int id, int progress, boolean fromUser,
+             boolean animate) {
+-        if (mUiThreadId == Thread.currentThread().getId()) {
++        if (mUiThread == Thread.currentThread()) {
+             doRefreshProgress(id, progress, fromUser, true, animate);
+         } else {
+             if (mRefreshProgressRunnable == null) {
+@@ -2084,8 +2082,8 @@
+         if (!mInDrawing) {
+             if (verifyDrawable(dr)) {
+                 final Rect dirty = dr.getBounds();
+-                final int scrollX = mScrollX + mPaddingLeft;
+-                final int scrollY = mScrollY + mPaddingTop;
++                final int scrollX = getScrollX() + getPaddingLeft();
++                final int scrollY = getScrollY() + getPaddingTop();
+ 
+                 invalidate(dirty.left + scrollX, dirty.top + scrollY,
+                         dirty.right + scrollX, dirty.bottom + scrollY);
+@@ -2103,8 +2101,8 @@
+     private void updateDrawableBounds(int w, int h) {
+         // onDraw will translate the canvas so we draw starting at 0,0.
+         // Subtract out padding for the purposes of the calculations below.
+-        w -= mPaddingRight + mPaddingLeft;
+-        h -= mPaddingTop + mPaddingBottom;
++        w -= getPaddingRight() + getPaddingLeft();
++        h -= getPaddingTop() + getPaddingBottom();
+ 
+         int right = w;
+         int bottom = h;
+@@ -2134,7 +2132,7 @@
+                     }
+                 }
+             }
+-            if (isLayoutRtl() && mMirrorForRtl) {
++            if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL) && mMirrorForRtl) {
+                 int tempLeft = left;
+                 left = w - right;
+                 right = w - tempLeft;
+@@ -2164,11 +2162,11 @@
+             // rotates properly in its animation
+             final int saveCount = canvas.save();
+ 
+-            if (isLayoutRtl() && mMirrorForRtl) {
+-                canvas.translate(getWidth() - mPaddingRight, mPaddingTop);
++            if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL) && mMirrorForRtl) {
++                canvas.translate(getWidth() - getPaddingRight(), getPaddingTop());
+                 canvas.scale(-1.0f, 1.0f);
+             } else {
+-                canvas.translate(mPaddingLeft, mPaddingTop);
++                canvas.translate(getPaddingLeft(), getPaddingTop());
+             }
+ 
+             final long time = getDrawingTime();
+@@ -2207,8 +2205,8 @@
+ 
+         updateDrawableState();
+ 
+-        dw += mPaddingLeft + mPaddingRight;
+-        dh += mPaddingTop + mPaddingBottom;
++        dw += getPaddingLeft() + getPaddingRight();
++        dh += getPaddingTop() + getPaddingBottom();
+ 
+         final int measuredWidth = resolveSizeAndState(dw, widthMeasureSpec, 0);
+         final int measuredHeight = resolveSizeAndState(dh, heightMeasureSpec, 0);
+@@ -2355,23 +2353,19 @@
+ 
+     /** @hide */
+     @Override
+-    public void onInitializeAccessibilityEventInternal(AccessibilityEvent event) {
+-        super.onInitializeAccessibilityEventInternal(event);
++    public void onInitializeAccessibilityEvent(AccessibilityEvent event) {
++        super.onInitializeAccessibilityEvent(event);
+         event.setItemCount(mMax - mMin);
+         event.setCurrentItemIndex(mProgress);
+     }
+ 
+     /** @hide */
+     @Override
+-    public void onInitializeAccessibilityNodeInfoInternal(AccessibilityNodeInfo info) {
+-        super.onInitializeAccessibilityNodeInfoInternal(info);
++    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
++        super.onInitializeAccessibilityNodeInfo(info);
+ 
+         AccessibilityNodeInfo.RangeInfo rangeInfo = null;
+-        if (isIndeterminate()) {
+-            if (indeterminateRangeInfo()) {
+-                rangeInfo = AccessibilityNodeInfo.RangeInfo.INDETERMINATE;
+-            }
+-        }  else {
++        if (!isIndeterminate()) {
+             rangeInfo = new AccessibilityNodeInfo.RangeInfo(
+                     AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_INT, getMin(), getMax(),
+                     getProgress());
+@@ -2390,17 +2384,6 @@
+         }
+     }
+ 
+-    /** @hide */
+-    @Override
+-    protected void encodeProperties(@NonNull ViewHierarchyEncoder stream) {
+-        super.encodeProperties(stream);
+-
+-        stream.addProperty("progress:max", getMax());
+-        stream.addProperty("progress:progress", getProgress());
+-        stream.addProperty("progress:secondaryProgress", getSecondaryProgress());
+-        stream.addProperty("progress:indeterminate", isIndeterminate());
+-    }
+-
+     /**
+      * Returns whether the ProgressBar is animating or not. This is essentially the same
+      * as whether the ProgressBar is {@link #isIndeterminate() indeterminate} and visible,
+--- a/frameworks/base/core/java/android/widget/AbsSeekBar.java
++++ b/frameworks/base/core/java/android/widget/AbsSeekBar.java
+@@ -682,7 +682,7 @@
+     }
+ 
+     private void updateThumbAndTrackPos(int w, int h) {
+-        final int paddedHeight = h - mPaddingTop - mPaddingBottom;
++        final int paddedHeight = h - getPaddingTop() - getPaddingBottom();
+         final Drawable track = getCurrentDrawable();
+         final Drawable thumb = mThumb;
+ 
+@@ -705,7 +705,7 @@
+         }
+ 
+         if (track != null) {
+-            final int trackWidth = w - mPaddingRight - mPaddingLeft;
++            final int trackWidth = w - getPaddingRight() - getPaddingLeft();
+             track.setBounds(0, trackOffset, trackWidth, trackOffset + trackHeight);
+         }
+ 
+@@ -731,7 +731,7 @@
+      *            {@link Integer#MIN_VALUE}, the current offset will be used.
+      */
+     private void setThumbPos(int w, Drawable thumb, float scale, int offset) {
+-        int available = w - mPaddingLeft - mPaddingRight;
++        int available = w - getPaddingLeft() - getPaddingRight();
+         final int thumbWidth = thumb.getIntrinsicWidth();
+         final int thumbHeight = thumb.getIntrinsicHeight();
+         available -= thumbWidth;
+@@ -751,13 +751,13 @@
+             bottom = offset + thumbHeight;
+         }
+ 
+-        final int left = (isLayoutRtl() && mMirrorForRtl) ? available - thumbPos : thumbPos;
++        final int left = ((getLayoutDirection() == LAYOUT_DIRECTION_RTL) && mMirrorForRtl) ? available - thumbPos : thumbPos;
+         final int right = left + thumbWidth;
+ 
+         final Drawable background = getBackground();
+         if (background != null) {
+-            final int offsetX = mPaddingLeft - mThumbOffset;
+-            final int offsetY = mPaddingTop;
++            final int offsetX = getPaddingLeft() - mThumbOffset;
++            final int offsetY = getPaddingTop();
+             background.setHotspotBounds(left + offsetX, top + offsetY,
+                     right + offsetX, bottom + offsetY);
+         }
+@@ -782,7 +782,7 @@
+         }
+         mGestureExclusionRects.clear();
+         thumb.copyBounds(mThumbRect);
+-        mThumbRect.offset(mPaddingLeft - mThumbOffset, mPaddingTop);
++        mThumbRect.offset(getPaddingLeft() - mThumbOffset, getPaddingTop());
+         growRectTo(mThumbRect, Math.min(getHeight(), mThumbExclusionMaxSize));
+         mGestureExclusionRects.add(mThumbRect);
+         mGestureExclusionRects.addAll(mUserGestureExclusionRects);
+@@ -811,18 +811,6 @@
+         }
+     }
+ 
+-    /**
+-     * @hide
+-     */
+-    @Override
+-    public void onResolveDrawables(int layoutDirection) {
+-        super.onResolveDrawables(layoutDirection);
+-
+-        if (mThumb != null) {
+-            mThumb.setLayoutDirection(layoutDirection);
+-        }
+-    }
+-
+     @Override
+     protected synchronized void onDraw(Canvas canvas) {
+         super.onDraw(canvas);
+@@ -836,7 +824,7 @@
+             final Insets insets = thumbDrawable.getOpticalInsets();
+             final Rect tempRect = mTempRect;
+             thumbDrawable.copyBounds(tempRect);
+-            tempRect.offset(mPaddingLeft - mThumbOffset, mPaddingTop);
++            tempRect.offset(getPaddingLeft() - mThumbOffset, getPaddingTop());
+             tempRect.left += insets.left;
+             tempRect.right -= insets.right;
+ 
+@@ -864,9 +852,9 @@
+                 final int halfH = h >= 0 ? h / 2 : 1;
+                 mTickMark.setBounds(-halfW, -halfH, halfW, halfH);
+ 
+-                final float spacing = (getWidth() - mPaddingLeft - mPaddingRight) / (float) count;
++                final float spacing = (getWidth() - getPaddingLeft() - getPaddingRight()) / (float) count;
+                 final int saveCount = canvas.save();
+-                canvas.translate(mPaddingLeft, getHeight() / 2);
++                canvas.translate(getPaddingLeft(), getHeight() / 2);
+                 for (int i = 0; i <= count; i++) {
+                     mTickMark.draw(canvas);
+                     canvas.translate(spacing, 0);
+@@ -885,7 +873,7 @@
+             final int saveCount = canvas.save();
+             // Translate the padding. For the x, we need to allow the thumb to
+             // draw in its extra space
+-            canvas.translate(mPaddingLeft - mThumbOffset, mPaddingTop);
++            canvas.translate(getPaddingLeft() - mThumbOffset, getPaddingTop());
+             mThumb.draw(canvas);
+             canvas.restoreToCount(saveCount);
+         }
+@@ -903,11 +891,21 @@
+             dh = Math.max(mMinHeight, Math.min(mMaxHeight, d.getIntrinsicHeight()));
+             dh = Math.max(thumbHeight, dh);
+         }
+-        dw += mPaddingLeft + mPaddingRight;
+-        dh += mPaddingTop + mPaddingBottom;
++        dw += getPaddingLeft() + getPaddingRight();
++        dh += getPaddingTop() + getPaddingBottom();
+ 
+         setMeasuredDimension(resolveSizeAndState(dw, widthMeasureSpec, 0),
+                 resolveSizeAndState(dh, heightMeasureSpec, 0));
++    }
++
++    private boolean isInDelayedPressContainer() {
++        for (android.view.ViewParent parent = getParent(); parent instanceof android.view.ViewGroup;
++                parent = parent.getParent()) {
++            if (((android.view.ViewGroup) parent).shouldDelayChildPressedState()) {
++                return true;
++            }
++        }
++        return false;
+     }
+ 
+     @Override
+@@ -919,14 +917,14 @@
+         switch (event.getAction()) {
+             case MotionEvent.ACTION_DOWN:
+                 if (mThumb != null) {
+-                    final int availableWidth = getWidth() - mPaddingLeft - mPaddingRight;
++                    final int availableWidth = getWidth() - getPaddingLeft() - getPaddingRight();
+                     mTouchThumbOffset = (getProgress() - getMin()) / (float) (getMax()
+-                        - getMin()) - (event.getX() - mPaddingLeft) / availableWidth;
++                        - getMin()) - (event.getX() - getPaddingLeft()) / availableWidth;
+                     if (Math.abs(mTouchThumbOffset * availableWidth) > getThumbOffset()) {
+                         mTouchThumbOffset = 0;
+                     }
+                 }
+-                if (isInScrollingContainer()) {
++                if (isInDelayedPressContainer()) {
+                     mTouchDownX = event.getX();
+                 } else {
+                     startDrag(event);
+@@ -998,27 +996,27 @@
+         final int x = Math.round(event.getX());
+         final int y = Math.round(event.getY());
+         final int width = getWidth();
+-        final int availableWidth = width - mPaddingLeft - mPaddingRight;
++        final int availableWidth = width - getPaddingLeft() - getPaddingRight();
+ 
+         final float scale;
+         float progress = 0.0f;
+-        if (isLayoutRtl() && mMirrorForRtl) {
+-            if (x > width - mPaddingRight) {
++        if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL) && mMirrorForRtl) {
++            if (x > width - getPaddingRight()) {
+                 scale = 0.0f;
+-            } else if (x < mPaddingLeft) {
++            } else if (x < getPaddingLeft()) {
+                 scale = 1.0f;
+             } else {
+-                scale = (availableWidth - x + mPaddingLeft) / (float) availableWidth
++                scale = (availableWidth - x + getPaddingLeft()) / (float) availableWidth
+                     + mTouchThumbOffset;
+                 progress = mTouchProgressOffset;
+             }
+         } else {
+-            if (x < mPaddingLeft) {
++            if (x < getPaddingLeft()) {
+                 scale = 0.0f;
+-            } else if (x > width - mPaddingRight) {
++            } else if (x > width - getPaddingRight()) {
+                 scale = 1.0f;
+             } else {
+-                scale = (x - mPaddingLeft) / (float) availableWidth + mTouchThumbOffset;
++                scale = (x - getPaddingLeft()) / (float) availableWidth + mTouchThumbOffset;
+                 progress = mTouchProgressOffset;
+             }
+         }
+@@ -1035,8 +1033,8 @@
+      * ancestors from stealing events in the drag.
+      */
+     private void attemptClaimDrag() {
+-        if (mParent != null) {
+-            mParent.requestDisallowInterceptTouchEvent(true);
++        if (getParent() != null) {
++            getParent().requestDisallowInterceptTouchEvent(true);
+         }
+     }
+ 
+@@ -1073,7 +1071,7 @@
+                 case KeyEvent.KEYCODE_DPAD_RIGHT:
+                 case KeyEvent.KEYCODE_PLUS:
+                 case KeyEvent.KEYCODE_EQUALS:
+-                    increment = isLayoutRtl() ? -increment : increment;
++                    increment = (getLayoutDirection() == LAYOUT_DIRECTION_RTL) ? -increment : increment;
+ 
+                     if (setProgressInternal(getProgress() + increment, true, true)) {
+                         onKeyChange();
+@@ -1093,8 +1091,8 @@
+ 
+     /** @hide */
+     @Override
+-    public void onInitializeAccessibilityNodeInfoInternal(AccessibilityNodeInfo info) {
+-        super.onInitializeAccessibilityNodeInfoInternal(info);
++    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
++        super.onInitializeAccessibilityNodeInfo(info);
+ 
+         if (isEnabled()) {
+             final int progress = getProgress();
+@@ -1109,8 +1107,8 @@
+ 
+     /** @hide */
+     @Override
+-    public boolean performAccessibilityActionInternal(int action, Bundle arguments) {
+-        if (super.performAccessibilityActionInternal(action, arguments)) {
++    public boolean performAccessibilityAction(int action, Bundle arguments) {
++        if (super.performAccessibilityAction(action, arguments)) {
+             return true;
+         }
+ 
+@@ -1166,6 +1164,7 @@
+ 
+         final Drawable thumb = mThumb;
+         if (thumb != null) {
++            thumb.setLayoutDirection(layoutDirection);
+             setThumbPos(getWidth(), thumb, getScale(), Integer.MIN_VALUE);
+ 
+             // Since we draw translated, the drawable's bounds that it signals
+--- a/frameworks/base/core/java/android/widget/SeekBar.java
++++ b/frameworks/base/core/java/android/widget/SeekBar.java
+@@ -135,8 +135,8 @@
+ 
+     /** @hide */
+     @Override
+-    public void onInitializeAccessibilityNodeInfoInternal(AccessibilityNodeInfo info) {
+-        super.onInitializeAccessibilityNodeInfoInternal(info);
++    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
++        super.onInitializeAccessibilityNodeInfo(info);
+ 
+         if (canUserSetProgress()) {
+             info.addAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS);
+--- a/frameworks/base/core/java/android/widget/Switch.java
++++ b/frameworks/base/core/java/android/widget/Switch.java
+@@ -42,8 +42,6 @@
+ import android.text.StaticLayout;
+ import android.text.TextPaint;
+ import android.text.TextUtils;
+-import android.text.method.AllCapsTransformationMethod;
+-import android.text.method.TransformationMethod2;
+ import android.util.AttributeSet;
+ import android.util.FloatProperty;
+ import android.util.MathUtils;
+@@ -179,10 +177,10 @@
+     private TextPaint mTextPaint;
+     private ColorStateList mTextColors;
+     @UnsupportedAppUsage
+-    private Layout mOnLayout;
++    private SwitchLabel mOnLayout;
+     @UnsupportedAppUsage
+-    private Layout mOffLayout;
+-    private TransformationMethod2 mSwitchTransformationMethod;
++    private SwitchLabel mOffLayout;
++    private boolean mSwitchTextAllCaps;
+     private ObjectAnimator mPositionAnimator;
+ 
+     @SuppressWarnings("hiding")
+@@ -371,14 +369,8 @@
+ 
+         setSwitchTypefaceByIndex(typefaceIndex, styleIndex);
+ 
+-        boolean allCaps = appearance.getBoolean(com.android.internal.R.styleable.
++        mSwitchTextAllCaps = appearance.getBoolean(com.android.internal.R.styleable.
+                 TextAppearance_textAllCaps, false);
+-        if (allCaps) {
+-            mSwitchTransformationMethod = new AllCapsTransformationMethod(getContext());
+-            mSwitchTransformationMethod.setLengthChangesAllowed(true);
+-        } else {
+-            mSwitchTransformationMethod = null;
+-        }
+ 
+         appearance.recycle();
+     }
+@@ -697,7 +689,7 @@
+             // The drawable (or one of its children) may not have been
+             // stateful before applying the tint, so let's try again.
+             if (mTrackDrawable.isStateful()) {
+-                mTrackDrawable.setState(getDrawableState());
++                mTrackDrawable.setState(getButtonDrawableState());
+             }
+         }
+     }
+@@ -878,7 +870,7 @@
+             // The drawable (or one of its children) may not have been
+             // stateful before applying the tint, so let's try again.
+             if (mThumbDrawable.isStateful()) {
+-                mThumbDrawable.setState(getDrawableState());
++                mThumbDrawable.setState(getButtonDrawableState());
+             }
+         }
+     }
+@@ -1049,8 +1041,8 @@
+ 
+     /** @hide */
+     @Override
+-    public void onPopulateAccessibilityEventInternal(AccessibilityEvent event) {
+-        super.onPopulateAccessibilityEventInternal(event);
++    public void onPopulateAccessibilityEvent(AccessibilityEvent event) {
++        super.onPopulateAccessibilityEvent(event);
+ 
+         final CharSequence text = isChecked() ? mTextOn : mTextOff;
+         if (text != null) {
+@@ -1058,16 +1050,61 @@
+         }
+     }
+ 
+-    private Layout makeLayout(CharSequence text) {
+-        final CharSequence transformed = (mSwitchTransformationMethod != null)
+-                    ? mSwitchTransformationMethod.getTransformation(text, this)
+-                    : text;
+-
+-        int width = (int) Math.ceil(Layout.getDesiredWidth(transformed, 0,
+-                transformed.length(), mTextPaint, getTextDirectionHeuristic()));
+-        return StaticLayout.Builder.obtain(transformed, 0, transformed.length(), mTextPaint, width)
+-                .setUseLineSpacingFromFallbacks(mUseFallbackLineSpacing)
+-                .build();
++    private SwitchLabel makeLayout(CharSequence text) {
++        final CharSequence transformed = text == null ? "" : mSwitchTextAllCaps
++                ? text.toString().toUpperCase(getResources().getConfiguration().getLocales().get(0))
++                : text;
++
++        if (HAS_STATIC_LAYOUT) {
++            final int width = (int) Math.ceil(Layout.getDesiredWidth(transformed, 0,
++                    transformed.length(), mTextPaint));
++            final Layout layout = StaticLayout.Builder.obtain(transformed, 0, transformed.length(),
++                    mTextPaint, width).setUseLineSpacingFromFallbacks(mUseFallbackLineSpacing)
++                    .build();
++            return new SwitchLabel(transformed, layout, width, layout.getHeight(), 0);
++        }
++        // Use the guest paint metrics when the text layout subsystem is outside this profile.
++        final int width = (int) Math.ceil(mTextPaint.measureText(transformed, 0, transformed.length()));
++        final android.graphics.Paint.FontMetricsInt metrics = mTextPaint.getFontMetricsInt();
++        return new SwitchLabel(transformed, null, width, metrics.bottom - metrics.top, -metrics.top);
++    }
++
++    private static final boolean HAS_STATIC_LAYOUT = hasStaticLayout();
++
++    private static boolean hasStaticLayout() {
++        try {
++            Class.forName("android.text.StaticLayout", false, Switch.class.getClassLoader());
++            return true;
++        } catch (ClassNotFoundException unavailable) {
++            return false;
++        }
++    }
++
++    private static final class SwitchLabel {
++        private final CharSequence mText;
++        private final Layout mLayout;
++        private final int mWidth;
++        private final int mHeight;
++        private final int mBaseline;
++
++        SwitchLabel(CharSequence text, Layout layout, int width, int height, int baseline) {
++            mText = text;
++            mLayout = layout;
++            mWidth = width;
++            mHeight = height;
++            mBaseline = baseline;
++        }
++
++        int getWidth() { return mWidth; }
++        int getHeight() { return mHeight; }
++
++        void draw(Canvas canvas, TextPaint paint) {
++            if (mLayout != null) {
++                mLayout.draw(canvas);
++            } else {
++                canvas.drawText(mText, 0, mText.length(), 0, mBaseline, paint);
++            }
++        }
+     }
+ 
+     /**
+@@ -1138,7 +1175,7 @@
+                             // movement direction to snap on or off.
+                             dPos = thumbScrollOffset > 0 ? 1 : -1;
+                         }
+-                        if (isLayoutRtl()) {
++                        if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
+                             dPos = -dPos;
+                         }
+                         final float newPos = MathUtils.constrain(mThumbPosition + dPos, 0, 1);
+@@ -1193,7 +1230,7 @@
+             mVelocityTracker.computeCurrentVelocity(1000);
+             final float xvel = mVelocityTracker.getXVelocity();
+             if (Math.abs(xvel) > mMinFlingVelocity) {
+-                newState = isLayoutRtl() ? (xvel < 0) : (xvel > 0);
++                newState = (getLayoutDirection() == LAYOUT_DIRECTION_RTL) ? (xvel < 0) : (xvel > 0);
+             } else {
+                 newState = getTargetCheckedState();
+             }
+@@ -1293,7 +1330,7 @@
+ 
+         final int switchRight;
+         final int switchLeft;
+-        if (isLayoutRtl()) {
++        if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
+             switchLeft = getPaddingLeft() + opticalInsetLeft;
+             switchRight = switchLeft + mSwitchWidth - opticalInsetLeft - opticalInsetRight;
+         } else {
+@@ -1432,9 +1469,9 @@
+             thumbDrawable.draw(canvas);
+         }
+ 
+-        final Layout switchText = getTargetCheckedState() ? mOnLayout : mOffLayout;
++        final SwitchLabel switchText = getTargetCheckedState() ? mOnLayout : mOffLayout;
+         if (switchText != null) {
+-            final int drawableState[] = getDrawableState();
++            final int drawableState[] = getButtonDrawableState();
+             if (mTextColors != null) {
+                 mTextPaint.setColor(mTextColors.getColorForState(drawableState, 0));
+             }
+@@ -1451,7 +1488,7 @@
+             final int left = cX / 2 - switchText.getWidth() / 2;
+             final int top = (switchInnerTop + switchInnerBottom) / 2 - switchText.getHeight() / 2;
+             canvas.translate(left, top);
+-            switchText.draw(canvas);
++            switchText.draw(canvas, mTextPaint);
+         }
+ 
+         canvas.restoreToCount(saveCount);
+@@ -1459,7 +1496,7 @@
+ 
+     @Override
+     public int getCompoundPaddingLeft() {
+-        if (!isLayoutRtl()) {
++        if (!(getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
+             return super.getCompoundPaddingLeft();
+         }
+         int padding = super.getCompoundPaddingLeft() + mSwitchWidth;
+@@ -1471,7 +1508,7 @@
+ 
+     @Override
+     public int getCompoundPaddingRight() {
+-        if (isLayoutRtl()) {
++        if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
+             return super.getCompoundPaddingRight();
+         }
+         int padding = super.getCompoundPaddingRight() + mSwitchWidth;
+@@ -1489,7 +1526,7 @@
+      */
+     private int getThumbOffset() {
+         final float thumbPosition;
+-        if (isLayoutRtl()) {
++        if ((getLayoutDirection() == LAYOUT_DIRECTION_RTL)) {
+             thumbPosition = 1 - mThumbPosition;
+         } else {
+             thumbPosition = mThumbPosition;
+@@ -1529,7 +1566,7 @@
+     protected void drawableStateChanged() {
+         super.drawableStateChanged();
+ 
+-        final int[] state = getDrawableState();
++        final int[] state = getButtonDrawableState();
+         boolean changed = false;
+ 
+         final Drawable thumbDrawable = mThumbDrawable;
+@@ -1590,8 +1627,8 @@
+ 
+     /** @hide */
+     @Override
+-    protected void onProvideStructure(@NonNull ViewStructure structure,
+-            @ViewStructureType int viewFor, int flags) {
++    public void onProvideStructure(@NonNull ViewStructure structure) {
++        super.onProvideStructure(structure);
+         CharSequence switchText = isChecked() ? mTextOn : mTextOff;
+         if (!TextUtils.isEmpty(switchText)) {
+             CharSequence oldText = structure.getText();

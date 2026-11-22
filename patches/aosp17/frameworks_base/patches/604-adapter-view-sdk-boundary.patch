@@ -1,0 +1,258 @@
+--- a/frameworks/base/core/java/android/widget/AdapterView.java
++++ b/frameworks/base/core/java/android/widget/AdapterView.java
+@@ -28,16 +28,13 @@
+ import android.util.SparseArray;
+ import android.view.ContextMenu;
+ import android.view.ContextMenu.ContextMenuInfo;
+-import android.view.SoundEffectConstants;
+ import android.view.View;
+ import android.view.ViewDebug;
+ import android.view.ViewGroup;
+-import android.view.ViewHierarchyEncoder;
+ import android.view.ViewStructure;
+ import android.view.accessibility.AccessibilityEvent;
+ import android.view.accessibility.AccessibilityManager;
+ import android.view.accessibility.AccessibilityNodeInfo;
+-import android.view.autofill.AutofillManager;
+ 
+ /**
+  * An AdapterView is a view whose children are determined by an {@link Adapter}.
+@@ -264,10 +261,10 @@
+             setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+         }
+ 
+-        mDesiredFocusableState = getFocusable();
++        mDesiredFocusableState = isFocusable() ? FOCUSABLE : FOCUSABLE_AUTO;
+         if (mDesiredFocusableState == FOCUSABLE_AUTO) {
+             // Starts off without an adapter, so NOT_FOCUSABLE by default.
+-            super.setFocusable(NOT_FOCUSABLE);
++            super.setFocusable(false);
+         }
+     }
+ 
+@@ -326,8 +323,7 @@
+     public boolean performItemClick(View view, int position, long id) {
+         final boolean result;
+         if (mOnItemClickListener != null) {
+-            playSoundEffect(SoundEffectConstants.CLICK);
+-            mOnItemClickListener.onItemClick(this, view, position, id);
++                mOnItemClickListener.onItemClick(this, view, position, id);
+             result = true;
+         } else {
+             result = false;
+@@ -729,7 +725,12 @@
+     }
+ 
+     @Override
+-    public void setFocusable(@Focusable int focusable) {
++    public void setFocusable(boolean focusable) {
++        setFocusable(focusable ? FOCUSABLE : NOT_FOCUSABLE);
++    }
++
++    @Override
++    public void setFocusable(int focusable) {
+         final T adapter = getAdapter();
+         final boolean empty = adapter == null || adapter.getCount() == 0;
+ 
+@@ -738,7 +739,7 @@
+             mDesiredFocusableInTouchModeState = false;
+         }
+ 
+-        super.setFocusable((!empty || isInFilterMode()) ? focusable : NOT_FOCUSABLE);
++        super.setFocusable((!empty || isInFilterMode()) && focusable != NOT_FOCUSABLE);
+     }
+ 
+     @Override
+@@ -762,7 +763,7 @@
+         // for the client, see View.setFocusableInTouchMode() comments for more
+         // details
+         super.setFocusableInTouchMode(focusable && mDesiredFocusableInTouchModeState);
+-        super.setFocusable(focusable ? mDesiredFocusableState : NOT_FOCUSABLE);
++        super.setFocusable(focusable && mDesiredFocusableState != NOT_FOCUSABLE);
+         if (mEmptyView != null) {
+             updateEmptyStatus((adapter == null) || adapter.isEmpty());
+         }
+@@ -791,7 +792,7 @@
+             // Force one here to make sure that the state of the list matches
+             // the state of the adapter.
+             if (mDataChanged) {
+-                this.onLayout(false, mLeft, mTop, mRight, mBottom);
++                this.onLayout(false, getLeft(), getTop(), getRight(), getBottom());
+             }
+         } else {
+             if (mEmptyView != null) mEmptyView.setVisibility(View.GONE);
+@@ -898,8 +899,7 @@
+         public void run() {
+             mPendingSelectionNotifier = null;
+ 
+-            if (mDataChanged && getViewRootImpl() != null
+-                    && getViewRootImpl().isLayoutRequested()) {
++            if (mDataChanged && isAttachedToWindow() && isLayoutRequested()) {
+                 // Data has changed between when this SelectionNotifier was
+                 // posted and now. Postpone the notification until the next
+                 // layout is complete and we run checkSelectionChanged().
+@@ -919,7 +919,7 @@
+         mPendingSelectionNotifier = null;
+ 
+         if (mOnItemSelectedListener != null
+-                || AccessibilityManager.getInstance(mContext).isEnabled()) {
++                || isAccessibilityEnabled()) {
+             if (mInLayout || mBlockLayoutRequests) {
+                 // If we are in a layout traversal, defer notification
+                 // by posting. This ensures that the view tree is
+@@ -935,11 +935,6 @@
+                 dispatchOnItemSelected();
+             }
+         }
+-        // Always notify AutoFillManager - it will return right away if autofill is disabled.
+-        final AutofillManager afm = mContext.getSystemService(AutofillManager.class);
+-        if (afm != null) {
+-            afm.notifyValueChanged(this);
+-        }
+     }
+ 
+     private void dispatchOnItemSelected() {
+@@ -961,8 +956,13 @@
+         }
+     }
+ 
++    final boolean isAccessibilityEnabled() {
++        final AccessibilityManager manager = getContext().getSystemService(AccessibilityManager.class);
++        return manager != null && manager.isEnabled();
++    }
++
+     private void performAccessibilityActionsOnSelected() {
+-        if (!AccessibilityManager.getInstance(mContext).isEnabled()) {
++        if (!isAccessibilityEnabled()) {
+             return;
+         }
+         final int position = getSelectedItemPosition();
+@@ -975,7 +975,7 @@
+ 
+     /** @hide */
+     @Override
+-    public boolean dispatchPopulateAccessibilityEventInternal(AccessibilityEvent event) {
++    public boolean dispatchPopulateAccessibilityEvent(AccessibilityEvent event) {
+         View selectedView = getSelectedView();
+         if (selectedView != null && selectedView.getVisibility() == VISIBLE
+                 && selectedView.dispatchPopulateAccessibilityEvent(event)) {
+@@ -986,8 +986,8 @@
+ 
+     /** @hide */
+     @Override
+-    public boolean onRequestSendAccessibilityEventInternal(View child, AccessibilityEvent event) {
+-        if (super.onRequestSendAccessibilityEventInternal(child, event)) {
++    public boolean onRequestSendAccessibilityEvent(View child, AccessibilityEvent event) {
++        if (super.onRequestSendAccessibilityEvent(child, event)) {
+             // Add a record for ourselves as well.
+             AccessibilityEvent record = AccessibilityEvent.obtain();
+             onInitializeAccessibilityEvent(record);
+@@ -1006,8 +1006,8 @@
+ 
+     /** @hide */
+     @Override
+-    public void onInitializeAccessibilityNodeInfoInternal(AccessibilityNodeInfo info) {
+-        super.onInitializeAccessibilityNodeInfoInternal(info);
++    public void onInitializeAccessibilityNodeInfo(AccessibilityNodeInfo info) {
++        super.onInitializeAccessibilityNodeInfo(info);
+         info.setScrollable(isScrollableForAccessibility());
+         View selectedView = getSelectedView();
+         if (selectedView != null) {
+@@ -1017,8 +1017,8 @@
+ 
+     /** @hide */
+     @Override
+-    public void onInitializeAccessibilityEventInternal(AccessibilityEvent event) {
+-        super.onInitializeAccessibilityEventInternal(event);
++    public void onInitializeAccessibilityEvent(AccessibilityEvent event) {
++        super.onInitializeAccessibilityEvent(event);
+         event.setScrollable(isScrollableForAccessibility());
+         View selectedView = getSelectedView();
+         if (selectedView != null) {
+@@ -1107,7 +1107,6 @@
+             checkSelectionChanged();
+         }
+ 
+-        notifySubtreeAccessibilityStateChangedIfNeeded();
+     }
+ 
+     /**
+@@ -1289,18 +1288,6 @@
+         }
+     }
+ 
+-    /** @hide */
+-    @Override
+-    protected void encodeProperties(@NonNull ViewHierarchyEncoder encoder) {
+-        super.encodeProperties(encoder);
+-
+-        encoder.addProperty("scrolling:firstPosition", mFirstPosition);
+-        encoder.addProperty("list:nextSelectedPosition", mNextSelectedPosition);
+-        encoder.addProperty("list:nextSelectedRowId", mNextSelectedRowId);
+-        encoder.addProperty("list:selectedPosition", mSelectedPosition);
+-        encoder.addProperty("list:itemCount", mItemCount);
+-    }
+-
+     /**
+      * {@inheritDoc}
+      *
+@@ -1311,19 +1298,8 @@
+     @Override
+     public void onProvideAutofillStructure(ViewStructure structure, int flags) {
+         super.onProvideAutofillStructure(structure, flags);
+-    }
+-
+-    /** @hide */
+-    @Override
+-    protected void onProvideStructure(@NonNull ViewStructure structure,
+-            @ViewStructureType int viewFor, int flags) {
+-        super.onProvideStructure(structure, viewFor, flags);
+-
+-        if (viewFor == VIEW_STRUCTURE_FOR_AUTOFILL
+-                || viewFor == VIEW_STRUCTURE_FOR_CONTENT_CAPTURE) {
+-            final Adapter adapter = getAdapter();
+-            if (adapter == null) return;
+-
++        final Adapter adapter = getAdapter();
++        if (adapter != null) {
+             final CharSequence[] options = adapter.getAutofillOptions();
+             if (options != null) {
+                 structure.setAutofillOptions(options);
+--- a/frameworks/base/core/java/android/widget/ArrayAdapter.java
++++ b/frameworks/base/core/java/android/widget/ArrayAdapter.java
+@@ -128,12 +128,6 @@
+     /** Layout inflater used for {@link #getDropDownView(int, View, ViewGroup)}. */
+     private LayoutInflater mDropDownInflater;
+ 
+-    private static final boolean sBoostCpuLoadFlag =
+-            android.widget.flags.Flags.boostCpuLoadForLongTextRendering();
+-
+-    /** The threshold at which to boost cpu work load for long text rendering. */
+-    private static final int BOOST_CPU_TEXT_LENGTH_THRESHOLD = 500;
+-
+     /**
+      * Constructor
+      *
+@@ -454,22 +448,11 @@
+         }
+ 
+         final T item = getItem(position);
+-        int textLength;
+         CharSequence textContent;
+         if (item instanceof CharSequence) {
+-            textLength = ((CharSequence) item).length();
+             textContent = (CharSequence) item;
+         } else {
+-            textLength = item.toString() == null ? 0 : item.toString().length();
+             textContent = item.toString();
+-        }
+-        // Send a hint to boost the renderer when processing text content rendering takes time.
+-        // (e.g. text rendering in minikin may take 2 ~ 4 ms when the text length > 500 during
+-        // calculating text bounds)
+-        if (sBoostCpuLoadFlag && parent.isAttachedToWindow()
+-                && textLength > BOOST_CPU_TEXT_LENGTH_THRESHOLD) {
+-            parent.getViewRootImpl().notifyRendererOfExpensiveFrame(
+-                    "ADPF_SendHint: Expensive text rendering");
+         }
+         text.setText(textContent);
+ 

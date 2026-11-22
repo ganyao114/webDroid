@@ -1,6 +1,7 @@
 package android.os;
 
 import java.util.ArrayList;
+import java.util.List;
 
 /** In-process value parcel for framework parcelables. */
 public final class Parcel {
@@ -28,9 +29,34 @@ public final class Parcel {
     public void writeString(String value) { write(value); }
     public void writeBundle(Bundle value) { write(value == null ? null : new Bundle(value)); }
     public void writeBoolean(boolean value) { writeInt(value ? 1 : 0); }
+    public void writeStrongBinder(IBinder value) { write(value); }
+    public IBinder readStrongBinder() { return (IBinder) values.get(position++); }
     public void writeCharSequence(CharSequence value) { write(value); }
+    public void writeList(List<?> value) { write(value == null ? null : new ArrayList<>(value)); }
+    public <T> void readList(List<? super T> target, ClassLoader loader, Class<T> type) {
+        List<?> stored = (List<?>) values.get(position++);
+        if (stored != null) for (Object value : stored) target.add(type.cast(value));
+    }
     public void writeParcelable(Parcelable value, int flags) { write(value); }
     public <T> T readParcelable(ClassLoader loader, Class<T> type) { return type.cast(values.get(position++)); }
+    public <T extends Parcelable> void writeTypedObject(T value, int flags) {
+        writeInt(value == null ? 0 : 1);
+        if (value != null) value.writeToParcel(this, flags);
+    }
+    public <T> T readTypedObject(Parcelable.Creator<T> creator) {
+        return readInt() == 0 ? null : creator.createFromParcel(this);
+    }
+    public <T extends Parcelable> void writeTypedArray(T[] array, int flags) {
+        writeInt(array == null ? -1 : array.length);
+        if (array != null) for (T value : array) writeTypedObject(value, flags);
+    }
+    public <T> T[] createTypedArray(Parcelable.Creator<T> creator) {
+        int size = readInt();
+        if (size < 0) return null;
+        T[] array = creator.newArray(size);
+        for (int i = 0; i < size; i++) array[i] = readTypedObject(creator);
+        return array;
+    }
     public void writeArrayMap(android.util.ArrayMap<?, ?> value) { write(new android.util.ArrayMap<>(value)); }
     @SuppressWarnings("unchecked")
     public void readArrayMap(android.util.ArrayMap<?, ?> destination, ClassLoader loader) {
