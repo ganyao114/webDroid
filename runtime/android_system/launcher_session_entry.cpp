@@ -37,7 +37,7 @@ constexpr char kMain[] = "android.intent.action.MAIN";
 constexpr char kHome[] = "android.intent.category.HOME";
 constexpr char kDefault[] = "android.intent.category.DEFAULT";
 constexpr uint32_t kWallpaperLayer = 1, kLauncherLayer = 2, kBarsLayer = 3;
-constexpr size_t kGcInterval = 32'768;
+constexpr size_t kGcInterval = 4'096;
 constexpr int kMatchDefaultOnly = 0x10000;
 constexpr int kMatchDisabled = 0x200;
 
@@ -603,6 +603,7 @@ int32_t wa_system_launcher_boot_apk(const char* name, const uint8_t* bytes, size
             throw;
         }
         s.launcher_apk = std::move(apk);
+        vm.Collect();
         s.boot_ms = ElapsedMs(start);
         s.booted = true;
         std::vector<uint8_t>().swap(s.framework_dex);

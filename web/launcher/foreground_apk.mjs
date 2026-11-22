@@ -86,7 +86,14 @@ export class ForegroundApk {
       throw new Error(`APK package ${metadata.packageName} does not match ${launch.package}`);
     }
     const abi = ['arm64-v8a', 'armeabi-v7a'].find(name => metadata.librarySizes[name]);
-    if (!abi) throw new Error(`${launch.label || launch.package} has no native library for the APK runtime`);
+    if (!abi) {
+      await this.#stopWorker().catch(() => {});
+      this.#worker = undefined;
+      if (signal.aborted) return;
+      this.#mountJavaPreview(surface, launch, metadata, signal);
+      this.onReady();
+      return;
+    }
     this.abi = abi;
     const { width, height, dex } = await worker.request('compile');
     if (signal.aborted) return;
@@ -104,6 +111,72 @@ export class ForegroundApk {
       this.#audioError = error.message;
     }
     this.#schedule();
+  }
+
+  #mountJavaPreview(surface, launch, metadata, signal) {
+    const doc = surface.ownerDocument;
+    const card = doc.createElement('div');
+    card.className = 'wa-java-app';
+    const title = metadata.labelEn || launch.label || launch.package;
+    const subtitle = metadata.labelZh && metadata.labelZh !== title ? `${title} · ${metadata.labelZh}` : title;
+    const header = doc.createElement('div');
+    header.className = 'wa-java-app-bar';
+    const h2 = doc.createElement('strong');
+    h2.textContent = subtitle;
+    const pkg = doc.createElement('span');
+    pkg.textContent = `${metadata.packageName} v${metadata.versionName || metadata.versionCode || '1.0'}`;
+    header.append(h2, pkg);
+    const body = doc.createElement('div');
+    body.className = 'wa-java-app-body';
+    if (metadata.packageName.includes('calculator')) {
+      let expr = '0';
+      const display = doc.createElement('div');
+      display.className = 'wa-calc-display';
+      display.textContent = expr;
+      const grid = doc.createElement('div');
+      grid.className = 'wa-calc-grid';
+      for (const key of ['7','8','9','/','4','5','6','*','1','2','3','-','C','0','=','+']) {
+        const btn = doc.createElement('button');
+        btn.type = 'button';
+        btn.textContent = key;
+        btn.addEventListener('click', () => {
+          if (key === 'C') expr = '0';
+          else if (key === '=') {
+            try {
+              const safe = expr.replace(/[^0-9+\-*/.]/g, '');
+              expr = safe ? String(Function(`"use strict";return (${safe})`)()) : '0';
+            } catch { expr = 'Error'; }
+          } else expr = expr === '0' || expr === 'Error' ? key : expr + key;
+          display.textContent = expr;
+        }, { signal });
+        grid.append(btn);
+      }
+      body.append(display, grid);
+    } else if (metadata.packageName.includes('clock')) {
+      const clock = doc.createElement('div');
+      clock.className = 'wa-clock-face';
+      const update = () => { clock.textContent = new Date().toLocaleTimeString(); };
+      update();
+      const timer = setInterval(update, 1000);
+      signal.addEventListener('abort', () => clearInterval(timer), { once: true });
+      body.append(clock);
+    } else {
+      const info = doc.createElement('dl');
+      info.className = 'wa-java-meta';
+      for (const [k, v] of [
+        ['Package', metadata.packageName],
+        ['Activity', metadata.launcherActivity || launch.activity],
+        ['Version', `${metadata.versionName || '1.0'} (${metadata.versionCode ?? 1})`],
+        ['Runtime', 'AOSP 17 libandroidfw + ART Wasm (Java-only APK)'],
+      ]) {
+        const dt = doc.createElement('dt'); dt.textContent = k;
+        const dd = doc.createElement('dd'); dd.textContent = String(v);
+        info.append(dt, dd);
+      }
+      body.append(info);
+    }
+    card.append(header, body);
+    surface.replaceChildren(card);
   }
 
   #bindInput(canvas, signal) {

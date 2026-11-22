@@ -5,7 +5,7 @@ import {
 import { serveWorker, WorkerClient } from '../../web/workers/worker_rpc.mjs';
 
 const names = ['servicemanager', 'system_server', 'launcher'];
-const privatePages = 1024;
+const privatePages = 2048;
 const cubePackage = 'org.wasmandroid.cube';
 const homePackage = 'org.wasmandroid.home';
 const cubeActivity = cubePackage + '.CubeActivity';
