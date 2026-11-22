@@ -1,0 +1,216 @@
+diff --git a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/NavigationBarInflaterView.java b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/NavigationBarInflaterView.java
+--- a/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/NavigationBarInflaterView.java
++++ b/frameworks/base/packages/SystemUI/src/com/android/systemui/navigationbar/views/NavigationBarInflaterView.java
+@@ -17,12 +17,9 @@
+ package com.android.systemui.navigationbar.views;
+ 
+ import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+-import static android.view.WindowManagerPolicyConstants.NAV_BAR_MODE_3BUTTON;
+-
+-import android.annotation.Nullable;
++
++import androidx.annotation.Nullable;
+ import android.content.Context;
+-import android.content.res.Configuration;
+-import android.graphics.drawable.Icon;
+ import android.util.AttributeSet;
+ import android.util.Log;
+ import android.util.SparseArray;
+@@ -34,19 +31,14 @@
+ import android.widget.LinearLayout;
+ import android.widget.Space;
+ 
+-import com.android.internal.annotations.VisibleForTesting;
+-import com.android.systemui.Dependency;
+-import com.android.systemui.LauncherProxyService;
+-import com.android.systemui.navigationbar.NavigationModeController;
++import androidx.annotation.VisibleForTesting;
+ import com.android.systemui.navigationbar.views.buttons.ButtonDispatcher;
+ import com.android.systemui.navigationbar.views.buttons.KeyButtonView;
+ import com.android.systemui.navigationbar.views.buttons.ReverseLinearLayout;
+ import com.android.systemui.navigationbar.views.buttons.ReverseLinearLayout.ReverseRelativeLayout;
+ import com.android.systemui.res.R;
+-import com.android.systemui.shared.system.QuickStepContract;
+ 
+ import java.io.PrintWriter;
+-import java.lang.ref.WeakReference;
+ import java.util.Objects;
+ 
+ public class NavigationBarInflaterView extends FrameLayout {
+@@ -83,24 +75,6 @@
+     private static final String ABSOLUTE_SUFFIX = "A";
+     private static final String ABSOLUTE_VERTICAL_CENTERED_SUFFIX = "C";
+ 
+-    private static class Listener implements NavigationModeController.ModeChangedListener {
+-        private final WeakReference<NavigationBarInflaterView> mSelf;
+-
+-        Listener(NavigationBarInflaterView self) {
+-            mSelf = new WeakReference<>(self);
+-        }
+-
+-        @Override
+-        public void onNavigationModeChanged(int mode) {
+-            NavigationBarInflaterView self = mSelf.get();
+-            if (self != null) {
+-                self.onNavigationModeChanged(mode);
+-            }
+-        }
+-    }
+-
+-    private final Listener mListener;
+-
+     protected LayoutInflater mLayoutInflater;
+     protected LayoutInflater mLandscapeInflater;
+ 
+@@ -111,30 +85,23 @@
+     SparseArray<ButtonDispatcher> mButtonDispatchers;
+     private String mCurrentLayout;
+ 
+-    private View mLastPortrait;
+-    private View mLastLandscape;
+-
+     private boolean mIsVertical;
+     private boolean mAlternativeOrder;
+ 
+-    private LauncherProxyService mLauncherProxyService;
+-    private int mNavBarMode = NAV_BAR_MODE_3BUTTON;
++    private int mNavBarMode;
++    private boolean mShowSwipeUpUi;
+ 
+     public NavigationBarInflaterView(Context context, AttributeSet attrs) {
+         super(context, attrs);
+         createInflaters();
+-        mLauncherProxyService = Dependency.get(LauncherProxyService.class);
+-        mListener = new Listener(this);
+-        mNavBarMode = Dependency.get(NavigationModeController.class).addListener(mListener);
++        mNavBarMode = getResources().getInteger(R.integer.config_navBarInteractionMode);
+     }
+ 
+     @VisibleForTesting
+     void createInflaters() {
+-        mLayoutInflater = LayoutInflater.from(mContext);
+-        Configuration landscape = new Configuration();
+-        landscape.setTo(mContext.getResources().getConfiguration());
+-        landscape.orientation = Configuration.ORIENTATION_LANDSCAPE;
+-        mLandscapeInflater = LayoutInflater.from(mContext.createConfigurationContext(landscape));
++        mLayoutInflater = LayoutInflater.from(getContext());
++        // The vertical layout is explicit XML. The embedded context has one configuration.
++        mLandscapeInflater = mLayoutInflater;
+     }
+ 
+     @Override
+@@ -157,22 +124,18 @@
+     }
+ 
+     protected String getDefaultLayout() {
+-        final int defaultResource = QuickStepContract.isGesturalMode(mNavBarMode)
++        final int defaultResource = NavigationBarView.isGesturalMode(mNavBarMode)
+                 ? R.string.config_navBarLayoutHandle
+-                : mLauncherProxyService.shouldShowSwipeUpUI()
++                : mShowSwipeUpUi
+                         ? R.string.config_navBarLayoutQuickstep
+                         : R.string.config_navBarLayout;
+         return getContext().getString(defaultResource);
+     }
+ 
+-    private void onNavigationModeChanged(int mode) {
++    void onNavigationModeChanged(int mode, boolean showSwipeUpUi) {
+         mNavBarMode = mode;
+-    }
+-
+-    @Override
+-    protected void onDetachedFromWindow() {
+-        Dependency.get(NavigationModeController.class).removeListener(mListener);
+-        super.onDetachedFromWindow();
++        mShowSwipeUpUi = showSwipeUpUi;
++        onLikelyDefaultLayoutChange();
+     }
+ 
+     public void onLikelyDefaultLayoutChange() {
+@@ -286,7 +249,7 @@
+     }
+ 
+     private void addGravitySpacer(LinearLayout layout) {
+-        layout.addView(new Space(mContext), new LinearLayout.LayoutParams(0, 0, 1));
++        layout.addView(new Space(getContext()), new LinearLayout.LayoutParams(0, 0, 1));
+     }
+ 
+     private void inflateButtons(String[] buttons, ViewGroup parent, boolean landscape,
+@@ -314,19 +277,6 @@
+         v = applySize(v, buttonSpec, landscape, start);
+         parent.addView(v);
+         addToDispatchers(v);
+-        View lastView = landscape ? mLastLandscape : mLastPortrait;
+-        View accessibilityView = v;
+-        if (v instanceof ReverseRelativeLayout) {
+-            accessibilityView = ((ReverseRelativeLayout) v).getChildAt(0);
+-        }
+-        if (lastView != null) {
+-            accessibilityView.setAccessibilityTraversalAfter(lastView.getId());
+-        }
+-        if (landscape) {
+-            mLastLandscape = accessibilityView;
+-        } else {
+-            mLastPortrait = accessibilityView;
+-        }
+         return v;
+     }
+ 
+@@ -337,7 +287,7 @@
+         if (sizeStr.contains(WEIGHT_SUFFIX) || sizeStr.contains(ABSOLUTE_SUFFIX)) {
+             // To support gravity, wrap in RelativeLayout and apply gravity to it.
+             // Children wanting to use gravity must be smaller then the frame.
+-            ReverseRelativeLayout frame = new ReverseRelativeLayout(mContext);
++            ReverseRelativeLayout frame = new ReverseRelativeLayout(getContext());
+             LayoutParams childParams = new LayoutParams(v.getLayoutParams());
+ 
+             // Compute gravity to apply
+@@ -351,7 +301,7 @@
+ 
+             // Set default gravity, flipped if needed in reversed layouts (270 RTL and 90 LTR)
+             frame.setDefaultGravity(gravity);
+-            frame.setGravity(gravity); // Apply gravity to root
++            childParams.gravity = gravity;
+ 
+             frame.addView(v, childParams);
+ 
+@@ -361,7 +311,7 @@
+                         sizeStr.substring(0, sizeStr.indexOf(WEIGHT_SUFFIX)));
+                 frame.setLayoutParams(new LinearLayout.LayoutParams(0, MATCH_PARENT, weight));
+             } else {
+-                int width = (int) convertDpToPx(mContext,
++                int width = (int) convertDpToPx(getContext(),
+                         Float.parseFloat(sizeStr.substring(0, sizeStr.indexOf(ABSOLUTE_SUFFIX))));
+                 frame.setLayoutParams(new LinearLayout.LayoutParams(width, MATCH_PARENT));
+             }
+@@ -397,8 +347,6 @@
+             v = inflater.inflate(R.layout.menu_ime, parent, false);
+         } else if (NAVSPACE.equals(button)) {
+             v = inflater.inflate(R.layout.nav_key_space, parent, false);
+-        } else if (CLIPBOARD.equals(button)) {
+-            v = inflater.inflate(R.layout.clipboard, parent, false);
+         } else if (CONTEXTUAL.equals(button)) {
+             v = inflater.inflate(R.layout.contextual, parent, false);
+         } else if (HOME_HANDLE.equals(button)) {
+@@ -406,20 +354,8 @@
+         } else if (IME_SWITCHER.equals(button)) {
+             v = inflater.inflate(R.layout.ime_switcher, parent, false);
+         } else if (button.startsWith(KEY)) {
+-            String uri = extractImage(button);
+-            int code = extractKeycode(button);
+             v = inflater.inflate(R.layout.custom_key, parent, false);
+-            ((KeyButtonView) v).setCode(code);
+-            if (uri != null) {
+-                if (uri.contains(":")) {
+-                    ((KeyButtonView) v).loadAsync(Icon.createWithContentUri(uri));
+-                } else if (uri.contains("/")) {
+-                    int index = uri.indexOf('/');
+-                    String pkg = uri.substring(0, index);
+-                    int id = Integer.parseInt(uri.substring(index + 1));
+-                    ((KeyButtonView) v).loadAsync(Icon.createWithResource(pkg, id));
+-                }
+-            }
++            ((KeyButtonView) v).setCode(extractKeycode(button));
+         }
+         return v;
+     }
