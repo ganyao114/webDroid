@@ -22,11 +22,16 @@ public class Paint {
 
     private int color, flags;
     private float strokeWidth, strokeMiter, textSize, textScaleX, textSkewX;
+    private float letterSpacing;
     private Style style;
     private Align align;
     private Cap cap;
     private Join join;
     private Typeface typeface;
+    private MaskFilter maskFilter;
+    private Shader shader;
+    private float shadowRadius, shadowDx, shadowDy;
+    private int shadowColor;
 
     public Paint() { this(0); }
     public Paint(int flags) { reset(); this.flags |= flags; }
@@ -43,15 +48,40 @@ public class Paint {
         textSize = 16;
         textScaleX = 1;
         textSkewX = 0;
+        letterSpacing = 0;
         typeface = null;
+        maskFilter = null;
+        shader = null;
+        clearShadowLayer();
     }
     public void set(Paint other) {
         color = other.color; flags = other.flags; style = other.style; align = other.align;
         cap = other.cap; join = other.join; strokeWidth = other.strokeWidth; strokeMiter = other.strokeMiter;
         textSize = other.textSize; textScaleX = other.textScaleX; textSkewX = other.textSkewX;
+        letterSpacing = other.letterSpacing;
         typeface = other.typeface;
+        maskFilter = other.maskFilter;
+        shader = other.shader;
+        shadowRadius = other.shadowRadius; shadowDx = other.shadowDx; shadowDy = other.shadowDy;
+        shadowColor = other.shadowColor;
     }
     public int getColor() { return color; }
+    public MaskFilter getMaskFilter() { return maskFilter; }
+    public MaskFilter setMaskFilter(MaskFilter value) { maskFilter = value; return value; }
+    public Shader getShader() { return shader; }
+    public Shader setShader(Shader value) { shader = value; return value; }
+    public void setShadowLayer(float radius, float dx, float dy, int color) {
+        shadowRadius = Math.max(0, radius);
+        shadowDx = dx;
+        shadowDy = dy;
+        shadowColor = color;
+    }
+    public void clearShadowLayer() { setShadowLayer(0, 0, 0, Color.TRANSPARENT); }
+    public boolean hasShadowLayer() { return shadowRadius > 0; }
+    public float getShadowLayerRadius() { return shadowRadius; }
+    public float getShadowLayerDx() { return shadowDx; }
+    public float getShadowLayerDy() { return shadowDy; }
+    public int getShadowLayerColor() { return shadowColor; }
     public void setColor(int color) { this.color = color; }
     public int getAlpha() { return Color.alpha(color); }
     public void setAlpha(int alpha) { color = color & 0xffffff | Math.max(0, Math.min(255, alpha)) << 24; }
@@ -87,6 +117,8 @@ public class Paint {
     public void setTextScaleX(float scale) { textScaleX = scale; }
     public float getTextSkewX() { return textSkewX; }
     public void setTextSkewX(float skew) { textSkewX = skew; }
+    public float getLetterSpacing() { return letterSpacing; }
+    public void setLetterSpacing(float spacing) { letterSpacing = spacing; }
     public Align getTextAlign() { return align; }
     public void setTextAlign(Align align) { this.align = java.util.Objects.requireNonNull(align); }
     public Typeface getTypeface() { return typeface; }
@@ -96,7 +128,22 @@ public class Paint {
 
     public float measureText(String text) {
         if (text == null) throw new IllegalArgumentException("text is null");
-        return nativeMeasure(text, textSize, weight(), face(), null) * textScaleX;
+        float width = nativeMeasure(text, textSize, weight(), face(), null);
+        return scaledTextWidth(text, width);
+    }
+    private float scaledTextWidth(String text, float width) {
+        if (letterSpacing == 0 || text.length() == 0) return width * textScaleX;
+        int count = 0;
+        for (int offset = 0; offset < text.length(); count++) {
+            offset += Character.charCount(Character.codePointAt(text, offset));
+        }
+        return Math.max(0, width + (count - 1) * letterSpacing * textSize) * textScaleX;
+    }
+    float textScaleForDrawing(String text) {
+        if (letterSpacing == 0) return textScaleX;
+        // The display list records font runs with an affine transform and no tracking field.
+        float width = nativeMeasure(text, textSize, weight(), face(), null);
+        return width == 0 ? textScaleX : scaledTextWidth(text, width) / width;
     }
     public float measureText(String text, int start, int end) { return measureText(text.substring(start, end)); }
     public float measureText(CharSequence text, int start, int end) {
@@ -119,6 +166,7 @@ public class Paint {
         return m[0] + m[1];
     }
     public FontMetricsInt getFontMetricsInt() { FontMetricsInt m = new FontMetricsInt(); getFontMetricsInt(m); return m; }
+    public float getUnderlineThickness() { return Math.max(1, getTextSize() * 0.05f); }
     public int getFontMetricsInt(FontMetricsInt out) {
         FontMetrics metrics = getFontMetrics();
         int ascent = NativeMath.round(metrics.ascent);

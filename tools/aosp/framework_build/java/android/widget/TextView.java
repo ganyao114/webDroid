@@ -9,6 +9,7 @@ import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
+import android.text.TextPaint;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.TypedValue;
@@ -17,7 +18,12 @@ import android.view.KeyEvent;
 import android.view.View;
 import java.util.ArrayList;
 
-public class TextView extends View {
+// Keep the Paint-returning bridge for embedded clients compiled against the older framework DEX.
+interface TextViewPaintAccess {
+    Paint getPaint();
+}
+
+public class TextView extends View implements TextViewPaintAccess {
     public enum BufferType { NORMAL, SPANNABLE, EDITABLE }
     public interface OnEditorActionListener { boolean onEditorAction(TextView view, int actionId, KeyEvent event); }
     private static final int[] TEXT_ATTRS = {android.R.attr.text, android.R.attr.textSize, android.R.attr.textColor,
@@ -25,7 +31,7 @@ public class TextView extends View {
             android.R.attr.fontFamily, android.R.attr.textStyle, android.R.attr.hint, android.R.attr.textColorHint,
             android.R.attr.includeFontPadding, android.R.attr.textAppearance, android.R.attr.lineSpacingExtra,
             android.R.attr.lineSpacingMultiplier};
-    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final TextPaint paint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private final Paint.FontMetrics fontMetrics = new Paint.FontMetrics();
     private final ArrayList<String> lines = new ArrayList<>();
     private CharSequence text = "", hint;
@@ -36,6 +42,7 @@ public class TextView extends View {
     private float lineSpacingExtra, lineSpacingMultiplier = 1;
     private int drawablePadding;
     private Drawable start, top, end, bottom;
+    private boolean relativeDrawables;
     private TextUtils.TruncateAt ellipsize;
     public TextView(Context context) { this(context, null); }
     public TextView(Context context, AttributeSet attrs) { this(context, attrs, android.R.attr.textViewStyle); }
@@ -47,7 +54,7 @@ public class TextView extends View {
             int appearance = a.getResourceId(12, 0);
             if (appearance != 0) setTextAppearance(appearance);
             applyTextAppearance(a);
-            setText(a.getText(0));
+            applyText(a.getText(0));
             setHint(a.getText(9));
             setGravity(a.getInt(3, gravity));
             singleLine = a.getBoolean(4, false);
@@ -70,7 +77,8 @@ public class TextView extends View {
     public void setTextAppearance(Context context, int id) { setTextAppearance(id); }
     public CharSequence getText() { return text; }
     public void setText(CharSequence value) { setText(value, BufferType.NORMAL); }
-    public void setText(CharSequence value, BufferType type) {
+    public void setText(CharSequence value, BufferType type) { applyText(value); }
+    private void applyText(CharSequence value) {
         text = value == null ? "" : value;
         requestLayout();
         invalidate();
@@ -87,8 +95,9 @@ public class TextView extends View {
         invalidate();
     }
     public float getTextSize() { return paint.getTextSize(); }
-    public void setTextColor(int color) { setTextColor(ColorStateList.valueOf(color)); }
-    public void setTextColor(ColorStateList colors) {
+    public void setTextColor(int color) { applyTextColor(ColorStateList.valueOf(color)); }
+    public void setTextColor(ColorStateList colors) { applyTextColor(colors); }
+    private void applyTextColor(ColorStateList colors) {
         if (colors == null) throw new NullPointerException("colors");
         this.colors = colors;
         invalidate();
@@ -99,7 +108,24 @@ public class TextView extends View {
     public void setHintTextColor(ColorStateList color) { if (color != null) { hintColors = color; invalidate(); } }
     public ColorStateList getHintTextColors() { return hintColors; }
     public int getCurrentHintTextColor() { return hintColors.getColorForState(getDrawableState(), hintColors.getDefaultColor()); }
-    public Paint getPaint() { return paint; }
+    @Override public TextPaint getPaint() { return paint; }
+    public void setShadowLayer(float radius, float dx, float dy, int color) {
+        paint.setShadowLayer(radius, dx, dy, color);
+        invalidate();
+    }
+    public float getShadowRadius() { return paint.getShadowLayerRadius(); }
+    public float getShadowDx() { return paint.getShadowLayerDx(); }
+    public float getShadowDy() { return paint.getShadowLayerDy(); }
+    public int getShadowColor() { return paint.getShadowLayerColor(); }
+    public int getExtendedPaddingTop() { return getCompoundPaddingTop(); }
+    public int getExtendedPaddingBottom() { return getCompoundPaddingBottom(); }
+    public float getLetterSpacing() { return paint.getLetterSpacing(); }
+    public void setLetterSpacing(float spacing) {
+        if (Float.compare(paint.getLetterSpacing(), spacing) == 0) return;
+        paint.setLetterSpacing(spacing);
+        requestLayout();
+        invalidate();
+    }
     public void setTypeface(Typeface font) { paint.setTypeface(font); requestLayout(); invalidate(); }
     public void setTypeface(Typeface font, int style) { setTypeface(Typeface.create(font, style)); }
     public Typeface getTypeface() { return paint.getTypeface(); }
@@ -130,6 +156,14 @@ public class TextView extends View {
     }
     public int getCompoundDrawablePadding() { return drawablePadding; }
     public void setCompoundDrawablesRelative(Drawable start, Drawable top, Drawable end, Drawable bottom) {
+        relativeDrawables = true;
+        applyCompoundDrawables(start, top, end, bottom);
+    }
+    public void setCompoundDrawables(Drawable left, Drawable top, Drawable right, Drawable bottom) {
+        relativeDrawables = false;
+        applyCompoundDrawables(left, top, right, bottom);
+    }
+    private void applyCompoundDrawables(Drawable start, Drawable top, Drawable end, Drawable bottom) {
         if (this.start != null) this.start.setCallback(null);
         if (this.top != null) this.top.setCallback(null);
         if (this.end != null) this.end.setCallback(null);
@@ -142,8 +176,13 @@ public class TextView extends View {
         requestLayout();
         invalidate();
     }
-    private Drawable leftDrawable() { return getLayoutDirection() == LAYOUT_DIRECTION_RTL ? end : start; }
-    private Drawable rightDrawable() { return getLayoutDirection() == LAYOUT_DIRECTION_RTL ? start : end; }
+    private Drawable leftDrawable() { return relativeDrawables && getLayoutDirection() == LAYOUT_DIRECTION_RTL ? end : start; }
+    private Drawable rightDrawable() { return relativeDrawables && getLayoutDirection() == LAYOUT_DIRECTION_RTL ? start : end; }
+    public Drawable[] getCompoundDrawables() { return new Drawable[] {leftDrawable(), top, rightDrawable(), bottom}; }
+    public Drawable[] getCompoundDrawablesRelative() {
+        if (relativeDrawables || getLayoutDirection() != LAYOUT_DIRECTION_RTL) return new Drawable[] {start, top, end, bottom};
+        return new Drawable[] {end, top, start, bottom};
+    }
     private int drawableWidth(Drawable drawable) { return drawable == null ? 0 : drawable.getBounds().width() + drawablePadding; }
     private int drawableHeight(Drawable drawable) {
         return drawable == null ? 0 : drawable.getBounds().height() + (text.length() == 0 && hint == null ? 0 : drawablePadding);
@@ -174,12 +213,8 @@ public class TextView extends View {
             if (singleLine || start == lineEnd || paint.measureText(source, start, lineEnd) <= width) {
                 String value = source.substring(start, lineEnd);
                 if (ellipsize == TextUtils.TruncateAt.END && singleLine && paint.measureText(value) > width) {
-                    int end = value.length();
-                    while (end > 0 && paint.measureText(value.substring(0, end) + "…") > width) {
-                        --end;
-                        if (end > 0 && Character.isLowSurrogate(value.charAt(end))) --end;
-                    }
-                    value = end == 0 ? "…" : value.substring(0, end) + "…";
+                    value = TextUtils.ellipsize(value, paint, width, ellipsize).toString();
+                    if (value.isEmpty()) value = "…";
                 }
                 lines.add(value);
                 start = lineEnd + 1;

@@ -1,0 +1,10 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/DatabaseHelper.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/DatabaseHelper.java
+@@ -116,6 +116,7 @@
+     @Override
+     public void onOpen(SQLiteDatabase db) {
+         super.onOpen(db);
++        if (":memory:".equals(db.getPath())) return;
+ 
+         File schemaFile = mContext.getFileStreamPath(DOWNGRADE_SCHEMA_FILE);
+         if (!schemaFile.exists()) {

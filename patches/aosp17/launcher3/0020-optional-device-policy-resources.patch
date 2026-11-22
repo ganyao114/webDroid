@@ -1,0 +1,30 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/StringCache.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/StringCache.kt
+@@ -86,7 +86,7 @@
+                         context.getString(
+                             when {
+                                 !Utilities.ATLEAST_U -> R.string.work_apps_paused_body
+-                                context.dm().managedSubscriptionsPolicy.policyType ==
++                                context.dm()?.managedSubscriptionsPolicy?.policyType ==
+                                     ManagedSubscriptionsPolicy.TYPE_ALL_MANAGED_SUBSCRIPTIONS ->
+                                     R.string.work_apps_paused_telephony_unavailable_body
+                                 else -> R.string.work_apps_paused_info_body
+@@ -145,10 +145,14 @@
+             updatableStringId: String,
+             defaultSupplier: Supplier<String>,
+         ) =
+-            if (Utilities.ATLEAST_T) dm().resources.getString(updatableStringId, defaultSupplier)
+-            else defaultSupplier.get()
+-
+-        private fun Context.dm() = getSystemService(DevicePolicyManager::class.java)!!
++            if (Utilities.ATLEAST_T) {
++                dm()?.resources?.getString(updatableStringId, defaultSupplier) ?: defaultSupplier.get()
++            } else defaultSupplier.get()
++
++        private fun Context.dm(): DevicePolicyManager? {
++            val service = getSystemService(Context.DEVICE_POLICY_SERVICE) ?: return null
++            return service as? DevicePolicyManager
++        }
+ 
+         private const val PREFIX = "Launcher."
+ 

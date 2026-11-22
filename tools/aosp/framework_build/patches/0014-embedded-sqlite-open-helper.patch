@@ -1,0 +1,31 @@
+--- a/frameworks/base/core/java/android/database/sqlite/SQLiteOpenHelper.java
++++ b/frameworks/base/core/java/android/database/sqlite/SQLiteOpenHelper.java
+@@ -24,7 +24,6 @@
+ import android.database.DatabaseErrorHandler;
+ import android.database.SQLException;
+ import android.database.sqlite.SQLiteDatabase.CursorFactory;
+-import android.os.FileUtils;
+ import android.util.Log;
+ 
+ import java.io.File;
+@@ -388,8 +387,6 @@
+                     SQLiteDatabase.OpenParams params = mOpenParamsBuilder.build();
+                     try {
+                         db = SQLiteDatabase.openDatabase(filePath, params);
+-                        // Keep pre-O-MR1 behavior by resetting file permissions to 660
+-                        setFilePermissionsForDb(filePath.getPath());
+                     } catch (SQLException ex) {
+                         if (writable) {
+                             throw ex;
+@@ -453,11 +450,6 @@
+         }
+     }
+ 
+-    private static void setFilePermissionsForDb(String dbPath) {
+-        int perms = FileUtils.S_IRUSR | FileUtils.S_IWUSR | FileUtils.S_IRGRP | FileUtils.S_IWGRP;
+-        FileUtils.setPermissions(dbPath, perms, -1, -1);
+-    }
+-
+     /**
+      * Close any open database object.
+      */

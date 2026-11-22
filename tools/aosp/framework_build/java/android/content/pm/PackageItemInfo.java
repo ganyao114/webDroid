@@ -8,11 +8,13 @@ public class PackageItemInfo {
     public int labelRes, icon, banner, logo;
     public CharSequence nonLocalizedLabel;
     public Bundle metaData;
+    public boolean isArchived;
 
     public PackageItemInfo() {}
     public PackageItemInfo(PackageItemInfo other) {
         name = other.name; packageName = other.packageName; labelRes = other.labelRes; icon = other.icon;
         banner = other.banner; logo = other.logo; nonLocalizedLabel = other.nonLocalizedLabel; metaData = other.metaData;
+        isArchived = other.isArchived;
     }
     public CharSequence loadLabel(PackageManager pm) {
         if (nonLocalizedLabel != null) return nonLocalizedLabel;

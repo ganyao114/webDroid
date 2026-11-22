@@ -6,6 +6,7 @@ public class DisplayMetrics {
     public static final int DENSITY_LOW = 120;
     public static final int DENSITY_MEDIUM = 160;
     public static final int DENSITY_DEFAULT = DENSITY_MEDIUM;
+    public static final int DENSITY_DEVICE_STABLE = DENSITY_DEFAULT;
     public static final int DENSITY_HIGH = 240;
     public static final int DENSITY_XHIGH = 320;
     public static final int DENSITY_XXHIGH = 480;

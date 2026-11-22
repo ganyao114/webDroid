@@ -14,6 +14,9 @@ public final class Insets {
     public static Insets of(int left, int top, int right, int bottom) {
         return (left | top | right | bottom) == 0 ? NONE : new Insets(left, top, right, bottom);
     }
+    public static Insets of(Rect rect) {
+        return rect == null ? NONE : of(rect.left, rect.top, rect.right, rect.bottom);
+    }
 
     public static Insets max(Insets a, Insets b) {
         return of(Math.max(a.left, b.left), Math.max(a.top, b.top),

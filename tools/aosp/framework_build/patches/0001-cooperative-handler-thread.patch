@@ -1,0 +1,102 @@
+--- a/frameworks/base/core/java/android/os/HandlerThread.java
++++ b/frameworks/base/core/java/android/os/HandlerThread.java
+@@ -86,6 +86,7 @@
+     int mPriority;
+     int mTid = -1;
+     Looper mLooper;
++    private boolean mStarted;
+     private volatile @Nullable Handler mHandler;
+     private volatile @Nullable Executor mExecutor;
+ 
+@@ -108,15 +109,7 @@
+     }
+ 
+     /** @hide */
+-    @android.ravenwood.annotation.RavenwoodReplace
+     protected void onCreated() {
+-    }
+-
+-    /** @hide */
+-    protected void onCreated$ravenwood() {
+-        // Mark ourselves as daemon to enable tests to terminate quickly when finished, despite
+-        // any HandlerThread instances that may be lingering around
+-        setDaemon(true);
+     }
+ 
+     /**
+@@ -127,52 +120,22 @@
+     }
+ 
+     @Override
+-    public void run() {
+-        mTid = Process.myTid();
+-        Looper.prepare();
+-        synchronized (this) {
+-            mLooper = Looper.myLooper();
+-            notifyAll();
+-        }
+-        Process.setThreadPriority(mPriority);
+-        onLooperPrepared();
+-        Looper.loop();
+-        mTid = -1;
+-    }
+-
+-    /**
+-     * This method returns the Looper associated with this thread. If this thread not been started
+-     * or for any reason isAlive() returns false, this method will return null. If this thread
+-     * has been started, this method will block until the looper has been initialized.
+-     * @return The looper.
+-     */
++    public synchronized void start() {
++        if (mStarted) throw new IllegalThreadStateException();
++        mStarted = true;
++        mTid = (int) getId();
++        mLooper = Looper.createWorker(this);
++        try {
++            mLooper.prepareWorker(this::onLooperPrepared);
++        } catch (RuntimeException | Error e) {
++            mLooper.quit();
++            throw e;
++        }
++    }
++
++    /** Returns the cooperative looper after start and while its queue is active. */
+     public Looper getLooper() {
+-        if (!isAlive()) {
+-            return null;
+-        }
+-
+-        boolean wasInterrupted = false;
+-
+-        // If the thread has been started, wait until the looper has been created.
+-        synchronized (this) {
+-            while (isAlive() && mLooper == null) {
+-                try {
+-                    wait();
+-                } catch (InterruptedException e) {
+-                    wasInterrupted = true;
+-                }
+-            }
+-        }
+-
+-        /*
+-         * We may need to restore the thread's interrupted flag, because it may
+-         * have been cleared above since we eat InterruptedExceptions
+-         */
+-        if (wasInterrupted) {
+-            Thread.currentThread().interrupt();
+-        }
+-
+-        return mLooper;
++        return mLooper != null && !mLooper.isFinished() ? mLooper : null;
+     }
+ 
+     /**
+@@ -264,6 +227,6 @@
+      * Returns the identifier of this thread. See Process.myTid().
+      */
+     public int getThreadId() {
+-        return mTid;
++        return getLooper() == null ? -1 : mTid;
+     }
+ }

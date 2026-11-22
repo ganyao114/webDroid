@@ -2,6 +2,8 @@ package android.widget;
 
 import android.content.Context;
 import android.text.Editable;
+import android.text.Selection;
+import android.text.SpannableStringBuilder;
 import android.text.TextWatcher;
 import android.util.AttributeSet;
 import android.view.KeyEvent;
@@ -11,7 +13,7 @@ import java.util.ArrayList;
 
 public class EditText extends TextView {
     private final ArrayList<TextWatcher> watchers = new ArrayList<>();
-    private final Buffer editable = new Buffer();
+    private final Buffer editable = new Buffer(super.getText());
     private OnEditorActionListener editor;
     private int selectionStart, selectionEnd, composingStart = -1;
 
@@ -19,7 +21,6 @@ public class EditText extends TextView {
     public EditText(Context context, AttributeSet attrs) { this(context, attrs, android.R.attr.editTextStyle); }
     public EditText(Context context, AttributeSet attrs, int style) {
         super(context, attrs, style);
-        editable.value = super.getText().toString();
         setSelection(editable.length());
         setFocusableInTouchMode(true);
         setClickable(true);
@@ -45,6 +46,7 @@ public class EditText extends TextView {
         composingStart = -1;
         selectionStart = start;
         selectionEnd = end;
+        Selection.setSelection(editable, start, end);
     }
     public void setSelection(int index) { setSelection(index, index); }
 
@@ -83,32 +85,21 @@ public class EditText extends TextView {
         return super.onKeyUp(code, event);
     }
 
-    private final class Buffer implements Editable {
-        private String value = "";
-        @Override public int length() { return value.length(); }
-        @Override public char charAt(int point) { return value.charAt(point); }
-        @Override public CharSequence subSequence(int start, int end) { return value.substring(start, end); }
-        @Override public String toString() { return value; }
-        @Override public Editable replace(int start, int end, CharSequence text, int from, int to) {
-            if (start < 0 || end < start || end > value.length()) throw new IndexOutOfBoundsException();
-            String replacement = text.subSequence(from, to).toString();
-            String next = value.substring(0, start) + replacement + value.substring(end);
+    private final class Buffer extends SpannableStringBuilder {
+        Buffer(CharSequence initial) { super(initial); }
+
+        @Override public SpannableStringBuilder replace(int start, int end, CharSequence text, int from, int to) {
+            if (start < 0 || end < start || end > length()) throw new IndexOutOfBoundsException();
+            int previousLength = length();
             TextWatcher[] listeners = watchers.toArray(new TextWatcher[watchers.size()]);
-            for (TextWatcher watcher : listeners) watcher.beforeTextChanged(value, start, end - start, to - from);
-            value = next;
-            setSelection(start + replacement.length());
-            EditText.super.setText(value, BufferType.EDITABLE);
-            for (TextWatcher watcher : listeners) watcher.onTextChanged(value, start, end - start, to - from);
+            for (TextWatcher watcher : listeners) watcher.beforeTextChanged(this, start, end - start, to - from);
+            super.replace(start, end, text, from, to);
+            int inserted = length() - previousLength + (end - start);
+            setSelection(start + inserted);
+            EditText.super.setText(this, BufferType.EDITABLE);
+            for (TextWatcher watcher : listeners) watcher.onTextChanged(this, start, end - start, inserted);
             for (TextWatcher watcher : listeners) watcher.afterTextChanged(this);
             return this;
         }
-        @Override public Editable replace(int start, int end, CharSequence text) { return replace(start, end, text, 0, text.length()); }
-        @Override public Editable insert(int where, CharSequence text, int start, int end) { return replace(where, where, text, start, end); }
-        @Override public Editable insert(int where, CharSequence text) { return replace(where, where, text); }
-        @Override public Editable delete(int start, int end) { return replace(start, end, ""); }
-        @Override public Editable append(CharSequence text) { return insert(length(), text == null ? "null" : text); }
-        @Override public Editable append(CharSequence text, int start, int end) { return insert(length(), text == null ? "null" : text, start, end); }
-        @Override public Editable append(char value) { return append(String.valueOf(value)); }
-        @Override public void clear() { delete(0, length()); }
     }
 }

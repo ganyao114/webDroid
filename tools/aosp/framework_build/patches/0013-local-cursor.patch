@@ -1,0 +1,126 @@
+--- a/frameworks/base/core/java/android/database/AbstractCursor.java
++++ b/frameworks/base/core/java/android/database/AbstractCursor.java
+@@ -24,7 +24,6 @@
+ import android.os.Bundle;
+ import android.util.Log;
+ 
+-import dalvik.system.CloseGuard;
+ 
+ import java.lang.ref.WeakReference;
+ import java.util.Arrays;
+@@ -38,7 +37,7 @@
+  * that all cursors need to deal with and is provided for convenience reasons.
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+-public abstract class AbstractCursor implements CrossProcessCursor {
++public abstract class AbstractCursor implements Cursor {
+     private static final String TAG = "Cursor";
+ 
+     /**
+@@ -86,10 +85,8 @@
+     private final ContentObservable mContentObservable = new ContentObservable();
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+-    private Bundle mExtras = Bundle.EMPTY;
+-
+-    /** CloseGuard to detect leaked cursor **/
+-    private final CloseGuard mCloseGuard;
++    private Bundle mExtras = new Bundle();
++
+ 
+     /* -------------------------------------------------------- */
+     /* These need to be implemented by subclasses */
+@@ -129,17 +126,6 @@
+     }
+     /* -------------------------------------------------------- */
+     /* Methods that may optionally be implemented by subclasses */
+-
+-    /**
+-     * If the cursor is backed by a {@link CursorWindow}, returns a pre-filled
+-     * window with the contents of the cursor, otherwise null.
+-     *
+-     * @return The pre-filled window that backs this cursor, or null if none.
+-     */
+-    @Override
+-    public CursorWindow getWindow() {
+-        return null;
+-    }
+ 
+     @Override
+     public int getColumnCount() {
+@@ -184,9 +170,6 @@
+         mClosed = true;
+         mContentObservable.unregisterAll();
+         onDeactivateOrClose();
+-        if (mCloseGuard != null) {
+-            mCloseGuard.close();
+-        }
+     }
+ 
+     /**
+@@ -199,7 +182,6 @@
+      * @param newPosition the position that we're moving to
+      * @return true if the move is successful, false otherwise
+      */
+-    @Override
+     public boolean onMove(int oldPosition, int newPosition) {
+         return true;
+     }
+@@ -226,19 +208,6 @@
+     /* Implementation */
+     public AbstractCursor() {
+         mPos = -1;
+-        mCloseGuard = initCloseGuard();
+-        if (mCloseGuard != null) {
+-            mCloseGuard.open("AbstractCursor.close");
+-        }
+-    }
+-
+-    @android.ravenwood.annotation.RavenwoodReplace
+-    private CloseGuard initCloseGuard() {
+-        return CloseGuard.get();
+-    }
+-
+-    private CloseGuard initCloseGuard$ravenwood() {
+-        return null;
+     }
+ 
+     @Override
+@@ -274,11 +243,6 @@
+         }
+ 
+         return result;
+-    }
+-
+-    @Override
+-    public void fillWindow(int position, CursorWindow window) {
+-        DatabaseUtils.cursorFillWindow(this, position, window);
+     }
+ 
+     @Override
+@@ -493,7 +457,7 @@
+ 
+     @Override
+     public void setExtras(Bundle extras) {
+-        mExtras = (extras == null) ? Bundle.EMPTY : extras;
++        mExtras = (extras == null) ? new Bundle() : extras;
+     }
+ 
+     @Override
+@@ -503,7 +467,7 @@
+ 
+     @Override
+     public Bundle respond(Bundle extras) {
+-        return Bundle.EMPTY;
++        return new Bundle();
+     }
+ 
+     /**
+@@ -542,7 +506,6 @@
+             mContentResolver.unregisterContentObserver(mSelfObserver);
+         }
+         try {
+-            if (mCloseGuard != null) mCloseGuard.warnIfOpen();
+             if (!mClosed) close();
+         } catch(Exception e) { }
+     }

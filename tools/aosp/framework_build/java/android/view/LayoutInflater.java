@@ -11,6 +11,7 @@ import org.xmlpull.v1.XmlPullParserException;
 import org.wasmandroid.ui.XmlValues;
 
 public class LayoutInflater {
+    public interface Filter { boolean onLoadClass(Class<?> type); }
     public interface Factory { View onCreateView(String name, Context context, AttributeSet attrs); }
     public interface Factory2 extends Factory {
         View onCreateView(View parent, String name, Context context, AttributeSet attrs);
@@ -18,6 +19,7 @@ public class LayoutInflater {
     private final Context context;
     private Factory factory;
     private Factory2 factory2;
+    private Filter filter;
     private final ArrayList<Integer> layoutStack = new ArrayList<>();
     private static final int[] INCLUDE_ATTRS = {android.R.attr.id, android.R.attr.visibility, android.R.attr.theme};
 
@@ -25,6 +27,7 @@ public class LayoutInflater {
     protected LayoutInflater(LayoutInflater original, Context context) {
         this.context = context;
         factory = original.factory; factory2 = original.factory2;
+        filter = original.filter;
     }
     public LayoutInflater cloneInContext(Context context) { return new LayoutInflater(this, context); }
     public Context getContext() { return context; }
@@ -33,6 +36,8 @@ public class LayoutInflater {
     }
     public Factory getFactory() { return factory; }
     public Factory2 getFactory2() { return factory2; }
+    public Filter getFilter() { return filter; }
+    public void setFilter(Filter filter) { this.filter = filter; }
     public void setFactory(Factory factory) {
         if (this.factory != null) throw new IllegalStateException("LayoutInflater already has a factory");
         if (factory == null) throw new NullPointerException("factory");
@@ -169,7 +174,11 @@ public class LayoutInflater {
     }
     public final View createView(Context context, String name, String prefix, AttributeSet attrs)
             throws ClassNotFoundException {
-        return nativeCreateView(prefix == null ? name : prefix + name, context, attrs);
+        String className = prefix == null ? name : prefix + name;
+        if (filter != null && !filter.onLoadClass(Class.forName(className, false, context.getClassLoader()))) {
+            throw new InflateException("Class is not allowed to be inflated: " + className);
+        }
+        return nativeCreateView(className, context, attrs);
     }
     private static InflateException error(XmlPullParser xml, String message) {
         return new InflateException(xml.getPositionDescription() + " " + message);

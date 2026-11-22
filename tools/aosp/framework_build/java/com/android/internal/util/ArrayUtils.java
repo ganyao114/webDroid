@@ -9,11 +9,13 @@ public final class ArrayUtils {
     public static long[] newUnpaddedLongArray(int size) { return new long[size]; }
     public static float[] newUnpaddedFloatArray(int size) { return new float[size]; }
     public static boolean[] newUnpaddedBooleanArray(int size) { return new boolean[size]; }
+    public static char[] newUnpaddedCharArray(int size) { return new char[size]; }
 
     @SuppressWarnings("unchecked")
     public static <T> T[] newUnpaddedArray(Class<T> component, int size) {
         return (T[]) Array.newInstance(component, size);
     }
+    public static <T> T[] emptyArray(Class<T> component) { return newUnpaddedArray(component, 0); }
 
     public static String deepToString(Object value) {
         if (value == null) return "null";

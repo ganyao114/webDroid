@@ -1,0 +1,138 @@
+--- a/frameworks/base/core/java/android/os/Trace.java
++++ b/frameworks/base/core/java/android/os/Trace.java
+@@ -16,11 +16,8 @@
+ 
+ package android.os;
+ 
+-import static android.annotation.SystemApi.Client.MODULE_LIBRARIES;
+-
+-import android.annotation.FlaggedApi;
++
+ import android.annotation.NonNull;
+-import android.annotation.SystemApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+ 
+ import dalvik.annotation.optimization.CriticalNative;
+@@ -95,14 +92,12 @@
+     /** @hide */
+     public static final long TRACE_TAG_DATABASE = 1L << 20;
+     /** @hide */
+-    @SystemApi(client = MODULE_LIBRARIES)
+     public static final long TRACE_TAG_NETWORK = 1L << 21;
+     /** @hide */
+     public static final long TRACE_TAG_ADB = 1L << 22;
+     /** @hide */
+     public static final long TRACE_TAG_VIBRATOR = 1L << 23;
+     /** @hide */
+-    @SystemApi
+     public static final long TRACE_TAG_AIDL = 1L << 24;
+     /** @hide */
+     public static final long TRACE_TAG_NNAPI = 1L << 25;
+@@ -123,25 +118,17 @@
+ 
+     private static int sZygoteDebugFlags = 0;
+ 
+-    @UnsupportedAppUsage
+-    @CriticalNative
+-    @android.ravenwood.annotation.RavenwoodReplace
+-    private static native boolean nativeIsTagEnabled(long tag);
+-    @android.ravenwood.annotation.RavenwoodReplace
+-    private static native void nativeSetAppTracingAllowed(boolean allowed);
+-    @android.ravenwood.annotation.RavenwoodReplace
+-    private static native void nativeSetTracingEnabled(boolean allowed);
+-
+-    private static boolean nativeIsTagEnabled$ravenwood(long traceTag) {
++
++    private static boolean nativeIsTagEnabled(long traceTag) {
+         // Tracing currently completely disabled under Ravenwood
+         return false;
+     }
+ 
+-    private static void nativeSetAppTracingAllowed$ravenwood(boolean allowed) {
++    private static void nativeSetAppTracingAllowed(boolean allowed) {
+         // Tracing currently completely disabled under Ravenwood
+     }
+ 
+-    private static void nativeSetTracingEnabled$ravenwood(boolean allowed) {
++    private static void nativeSetTracingEnabled(boolean allowed) {
+         // Tracing currently completely disabled under Ravenwood
+     }
+ 
+@@ -178,7 +165,6 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    @SystemApi(client = MODULE_LIBRARIES)
+     public static boolean isTagEnabled(long traceTag) {
+         return nativeIsTagEnabled(traceTag);
+     }
+@@ -193,7 +179,6 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    @SystemApi(client = MODULE_LIBRARIES)
+     public static void traceCounter(long traceTag, @NonNull String counterName, int counterValue) {
+         if (isTagEnabled(traceTag)) {
+             nativeTraceCounter(traceTag, counterName, counterValue);
+@@ -233,7 +218,6 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    @SystemApi(client = MODULE_LIBRARIES)
+     public static void traceBegin(long traceTag, @NonNull String methodName) {
+         if (isTagEnabled(traceTag)) {
+             nativeTraceBegin(traceTag, methodName);
+@@ -249,7 +233,6 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    @SystemApi(client = MODULE_LIBRARIES)
+     public static void traceEnd(long traceTag) {
+         if (isTagEnabled(traceTag)) {
+             nativeTraceEnd(traceTag);
+@@ -277,7 +260,6 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    @SystemApi(client = MODULE_LIBRARIES)
+     public static void asyncTraceBegin(long traceTag, @NonNull String methodName, int cookie) {
+         if (isTagEnabled(traceTag)) {
+             nativeAsyncTraceBegin(traceTag, methodName, cookie);
+@@ -299,7 +281,6 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    @SystemApi(client = MODULE_LIBRARIES)
+     public static void asyncTraceEnd(long traceTag, @NonNull String methodName, int cookie) {
+         if (isTagEnabled(traceTag)) {
+             nativeAsyncTraceEnd(traceTag, methodName, cookie);
+@@ -404,8 +385,6 @@
+      *                   track must have different values for cookie.
+      * @hide
+      */
+-    @SystemApi
+-    @FlaggedApi(Flags.FLAG_ASYNC_TRACE_FOR_TRACK)
+     public static void asyncTraceForTrackBegin(
+             @NonNull String trackName, @NonNull String methodName, int cookie) {
+         asyncTraceForTrackBegin(TRACE_TAG_APP, trackName, methodName, cookie);
+@@ -450,8 +429,6 @@
+      *                  track must have different values for cookie.
+      * @hide
+      */
+-    @SystemApi
+-    @FlaggedApi(Flags.FLAG_ASYNC_TRACE_FOR_TRACK)
+     public static void asyncTraceForTrackEnd(@NonNull String trackName, int cookie) {
+         asyncTraceForTrackEnd(TRACE_TAG_APP, trackName, cookie);
+     }
+@@ -588,10 +565,6 @@
+      * @hide
+      */
+     public static void registerWithPerfetto() {
+-        if (android.os.Flags.perfettoSdkTracingV3()) {
+-            com.android.internal.dev.perfetto.sdk.PerfettoTrace.register(
+-                    false /* isBackendInProcess */);
+-            PerfettoCategories.registerCategories();
+-        }
++        // Embedded runtime uses the same disabled tracing as Ravenwood.
+     }
+ }

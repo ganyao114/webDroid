@@ -1,0 +1,11 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/data/ItemInfo.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/data/ItemInfo.java
+@@ -334,7 +334,7 @@
+     protected String dumpProperties() {
+         return "id=" + id
+                 + " type=" + LauncherSettings.Favorites.itemTypeToString(itemType)
+-                + " container=" + getContainerInfo()
++                + " container=" + container
+                 + " targetComponent=" + getTargetComponent()
+                 + " ResolvedTargetInfo=" + getResolvedTargetInfo()
+                 + " screen=" + screenId

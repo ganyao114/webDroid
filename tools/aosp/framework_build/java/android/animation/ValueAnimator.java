@@ -7,6 +7,7 @@ import java.util.ArrayList;
 
 public class ValueAnimator extends Animator implements Choreographer.FrameCallback {
     public static final int INFINITE = -1, RESTART = 1, REVERSE = 2;
+    public static boolean areAnimatorsEnabled() { return true; }
     public interface AnimatorUpdateListener { void onAnimationUpdate(ValueAnimator animation); }
     private final ArrayList<AnimatorUpdateListener> updates = new ArrayList<>();
     private long duration = 300, delay, startTime = -1, seekTime;
@@ -15,6 +16,8 @@ public class ValueAnimator extends Animator implements Choreographer.FrameCallba
     private boolean started, running, reverse, seekPending;
     private float fraction;
     private float[] floats;
+    private float[] keyframeFractions;
+    private TimeInterpolator[] keyframeInterpolators;
     private int[] ints;
     private Object value;
     private TimeInterpolator interpolator = new AccelerateDecelerateInterpolator();
@@ -32,10 +35,19 @@ public class ValueAnimator extends Animator implements Choreographer.FrameCallba
     public void setFloatValues(float... values) {
         floats = values.length == 1 ? new float[] {0, values[0]} : values.clone();
         ints = null;
+        keyframeFractions = null;
+        keyframeInterpolators = null;
+    }
+    void setFloatKeyframes(float[] fractions, float[] values, TimeInterpolator[] interpolators) {
+        setFloatValues(values);
+        keyframeFractions = fractions;
+        keyframeInterpolators = interpolators;
     }
     public void setIntValues(int... values) {
         ints = values.length == 1 ? new int[] {0, values[0]} : values.clone();
         floats = null;
+        keyframeFractions = null;
+        keyframeInterpolators = null;
     }
     @Override public ValueAnimator setDuration(long milliseconds) {
         if (milliseconds < 0) throw new IllegalArgumentException("Negative animation duration");
@@ -115,6 +127,15 @@ public class ValueAnimator extends Animator implements Choreographer.FrameCallba
             int from = Math.max(0, Math.min(count - 2, (int) i));
             int to = Math.min(count - 1, from + 1);
             float local = i - from;
+            if (keyframeFractions != null) {
+                from = 0;
+                while (from + 2 < count && keyframeFractions[from + 1] <= fraction) from++;
+                to = from + 1;
+                float start = keyframeFractions[from];
+                local = (fraction - start) / (keyframeFractions[to] - start);
+                TimeInterpolator between = keyframeInterpolators[to];
+                if (between != null) local = between.getInterpolation(local);
+            }
             if (floats != null) value = floats[from] + (floats[to] - floats[from]) * local;
             else value = ints[from] + (int) ((ints[to] - (float) ints[from]) * local);
         }

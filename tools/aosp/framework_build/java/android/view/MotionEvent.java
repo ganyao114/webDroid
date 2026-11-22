@@ -8,11 +8,15 @@ public final class MotionEvent extends InputEvent {
     public static final int ACTION_OUTSIDE = 4, ACTION_POINTER_DOWN = 5, ACTION_POINTER_UP = 6;
     public static final int ACTION_HOVER_MOVE = 7, ACTION_SCROLL = 8, ACTION_HOVER_ENTER = 9, ACTION_HOVER_EXIT = 10;
     public static final int ACTION_BUTTON_PRESS = 11, ACTION_BUTTON_RELEASE = 12;
+    public static final int BUTTON_PRIMARY = 1, BUTTON_SECONDARY = 2, BUTTON_STYLUS_PRIMARY = 32;
+    public static final int CLASSIFICATION_NONE = 0, CLASSIFICATION_AMBIGUOUS_GESTURE = 1,
+            CLASSIFICATION_DEEP_PRESS = 2;
+    public static final int FLAG_IS_GENERATED_GESTURE = 0x8;
     public static final int AXIS_X = 0, AXIS_Y = 1, AXIS_PRESSURE = 2, AXIS_SIZE = 3, AXIS_VSCROLL = 9, AXIS_HSCROLL = 10;
     public static final int TOOL_TYPE_UNKNOWN = 0, TOOL_TYPE_FINGER = 1, TOOL_TYPE_STYLUS = 2, TOOL_TYPE_MOUSE = 3;
     private final long downTime;
     private long eventTime;
-    private int action, metaState, buttonState, edgeFlags;
+    private int action, metaState, buttonState, edgeFlags, actionButton, flags;
     private final int[] ids;
     private float[] x, y;
     private float pressure = 1f, size = 1f;
@@ -49,6 +53,7 @@ public final class MotionEvent extends InputEvent {
         event.hScroll = source.hScroll; event.vScroll = source.vScroll;
         event.pressure = source.pressure; event.size = source.size;
         event.edgeFlags = source.edgeFlags; event.buttonState = source.buttonState;
+        event.actionButton = source.actionButton; event.flags = source.flags;
         event.setSource(source.getSource());
         if (history && source.history != null) {
             event.history = new ArrayList<>();
@@ -73,6 +78,10 @@ public final class MotionEvent extends InputEvent {
     public void setAction(int action) { this.action = action; }
     public int getMetaState() { return metaState; }
     public int getButtonState() { return buttonState; }
+    public int getActionButton() { return actionButton; }
+    public void setActionButton(int actionButton) { this.actionButton = actionButton; }
+    public int getFlags() { return flags; }
+    public int getClassification() { return CLASSIFICATION_NONE; }
     public int getEdgeFlags() { return edgeFlags; }
     public void setEdgeFlags(int flags) { edgeFlags = flags; }
     public int getPointerCount() { return ids.length; }

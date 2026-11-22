@@ -1,0 +1,68 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/logging/StatsLogManager.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/logging/StatsLogManager.kt
+@@ -777,6 +777,10 @@
+          */
+         fun withContainerInfo(containerInfo: ContainerInfo?) = this
+ 
++        /** Computes container details only when the logger uses them. */
++        fun withContainerInfoSupplier(containerInfo: java.util.function.Supplier<ContainerInfo>): StatsLogger =
++            withContainerInfo(containerInfo.get())
++
+         /** Sets logging fields from provided [SliceItem]. */
+         fun withSliceItem(sliceItem: SliceItem) = this
+ 
+--- a/packages/apps/Launcher3/src/com/android/launcher3/dagger/NoOpLoggerModule.kt
++++ b/packages/apps/Launcher3/src/com/android/launcher3/dagger/NoOpLoggerModule.kt
+@@ -16,16 +16,22 @@
+ 
+ package com.android.launcher3.dagger
+ 
++import com.android.launcher3.logger.LauncherAtom.ContainerInfo
+ import com.android.launcher3.logging.StatsLogManager.StatsImpressionLogger
+ import com.android.launcher3.logging.StatsLogManager.StatsLatencyLogger
+ import com.android.launcher3.logging.StatsLogManager.StatsLogger
+ import dagger.Module
+ import dagger.Provides
++import java.util.function.Supplier
+ 
+ @Module
+ object NoOpLoggerModule {
+ 
+-    @JvmStatic @Provides fun provideStatsLogger(): StatsLogger = object : StatsLogger {}
++    @JvmStatic
++    @Provides
++    fun provideStatsLogger(): StatsLogger = object : StatsLogger {
++        override fun withContainerInfoSupplier(containerInfo: Supplier<ContainerInfo>): StatsLogger = this
++    }
+ 
+     @JvmStatic
+     @Provides
+--- a/packages/apps/Launcher3/src/com/android/launcher3/Launcher.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/Launcher.java
+@@ -1011,7 +1011,7 @@
+         }
+ 
+         if (statsLogOrdinal == LAUNCHER_STATE_HOME && mWorkspace != null) {
+-            logger.withContainerInfo(LauncherAtom.ContainerInfo.newBuilder()
++            logger.withContainerInfoSupplier(() -> LauncherAtom.ContainerInfo.newBuilder()
+                     .setWorkspace(
+                             LauncherAtom.WorkspaceContainer.newBuilder()
+                                     .setPageIndex(pageIndex)).build());
+@@ -1045,7 +1045,7 @@
+             mAllAppsSessionLogId = new InstanceIdSequence().newInstanceId();
+             if (getAllAppsEntryEvent().isPresent()) {
+                 getStatsLogManager().logger()
+-                        .withContainerInfo(ContainerInfo.newBuilder()
++                        .withContainerInfoSupplier(() -> ContainerInfo.newBuilder()
+                                 .setWorkspace(WorkspaceContainer.newBuilder()
+                                         .setPageIndex(getWorkspace().getCurrentPage())).build())
+                         .log(getAllAppsEntryEvent().get());
+@@ -2252,7 +2252,7 @@
+         getStatsLogManager().logger()
+                 .withSrcState(LAUNCHER_STATE_HOME)
+                 .withDstState(LAUNCHER_STATE_HOME)
+-                .withContainerInfo(LauncherAtom.ContainerInfo.newBuilder()
++                .withContainerInfoSupplier(() -> LauncherAtom.ContainerInfo.newBuilder()
+                         .setWorkspace(WorkspaceContainer.newBuilder()
+                                 .setPageIndex(visible ? 0 : -1))
+                         .build())

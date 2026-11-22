@@ -4,7 +4,7 @@ import android.content.Context;
 import android.util.AttributeSet;
 import android.view.ViewGroup;
 
-public abstract class AbsListView extends ViewGroup {
+public abstract class AbsListView extends AdapterView<ListAdapter> {
     public static class LayoutParams extends ViewGroup.LayoutParams {
         public LayoutParams(int width, int height) { super(width, height); }
     }

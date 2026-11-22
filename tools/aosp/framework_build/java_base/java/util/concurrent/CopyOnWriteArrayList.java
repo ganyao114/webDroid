@@ -22,9 +22,11 @@ public class CopyOnWriteArrayList<E> extends ArrayList<E> {
         return added;
     }
 
+    final Object[] getArray() { return super.toArray(); }
+
     @SuppressWarnings("unchecked")
     private List<E> snapshot() {
-        return Collections.unmodifiableList(Arrays.asList((E[]) super.toArray()));
+        return Collections.unmodifiableList(Arrays.asList((E[]) getArray()));
     }
 
     @Override public Iterator<E> iterator() { return snapshot().iterator(); }

@@ -10,6 +10,7 @@ import java.net.URISyntaxException;
 
 public class Intent implements Cloneable {
     public static final String ACTION_MAIN = "android.intent.action.MAIN", ACTION_VIEW = "android.intent.action.VIEW";
+    public static final String ACTION_CREATE_SHORTCUT = "android.intent.action.CREATE_SHORTCUT";
     public static final String ACTION_SEND = "android.intent.action.SEND";
     public static final String CATEGORY_DEFAULT = "android.intent.category.DEFAULT";
     public static final String CATEGORY_LAUNCHER = "android.intent.category.LAUNCHER";
@@ -17,6 +18,8 @@ public class Intent implements Cloneable {
     public static final String CATEGORY_BROWSABLE = "android.intent.category.BROWSABLE";
     public static final int FLAG_ACTIVITY_NEW_TASK = 0x10000000, FLAG_ACTIVITY_RESET_TASK_IF_NEEDED = 0x00200000;
     public static final int FLAG_ACTIVITY_CLEAR_TOP = 0x04000000, FLAG_ACTIVITY_SINGLE_TOP = 0x20000000;
+    public static final int URI_INTENT_SCHEME = 1, URI_ANDROID_APP_SCHEME = 2, URI_ALLOW_UNSAFE = 4;
+    private static final int URI_GRANT_FLAGS = 0xc3;
 
     private String action, pkg, type;
     private android.net.Uri data;
@@ -66,12 +69,30 @@ public class Intent implements Cloneable {
                     break;
                 case "scheme": scheme = value; break;
                 case "launchFlags":
-                    try { result.setFlags(Integer.decode(value)); }
+                    try {
+                        long parsed = value.startsWith("0x") || value.startsWith("0X")
+                                ? Long.parseLong(value.substring(2), 16) : Integer.parseInt(value);
+                        if (parsed > 0xffffffffL) throw new NumberFormatException();
+                        result.setFlags((int) parsed & ((flags & URI_ALLOW_UNSAFE) == 0 ? ~URI_GRANT_FLAGS : -1));
+                    }
                     catch (NumberFormatException invalid) { throw new URISyntaxException(uri, "Invalid launch flags", start); }
                     break;
                 default:
-                    if (key.startsWith("S.")) result.putExtra(Uri.decode(key.substring(2)), value);
-                    else throw new URISyntaxException(uri, "Unsupported intent property", start);
+                    if (key.length() < 3 || key.charAt(1) != '.') {
+                        throw new URISyntaxException(uri, "Unsupported intent property", start);
+                    }
+                    String extra = Uri.decode(key.substring(2));
+                    try {
+                        switch (key.charAt(0)) {
+                            case 'S': result.putExtra(extra, value); break;
+                            case 'B': result.putExtra(extra, Boolean.parseBoolean(value)); break;
+                            case 'i': result.putExtra(extra, Integer.parseInt(value)); break;
+                            case 'l': result.putExtra(extra, Long.parseLong(value)); break;
+                            default: throw new URISyntaxException(uri, "Unsupported intent extra", start);
+                        }
+                    } catch (NumberFormatException invalid) {
+                        throw new URISyntaxException(uri, "Invalid intent extra", start);
+                    }
             }
             start = separator + 1;
         }
@@ -79,6 +100,47 @@ public class Intent implements Cloneable {
         if (data.startsWith("intent:")) data = scheme == null ? data.substring(7) : scheme + ':' + data.substring(7);
         if (!data.isEmpty()) result.setDataAndType(Uri.parse(data), result.getType());
         return result;
+    }
+    public String toUri(int uriFlags) {
+        if ((uriFlags & URI_ANDROID_APP_SCHEME) != 0) {
+            throw new UnsupportedOperationException("android-app scheme is unavailable");
+        }
+        StringBuilder uri = new StringBuilder();
+        String scheme = null;
+        if (data != null) {
+            String value = data.toString();
+            if ((uriFlags & URI_INTENT_SCHEME) != 0 && data.getScheme() != null) {
+                scheme = data.getScheme();
+                uri.append("intent:");
+                value = value.substring(scheme.length() + 1);
+            }
+            uri.append(value);
+        } else if ((uriFlags & URI_INTENT_SCHEME) != 0) {
+            uri.append("intent:");
+        }
+        StringBuilder fragment = new StringBuilder();
+        appendUriProperty(fragment, "scheme", scheme, null);
+        if (!ACTION_VIEW.equals(action)) appendUriProperty(fragment, "action", action, null);
+        if (categories != null) {
+            for (String category : categories) appendUriProperty(fragment, "category", category, null);
+        }
+        appendUriProperty(fragment, "type", type, "/");
+        if (flags != 0) fragment.append("launchFlags=0x").append(Integer.toHexString(flags)).append(';');
+        appendUriProperty(fragment, "package", pkg, null);
+        if (component != null) appendUriProperty(fragment, "component", component.flattenToShortString(), "/");
+        if (extras != null) {
+            for (String key : extras.keySet()) {
+                Object value = extras.get(key);
+                char kind = value instanceof String ? 'S' : value instanceof Boolean ? 'B'
+                        : value instanceof Integer ? 'i' : value instanceof Long ? 'l' : 0;
+                if (kind != 0) appendUriProperty(fragment, kind + "." + Uri.encode(key), value.toString(), null);
+            }
+        }
+        if (fragment.length() != 0) uri.append("#Intent;").append(fragment).append("end");
+        return uri.toString();
+    }
+    private static void appendUriProperty(StringBuilder target, String key, String value, String allowed) {
+        if (value != null) target.append(key).append('=').append(Uri.encode(value, allowed)).append(';');
     }
     public Intent setAction(String action) { this.action = action; return this; }
     public String getAction() { return action; }

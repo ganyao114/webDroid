@@ -1,0 +1,168 @@
+--- a/frameworks/base/core/java/android/content/BroadcastReceiver.java
++++ b/frameworks/base/core/java/android/content/BroadcastReceiver.java
+@@ -18,23 +18,15 @@
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.SystemApi;
+-import android.app.ActivityManager;
+-import android.app.ActivityThread;
+-import android.app.IActivityManager;
+-import android.app.QueuedWork;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.os.IBinder;
+ import android.os.Process;
+-import android.os.RemoteException;
+ import android.os.Trace;
+ import android.os.UserHandle;
+ import android.util.Log;
+-import android.util.Slog;
+-
+-import com.android.internal.os.DebugStore;
++
+ 
+ /**
+  * Base class for code that receives and handles broadcast intents sent by
+@@ -52,15 +44,10 @@
+  * <a href="{@docRoot}guide/components/broadcasts.html">Broadcasts</a> developer guide.</p></div>
+  *
+  */
+-@android.ravenwood.annotation.RavenwoodPartiallyAllowlisted
+-@android.ravenwood.annotation.RavenwoodKeepPartialClass
+ public abstract class BroadcastReceiver {
+     @UnsupportedAppUsage
+     private PendingResult mPendingResult;
+     private boolean mDebugUnregister;
+-
+-    private static final boolean DEBUG_STORE_ENABLED =
+-            com.android.internal.os.Flags.debugStoreEnabled();
+ 
+     /**
+      * State for a result that is pending for a broadcast receiver.  Returned
+@@ -262,40 +249,9 @@
+                         "PendingResult#finish#ClassName:" + mReceiverClassName,
+                         1);
+             }
+-            if (DEBUG_STORE_ENABLED) {
+-                DebugStore.recordFinish(System.identityHashCode(this));
+-            }
+-
+-            if (mType == TYPE_COMPONENT) {
+-                final IActivityManager mgr = ActivityManager.getService();
+-                if (QueuedWork.hasPendingWork()) {
+-                    // If this is a broadcast component, we need to make sure any
+-                    // queued work is complete before telling AM we are done, so
+-                    // we don't have our process killed before that.  We now know
+-                    // there is pending work; put another piece of work at the end
+-                    // of the list to finish the broadcast, so we don't block this
+-                    // thread (which may be the main thread) to have it finished.
+-                    //
+-                    // Note that we don't need to use QueuedWork.addFinisher() with the
+-                    // runnable, since we know the AM is waiting for us until the
+-                    // executor gets to it.
+-                    QueuedWork.queue(new Runnable() {
+-                        @Override public void run() {
+-                            if (ActivityThread.DEBUG_BROADCAST) Slog.i(ActivityThread.TAG,
+-                                    "Finishing broadcast after work to component " + mToken);
+-                            sendFinished(mgr);
+-                        }
+-                    }, false);
+-                } else {
+-                    if (ActivityThread.DEBUG_BROADCAST) Slog.i(ActivityThread.TAG,
+-                            "Finishing broadcast to component " + mToken);
+-                    sendFinished(mgr);
+-                }
+-            } else {
+-                if (ActivityThread.DEBUG_BROADCAST) Slog.i(ActivityThread.TAG,
+-                        "Finishing broadcast to " + mToken);
+-                final IActivityManager mgr = ActivityManager.getService();
+-                sendFinished(mgr);
++            synchronized (this) {
++                if (mFinished) throw new IllegalStateException("Broadcast already finished");
++                mFinished = true;
+             }
+         }
+ 
+@@ -303,37 +259,6 @@
+         public void setExtrasClassLoader(ClassLoader cl) {
+             if (mResultExtras != null) {
+                 mResultExtras.setClassLoader(cl);
+-            }
+-        }
+-
+-        /** @hide */
+-        public void sendFinished(IActivityManager am) {
+-            if (DEBUG_STORE_ENABLED) {
+-                DebugStore.recordSendFinished(System.identityHashCode(this));
+-            }
+-            synchronized (this) {
+-                if (mFinished) {
+-                    throw new IllegalStateException("Broadcast already finished");
+-                }
+-                mFinished = true;
+-
+-                try {
+-                    if (mResultExtras != null) {
+-                        mResultExtras.setAllowFds(false);
+-                    }
+-
+-                    // When the OS didn't assume delivery, we need to inform
+-                    // it that we've actually finished the delivery
+-                    if (!mAssumeDeliveredHint) {
+-                        if (mOrderedHint) {
+-                            am.finishReceiver(mToken, mResultCode, mResultData, mResultExtras,
+-                                    mAbortBroadcast, mFlags);
+-                        } else {
+-                            am.finishReceiver(mToken, 0, null, null, false, mFlags);
+-                        }
+-                    }
+-                } catch (RemoteException ex) {
+-                }
+             }
+         }
+ 
+@@ -365,7 +290,6 @@
+         }
+     }
+ 
+-    @android.ravenwood.annotation.RavenwoodKeep
+     public BroadcastReceiver() {
+     }
+ 
+@@ -446,9 +370,6 @@
+     public final PendingResult goAsync() {
+         PendingResult res = mPendingResult;
+         mPendingResult = null;
+-        if (DEBUG_STORE_ENABLED) {
+-            DebugStore.recordGoAsync(System.identityHashCode(res));
+-        }
+         if (res != null && Trace.isTagEnabled(Trace.TRACE_TAG_ACTIVITY_MANAGER)) {
+             res.mReceiverClassName = getClass().getName();
+             Trace.traceCounter(Trace.TRACE_TAG_ACTIVITY_MANAGER,
+@@ -474,15 +395,7 @@
+      * for more information.
+      */
+     public IBinder peekService(Context myContext, Intent service) {
+-        IActivityManager am = ActivityManager.getService();
+-        IBinder binder = null;
+-        try {
+-            service.prepareToLeaveProcess(myContext);
+-            binder = am.peekService(service, service.resolveTypeIfNeeded(
+-                    myContext.getContentResolver()), myContext.getOpPackageName());
+-        } catch (RemoteException e) {
+-        }
+-        return binder;
++        return null;
+     }
+ 
+     /**
+@@ -710,7 +623,6 @@
+      *
+      * @hide
+      */
+-    @SystemApi
+     public final @NonNull UserHandle getSendingUser() {
+         return UserHandle.of(getSendingUserId());
+     }

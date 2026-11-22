@@ -1,0 +1,16 @@
+--- a/frameworks/libs/systemui/iconloaderlib/src/com/android/launcher3/icons/RoundRectEstimator.kt
++++ b/frameworks/libs/systemui/iconloaderlib/src/com/android/launcher3/icons/RoundRectEstimator.kt
+@@ -47,7 +47,12 @@
+      * half-[size] or -1 if the provided path can't be estimated as a rounded rectangle.
+      */
+     fun estimateRadius(path: Path, size: Float): Float {
+-        val fullRegion = Region(0, 0, AREA_CALC_SIZE, AREA_CALC_SIZE)
++        val fullRegion = try {
++            Region(0, 0, AREA_CALC_SIZE, AREA_CALC_SIZE)
++        } catch (_: UnsatisfiedLinkError) {
++            // Select the upstream generic path renderer when Skia Region is unavailable.
++            return -1f
++        }
+ 
+         val tmpPath = Path()
+         path.transform(

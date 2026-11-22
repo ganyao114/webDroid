@@ -38,6 +38,22 @@ public abstract class Uri implements Parcelable, Comparable<Uri> {
         }
         return decoded.toString();
     }
+    public static String encode(String value) { return encode(value, null); }
+    public static String encode(String value, String allowed) {
+        if (value == null) return null;
+        StringBuilder encoded = new StringBuilder(value.length());
+        String digits = "0123456789ABCDEF";
+        for (byte item : value.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            int c = item & 0xff;
+            if (c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+                    || "_-!.~'()*".indexOf(c) >= 0 || c < 128 && allowed != null && allowed.indexOf(c) >= 0) {
+                encoded.append((char) c);
+            } else {
+                encoded.append('%').append(digits.charAt(c >>> 4)).append(digits.charAt(c & 15));
+            }
+        }
+        return encoded.toString();
+    }
     @Override public abstract String toString();
     @Override public final int compareTo(Uri other) { return toString().compareTo(other.toString()); }
     @Override public final boolean equals(Object other) { return other instanceof Uri && toString().equals(other.toString()); }

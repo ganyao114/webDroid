@@ -1,10 +1,12 @@
 package android.content.pm;
 
 public class ApplicationInfo extends PackageItemInfo {
+    public static final int FLAG_SUPPORTS_RTL = 1 << 22;
     public String sourceDir, publicSourceDir, processName, className, dataDir;
     public int uid, targetSdkVersion = android.os.Build.VERSION.SDK_INT, flags, theme;
     public boolean enabled = true;
     public ApplicationInfo() {}
+    public boolean hasRtlSupport() { return (flags & FLAG_SUPPORTS_RTL) != 0; }
     public ApplicationInfo(ApplicationInfo other) {
         super(other);
         sourceDir = other.sourceDir; publicSourceDir = other.publicSourceDir; processName = other.processName;

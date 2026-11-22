@@ -5,18 +5,31 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Resources;
+import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 import android.os.UserHandle;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 
 public class PackageManager {
+    public static final int PERMISSION_GRANTED = 0, PERMISSION_DENIED = -1;
+    private final PackageInstaller installer = new PackageInstaller();
+    public boolean isSafeMode() { return false; }
+    public boolean hasSystemFeature(String feature) { return "android.hardware.touchscreen".equals(feature); }
+    public PackageInstaller getPackageInstaller() { return installer; }
+    public java.util.List<ResolveInfo> queryBroadcastReceivers(Intent intent, int flags) {
+        // The embedded package catalog contains launchable activities only.
+        return java.util.Collections.emptyList();
+    }
     public static final int GET_META_DATA = 0x80, MATCH_DEFAULT_ONLY = 0x10000, MATCH_DISABLED_COMPONENTS = 0x200;
     public static final int COMPONENT_ENABLED_STATE_DEFAULT = 0, COMPONENT_ENABLED_STATE_ENABLED = 1;
     private final Context context;
+    private final HashMap<List<Object>, Resources> packageResources = new HashMap<>();
     public PackageManager(Context context) { this.context = context; }
     public static class NameNotFoundException extends Exception {
         public NameNotFoundException() {}
@@ -103,8 +116,48 @@ public class PackageManager {
     public ApplicationInfo getApplicationInfo(String pkg, int flags) throws NameNotFoundException {
         return getApplicationInfo(pkg, ApplicationInfoFlags.of(flags));
     }
+    public InstallSourceInfo getInstallSourceInfo(String pkg) throws NameNotFoundException {
+        getApplicationInfo(pkg, 0);
+        return new InstallSourceInfo(null, null, null, null);
+    }
+    public Resources getResourcesForApplication(String pkg) throws NameNotFoundException {
+        if ("android".equals(pkg)) return Resources.getSystem();
+        return getResourcesForApplication(getApplicationInfo(pkg, 0));
+    }
+    public Resources getResourcesForApplication(ApplicationInfo info) throws NameNotFoundException {
+        if (context.getPackageName().equals(info.packageName)) return context.getResources();
+        if ("android".equals(info.packageName)) return Resources.getSystem();
+        String path = info.publicSourceDir == null ? info.sourceDir : info.publicSourceDir;
+        if (path == null) throw new NameNotFoundException(info.packageName);
+        Resources local = context.getResources();
+        String locale = local.getConfiguration().getLocaleTag();
+        int density = local.getDisplayMetrics().densityDpi;
+        List<Object> key = Arrays.asList(path, locale, density);
+        synchronized (packageResources) {
+            Resources resources = packageResources.get(key);
+            if (resources == null) {
+                try {
+                    resources = Resources.forApk(path, locale, density);
+                } catch (IOException error) {
+                    throw new NameNotFoundException(info.packageName + ": " + error.getMessage());
+                }
+                packageResources.put(key, resources);
+            }
+            return resources;
+        }
+    }
+    /** Releases external APK assets when the embedded package catalog is torn down. */
+    public void closePackageResources() {
+        synchronized (packageResources) {
+            for (Resources resources : packageResources.values()) resources.close();
+            packageResources.clear();
+        }
+    }
     public CharSequence getApplicationLabel(ApplicationInfo info) { return info.loadLabel(this); }
     public Drawable getApplicationIcon(ApplicationInfo info) { return info.loadIcon(this); }
+    // The single local profile has no work or private-space badge.
+    public CharSequence getUserBadgedLabel(CharSequence label, UserHandle user) { return label; }
+    public Drawable getUserBadgedIcon(Drawable icon, UserHandle user) { return icon; }
     public Drawable getApplicationIcon(String pkg) throws NameNotFoundException { return getApplicationIcon(getApplicationInfo(pkg, 0)); }
     public Drawable getActivityIcon(ComponentName component) throws NameNotFoundException {
         ResolveInfo info = resolveActivity(new Intent().setComponent(component), 0);
@@ -125,8 +178,18 @@ public class PackageManager {
         try {
             return context.getDrawable(android.R.drawable.sym_def_app_icon);
         } catch (Resources.NotFoundException unavailable) {
-            return new ColorDrawable(0xff8b9299);
+            return new DefaultActivityIcon();
         }
+    }
+    private static final class DefaultActivityIcon extends ColorDrawable {
+        DefaultActivityIcon() { super(0xff8b9299); }
+    }
+    public boolean isDefaultApplicationIcon(Drawable drawable) {
+        if (drawable instanceof DefaultActivityIcon) return true;
+        if (!(drawable instanceof AdaptiveIconDrawable icon)) return false;
+        int id = icon.getSourceDrawableResId();
+        return id != 0 && (id == android.R.drawable.sym_def_app_icon || id == Resources.getSystem()
+                .getIdentifier("sym_app_on_sd_unavailable_icon", "drawable", "android"));
     }
 
     public Drawable getDrawable(String pkg, int resId, ApplicationInfo optional) {
@@ -138,26 +201,20 @@ public class PackageManager {
             if (context.getPackageName().equals(pkg)) {
                 return context.getResources().getDrawableForDensity(resId, density, context.getTheme());
             }
-            ApplicationInfo info = optional == null ? getApplicationInfo(pkg, 0) : optional;
-            if (info.sourceDir == null) return null;
-            try (Resources res = Resources.forApk(info.sourceDir, context.getResources().getConfiguration().getLocaleTag(),
-                    context.getResources().getDisplayMetrics().densityDpi)) {
-                return res.getDrawableForDensity(resId, density, null);
-            }
-        } catch (NameNotFoundException | Resources.NotFoundException | IOException error) {
+            Resources resources = optional == null ? getResourcesForApplication(pkg)
+                    : getResourcesForApplication(optional);
+            return resources.getDrawableForDensity(resId, density, null);
+        } catch (NameNotFoundException | Resources.NotFoundException error) {
             return null;
         }
     }
     public CharSequence getText(String pkg, int resId, ApplicationInfo optional) {
         try {
             if (context.getPackageName().equals(pkg)) return context.getText(resId);
-            ApplicationInfo info = optional == null ? getApplicationInfo(pkg, 0) : optional;
-            if (info.sourceDir == null) return null;
-            try (Resources res = Resources.forApk(info.sourceDir, context.getResources().getConfiguration().getLocaleTag(),
-                    context.getResources().getDisplayMetrics().densityDpi)) {
-                return res.getText(resId);
-            }
-        } catch (NameNotFoundException | Resources.NotFoundException | IOException error) {
+            Resources resources = optional == null ? getResourcesForApplication(pkg)
+                    : getResourcesForApplication(optional);
+            return resources.getText(resId);
+        } catch (NameNotFoundException | Resources.NotFoundException error) {
             return null;
         }
     }

@@ -1,0 +1,47 @@
+--- a/frameworks/base/core/java/android/text/SpannableStringInternal.java
++++ b/frameworks/base/core/java/android/text/SpannableStringInternal.java
+@@ -23,7 +23,7 @@
+ import com.android.internal.util.ArrayUtils;
+ import com.android.internal.util.GrowingArrayUtils;
+ 
+-import libcore.util.EmptyArray;
++import android.util.EmptyArray;
+ 
+ import java.lang.reflect.Array;
+ 
+--- a/frameworks/base/core/java/android/text/style/ImageSpan.java
++++ b/frameworks/base/core/java/android/text/style/ImageSpan.java
+@@ -22,13 +22,10 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.graphics.Bitmap;
+-import android.graphics.BitmapFactory;
+ import android.graphics.drawable.BitmapDrawable;
+ import android.graphics.drawable.Drawable;
+ import android.net.Uri;
+ import android.util.Log;
+-
+-import java.io.InputStream;
+ 
+ /**
+  * Span that replaces the text it's attached to with a {@link Drawable} that can be aligned with
+@@ -231,18 +228,7 @@
+         if (mDrawable != null) {
+             drawable = mDrawable;
+         } else if (mContentUri != null) {
+-            Bitmap bitmap = null;
+-            try {
+-                InputStream is = mContext.getContentResolver().openInputStream(
+-                        mContentUri);
+-                bitmap = BitmapFactory.decodeStream(is);
+-                drawable = new BitmapDrawable(mContext.getResources(), bitmap);
+-                drawable.setBounds(0, 0, drawable.getIntrinsicWidth(),
+-                        drawable.getIntrinsicHeight());
+-                is.close();
+-            } catch (Exception e) {
+-                Log.e("ImageSpan", "Failed to loaded content " + mContentUri, e);
+-            }
++            Log.e("ImageSpan", "Content URI unavailable in the embedded process: " + mContentUri);
+         } else {
+             try {
+                 drawable = mContext.getDrawable(mResourceId);

@@ -16,27 +16,30 @@ public class Window {
     private boolean statusBarContrastEnforced, navigationBarContrastEnforced;
     private final WindowInsetsController insetsController = new WindowInsetsController() {
         private int appearance;
+        @Override public void hide(int types) {
+            if ((types & WindowInsets.Type.ime()) == 0) return;
+            var ime = context.getSystemService(android.view.inputmethod.InputMethodManager.class);
+            if (ime != null) ime.hideSoftInputFromWindow(decor.getWindowToken(), 0);
+        }
         @Override public void setSystemBarsAppearance(int value, int mask) {
             appearance = (appearance & ~mask) | (value & mask);
             updateSystemBars();
         }
         @Override public int getSystemBarsAppearance() { return appearance; }
     };
-    private final WindowManager manager = new WindowManager() {
-        @Override public WindowMetrics getCurrentWindowMetrics() {
-            DisplayMetrics metrics = context.getResources().getDisplayMetrics();
-            return new WindowMetrics(new Rect(0, 0, metrics.widthPixels, metrics.heightPixels),
-                    makeInsets(), metrics.density);
-        }
-        @Override public WindowMetrics getMaximumWindowMetrics() { return getCurrentWindowMetrics(); }
-        @Override public void addView(View view, android.view.ViewGroup.LayoutParams params) { decor.addView(view, params); }
-        @Override public void updateViewLayout(View view, android.view.ViewGroup.LayoutParams params) { view.setLayoutParams(params); }
-        @Override public void removeView(View view) { decor.removeView(view); }
-    };
+    private final WindowManager manager;
     public Window(Context context) {
         this.context = context;
         decor = new FrameLayout(context);
         content = new FrameLayout(context);
+        manager = new WindowManager() {
+            @Override public Display getDefaultDisplay() { return context.getDisplay(); }
+            @Override public WindowMetrics getCurrentWindowMetrics() { return displayMetrics(context); }
+            @Override public WindowMetrics getMaximumWindowMetrics() { return getCurrentWindowMetrics(); }
+            @Override public void addView(View view, ViewGroup.LayoutParams params) { decor.addView(view, params); }
+            @Override public void updateViewLayout(View view, ViewGroup.LayoutParams params) { view.setLayoutParams(params); }
+            @Override public void removeView(View view) { decor.removeView(view); }
+        };
         content.setId(android.R.id.content);
         decor.addView(content, new FrameLayout.LayoutParams(-1, -1));
     }
@@ -69,16 +72,31 @@ public class Window {
     public boolean isStatusBarContrastEnforced() { return statusBarContrastEnforced; }
     public void setNavigationBarContrastEnforced(boolean enforced) { navigationBarContrastEnforced = enforced; }
     public boolean isNavigationBarContrastEnforced() { return navigationBarContrastEnforced; }
-    WindowInsets makeInsets() {
-        float density = context.getResources().getDisplayMetrics().density;
+    private static WindowInsets makeInsets(float density) {
         return new WindowInsets((int) (24 * density + 0.5f), (int) (22 * density + 0.5f));
+    }
+    public static WindowMetrics displayMetrics(Context context) {
+        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        return new WindowMetrics(new Rect(0, 0, metrics.widthPixels, metrics.heightPixels),
+                makeInsets(metrics.density), metrics.density);
+    }
+    WindowInsets makeInsets() { return makeInsets(context.getResources().getDisplayMetrics().density); }
+    void applyLegacySystemBarAppearance(int visibility) {
+        int status = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
+        int navigation = WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+        int appearance = (visibility & View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR) != 0 ? status : 0;
+        if ((visibility & View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR) != 0) appearance |= navigation;
+        insetsController.setSystemBarsAppearance(appearance, status | navigation);
     }
     void applyInsets() {
         WindowInsets insets = makeInsets();
         android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
-        decor.setPadding(0, decorFitsSystemWindows ? bars.top : 0,
-                0, decorFitsSystemWindows ? bars.bottom : 0);
-        decor.dispatchApplyWindowInsets(decorFitsSystemWindows ? WindowInsets.NONE : insets);
+        View appRoot = content.getChildAt(0);
+        int layout = decor.getSystemUiVisibility() | (appRoot == null ? 0 : appRoot.getSystemUiVisibility());
+        boolean fitTop = decorFitsSystemWindows && (layout & View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN) == 0;
+        boolean fitBottom = decorFitsSystemWindows && (layout & View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION) == 0;
+        decor.setPadding(0, fitTop ? bars.top : 0, 0, fitBottom ? bars.bottom : 0);
+        decor.dispatchApplyWindowInsets(new WindowInsets(fitTop ? 0 : bars.top, fitBottom ? 0 : bars.bottom, bars.bottom));
     }
     private void updateSystemBars() {
         nativeSetSystemBars(insetsController.getSystemBarsAppearance(), statusBarColor, navigationBarColor);

@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.os.SystemClock;
+import android.util.AttributeSet;
 
 public class EdgeEffect {
     private int width, height, color = 0x805264af;
@@ -12,6 +13,12 @@ public class EdgeEffect {
     private long released = -1;
 
     public EdgeEffect(Context context) {}
+    public EdgeEffect(Context context, AttributeSet attrs) {
+        this(context);
+        try (var a = context.obtainStyledAttributes(attrs, new int[] {android.R.attr.colorEdgeEffect})) {
+            color = a.getColor(0, color);
+        }
+    }
     public void setColor(int color) { this.color = color; }
     public int getColor() { return color; }
     public void setSize(int width, int height) { this.width = width; this.height = height; }

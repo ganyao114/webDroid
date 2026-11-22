@@ -1,0 +1,15 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/Launcher.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/Launcher.java
+@@ -1591,7 +1591,11 @@
+         mWidgetVisibilityTracker.destroy();
+         mWidgetPickerDataProvider.destroy();
+ 
+-        TextKeyListener.getInstance().release();
++        try {
++            TextKeyListener.getInstance().release();
++        } catch (NoClassDefFoundError unavailable) {
++            // Hosts that deliver text through the IME can omit the legacy key listener.
++        }
+         modelCallbacks.clearPendingBinds();
+         LauncherAppState.getIDP(this).removeOnChangeListener(this);
+         mOverlayManager.onActivityDestroyed();

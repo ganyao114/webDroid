@@ -1,0 +1,11 @@
+--- a/frameworks/libs/systemui/iconloaderlib/src/com/android/launcher3/icons/BitmapRenderer.java
++++ b/frameworks/libs/systemui/iconloaderlib/src/com/android/launcher3/icons/BitmapRenderer.java
+@@ -30,7 +30,7 @@
+  */
+ public interface BitmapRenderer {
+ 
+-    boolean USE_HARDWARE_BITMAP = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P;
++    boolean USE_HARDWARE_BITMAP = false;
+ 
+     static Bitmap createSoftwareBitmap(int width, int height, BitmapRenderer renderer) {
+         GraphicsUtils.noteNewBitmapCreated();

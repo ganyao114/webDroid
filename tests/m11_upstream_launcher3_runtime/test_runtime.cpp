@@ -6,10 +6,14 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/heap.h>
@@ -25,6 +29,8 @@ using wa::interp::Object;
 using wa::interp::ScopedHandleScope;
 using wa::interp::Value;
 using wa::interp::Vm;
+using wa::ui_jni::IntentRequest;
+using wa::ui_jni::PackageActivity;
 using wa::ui_jni::UiBridge;
 using Clock = std::chrono::steady_clock;
 
@@ -33,9 +39,17 @@ constexpr auto kState = "Lcom/android/launcher3/LauncherState;";
 constexpr auto kProfile = "Lcom/android/launcher3/DeviceProfile;";
 constexpr auto kInvariantProfile = "Lcom/android/launcher3/InvariantDeviceProfile;";
 constexpr auto kDagger = "Lcom/android/launcher3/dagger/DaggerLauncherAppComponent;";
+constexpr auto kWorkspace = "Lcom/android/launcher3/Workspace;";
+constexpr auto kDragLayer = "Lcom/android/launcher3/dragndrop/DragLayer;";
+constexpr auto kLauncherRootView = "Lcom/android/launcher3/LauncherRootView;";
 constexpr auto kResources = "Landroid/content/res/Resources;";
 constexpr auto kUiRuntime = "Landroid/app/UiRuntime;";
 constexpr std::array kEntryNames{"classes.dex", "classes2.dex", "classes3.dex", "classes4.dex"};
+constexpr std::array kLauncherClasses{
+    kLauncher, kWorkspace, "Lcom/android/launcher3/CellLayout;",
+    "Lcom/android/launcher3/Hotseat;", "Lcom/android/launcher3/BubbleTextView;",
+    kProfile, kInvariantProfile, "Lcom/android/launcher3/allapps/ActivityAllAppsContainerView;", kDagger,
+};
 
 Object* ReadStaticObject(Vm& vm, ScopedHandleScope& roots, const char* owner, const char* name,
                          const char* signature) {
@@ -57,6 +71,13 @@ struct Inputs {
     std::string core;
     std::string framework;
     std::string framework_resources;
+    std::string browser_apk;
+    std::string gallery_apk;
+};
+
+struct Fixture {
+    PackageActivity activity;
+    uint32_t icon_background;
 };
 
 void Require(bool condition, std::string_view message) {
@@ -72,9 +93,11 @@ Inputs ParseInputs(int argc, char** argv) {
         else if (flag == "--core") inputs.core = argv[index + 1];
         else if (flag == "--framework") inputs.framework = argv[index + 1];
         else if (flag == "--framework-resources") inputs.framework_resources = argv[index + 1];
+        else if (flag == "--browser") inputs.browser_apk = argv[index + 1];
+        else if (flag == "--gallery") inputs.gallery_apk = argv[index + 1];
         else throw std::runtime_error("Unrecognized option " + std::string(flag));
     }
-    Require(argc == 10 && !inputs.apk.empty() && !inputs.core.empty() && !inputs.framework.empty() &&
+    Require(argc % 2 == 0 && !inputs.apk.empty() && !inputs.core.empty() && !inputs.framework.empty() &&
                 !inputs.framework_resources.empty(),
             "Expected --apk, --core, --framework, and --framework-resources");
     return inputs;
@@ -181,23 +204,42 @@ void PrintFailure(Vm& vm, std::string_view step) {
         std::cout << "  " << frame << '\n';
 }
 
-constexpr auto kMissingTranslation =
-    "Ljava/lang/NoSuchFieldError;: Landroid/view/View;->TRANSLATION_X:Landroid/util/Property;";
-constexpr auto kMissingDrawableState =
-    "Ljava/lang/NoSuchFieldError;: Lcom/android/launcher3/CellLayout;->EMPTY_STATE_SET:[I";
-constexpr auto kMissingPerson = "Ljava/lang/NoClassDefFoundError;: Landroid/app/Person;";
-constexpr auto kMissingRelativeLayout = "Ljava/lang/NoClassDefFoundError;: Landroid/widget/RelativeLayout;";
-constexpr auto kMissingHandlerThread = "Ljava/lang/NoClassDefFoundError;: Landroid/os/HandlerThread;";
+size_t PrintLauncherExecution(Vm& vm) {
+    const auto& linker = JniBridge::From(vm.JniEnv()).Vm().linker;
+    size_t linked = 0;
+    size_t executed = 0;
+    for (const auto* descriptor : kLauncherClasses) {
+        const auto* cls = linker.FindLinkedClass(descriptor);
+        size_t methods = 0;
+        if (cls) {
+            ++linked;
+            methods = std::ranges::count_if(cls->methods, [](const auto& entry) {
+                return entry.second.stats.interpreted > 0;
+            });
+            executed += methods != 0;
+        }
+        std::cout << descriptor << " linked=" << (cls != nullptr) << " methods_executed=" << methods << '\n';
+    }
+    std::cout << "Launcher target classes linked=" << linked << " executed=" << executed << '\n';
+    return executed;
+}
 
 template <class Probe>
-void ProbeFramework(Vm& vm, std::string_view step, std::string_view known_error, Probe probe) {
+void RequireActivityContext(Vm& vm, std::string_view type, Probe probe) {
     try {
         probe();
     } catch (const ManagedException&) {
-        PrintFailure(vm, step);
-        Require(vm.ExceptionSummary().ends_with(known_error), "Unexpected failure in " + std::string(step));
+        const auto exception = vm.ExceptionSummary();
+        if (!exception.ends_with("Ljava/lang/IllegalArgumentException;: Cannot find ActivityContext in parent tree") &&
+            !(type == kWorkspace && exception.ends_with(
+                "Ljava/lang/IllegalArgumentException;: Cannot find BaseActivity in parent tree"))) {
+            PrintFailure(vm, type);
+            throw;
+        }
         vm.ClearException();
+        return;
     }
+    throw std::runtime_error(std::string(type) + " accepted an application context");
 }
 
 void TestUtilities(Vm& vm) {
@@ -326,25 +368,32 @@ Object* BuildDagger(Vm& vm, ScopedHandleScope& roots, Object* context) {
     return component;
 }
 
-Object* OpenResources(Vm& vm, ScopedHandleScope& roots, const Inputs& inputs) {
+Object* OpenResources(Vm& vm, ScopedHandleScope& roots, const Inputs& inputs, std::string_view apk) {
     auto& runtime = JniBridge::From(vm.JniEnv()).Vm();
     auto* paths = roots.Hold(runtime.NewArray(runtime.linker.Resolve("[Ljava/lang/String;"), 2));
     runtime.StoreArrayElement(*paths, 0, Value::Ref(vm.NewString(inputs.framework_resources)));
-    runtime.StoreArrayElement(*paths, 1, Value::Ref(vm.NewString(inputs.apk)));
+    runtime.StoreArrayElement(*paths, 1, Value::Ref(vm.NewString(apk)));
     const Value args[]{
         Value::Ref(paths),
         Value::Ref(roots.Hold(vm.NewString("en-US"))),
         Value::Int(160),
     };
-    return roots.Hold(vm.CallStatic(kResources, "forApk",
+    auto* resources = roots.Hold(vm.CallStatic(kResources, "forApk",
                      "([Ljava/lang/String;Ljava/lang/String;I)Landroid/content/res/Resources;", args)).ref();
+    vm.CallVirtual(resources, "updateDisplay", "(III)V",
+                   std::array{Value::Int(448), Value::Int(896), Value::Int(160)});
+    return resources;
+}
+
+Object* ReadManifest(Vm& vm, ScopedHandleScope& roots, Object* resources, std::string_view apk) {
+    constexpr auto kManifest = "(Landroid/content/res/Resources;Ljava/lang/String;Ljava/lang/String;"
+                               "I)Landroid/app/UiRuntime$Manifest;";
+    const Value args[]{Value::Ref(resources), Value::Ref(roots.Hold(vm.NewString(apk))), {}, Value::Int(1)};
+    return roots.Hold(vm.CallStatic(kUiRuntime, "readManifest", kManifest, args)).ref();
 }
 
 Object* AppContext(Vm& vm, ScopedHandleScope& roots, const Inputs& inputs, Object* resources) {
-    constexpr auto kManifest = "(Landroid/content/res/Resources;Ljava/lang/String;Ljava/lang/String;"
-                               "I)Landroid/app/UiRuntime$Manifest;";
-    const Value args[]{Value::Ref(resources), Value::Ref(roots.Hold(vm.NewString(inputs.apk))), {}, Value::Int(1)};
-    auto* manifest = roots.Hold(vm.CallStatic(kUiRuntime, "readManifest", kManifest, args)).ref();
+    auto* manifest = ReadManifest(vm, roots, resources, inputs.apk);
     const auto info = vm.ReadField(manifest, "info", "Landroid/content/pm/ApplicationInfo;");
     return roots.Hold(vm.NewObject("Landroid/app/UiRuntime$AppContext;",
                                   "(Landroid/content/res/Resources;Landroid/content/pm/ApplicationInfo;)V",
@@ -479,23 +528,12 @@ void TestUnmodifiableMap(Vm& vm) {
 }
 
 void TestViewConstructors(Vm& vm, Object* context) {
-    struct ViewProbe {
-        const char* name;
-        const char* descriptor;
-        const char* missing_api;
-    };
-    for (const auto& [name, type, error] : {
-             ViewProbe{"BubbleTextView", "Lcom/android/launcher3/BubbleTextView;", kMissingHandlerThread},
-             {"CellLayout", "Lcom/android/launcher3/CellLayout;", kMissingDrawableState},
-             {"Hotseat", "Lcom/android/launcher3/Hotseat;", kMissingDrawableState},
-             {"Workspace (PagedView)", "Lcom/android/launcher3/Workspace;", kMissingPerson},
-             {"ActivityAllAppsContainerView", "Lcom/android/launcher3/allapps/ActivityAllAppsContainerView;",
-              kMissingRelativeLayout}}) {
-        ProbeFramework(vm, name, error, [&] {
-            constexpr auto ctor = "(Landroid/content/Context;Landroid/util/AttributeSet;)V";
-            vm.NewObject(type, ctor, std::array{Value::Ref(context), Value{}});
-            Executed(vm, type, "<init>", ctor);
-        });
+    constexpr auto ctor = "(Landroid/content/Context;Landroid/util/AttributeSet;)V";
+    const std::array args{Value::Ref(context), Value{}};
+    for (const auto* type : {"Lcom/android/launcher3/BubbleTextView;", "Lcom/android/launcher3/CellLayout;",
+                            kWorkspace, "Lcom/android/launcher3/allapps/ActivityAllAppsContainerView;"}) {
+        RequireActivityContext(vm, type, [&] { vm.NewObject(type, ctor, args); });
+        Executed(vm, type, "<init>", ctor);
     }
     Executed(vm, "Lcom/android/launcher3/BubbleTextView;", "<init>",
              "(Landroid/content/Context;Landroid/util/AttributeSet;I)V");
@@ -508,21 +546,20 @@ void TestViewConstructors(Vm& vm, Object* context) {
 
 void TestProviders(Vm& vm, Object* component) {
     ScopedHandleScope roots(vm);
-    ProbeFramework(vm, "InvariantDeviceProfile via Dagger", kMissingHandlerThread, [&] {
-        auto* profile = roots.Hold(vm.CallVirtual(component, "getIDP",
-                                    "()Lcom/android/launcher3/InvariantDeviceProfile;")).ref();
-        Require(profile != nullptr, "Dagger created InvariantDeviceProfile");
-        Require(vm.ReadField(profile, "numColumns", "I").i() > 0, "APK device profiles configured columns");
-    });
+    auto* profile = roots.Hold(vm.CallVirtual(component, "getIDP",
+                                "()Lcom/android/launcher3/InvariantDeviceProfile;")).ref();
+    Require(profile != nullptr, "Dagger created InvariantDeviceProfile");
+    const auto columns = vm.ReadField(profile, "numColumns", "I").i();
+    const auto rows = vm.ReadField(profile, "numRows", "I").i();
+    Require(columns > 0 && rows > 0, "APK device profiles configured rows and columns");
+    std::cout << "Dagger configured InvariantDeviceProfile rows=" << rows << " columns=" << columns << '\n';
     Executed(vm, "Lcom/android/launcher3/util/Executors;", "<clinit>", "()V", true);
-    ProbeFramework(vm, "LauncherAppState and LauncherModel via Dagger",
-                   "Ljava/lang/NoSuchMethodError;: Landroid/content/Context;->getSharedPreferences"
-                   "(Ljava/lang/String;I)Landroid/content/SharedPreferences;", [&] {
-        auto* state = roots.Hold(vm.CallVirtual(component, "getLauncherAppState",
-                                  "()Lcom/android/launcher3/LauncherAppState;")).ref();
-        const auto model = vm.CallVirtual(state, "getModel", "()Lcom/android/launcher3/LauncherModel;");
-        Require(model.ref() != nullptr, "Dagger created LauncherModel");
-    });
+    auto* state = roots.Hold(vm.CallVirtual(component, "getLauncherAppState",
+                              "()Lcom/android/launcher3/LauncherAppState;")).ref();
+    auto* model = vm.CallVirtual(state, "getModel", "()Lcom/android/launcher3/LauncherModel;").ref();
+    Require(model && model->type->descriptor == "Lcom/android/launcher3/LauncherModel;",
+            "Dagger created LauncherModel");
+    std::cout << "Dagger created LauncherAppState and LauncherModel\n";
 }
 
 void TestProfileParser(Vm& vm, Object* component, Object* context) {
@@ -531,17 +568,9 @@ void TestProfileParser(Vm& vm, Object* component, Object* context) {
     constexpr auto kDisplay = "Lcom/android/launcher3/display/LauncherDisplayInfo;";
     auto* proxy = roots.Hold(vm.CallVirtual(component, "getWmProxy",
                                    "()Lcom/android/launcher3/util/window/WindowManagerProxy;")).ref();
-    ProbeFramework(vm, "LauncherDisplayInfo default density",
-        "Ljava/lang/NoSuchFieldError;: Landroid/util/DisplayMetrics;->DENSITY_DEVICE_STABLE:I", [&] {
-            vm.NewObject(kDisplay, "(Landroid/content/Context;Lcom/android/launcher3/util/window/WindowManagerProxy;)V",
-                         std::array{Value::Ref(context), Value::Ref(proxy)});
-        });
-    auto* bounds = roots.Hold(vm.NewObject("Landroid/util/ArrayMap;"));
     auto* info = roots.Hold(vm.NewObject(kDisplay,
-                              "(Landroid/content/Context;Lcom/android/launcher3/util/window/WindowManagerProxy;"
-                              "ZLjava/util/Map;I)V",
-                              std::array{Value::Ref(context), Value::Ref(proxy),
-                                         Value{}, Value::Ref(bounds), Value::Int(160)}));
+        "(Landroid/content/Context;Lcom/android/launcher3/util/window/WindowManagerProxy;)V",
+        std::array{Value::Ref(context), Value::Ref(proxy)}));
     const auto device = vm.CallVirtual(info, "getDeviceType", "()I");
     constexpr auto kParserSignature = "(Landroid/content/Context;Lcom/android/launcher3/display/LauncherDisplayInfo;"
                                       "IZ)Ljava/util/List;";
@@ -566,7 +595,116 @@ void TestInflateLauncher(Vm& vm, Object* context) {
     std::cout << "Inflated the APK's LauncherRootView\n";
 }
 
+void TestEmbeddedFramework(Vm& vm, Object* context) {
+    ScopedHandleScope roots(vm);
+    constexpr auto kLooper = "Landroid/os/Looper;";
+    constexpr auto kThread = "Ljava/lang/Thread;";
+    auto* worker = roots.Hold(vm.NewObject("Landroid/os/HandlerThread;", "(Ljava/lang/String;)V",
+                                         std::array{Value::Ref(roots.Hold(vm.NewString("m11-worker")))}));
+    Require(!vm.CallVirtual(worker, "getLooper", "()Landroid/os/Looper;").ref(), "Worker has not started");
+    vm.CallVirtual(worker, "start", "()V");
+    auto* looper = roots.Hold(vm.CallVirtual(worker, "getLooper", "()Landroid/os/Looper;")).ref();
+    auto* main = roots.Hold(vm.CallStatic(kLooper, "getMainLooper", "()Landroid/os/Looper;")).ref();
+    Require(looper && looper != main && vm.CallVirtual(looper, "getThread", "()Ljava/lang/Thread;").ref() == worker,
+            "Worker owns a distinct cooperative queue");
+    auto* handler = roots.Hold(vm.NewObject("Landroid/os/Handler;", "(Landroid/os/Looper;)V",
+                                          std::array{Value::Ref(looper)}));
+    auto* task = roots.Hold(vm.NewObject(kThread));
+    const std::array post{Value::Ref(task)};
+    Require(vm.CallVirtual(handler, "post", "(Ljava/lang/Runnable;)Z", post).i() &&
+                vm.CallVirtual(handler, "hasCallbacks", "(Ljava/lang/Runnable;)Z", post).i(),
+            "Worker callback is queued");
+    vm.CallStatic(kLooper, "dispatchAllDueMessages", "(J)V", std::array{Value::Long(0)});
+    Require(!vm.CallVirtual(handler, "hasCallbacks", "(Ljava/lang/Runnable;)Z", post).i() &&
+                vm.CallStatic(kThread, "currentThread", "()Ljava/lang/Thread;").ref() ==
+                    vm.CallVirtual(main, "getThread", "()Ljava/lang/Thread;").ref(),
+            "Frame pump ran the worker callback and restored the main thread");
+    Require(vm.CallVirtual(worker, "quit", "()Z").i() &&
+                !vm.CallVirtual(handler, "post", "(Ljava/lang/Runnable;)Z", post).i(),
+            "A quit worker rejects further callbacks");
+
+    const auto name = Value::Ref(roots.Hold(vm.NewString("m11-preferences")));
+    const auto key = Value::Ref(roots.Hold(vm.NewString("column-count")));
+    auto* prefs = roots.Hold(vm.CallVirtual(context, "getSharedPreferences",
+        "(Ljava/lang/String;I)Landroid/content/SharedPreferences;", std::array{name, Value::Int(0)})).ref();
+    auto* edit = roots.Hold(vm.CallVirtual(prefs, "edit", "()Landroid/content/SharedPreferences$Editor;")).ref();
+    vm.CallVirtual(edit, "putInt", "(Ljava/lang/String;I)Landroid/content/SharedPreferences$Editor;",
+                   std::array{key, Value::Int(5)});
+    Require(vm.CallVirtual(edit, "commit", "()Z").i() &&
+                vm.CallVirtual(prefs, "getInt", "(Ljava/lang/String;I)I", std::array{key, Value{}}).i() == 5,
+            "An editor publishes its values to the package store");
+
+    constexpr auto kBitmap = "Landroid/graphics/Bitmap;";
+    constexpr auto kConfig = "Landroid/graphics/Bitmap$Config;";
+    auto* config = ReadStaticObject(vm, roots, "android/graphics/Bitmap$Config", "ARGB_8888", kConfig);
+    auto* bitmap = roots.Hold(vm.CallStatic(kBitmap, "createBitmap", "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;",
+                                          std::array{Value::Int(8), Value::Int(8), Value::Ref(config)})).ref();
+    auto* canvas = roots.Hold(vm.NewObject("Landroid/graphics/Canvas;", "(Landroid/graphics/Bitmap;)V",
+                                          std::array{Value::Ref(bitmap)}));
+    auto* paint = roots.Hold(vm.NewObject("Landroid/graphics/Paint;"));
+    vm.CallVirtual(canvas, "translate", "(FF)V", std::array{Value::Float(2), Value::Float(1)});
+    vm.CallVirtual(canvas, "drawRect", "(FFFFLandroid/graphics/Paint;)V",
+                   std::array{Value::Float(0), Value::Float(0), Value::Float(3), Value::Float(3), Value::Ref(paint)});
+    auto* alpha = roots.Hold(vm.CallVirtual(bitmap, "extractAlpha", "()Landroid/graphics/Bitmap;")).ref();
+    Require(static_cast<uint32_t>(vm.CallVirtual(alpha, "getPixel", "(II)I",
+                std::array{Value::Int(3), Value::Int(2)}).i()) == 0xff000000U &&
+                !vm.CallVirtual(alpha, "getPixel", "(II)I", std::array{Value::Int(0), Value::Int(0)}).i(),
+            "Software Canvas rasterized transformed path coverage into a real bitmap");
+    vm.CallVirtual(bitmap, "eraseColor", "(I)V", std::array{Value::Int(0)});
+    const auto saved = vm.CallVirtual(canvas, "save", "()I");
+    Require(vm.CallVirtual(canvas, "clipRoundRect", "(FFFFFF)Z",
+                           std::array{Value::Float(0), Value::Float(0), Value::Float(6),
+                                      Value::Float(6), Value::Float(3), Value::Float(3)}).i(),
+            "A translated circular clip intersects the bitmap");
+    vm.CallVirtual(canvas, "drawColor", "(I)V", std::array{Value::Int(int32_t(0xff00ff00u))});
+    const auto pixel = [&](int x, int y) {
+        return static_cast<uint32_t>(vm.CallVirtual(bitmap, "getPixel", "(II)I",
+                                                   std::array{Value::Int(x), Value::Int(y)}).i());
+    };
+    Require(pixel(2, 1) == 0 && pixel(5, 4) == 0xff00ff00u, "Software clip excludes the rounded corner");
+    vm.CallVirtual(canvas, "restoreToCount", "(I)V", std::array{saved});
+    vm.CallVirtual(canvas, "drawColor", "(I)V", std::array{Value::Int(int32_t(0xff0000ffu))});
+    Require(pixel(2, 1) == 0xff0000ffu, "Restore removes the software clip");
+}
+
+void TestEmbeddedDatabase(Vm& vm) {
+    ScopedHandleScope roots(vm);
+    constexpr auto kDatabase = "Landroid/database/sqlite/SQLiteDatabase;";
+    auto* builder = roots.Hold(vm.NewObject("Landroid/database/sqlite/SQLiteDatabase$OpenParams$Builder;"));
+    auto* params = roots.Hold(vm.CallVirtual(builder, "build", "()Landroid/database/sqlite/SQLiteDatabase$OpenParams;")).ref();
+    auto* db = roots.Hold(vm.CallStatic(kDatabase, "createInMemory",
+        "(Landroid/database/sqlite/SQLiteDatabase$OpenParams;)Landroid/database/sqlite/SQLiteDatabase;",
+        std::array{Value::Ref(params)})).ref();
+    auto* sql = roots.Hold(vm.NewString("CREATE TABLE favorites (_id INTEGER PRIMARY KEY, title TEXT)"));
+    vm.CallVirtual(db, "execSQL", "(Ljava/lang/String;)V", std::array{Value::Ref(sql)});
+    auto* row = roots.Hold(vm.NewObject("Landroid/content/ContentValues;"));
+    auto* title = roots.Hold(vm.NewString("title"));
+    auto* label = roots.Hold(vm.NewString("Calendar"));
+    vm.CallVirtual(row, "put", "(Ljava/lang/String;Ljava/lang/String;)V",
+                   std::array{Value::Ref(title), Value::Ref(label)});
+    auto* table = roots.Hold(vm.NewString("favorites"));
+    Require(vm.CallVirtual(db, "insert", "(Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;)J",
+                           std::array{Value::Ref(table), Value{}, Value::Ref(row)}).j() == 1,
+            "Database assigned an item ID");
+    auto* statement = roots.Hold(vm.CallVirtual(db, "compileStatement", "(Ljava/lang/String;)Landroid/database/sqlite/SQLiteStatement;",
+        std::array{Value::Ref(roots.Hold(vm.NewString("SELECT MAX(_id) FROM favorites WHERE _id >= 0")))})).ref();
+    Require(vm.CallVirtual(statement, "simpleQueryForLong", "()J").j() == 1,
+            "Scalar SQL returned the largest item ID");
+    vm.CallVirtual(statement, "close", "()V");
+    auto* cursor = roots.Hold(vm.CallVirtual(db, "query",
+        "(Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;"
+        "Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;",
+        std::array{Value::Ref(table), Value{}, Value{}, Value{}, Value{}, Value{}, Value{}})).ref();
+    Require(vm.CallVirtual(cursor, "moveToFirst", "()Z").i() &&
+                vm.StringUtf8(vm.CallVirtual(cursor, "getString", "(I)Ljava/lang/String;",
+                               std::array{Value::Int(1)}).ref()) == "Calendar",
+            "Upstream cursor returned the saved item");
+    vm.CallVirtual(cursor, "close", "()V");
+    vm.CallVirtual(db, "close", "()V");
+}
+
 void TestExecution(Vm& vm, const Inputs& inputs) {
+    vm.CallStatic("Landroid/os/Looper;", "prepareMainLooper", "()V");
     TestAndroidX(vm);
     TestUtilities(vm);
     TestProfile(vm);
@@ -576,66 +714,297 @@ void TestExecution(Vm& vm, const Inputs& inputs) {
     TestCoroutines(vm);
     TestUnmodifiableMap(vm);
     ScopedHandleScope roots(vm);
-    auto* res = OpenResources(vm, roots, inputs);
+    auto* res = OpenResources(vm, roots, inputs, inputs.apk);
     TestResourceXml(vm, res);
     auto* context = AppContext(vm, roots, inputs, res);
+    TestEmbeddedFramework(vm, context);
+    TestEmbeddedDatabase(vm);
     auto* component = BuildDagger(vm, roots, context);
+    TestProfileParser(vm, component, context);
     TestProviders(vm, component);
-    ProbeFramework(vm, "Launcher profile parser with explicit density",
-        "Ljava/lang/NoSuchMethodError;: Landroid/content/Context;->getDisplay()Landroid/view/Display;", [&] {
-            TestProfileParser(vm, component, context);
-        });
-    ProbeFramework(vm, "Launcher layout inflation from the application context",
-        "Ljava/lang/IllegalArgumentException;: Cannot find ActivityContext in parent tree", [&] {
-            TestInflateLauncher(vm, context);
-        });
-    ProbeFramework(vm, "Utilities.mapRange", kMissingPerson, [&] {
-        constexpr auto type = "Lcom/android/launcher3/Utilities;";
-        Require(vm.CallStatic(type, "mapRange", "(FFF)F",
-                              std::array{Value::Float(0.5f), Value::Float(0.0f), Value::Float(4.0f)}).f() == 2.0f,
-                "Utilities.mapRange midpoint");
-        Executed(vm, type, "mapRange", "(FFF)F", true);
-    });
+    RequireActivityContext(vm, "Launcher layout inflation", [&] { TestInflateLauncher(vm, context); });
+    constexpr auto type = "Lcom/android/launcher3/Utilities;";
+    Require(vm.CallStatic(type, "mapRange", "(FFF)F",
+                          std::array{Value::Float(0.5f), Value::Float(0.0f), Value::Float(4.0f)}).f() == 2.0f,
+            "Utilities.mapRange midpoint");
+    Executed(vm, type, "mapRange", "(FFF)F", true);
     Executed(vm, "Lcom/android/launcher3/Utilities;", "<clinit>", "()V", true);
     TestViewConstructors(vm, context);
-    vm.CallVirtual(res, "close", "()V");
+    vm.CallVirtual(context, "closeResources", "()V");
+}
+
+struct DrawCommands {
+    std::array<size_t, 4> counts{};
+    std::vector<std::string> labels;
+    std::array<bool, 2> fixture_icons{};
+};
+
+DrawCommands ReadDrawCommands(wa_sf_t* sf, const std::array<Fixture, 2>& fixtures) {
+    auto release = [sf](const wa_sf_frame_packet_t* packet) { wa_sf_frame_release(sf, packet); };
+    std::unique_ptr<const wa_sf_frame_packet_t, decltype(release)> packet(wa_sf_frame_acquire(sf), release);
+    Require(packet && packet->magic == WA_SF_FRAME_MAGIC && packet->abi_version == WA_SF_ABI_VERSION &&
+                packet->layer_count == 1, "Launcher produced a valid SurfaceFlinger frame");
+    const auto& layer = wa_sf_frame_layers(packet.get())[0];
+    Require(layer.desc.surface_kind == WA_SF_SURFACE_DISPLAY_LIST && layer.list_size > 0,
+            "Launcher window recorded a display list");
+    constexpr std::array opcodes{WA_CANVAS_DRAW_ROUND_RECT, WA_CANVAS_DRAW_PATH,
+                                 WA_CANVAS_DRAW_TEXT, WA_CANVAS_DRAW_BITMAP};
+    DrawCommands commands;
+    const auto* bytes = wa_sf_frame_list(packet.get(), &layer);
+    Require(bytes != nullptr, "Launcher display-list payload");
+    for (size_t offset = 0; offset < layer.list_size;) {
+        wa_canvas_record_t record{};
+        Require(layer.list_size - offset >= sizeof(record), "Complete draw command header");
+        const auto* command = bytes + offset;
+        std::memcpy(&record, command, sizeof(record));
+        Require(record.byte_size >= sizeof(record) && record.byte_size % 4 == 0 &&
+                    record.byte_size <= layer.list_size - offset, "Draw command fits the display list");
+        offset += record.byte_size;
+        for (size_t i = 0; i < opcodes.size(); ++i) commands.counts[i] += record.opcode == opcodes[i];
+        if (record.opcode == WA_CANVAS_DRAW_TEXT) {
+            wa_canvas_text_t draw{};
+            Require(record.byte_size >= sizeof(record) + sizeof(draw), "Complete text command header");
+            std::memcpy(&draw, command + sizeof(record), sizeof(draw));
+            Require(draw.utf8_offset >= sizeof(record) + sizeof(draw) && draw.utf8_offset <= record.byte_size &&
+                        draw.utf8_len <= record.byte_size - draw.utf8_offset,
+                    "Text is inside the draw command");
+            commands.labels.emplace_back(reinterpret_cast<const char*>(command + draw.utf8_offset), draw.utf8_len);
+        } else if (record.opcode == WA_CANVAS_DRAW_BITMAP) {
+            wa_canvas_bitmap_t draw{};
+            Require(record.byte_size >= sizeof(record) + sizeof(draw), "Complete bitmap command");
+            std::memcpy(&draw, command + sizeof(record), sizeof(draw));
+            auto* store = wa_sf_bitmaps(sf);
+            auto release_image = [store](const wa_bitmap_view_t* view) { wa_bitmap_release(store, view); };
+            std::unique_ptr<const wa_bitmap_view_t, decltype(release_image)> view(
+                wa_bitmap_acquire(store, draw.bitmap_id), release_image);
+            Require(view && uint64_t(view->width) * 4 <= view->stride &&
+                        uint64_t(view->stride) * view->height <= view->byte_size,
+                    "A bitmap draw references pixels in the frame store");
+            if (!(draw.alpha > 0)) continue;
+            const auto* pixels = wa_bitmap_pixels(view.get());
+            for (uint32_t y = 0; y < view->height; ++y) {
+                for (uint32_t x = 0; x < view->width; ++x) {
+                    const auto* rgba = pixels + size_t(y) * view->stride + size_t(x) * 4;
+                    if (rgba[3] != 255) continue;
+                    const uint32_t color = 0xff000000 | (uint32_t(rgba[0]) << 16) | (uint32_t(rgba[1]) << 8) | rgba[2];
+                    for (size_t i = 0; i < fixtures.size(); ++i) {
+                        commands.fixture_icons[i] |= color == fixtures[i].icon_background;
+                    }
+                }
+            }
+        }
+    }
+    return commands;
+}
+
+void CheckLauncherMotion(Vm& vm, UiBridge& bridge, wa_sf_t* sf, double event_time_ms) {
+    constexpr auto kMotion = "(Landroid/view/MotionEvent;)Z";
+    const auto drag = vm.GetInstanceMethodStats(kDragLayer, "dispatchTouchEvent", kMotion).interpreted;
+    const auto workspace = vm.GetInstanceMethodStats(kWorkspace, "onInterceptTouchEvent", kMotion).interpreted;
+    constexpr auto kWallpaperTap = "(Landroid/view/MotionEvent;)V";
+    const auto taps = vm.GetInstanceMethodStats(kWorkspace, "onWallpaperTap", kWallpaperTap).interpreted;
+    wa_input_event_t motion{};
+    motion.kind = WA_INPUT_MOTION;
+    motion.action = WA_ACTION_DOWN;
+    motion.pointer_id = 1;
+    motion.event_time_ms = event_time_ms;
+    motion.x = 224;
+    motion.y = 448;
+    Require(wa_input_push(wa_sf_input(sf), &motion) == WA_SF_OK, "Queue workspace touch down");
+    motion.action = WA_ACTION_UP;
+    motion.event_time_ms += 2;
+    Require(wa_input_push(wa_sf_input(sf), &motion) == WA_SF_OK, "Queue workspace touch up");
+    Require(bridge.DispatchInputEvents(vm, sf) == 2, "Dispatch workspace MotionEvents");
+    Require(vm.GetInstanceMethodStats(kDragLayer, "dispatchTouchEvent", kMotion).interpreted - drag >= 2 &&
+                vm.GetInstanceMethodStats(kWorkspace, "onInterceptTouchEvent", kMotion).interpreted > workspace &&
+                vm.GetInstanceMethodStats(kWorkspace, "onWallpaperTap", kWallpaperTap).interpreted > taps,
+            "MotionEvents reached upstream DragLayer and Workspace");
+    std::cout << "Down and up reached upstream DragLayer and Workspace\n";
+}
+
+Fixture ReadTestApk(Vm& vm, const Inputs& inputs, const std::string& apk) {
+    ScopedHandleScope roots(vm);
+    auto* resources = OpenResources(vm, roots, inputs, apk);
+    auto* manifest = ReadManifest(vm, roots, resources, apk);
+    auto* info = roots.Hold(vm.ReadField(manifest, "info", "Landroid/content/pm/ApplicationInfo;").ref());
+    auto label_id = vm.ReadField(info, "labelRes", "I");
+    PackageActivity activity{
+        vm.StringUtf8(vm.ReadField(info, "packageName", "Ljava/lang/String;").ref()),
+        vm.StringUtf8(vm.ReadField(manifest, "activity", "Ljava/lang/String;").ref()),
+        vm.StringUtf8(vm.CallVirtual(resources, "getString", "(I)Ljava/lang/String;",
+                                    std::array{label_id}).ref()),
+        apk,
+        static_cast<uint32_t>(vm.ReadField(info, "icon", "I").i()),
+    };
+    const auto icon_background = vm.CallVirtual(resources, "getIdentifier",
+        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
+        std::array{Value::Ref(roots.Hold(vm.NewString("icon_background"))),
+                   Value::Ref(roots.Hold(vm.NewString("color"))),
+                   Value::Ref(roots.Hold(vm.NewString(activity.package_name)))});
+    const auto color = static_cast<uint32_t>(vm.CallVirtual(resources, "getColor", "(I)I", std::array{icon_background}).i());
+    vm.CallVirtual(resources, "close", "()V");
+    Require(activity.icon_resource != 0 && !activity.label.empty(), "Installed test APK has a label and icon");
+    return {std::move(activity), color};
+}
+
+std::array<Fixture, 2> InstallTestApks(Vm& vm, UiBridge& bridge, const Inputs& inputs) {
+    Require(!inputs.browser_apk.empty() && !inputs.gallery_apk.empty(),
+            "Activity test requires --browser and --gallery APKs");
+    const std::array fixtures{ReadTestApk(vm, inputs, inputs.browser_apk), ReadTestApk(vm, inputs, inputs.gallery_apk)};
+    const std::array apps{fixtures[0].activity, fixtures[1].activity};
+    bridge.SetPackageCallbacks({
+        .query_activities = [apps](const IntentRequest& request) {
+            std::vector<PackageActivity> matches;
+            if (request.user_id != 0) return matches;
+            constexpr std::array categories{"android.intent.category.APP_BROWSER", "android.intent.category.APP_GALLERY"};
+            for (size_t i = 0; i < apps.size(); ++i) {
+                const auto& app = apps[i];
+                if ((request.package_name && request.package_name != app.package_name) ||
+                    (request.activity_name && request.activity_name != app.activity_name)) continue;
+                if (request.activity_name ||
+                    (request.action == "android.intent.action.MAIN" &&
+                     ((request.categories.size() == 1 && request.categories.front() == "android.intent.category.LAUNCHER") ||
+                      std::ranges::all_of(request.categories, [&](const auto& category) {
+                          return category == categories[i] || category == "android.intent.category.DEFAULT";
+                      })))) {
+                    matches.push_back(app);
+                }
+            }
+            return matches;
+        },
+        .get_application = [apps](std::string_view package, uint64_t, int32_t user)
+                -> std::optional<PackageActivity> {
+            if (user != 0) return std::nullopt;
+            const auto app = std::ranges::find(apps, package, &PackageActivity::package_name);
+            return app == apps.end() ? std::nullopt : std::optional<PackageActivity>(*app);
+        },
+    });
+    return fixtures;
+}
+
+void CheckBoundIcon(Vm& vm, Object* cell_layout, const Fixture& fixture) {
+    ScopedHandleScope roots(vm);
+    auto* items = roots.Hold(vm.CallVirtual(cell_layout, "getShortcutsAndWidgets",
+        "()Lcom/android/launcher3/ShortcutAndWidgetContainer;")).ref();
+    const auto count = vm.CallVirtual(items, "getChildCount", "()I").i();
+    for (int i = 0; i < count; ++i) {
+        auto* view = roots.Hold(vm.CallVirtual(items, "getChildAt", "(I)Landroid/view/View;", std::array{Value::Int(i)})).ref();
+        auto* type = view->type;
+        while (type && type->descriptor != "Lcom/android/launcher3/BubbleTextView;") type = type->super;
+        if (!type) continue;
+        auto* item = roots.Hold(vm.CallVirtual(view, "getTag", "()Ljava/lang/Object;")).ref();
+        if (!item || item->type->descriptor != "Lcom/android/launcher3/model/data/WorkspaceItemInfo;") continue;
+        auto* component = roots.Hold(vm.CallVirtual(item, "getTargetComponent", "()Landroid/content/ComponentName;")).ref();
+        if (!component || vm.StringUtf8(vm.CallVirtual(component, "getPackageName", "()Ljava/lang/String;").ref()) !=
+                              fixture.activity.package_name) continue;
+        auto* title = roots.Hold(vm.ReadField(item, "title", "Ljava/lang/CharSequence;").ref());
+        Require(vm.StringUtf8(vm.CallVirtual(component, "getClassName", "()Ljava/lang/String;").ref()) == fixture.activity.activity_name &&
+                    title && vm.StringUtf8(vm.CallVirtual(title, "toString", "()Ljava/lang/String;").ref()) == fixture.activity.label &&
+                    vm.CallVirtual(view, "getIcon", "()Lcom/android/launcher3/icons/FastBitmapDrawable;").ref(),
+                "Bound BubbleTextView retains the installed activity label and icon");
+        return;
+    }
+    throw std::runtime_error("Launcher did not bind " + fixture.activity.label + " into the expected CellLayout");
 }
 
 void TestActivity(Vm& vm, UiBridge& bridge, wa_sf_t* sf, const Inputs& inputs) {
-    try {
-        bridge.LaunchActivity(vm, {.apk_path = inputs.apk,
-                                   .width = 448, .height = 896,
-                                   .framework_resource_apk = inputs.framework_resources});
-    } catch (const ManagedException&) {
-        PrintFailure(vm, "UiBridge::LaunchActivity com.android.launcher3.Launcher");
-        const auto trace = vm.ExceptionStackTrace();
-        Require(vm.ExceptionSummary() == kMissingTranslation &&
-                    std::ranges::any_of(trace, [](const std::string& frame) {
-                        return frame.starts_with("Lcom/android/launcher3/Launcher;-><clinit>()V");
-                    }),
-                "Expected the real Launcher class initializer to reach View.TRANSLATION_X");
-        vm.ClearException();
-        Executed(vm, kLauncher, "<clinit>", "()V", true);
-        Require(vm.GetInstanceMethodStats(kLauncher, "<init>", "()V").interpreted == 0 &&
-                    vm.GetInstanceMethodStats(kLauncher, "onCreate", "(Landroid/os/Bundle;)V").interpreted == 0,
-                "No Launcher constructor or onCreate before the framework field is available");
-        return;
-    }
+    const auto fixtures = InstallTestApks(vm, bridge, inputs);
+    bridge.LaunchActivity(vm, {.apk_path = inputs.apk,
+                               .class_name = "com.android.launcher3.Launcher",
+                               .width = 448, .height = 896,
+                               .framework_resource_apk = inputs.framework_resources});
+    Executed(vm, "Lcom/android/launcher3/LauncherApplication;", "onCreate", "()V");
+    Executed(vm, "Lcom/android/launcher3/dagger/DaggerLauncherAppComponent$Builder;", "build",
+             "()Lcom/android/launcher3/dagger/LauncherAppComponent;");
+    Executed(vm, kLauncher, "<clinit>", "()V", true);
+    Executed(vm, kLauncher, "<init>", "()V");
     Executed(vm, kLauncher, "onCreate", "(Landroid/os/Bundle;)V");
+    Executed(vm, kLauncher, "onStart", "()V");
+    Executed(vm, kLauncher, "onResume", "()V");
+    ScopedHandleScope roots(vm);
+    auto* activity = roots.Hold(vm.CallStatic(kUiRuntime, "getActivity", "()Landroid/app/Activity;")).ref();
+    Require(activity && activity->type->descriptor == kLauncher, "The APK HOME activity is live");
+    auto* root = roots.Hold(vm.CallVirtual(activity, "getRootView", "()Lcom/android/launcher3/LauncherRootView;")).ref();
+    Require(root && root->type->descriptor == kLauncherRootView, "Inflated the APK's LauncherRootView");
+    for (const auto& [id_name, type] : {
+             std::pair{"drag_layer", kDragLayer}, {"workspace", kWorkspace},
+             {"hotseat", "Lcom/android/launcher3/Hotseat;"},
+             {"page_indicator", "Lcom/android/launcher3/pageindicators/PageIndicatorDotsWithArrows;"},
+             {"scrim_view", "Lcom/android/launcher3/views/ScrimView;"},
+             {"apps_view", "Lcom/android/launcher3/allapps/LauncherAllAppsContainerView;"}}) {
+        const auto id = ResourceId(vm, "com/android/launcher3/R$id", id_name);
+        auto* child = vm.CallVirtual(root, "findViewById", "(I)Landroid/view/View;", std::array{Value::Int(id)}).ref();
+        Require(child && child->type->descriptor == type, id_name);
+    }
     constexpr uint64_t kFrameInterval = 16'666'667;
-    const auto start = Clock::now();
-    for (uint32_t frame = 1; frame <= 60; ++frame) {
+    constexpr auto kViewRoot = "Landroid/view/ViewRootImpl;";
+    constexpr auto kDraw = "(Landroid/graphics/Canvas;)V";
+    constexpr uint32_t kFrames = 60;
+    uint32_t frame = 0;
+    const auto draw = [&] {
+        ++frame;
+        vm.CallVirtual(root, "invalidate", "()V");
         wa_sf_vsync_state_t tick{frame * kFrameInterval, frame, 448, 896, 160};
         Require(bridge.DoFrame(vm, tick) == WA_SF_OK, "Launcher frame");
-    }
+    };
+    auto* model = roots.Hold(vm.CallVirtual(activity, "getModel", "()Lcom/android/launcher3/LauncherModel;")).ref();
+    const auto loaded = [&] {
+        return vm.CallVirtual(model, "isModelLoaded", "()Z").i() &&
+               !vm.CallVirtual(activity, "isWorkspaceLoading", "()Z").i();
+    };
+    draw();
+    while (frame < kFrames && !loaded()) draw();
+    Require(loaded(), "The LauncherModel finished loading and binding the HOME workspace");
+    Executed(vm, "Lcom/android/launcher3/LauncherModel;", "isModelLoaded", "()Z");
+    auto* workspace = roots.Hold(vm.CallVirtual(activity, "getWorkspace", "()Lcom/android/launcher3/Workspace;")).ref();
+    auto* hotseat = roots.Hold(vm.CallVirtual(activity, "getHotseat", "()Lcom/android/launcher3/Hotseat;")).ref();
+    auto* cell = roots.Hold(vm.CallVirtual(workspace, "getPageAt", "(I)Landroid/view/View;",
+                                         std::array{Value::Int(0)})).ref();
+    Require(cell && cell->type->descriptor == "Lcom/android/launcher3/CellLayout;" && hotseat,
+            "Launcher bound the first workspace page and hotseat");
+    CheckBoundIcon(vm, hotseat, fixtures[0]);
+    CheckBoundIcon(vm, cell, fixtures[1]);
+    const auto initial_draws = vm.GetInstanceMethodStats(kViewRoot, "performDraw", kDraw).interpreted;
+    const auto start = Clock::now();
+    for (uint32_t i = 0; i < kFrames; ++i) draw();
     const auto elapsed = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
-    const auto* packet = wa_sf_frame_acquire(sf);
-    Require(packet != nullptr, "Launcher produced a SurfaceFlinger frame");
-    const auto* layers = wa_sf_frame_layers(packet);
-    const bool drew = packet->layer_count > 0 && layers && layers[0].list_size > 0;
-    wa_sf_frame_release(sf, packet);
-    Require(drew, "The Launcher scene contains recorded drawing");
-    std::cout << "60 Launcher vsync ticks ms=" << elapsed << '\n';
+    Executed(vm, kViewRoot, "performMeasure", "()V");
+    Executed(vm, kViewRoot, "performLayout", "()V");
+    Executed(vm, kViewRoot, "performDraw", kDraw);
+    Require(vm.GetInstanceMethodStats(kViewRoot, "performDraw", kDraw).interpreted - initial_draws == kFrames,
+            "Measured frames executed draw");
+    const auto commands = ReadDrawCommands(sf, fixtures);
+    std::cout << kFrames << " rendered Launcher frames, " << std::setprecision(9) << elapsed / kFrames << " ms/frame"
+              << ", round_rect=" << commands.counts[0] << ", path=" << commands.counts[1]
+              << ", text=" << commands.counts[2] << ", bitmap=" << commands.counts[3] << '\n';
+    Require(commands.counts[0] > 0 && commands.counts[2] > 0 && commands.counts[3] > 0 &&
+                std::ranges::all_of(commands.fixture_icons, [](bool present) { return present; }) &&
+                std::ranges::find(commands.labels, fixtures[1].activity.label) != commands.labels.end(),
+            "HOME draws rounded rectangles, both APK icons and the Workspace label");
+    CheckLauncherMotion(vm, bridge, sf, (frame + 1) * kFrameInterval / 1e6);
+
+    vm.CallVirtual(workspace, "addExtraEmptyScreens", "()V");
+    draw();
+    vm.CallVirtual(workspace, "showPageIndicatorAtCurrentScroll", "()V");
+    draw();
+    const auto pages = ReadDrawCommands(sf, fixtures);
+    Executed(vm, "Lcom/android/launcher3/pageindicators/PageIndicatorDots;", "onDraw", kDraw);
+    Require(pages.counts[0] > commands.counts[0], "Upstream PageIndicatorDots drew the workspace pagination");
+    std::cout << "Two-page HOME round_rect=" << pages.counts[0] << '\n';
+
+    auto* state_manager = roots.Hold(vm.CallVirtual(activity, "getStateManager",
+                                      "()Lcom/android/launcher3/statemanager/StateManager;")).ref();
+    auto* all_apps = ReadStaticObject(vm, roots, "com/android/launcher3/LauncherState", "ALL_APPS", kState);
+    vm.CallVirtual(state_manager, "goToState", "(Lcom/android/launcher3/statemanager/BaseState;Z)V",
+                   std::array{Value::Ref(all_apps), Value::Int(0)});
+    draw();
+    const auto drawer = ReadDrawCommands(sf, fixtures);
+    Executed(vm, "Lcom/android/launcher3/allapps/ActivityAllAppsContainerView;", "drawOnScrimWithScaleAndBottomOffset",
+             "(Landroid/graphics/Canvas;FI)V");
+    Require(std::ranges::all_of(drawer.counts, [](size_t count) { return count > 0; }),
+            "All Apps draws rounded rectangles, paths, text and bitmaps in one SurfaceFlinger packet");
+    std::cout << "All Apps round_rect=" << drawer.counts[0] << ", path=" << drawer.counts[1]
+              << ", text=" << drawer.counts[2] << ", bitmap=" << drawer.counts[3] << '\n';
     bridge.DestroyActivity(vm);
 }
 
@@ -673,8 +1042,16 @@ int main(int argc, char** argv) {
             }
         } catch (const ManagedException&) {
             PrintFailure(vm, mode);
+            PrintLauncherExecution(vm);
+            std::cout << "Linked DEX classes=" << vm.GetDexStats().linked_classes
+                      << " executed opcodes=" << vm.ExecutedOpcodeCount() << '\n';
             return 1;
+        } catch (const std::exception&) {
+            PrintLauncherExecution(vm);
+            throw;
         }
+        const auto launcher_classes = PrintLauncherExecution(vm);
+        if (mode == "activity") Require(launcher_classes == kLauncherClasses.size(), "All target APK classes executed");
         std::cout << "Linked DEX classes=" << vm.GetDexStats().linked_classes
                   << " executed opcodes=" << vm.ExecutedOpcodeCount() << '\n';
     } catch (const std::exception& error) {

@@ -1,46 +1,135 @@
-# Wave 11 upstream Launcher3 runtime
+# Upstream Launcher3 runtime
 
-This project runs the Wave 10 `Launcher3-upstream.apk` in the interpreter and
-attempts the manifest's HOME activity through `UiBridge` and SurfaceFlinger.
-It also runs Launcher3, AndroidX, Dagger, and coroutine methods directly and
-checks their results and interpreter counters. The startup test validates the
-current framework failure and emits the guest stack. A successful launch also
-runs 60 vsync ticks and checks the resulting SurfaceFlinger display list.
+This project runs `Launcher3-upstream.apk` in the interpreter and launches
+`com.android.launcher3.Launcher` through `UiBridge`. The execution test verifies
+the APK's compiled resources, Dagger providers, and AndroidX and coroutine
+methods independently. The activity test runs the upstream application and
+activity lifecycle, checks 60 HOME draws, dispatches host input to Launcher,
+and exercises Workspace pagination and the All Apps panel. An activity error
+fails CTest and prints the guest stack and execution counts for the key Launcher
+classes.
 
 ## Build and run
 
 Run these commands from the repository root. Omit
-`WA_UPSTREAM_LAUNCHER3_APK` to run the checked-in offline APK builder.
+`WA_UPSTREAM_LAUNCHER3_APK` to build the APK with the current Launcher patches.
 `WA_M11_FRAMEWORK_CORE_DEX` and `WA_UPSTREAM_FRAMEWORK_DEX` accept prebuilt
 framework DEX files. `WA_M11_FRAMEWORK_RES_APK` defaults to the resource archive
 in SDK 36's `android.jar`. Set it to use a separately built framework resource APK.
 
 ```sh
-cmake -S tests/m11_upstream_launcher3_runtime -B build-m11-w3-host -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DWA_UPSTREAM_LAUNCHER3_APK=/path/to/Launcher3-upstream.apk
-cmake --build build-m11-w3-host
-ctest --test-dir build-m11-w3-host -V
+cmake -S tests/m11_upstream_launcher3_runtime -B build-m12-w2-host -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release
+cmake --build build-m12-w2-host
+ctest --test-dir build-m12-w2-host -V
 ```
 
 For Wasm, use Node 26 and an installed Emscripten SDK. Copy the SDK cache to this
 worktree before configuring.
 
 ```sh
-mkdir -p build-m11-w3-wasm
-cp -R "$EMSDK/upstream/emscripten/cache" build-m11-w3-wasm/em_cache
-export EM_CACHE="$PWD/build-m11-w3-wasm/em_cache"
+mkdir -p build-m12-w2-wasm
+cp -R "$EMSDK/upstream/emscripten/cache" build-m12-w2-wasm/em_cache
+export EM_CACHE="$PWD/build-m12-w2-wasm/em_cache"
 "$EMSDK/upstream/emscripten/emcmake" cmake \
-  -S tests/m11_upstream_launcher3_runtime -B build-m11-w3-wasm -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release -DWA_UPSTREAM_LAUNCHER3_APK=/path/to/Launcher3-upstream.apk
-cmake --build build-m11-w3-wasm
-ctest --test-dir build-m11-w3-wasm -V
+  -S tests/m11_upstream_launcher3_runtime -B build-m12-w2-wasm -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DWA_UPSTREAM_LAUNCHER3_APK="$PWD/build-m12-w2-host/apk/Launcher3-upstream.apk"
+cmake --build build-m12-w2-wasm
+ctest --test-dir build-m12-w2-wasm -V
 ```
 
 The project also supports `add_subdirectory(tests/m11_upstream_launcher3_runtime)`
 from a parent CMake project. The test executable accepts `--apk`, `--core`,
 `--framework`, and `--framework-resources` paths.
+The `activity` mode also takes `--browser` and `--gallery` fixture APK paths.
+CTest builds the fixtures with the existing M9 APK builder and supplies both
+paths. The package catalog reads the fixtures' binary manifests and loads icons
+by their APK resource IDs.
 
-## APK and loading
+## Wave 12 runtime
+
+The APK is built from 402 Java and 477 Kotlin sources at `android-17.0.0_r1`.
+The provenance manifest records 385 verbatim Java and 452 verbatim Kotlin
+sources. The build applies the Launcher patch series to the remaining 42
+sources and generates 207 Dagger sources. The tested APK has SHA-256
+`79f8544641d423ad4a2ab80053fc7f2ad21f27641da33c0dcf1e04781efbb258`.
+Its four DEX files contain 37,050 class definitions and add 37,049 descriptors
+to the app index after framework precedence.
+It uses the manifest's `LauncherApplication`, the generated
+`DaggerLauncherAppComponent`, and the upstream `LauncherModel`. The framework
+build compiled 133 AOSP Java sources alongside the embedded framework code.
+
+The execution test verifies the three grids parsed from the APK's binary
+`R.xml.device_profiles`. The activity test launches `Launcher` with `UiBridge`
+and checks `onCreate`, `onStart`, and `onResume`. It checks the compiled
+`R.layout.launcher` hierarchy from `LauncherRootView` through `DragLayer`,
+`Workspace`, `Hotseat`, `PageIndicatorDotsWithArrows`, `ScrimView`, and
+`LauncherAllAppsContainerView`. The real model loads the default favorites and
+binds Browser in Hotseat and Gallery on Workspace. The SurfaceFlinger bitmap
+store contains the color values from both APK icons, and the HOME text command
+contains the Gallery label read from its APK.
+
+After model binding, the test times 60 calls to `UiBridge::DoFrame` at 448 × 896
+and 160 dpi using simulated 60 Hz ticks. It verifies `performMeasure`,
+`performLayout`, and 60 calls to `performDraw`. The wall time covers guest
+invalidation, interpreter execution, and publishing the SurfaceFlinger display
+list. The test dispatches a down/up pair and verifies both events cross
+`DragLayer` and that `Workspace` intercepts and handles the tap. It also adds
+an empty page through Workspace's API and verifies the pagination dots. The
+upstream All Apps state emits all four required opcodes in the same frame.
+
+| Runtime | HOME frames | Mean ms/frame | Workspace touch | M11 CTest |
+|---|---:|---:|---|---:|
+| Native arm64 macOS | 60 | 0.3517514 | Passed | 5/5 |
+| Emscripten Wasm32 with Node 26.13.1 | 60 | 0.488277783 | Passed | 5/5 |
+
+| Frame | `DRAW_ROUND_RECT` | `DRAW_PATH` | `DRAW_TEXT` | `DRAW_BITMAP` |
+|---|---:|---:|---:|---:|
+| Last timed HOME frame | 1 | 0 | 3 | 2 |
+| All Apps | 3 | 1 | 3 | 2 |
+
+The two-page HOME frame contains three rounded rectangles. Native and Wasm
+report the same command counts. The activity test links and executes all nine
+target classes from the APK on both runtimes.
+
+| APK class | Distinct interpreted methods on each runtime |
+|---|---:|
+| `Launcher` | 69 |
+| `Workspace` | 73 |
+| `CellLayout` | 31 |
+| `Hotseat` | 11 |
+| `BubbleTextView` | 46 |
+| `DeviceProfile` | 33 |
+| `InvariantDeviceProfile` | 27 |
+| `ActivityAllAppsContainerView` | 49 |
+| `DaggerLauncherAppComponent` | 1 |
+
+Native regression CTest passed M7 ART interpreter (1/1), M8 UI framework
+(1/1), M9 launcher session (1/1), and M10 upstream APK verification (5/5).
+The M9 launcher session test used an isolated build of the repository's
+launcher session sources. The M9 Node suite passed 7/7.
+
+### Launcher adaptations
+
+| Patch | Added | Removed | Effect |
+|---|---:|---:|---|
+| `0013-embedded-file-logging.patch` | 3 | 2 | Route standalone logging through Android log output. |
+| `0014-icon-shape-region-fallback.patch` | 6 | 1 | Use the icon-mask contour when the native `Region` operation is unavailable. |
+| `0015-notification-dot-path-intersection.patch` | 15 | 16 | Find notification-dot intersections on the sampled icon contour. |
+| `0016-software-icon-bitmaps.patch` | 1 | 1 | Use upstream's software bitmap rendering path. |
+| `0017-notification-listener-availability.patch` | 12 | 1 | Gate listener rebind on notification service availability. |
+| `0018-in-memory-database-schema.patch` | 1 | 0 | Skip the disk schema sidecar for an in-memory database. |
+| `0019-item-diagnostics-without-stats-proto.patch` | 1 | 1 | Log the container ID directly during model diagnostics. |
+| `0020-optional-device-policy-resources.patch` | 9 | 5 | Use bundled strings when device policy resources are unavailable. |
+| `0021-in-memory-install-queue.patch` | 10 | 4 | Keep the pending install queue in memory when the app files directory is unavailable. |
+| `0022-uncached-install-sessions.patch` | 2 | 1 | Query active sessions when the archiving flag leaves the cache empty. |
+| `0023-lazy-standalone-stats.patch` | 14 | 4 | Defer stats protobuf construction so the standalone no-op logger can skip it. |
+| `0024-optional-legacy-text-key-cleanup.patch` | 5 | 1 | Handle teardown on hosts that deliver text through the IME. |
+
+## Wave 11 handoff
+
+### APK and loading
 
 The measured APK was built from AOSP `android-17.0.0_r1` in Wave 10 and has
 SHA-256 `0145bc159e2cfbe4749862f251ffb826a9ff891468d9a64ba9694011f193ff47`.
@@ -75,7 +164,7 @@ the Wasm results. Wasm linear memory is the size at the end of the load.
 | Wasm32 | On | 224.666 | 171,982,848 | 94,896,128 |
 | Wasm32 | Off for the trusted APK | 29.3826 | 137,478,144 | 86,638,592 |
 
-## Interpreted execution
+### Interpreted execution
 
 | DEX | Verified calls and outcomes |
 |---|---|
@@ -100,7 +189,7 @@ run with one interpreter thread. Guest thread creation and blocking pool
 execution remain pending, as do the method-handle path and the broader
 reflection and JDK APIs outside these runs.
 
-## Startup and framework gaps
+### Startup and framework gaps
 
 The HOME attempt decoded the real APK manifest and called
 `android.app.UiRuntime.launch` at DEX pc 73, then
@@ -134,7 +223,7 @@ inflation path. The next field references visible in the bytecode of
 `Landroid/util/Property;`. Those references are beyond the observed launch
 failure.
 
-## Test results
+### Test results
 
 Wave 11 CTest passed 5/5 on both native and Wasm32. The archive test covers
 deflated DEX entries, default verification of a corrupted secondary entry,

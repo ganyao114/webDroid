@@ -1,0 +1,12 @@
+--- a/packages/apps/Launcher3/src/com/android/launcher3/model/LoaderTask.java
++++ b/packages/apps/Launcher3/src/com/android/launcher3/model/LoaderTask.java
+@@ -277,7 +277,8 @@
+         List<FirstScreenBroadcastModel> broadcastModels =
+                 mFirstScreenBroadcastHelper.createModelsForFirstScreenBroadcast(
+                         firstScreenItems,
+-                        mInstallingPkgsCached,
++                        mInstallingPkgsCached != null
++                                ? mInstallingPkgsCached : mSessionHelper.getActiveSessions(),
+                         mBgDataModel.itemsIdMap.stream().filter(WIDGET_FILTER).toList(),
+                         shouldAttachArchivingExtras
+                 );
