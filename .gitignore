@@ -12,3 +12,4 @@ __pycache__/
 node_modules/
 !demos/**/*.so
 third_party/aosp17/
+third_party/aosp17_deps/
