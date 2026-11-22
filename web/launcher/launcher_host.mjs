@@ -1,4 +1,5 @@
 import { Action, Input } from '../surfaceflinger/abi.mjs';
+import { loadAospRoboto } from '../surfaceflinger/atlas_cache.mjs';
 import { createSurfaceFlingerCompositor } from '../surfaceflinger/compositor.mjs';
 import { attachAndroidInput } from '../surfaceflinger/input_ime.mjs';
 import { LauncherAbi } from './abi_helpers.mjs';
@@ -86,6 +87,7 @@ export class LauncherHost {
       if (!globalThis.crossOriginIsolated) throw new Error('Launcher3 requires COOP and COEP for shared Wasm memory');
       [this.#module, this.#assets] = await Promise.all([
         this.loadSystem(), this.loadAssets({ signal: this.#abort.signal }),
+        loadAospRoboto(this.canvas.ownerDocument),
       ]);
       if (this.#abort.signal.aborted) return;
       for (const { name, bytes } of this.#assets.apks) this.#apks.set(name, bytes);
@@ -112,9 +114,10 @@ export class LauncherHost {
     const session = this.#session = { abi, size: this.size() };
     try {
       abi.create(session.size, this.locale);
+      // Stage the largest APK buffer before DEX loading fragments the Wasm heap.
+      abi.setFrameworkResources(this.#assets.resources);
       abi.loadFrameworkDex(this.#assets.frameworkDex);
       abi.loadFallbackDex(this.#assets.fallbackDex);
-      abi.setFrameworkResources(this.#assets.resources);
       for (const [name, bytes] of this.#apks) abi.installApk(name, bytes);
       abi.loadSystemUiApk(systemUiName, this.#assets.systemUi);
       abi.bootApk(launcherName, this.#assets.launcher);

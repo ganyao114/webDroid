@@ -92,6 +92,7 @@ async function run() {
     assert.equal(record.system_ui_mounted, true);
     assert.equal(record.system_ui_class, 'com.android.systemui.statusbar.phone.PhoneStatusBarView');
     assert.equal(record.system_ui_navigation, true);
+    assert.equal(record.roboto_font_loaded, true);
     assert.equal(record.isolated, true);
     assert(['webgpu', 'webgl2'].includes(record.backend), 'No active launcher GPU backend');
     if (backend !== 'auto') assert.equal(record.backend, backend);

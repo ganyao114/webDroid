@@ -131,7 +131,8 @@ function inspectFrame() {
       const layer = frame.layer(i);
       assert.equal(memory.u32(layer + 80), Surface.DISPLAY_LIST);
       assert.equal(memory.i32(layer + 8), i);
-      const info = { ops: new Set(), texts: [], paths: [], bitmaps: [], rounds: [], gestureHandle: false };
+      const info = { ops: new Set(), texts: [], paths: [], bitmaps: [], rounds: [], gestureHandle: false,
+        sheetOutline: false };
       layers.set(i, info);
       const begin = frame.list(layer), end = begin + memory.u32(layer + 92);
       let transform = [1, 0, 0, 1, 0, 0];
@@ -183,6 +184,8 @@ function inspectFrame() {
         if (op === Op.PATH && size >= 36 && memory.u32(at + 24) === 1 && memory.u32(at + 4) >>> 24) {
           const x = arg(6), y = arg(7);
           info.paths.push({ x, y, windowY: translate(x, y)[5] });
+          info.sheetOutline ||= memory.u32(at + 8) === 1 && arg(2) === 1 &&
+            (memory.u32(at + 4) >>> 24) <= 0x99 && memory.u32(at + 20) >= 6;
         }
         if (op === Op.ROUND) {
           const bounds = mapRect(arg(0), arg(1), arg(2), arg(3));
@@ -221,7 +224,8 @@ function fontRow(weight, face) {
 function fontExtents(size, weight, face) {
   const font = module._wa_sf_font_metrics(scene) + fontRow(weight, face) * 20;
   const sequence = memory.u32(font);
-  if (!sequence || sequence & 1) return [size * 0.8, size * 0.2];
+  if (!sequence || sequence & 1)
+    return face === 2 ? [size * 0.8, size * 0.2] : [size * 1900 / 2048, size * 500 / 2048];
   return [size * memory.u32(font + 12) / 65536, size * memory.u32(font + 16) / 65536];
 }
 
@@ -286,7 +290,12 @@ function checkHome(window, page, navigationInset, labels) {
     shape.bounds[1] > height * 0.65 && shape.bounds[3] <= height - navigationInset);
   assert(qsb && qsb.bounds.every((value, i) => near(intersect(qsb.bounds, qsb.clip)[i], value)),
     'The entire Hotseat Search pill is visible above SystemUI');
-  assert(window.texts.some(label => label.text === 'Search' || label.text === '搜索'), 'Visible QSB label');
+  assert(window.rounds.some(shape => shape.style === 1 &&
+    shape.bounds.every((edge, index) => near(edge, qsb.bounds[index]))), 'Hotseat Search pill has a matching outline');
+  const label = window.texts.find(({ text }) => text === 'Search' || text === '搜索');
+  assert(label, 'Visible QSB label');
+  assert(Math.abs((label.top + label.bottom) - (qsb.bounds[1] + qsb.bounds[3])) <= 2,
+    'Hotseat Search label is vertically centered');
   const iconBottom = Math.max(...window.bitmaps.map(icon => icon.bounds[3]));
   const hotseat = window.bitmaps.filter(icon => near(icon.bounds[3], iconBottom));
   assert.equal(hotseat.length, 5, 'All five upstream Hotseat icons draw');
@@ -333,6 +342,7 @@ function checkAppLabels(window, icons, expected) {
 }
 
 function checkDrawer(window, search, expected) {
+  assert(window.sheetOutline, 'All Apps sheet has a subtle outline');
   const pills = window.rounds.filter(({ bounds }) => [
     search.left, search.top, search.right, search.bottom,
   ].every((edge, i) => Math.abs(edge - bounds[i]) <= 1));
@@ -417,9 +427,10 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
   try {
     scene = module._wa_system_launcher_sf_ctx();
     assert(scene);
+    // Match the browser's mount order and verify both locales in the same Wasm heap.
+    await load('set_framework_res_apk', resources);
     await load('load_framework_dex', dex);
     await load('load_framework_fallback_dex', fallback);
-    await load('set_framework_res_apk', resources);
     for (const app of apps) {
       await load('install_apk', app, true);
       state();

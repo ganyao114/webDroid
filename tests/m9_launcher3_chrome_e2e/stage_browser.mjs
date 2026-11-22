@@ -6,6 +6,7 @@ import { parseArgs } from 'node:util';
 import { WORKTREE } from '../../tools/chrome_harness/serve.mjs';
 import { cubeName, fallbackDexName, frameworkDexName, launcherName, manifestName, resourcesName, settingsName,
   systemAppNames, systemUiName } from '../../web/launcher/assets.mjs';
+import { aospRobotoFile } from '../../web/surfaceflinger/atlas_cache.mjs';
 import { stageM6Browser } from '../m6_apk_chrome_e2e/stage_m6_browser.mjs';
 
 const suite = 'tests/m9_launcher3_chrome_e2e';
@@ -15,6 +16,7 @@ const m6 = 'tests/m6_apk_chrome_e2e';
 const m1 = 'tests/m1_chrome_ndk_cube';
 const systemRoot = 'runtime/android_system';
 const provenanceName = 'upstream_provenance.json';
+const robotoSource = join(WORKTREE, 'third_party/aosp17/external/roboto-fonts');
 const shellFiles = ['index.html', 'launcher.css', 'launcher_playground.mjs', 'runtime.mjs', 'elf_inspector.mjs'];
 const launcherFiles = ['abi_helpers.mjs', 'assets.mjs', 'foreground_apk.mjs', 'foreground_java_apk.mjs',
   'launcher_host.mjs', 'scene_labels.mjs'];
@@ -35,7 +37,7 @@ async function firstFile(paths, required = true) {
 export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostBuild } = {}) {
   const builds = [wasmBuild, hostBuild].filter(Boolean).map(dir => resolve(dir));
   const artifact = (paths, required) => firstFile(builds.flatMap(dir => paths.map(path => join(dir, path))), required);
-  const [cube, launcher, systemUi, dex, fallback, resources] = await Promise.all([
+  const [cube, launcher, systemUi, dex, fallback, resources, roboto] = await Promise.all([
     artifact([cubeName, `${m6}/${cubeName}`]),
     artifact([launcherName, `${systemRoot}/launcher/${launcherName}`, `apk/${launcherName}`]),
     artifact([systemUiName, `${systemRoot}/launcher/${systemUiName}`, `tests/m9_aosp17_launcher3_boot/apk/${systemUiName}`,
@@ -44,6 +46,8 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
     artifact([fallbackDexName, `${systemRoot}/aosp17-ui/${fallbackDexName}`,
       `aosp17-ui/${fallbackDexName}`, `tests/m8_aosp17_ui_framework/aosp17-ui/${fallbackDexName}`]),
     artifact([resourcesName, `${systemRoot}/upstream-framework/framework-res-upstream.apk`]),
+    // Match the default Android.bp prebuilt and its recovery font.
+    firstFile([join(robotoSource, 'font/3.005', aospRobotoFile)]),
     // stageM6Browser also validates and copies the two unified module files.
   ]);
   const apps = await Promise.all(systemAppNames.map(async name => {
@@ -67,6 +71,7 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
     [launcher, `build/${launcherName}`], [systemUi, `build/${systemUiName}`],
     [provenancePath, `build/${provenanceName}`], [dex, `build/${frameworkDexName}`],
     [fallback, `build/${fallbackDexName}`], [resources, `build/${resourcesName}`],
+    [roboto, `build/fonts/${aospRobotoFile}`], [join(robotoSource, 'NOTICE'), 'build/fonts/NOTICE'],
     ...apps.map(({ name, path }) => [path, `build/${name}`])];
   for (const name of ['libndk_gles3_cube_armv7a.so', 'libndk_gles3_cube_arm64.so']) {
     const file = await artifact([name, `${m6}/ndk/${name}`, `${m1}/ndk/${name}`], false);

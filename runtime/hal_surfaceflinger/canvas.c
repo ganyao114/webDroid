@@ -320,21 +320,26 @@ uint32_t wa_sf_font_calibration_generation(const wa_sf_t *sf) {
 
 _Static_assert(sizeof(wa_font_advances_t) == 404, "font advances ABI");
 
-/* Conservative widths in hundredths of an em for the browser's sans-serif
- * fallback stack. Keep the space and narrow glyphs distinct from wide letters. */
-static const uint8_t sans_widths[WA_FONT_ASCII_COUNT] = {
-    /*  ! " # $ % & ' ( ) * + , - . / */
-    32, 34, 47, 72, 67, 99, 80, 29, 42, 42, 52, 70, 34, 42, 34, 43,
-    /* 0 1 2 3 4 5 6 7 8 9 : ; < = > ? */
-    67, 62, 67, 67, 67, 67, 67, 67, 67, 67, 35, 35, 70, 70, 70, 57,
-    /* @ A B C D E F G H I J K L M N O */
-    104, 75, 73, 76, 79, 66, 60, 80, 79, 34, 43, 73, 61, 93, 79, 81,
-    /* P Q R S T U V W X Y Z [ \ ] ^ _ */
-    68, 81, 73, 69, 66, 78, 75, 102, 76, 74, 68, 42, 43, 42, 62, 59,
-    /* ` a b c d e f g h i j k l m n o */
-    58, 64, 67, 60, 67, 64, 40, 66, 66, 31, 32, 63, 31, 102, 66, 66,
-    /* p q r s t u v w x y z { | } ~ */
-    67, 67, 46, 58, 45, 66, 65, 92, 65, 65, 57, 44, 32, 44, 70,
+/* Roboto 3.005 at the default width and upright style. Each row reserves the
+ * maximum advance or right ink extent for weights 100–400 or 500–900, plus
+ * 1/64 em for kerning, rounded up to hundredths of an em. */
+static const uint8_t roboto_widths[2][WA_FONT_ASCII_COUNT] = {
+    {
+        27, 28, 34, 64, 58, 77, 64, 20, 36, 37, 45, 59, 22, 32, 28, 43,
+        58, 58, 58, 58, 58, 58, 58, 58, 58, 58, 26, 23, 53, 58, 54, 49,
+        95, 67, 64, 67, 68, 59, 59, 71, 73, 29, 57, 66, 56, 89, 73, 71,
+        65, 71, 67, 61, 62, 69, 66, 93, 65, 62, 62, 29, 43, 29, 44, 47,
+        33, 56, 58, 54, 58, 55, 37, 58, 57, 26, 26, 53, 26, 92, 57, 59,
+        58, 59, 36, 54, 35, 57, 50, 78, 52, 50, 52, 36, 26, 36, 71,
+    },
+    {
+        27, 30, 34, 62, 60, 76, 69, 19, 37, 37, 49, 58, 29, 47, 32, 41,
+        60, 60, 60, 60, 60, 60, 60, 60, 60, 60, 32, 31, 53, 61, 54, 53,
+        92, 70, 67, 68, 67, 59, 57, 70, 73, 32, 58, 67, 56, 90, 73, 71,
+        67, 71, 67, 65, 65, 69, 68, 90, 66, 65, 63, 30, 48, 30, 47, 47,
+        36, 56, 58, 54, 58, 57, 38, 60, 59, 30, 29, 58, 30, 89, 59, 59,
+        58, 59, 40, 54, 36, 59, 54, 76, 54, 54, 54, 35, 28, 35, 68,
+    },
 };
 
 static int wide_character(uint32_t cp) {
@@ -347,7 +352,7 @@ static double fallback_width(uint32_t cp, uint32_t face, uint32_t bucket) {
     if (face == WA_FONT_MONOSPACE)
         return 0.64;
     if (cp < WA_FONT_ASCII_FIRST + WA_FONT_ASCII_COUNT)
-        return sans_widths[cp - WA_FONT_ASCII_FIRST] / 100.0 + (bucket >= 4 ? 0.02 : 0);
+        return roboto_widths[bucket >= 4][cp - WA_FONT_ASCII_FIRST] / 100.0;
     return 0.86;
 }
 
@@ -399,7 +404,10 @@ wa_text_metrics_t wa_canvas_measure_text(const wa_sf_t *sf, const char *text, ui
     if (bucket)
         --bucket;
     float latin = 0;
-    float wide = 1.0f, ascent = 0.80f, descent = 0.20f;
+    // The sans-serif faces share Roboto's hhea metrics until calibrated.
+    float wide = 1.0f;
+    float ascent = face == WA_FONT_MONOSPACE ? 0.80f : 1900.0f / 2048.0f;
+    float descent = face == WA_FONT_MONOSPACE ? 0.20f : 500.0f / 2048.0f;
     if (sf) {
         const wa_font_metric_t *m = &sf->fonts[face][bucket];
         uint32_t before = wa_atomic_load(&m->sequence);
