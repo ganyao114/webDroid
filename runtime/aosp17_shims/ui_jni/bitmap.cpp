@@ -1,4 +1,20 @@
-#include "native_methods.h"
+#include "native_graphics.h"
+#include "software_raster.h"
+
+#include <androidfw/Asset.h>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <unistd.h>
+
+// Bundled stb_image from the Emscripten 7.0.0 toolchain.
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_ONLY_JPEG
+#define STBI_NO_STDIO
+#define STBI_NO_SIMD
+#define STB_IMAGE_STATIC
+#include "stb_image.h"
 
 #include <zlib.h>
 
@@ -392,7 +408,14 @@ jintArray DecodePng(JNIEnv* env, jclass, jbyteArray bytes, jint offset, jint len
 
 } // namespace
 
+#include "bitmap_native.inc"
+
 void RegisterBitmaps(interp::Vm& vm) {
+    if (RegisterIfDeclared(vm, "android/graphics/Bitmap",
+        Method<CreateBitmap>(vm, "nativeCreate", "([IIIIIIZJ)Landroid/graphics/Bitmap;"))) {
+        RegisterModernBitmaps(vm);
+        return;
+    }
     Register(vm, "android/graphics/Bitmap", Method<Allocate>(vm, "nativeAllocate", "(II)[I"),
              Method<ReadPixel>(vm, "nativePixel", "([IIJI)I"),
              Method<CopyRows>(vm, "nativeCopyRows", "([III[IIIIII)V"),

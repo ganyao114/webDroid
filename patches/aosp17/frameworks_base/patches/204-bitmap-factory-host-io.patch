@@ -1,0 +1,201 @@
+--- a/frameworks/base/graphics/java/android/graphics/BitmapFactory.java
++++ b/frameworks/base/graphics/java/android/graphics/BitmapFactory.java
+@@ -21,16 +21,14 @@
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.res.AssetManager;
+ import android.content.res.Resources;
++import android.graphics.drawable.BitmapDrawable;
++import android.graphics.drawable.Drawable;
+ import android.os.Build;
+-import android.os.Trace;
+-import android.system.OsConstants;
+ import android.util.DisplayMetrics;
+ import android.util.Log;
+ import android.util.TypedValue;
+ 
+-import libcore.io.IoBridge;
+ 
+ import java.io.FileDescriptor;
+ import java.io.FileInputStream;
+@@ -525,27 +523,15 @@
+      *         function is not an {@link ColorSpace.Rgb.TransferParameters ICC parametric curve}
+      */
+     public static Bitmap decodeFile(String pathName, Options opts) {
++        if (pathName == null) return null;
+         validate(opts);
+-        Bitmap bm = null;
+-        FileDescriptor fd = null;
+-        try {
+-            fd = IoBridge.open(pathName, OsConstants.O_RDONLY);
+-            bm = decodeFileDescriptor(fd, null, opts);
+-        } catch (Exception e) {
+-            /*  do nothing.
+-                If the exception happened on open, bm will be null.
+-            */
+-            Log.e("BitmapFactory", "Unable to decode file: " + e);
+-        } finally {
+-            if (fd != null) {
+-                try {
+-                    IoBridge.closeAndSignalBlockedThreads(fd);
+-                } catch (IOException e) {
+-                    // do nothing here
+-                }
+-            }
+-        }
+-        return bm;
++        Bitmap bitmap = nDecodeFile(pathName, opts, Options.nativeInBitmap(opts),
++                Options.nativeColorSpace(opts));
++        if (bitmap == null && opts != null && opts.inBitmap != null && !opts.inJustDecodeBounds) {
++            throw new IllegalArgumentException("Problem decoding into existing bitmap");
++        }
++        setDensityFromOptions(bitmap, opts);
++        return bitmap;
+     }
+ 
+     /**
+@@ -619,6 +605,16 @@
+             is = res.openRawResource(id, value);
+ 
+             bm = decodeResourceStream(res, value, is, null, opts);
++        } catch (NoSuchMethodError compatibilityResources) {
++            // The compatibility resource loader already decodes the bitmap through JNI.
++            Drawable drawable = res.getDrawable(id);
++            if (drawable instanceof BitmapDrawable) {
++                Bitmap decoded = ((BitmapDrawable) drawable).getBitmap();
++                if (opts == null) return decoded;
++                opts.outWidth = decoded.getWidth();
++                opts.outHeight = decoded.getHeight();
++                return opts.inJustDecodeBounds ? null : decoded;
++            }
+         } catch (Exception e) {
+             /*  do nothing.
+                 If the exception happened on open, bm will be null.
+@@ -632,7 +628,7 @@
+             }
+         }
+ 
+-        if (bm == null && opts != null && opts.inBitmap != null) {
++        if (bm == null && opts != null && opts.inBitmap != null && !opts.inJustDecodeBounds) {
+             throw new IllegalArgumentException("Problem decoding into existing bitmap");
+         }
+ 
+@@ -677,19 +673,14 @@
+ 
+         Bitmap bm;
+ 
+-        Trace.traceBegin(Trace.TRACE_TAG_GRAPHICS, "decodeBitmap");
+-        try {
+-            bm = nativeDecodeByteArray(data, offset, length, opts,
+-                    Options.nativeInBitmap(opts),
+-                    Options.nativeColorSpace(opts));
+-
+-            if (bm == null && opts != null && opts.inBitmap != null) {
+-                throw new IllegalArgumentException("Problem decoding into existing bitmap");
+-            }
+-            setDensityFromOptions(bm, opts);
+-        } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_GRAPHICS);
+-        }
++        bm = nativeDecodeByteArray(data, offset, length, opts,
++                Options.nativeInBitmap(opts),
++                Options.nativeColorSpace(opts));
++
++        if (bm == null && opts != null && opts.inBitmap != null && !opts.inJustDecodeBounds) {
++            throw new IllegalArgumentException("Problem decoding into existing bitmap");
++        }
++        setDensityFromOptions(bm, opts);
+ 
+         return bm;
+     }
+@@ -772,24 +763,13 @@
+ 
+         Bitmap bm = null;
+ 
+-        Trace.traceBegin(Trace.TRACE_TAG_GRAPHICS, "decodeBitmap");
+-        try {
+-            if (is instanceof AssetManager.AssetInputStream) {
+-                final long asset = ((AssetManager.AssetInputStream) is).getNativeAsset();
+-                bm = nativeDecodeAsset(asset, outPadding, opts, Options.nativeInBitmap(opts),
+-                    Options.nativeColorSpace(opts));
+-            } else {
+-                bm = decodeStreamInternal(is, outPadding, opts);
+-            }
+-
+-            if (bm == null && opts != null && opts.inBitmap != null) {
+-                throw new IllegalArgumentException("Problem decoding into existing bitmap");
+-            }
+-
+-            setDensityFromOptions(bm, opts);
+-        } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_GRAPHICS);
+-        }
++        bm = decodeStreamInternal(is, outPadding, opts);
++
++        if (bm == null && opts != null && opts.inBitmap != null && !opts.inJustDecodeBounds) {
++            throw new IllegalArgumentException("Problem decoding into existing bitmap");
++        }
++
++        setDensityFromOptions(bm, opts);
+ 
+         return bm;
+     }
+@@ -846,31 +826,26 @@
+         validate(opts);
+         Bitmap bm;
+ 
+-        Trace.traceBegin(Trace.TRACE_TAG_GRAPHICS, "decodeFileDescriptor");
+-        try {
+-            if (nativeIsSeekable(fd)) {
+-                bm = nativeDecodeFileDescriptor(fd, outPadding, opts,
+-                        Options.nativeInBitmap(opts),
+-                        Options.nativeColorSpace(opts));
+-            } else {
+-                FileInputStream fis = new FileInputStream(fd);
++        if (nativeIsSeekable(fd)) {
++            bm = nativeDecodeFileDescriptor(fd, outPadding, opts,
++                    Options.nativeInBitmap(opts),
++                    Options.nativeColorSpace(opts));
++        } else {
++            FileInputStream fis = new FileInputStream(fd);
++            try {
++                bm = decodeStreamInternal(fis, outPadding, opts);
++            } finally {
+                 try {
+-                    bm = decodeStreamInternal(fis, outPadding, opts);
+-                } finally {
+-                    try {
+-                        fis.close();
+-                    } catch (Throwable t) {/* ignore */}
+-                }
+-            }
+-
+-            if (bm == null && opts != null && opts.inBitmap != null) {
+-                throw new IllegalArgumentException("Problem decoding into existing bitmap");
+-            }
+-
+-            setDensityFromOptions(bm, opts);
+-        } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_GRAPHICS);
+-        }
++                    fis.close();
++                } catch (Throwable t) {/* ignore */}
++            }
++        }
++
++        if (bm == null && opts != null && opts.inBitmap != null && !opts.inJustDecodeBounds) {
++            throw new IllegalArgumentException("Problem decoding into existing bitmap");
++        }
++
++        setDensityFromOptions(bm, opts);
+         return bm;
+     }
+ 
+@@ -899,4 +874,6 @@
+     private static native Bitmap nativeDecodeByteArray(byte[] data, int offset,
+             int length, Options opts, long inBitmapHandle, long colorSpaceHandle);
+     private static native boolean nativeIsSeekable(FileDescriptor fd);
++    private static native Bitmap nDecodeFile(String pathName, Options opts,
++            long inBitmapHandle, long colorSpaceHandle);
+ }

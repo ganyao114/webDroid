@@ -1,0 +1,519 @@
+--- a/frameworks/base/graphics/java/android/graphics/Bitmap.java
++++ b/frameworks/base/graphics/java/android/graphics/Bitmap.java
+@@ -16,14 +16,6 @@
+ 
+ package android.graphics;
+ 
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidBitmap.SIZE;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidBitmap.WIDTH;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidBitmap.HEIGHT;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidBitmap.DENSITY;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidBitmap.CONFIG;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidBitmap.MUTABLE_PIXELS;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidBitmap.ID;
+-import static android.internal.perfetto.protos.AndroidTrackEventOuterClass.AndroidTrackEvent.BITMAP;
+ 
+ import android.annotation.CheckResult;
+ import android.annotation.ColorInt;
+@@ -37,23 +29,15 @@
+ import android.os.Parcel;
+ import android.os.ParcelFileDescriptor;
+ import android.os.Parcelable;
+-import android.os.PerfettoCategories;
+ import android.os.SharedMemory;
+-import android.os.StrictMode;
+-import android.os.Trace;
+ import android.util.DisplayMetrics;
+ import android.util.Half;
+ import android.util.Log;
+ import android.util.proto.ProtoOutputStream;
+-import android.view.ThreadedRenderer;
+-
+-import com.android.graphics.flags.Flags;
+-import com.android.internal.dev.perfetto.sdk.PerfettoTrackEventBuilder;
+-import com.android.server.am.BitmapDumpProto;
++
+ 
+ import dalvik.annotation.optimization.CriticalNative;
+ 
+-import libcore.util.NativeAllocationRegistry;
+ 
+ import java.io.ByteArrayOutputStream;
+ import java.io.IOException;
+@@ -141,7 +125,7 @@
+         if (sDefaultDensity >= 0) {
+             return sDefaultDensity;
+         }
+-        sDefaultDensity = DisplayMetrics.DENSITY_DEVICE;
++        sDefaultDensity = DisplayMetrics.DENSITY_DEFAULT;
+         return sDefaultDensity;
+     }
+ 
+@@ -150,49 +134,7 @@
+      */
+     private static final WeakHashMap<Bitmap, Void> sAllBitmaps = new WeakHashMap<>();
+ 
+-    /**
+-     * Two NativeAllocationRegistry instances are used to register the native
+-     * allocation for each bitmap:
+-     *
+-     *   1. One with a no-op free function for updating the native allocation
+-     *      size of the pixel data only, without actually releasing the native
+-     *      object that's associated with the bitmap instance.
+-     *
+-     *   2. sRegistry is the other static one with a valid freeFunction and a
+-     *      default (estimated) size to actually release the native object
+-     *      associated with this bitmap.
+-     *
+-     *  mRecycler is the cleaner runner from #1, and is used in Bitmap#recycle()
+-     *  to update the native allocation size associated with the pixel data
+-     *  released.
+-     */
+-    private static NativeAllocationRegistry sRegistry = null;
+-
+-    private Runnable mRecycler;
+-
+-    private void registerNativeAllocation(boolean malloc) {
+-        final long free = nativeGetNativeFinalizer();
+-        final long noop = nativeGetNativeNoop();
+-        final int size = getAllocationByteCount();
+-        NativeAllocationRegistry registry;
+-        if (com.android.libcore.readonly.Flags.nativeMetrics()) {
+-            Class cls = Bitmap.class;
+-            if (sRegistry == null) {
+-                sRegistry = NativeAllocationRegistry.createMalloced(cls, free);
+-            }
+-            registry = malloc ? NativeAllocationRegistry.createMalloced(cls, noop, size)
+-                              : NativeAllocationRegistry.createNonmalloced(cls, noop, size);
+-        } else {
+-            ClassLoader loader = Bitmap.class.getClassLoader();
+-            if (sRegistry == null) {
+-                sRegistry = NativeAllocationRegistry.createMalloced(loader, free);
+-            }
+-            registry = malloc ? NativeAllocationRegistry.createMalloced(loader, noop, size)
+-                              : NativeAllocationRegistry.createNonmalloced(loader, noop, size);
+-        }
+-        mRecycler = registry.registerNativeAllocation(this, mNativePtr);
+-        sRegistry.registerNativeAllocation(this, mNativePtr);
+-    }
++    private static native void nRegisterNativeAllocation(Bitmap bitmap, long handle);
+ 
+     /**
+      * Private constructor that must receive an already allocated native bitmap
+@@ -227,7 +169,7 @@
+ 
+         mNativePtr = nativeBitmap;
+         mSourceId = nativeGetSourceId(mNativePtr);
+-        registerNativeAllocation(fromMalloc);
++        nRegisterNativeAllocation(this, mNativePtr);
+ 
+         synchronized (Bitmap.class) {
+           sAllBitmaps.put(this, null);
+@@ -444,9 +386,6 @@
+             mNinePatchChunk = null;
+             mRecycled = true;
+             mHardwareBuffer = null;
+-            if (mRecycler != null) {
+-                mRecycler.run();
+-            }
+         }
+     }
+ 
+@@ -760,10 +699,7 @@
+     }
+ 
+     private void noteHardwareBitmapSlowCall() {
+-        if (getConfig() == Config.HARDWARE) {
+-            StrictMode.noteSlowCall("Warning: attempt to read pixels from hardware "
+-                    + "bitmap, which is very slow operation");
+-        }
++        // Embedded bitmaps are CPU-accessible.
+     }
+ 
+     /**
+@@ -812,7 +748,7 @@
+             b.setPremultiplied(mRequestPremultiplied);
+             b.mDensity = mDensity;
+             if (hasGainmap()) {
+-                b.setGainmap(getGainmap().asShared());
++                b.setGainmap(getGainmap());
+             }
+         }
+         return b;
+@@ -827,7 +763,7 @@
+     @NonNull
+     public Bitmap asShared() {
+         if (nativeIsBackedByAshmem(mNativePtr) && nativeIsImmutable(mNativePtr)
+-                && (!hasGainmap() || getGainmap().asShared() == getGainmap())) {
++                && (!hasGainmap() || false)) {
+             return this;
+         }
+         Bitmap shared = createAshmemBitmap();
+@@ -942,7 +878,7 @@
+     @NonNull
+     public static Bitmap createScaledAshmemBitmap(
+             @NonNull Bitmap src, int dstWidth, int dstHeight, boolean filter) {
+-        if (!Flags.scaleBitmapDirectlyToAshmem()) {
++        if (!nativeIsBackedByAshmem(src.getNativeInstance())) {
+             return createScaledBitmap(src, dstWidth, dstHeight, filter);
+         }
+         src.checkRecycled("Can't copy a recycled bitmap");
+@@ -993,7 +929,7 @@
+             Bitmap newMapContents = transformGainmap(src, b, m, paint, srcR, dstR,
+                     deviceR);
+             if (newMapContents != null) {
+-                b.setGainmap(new Gainmap(src.getGainmap(), newMapContents));
++                b.setGainmap(new Gainmap(newMapContents));
+             }
+         }
+ 
+@@ -1079,156 +1015,110 @@
+             throw new IllegalArgumentException("cannot use a recycled source in createBitmap");
+         }
+ 
+-        final long flowId = source.mId;
+-        if (android.os.Flags.perfettoSdkTracingV3()) {
+-            if (PerfettoCategories.BITMAP_CATEGORY.isEnabled()) {
+-                PerfettoTrackEventBuilder builder =
+-                        com.android.internal.dev.perfetto.sdk.PerfettoTrace.begin(
+-                                        PerfettoCategories.BITMAP_CATEGORY, "Bitmap_createBitmap")
+-                                .setFlow(flowId);
+-                traceBitmap(builder, source);
+-                builder.emit();
++        // check if we can just return our argument unchanged
++        if (!source.isMutable() && x == 0 && y == 0 && width == source.getWidth()
++                && height == source.getHeight() && (m == null || m.isIdentity())) {
++            return source;
++        }
++
++        boolean isHardware = source.getConfig() == Config.HARDWARE;
++        if (isHardware) {
++            source.noteHardwareBitmapSlowCall();
++            source = nativeCopyPreserveInternalConfig(source.mNativePtr);
++        }
++
++        int neww = width;
++        int newh = height;
++        Bitmap bitmap;
++        Paint paint;
++
++        Rect srcR = new Rect(x, y, x + width, y + height);
++        RectF dstR = new RectF(0, 0, width, height);
++        RectF deviceR = new RectF();
++
++        Config newConfig = Config.ARGB_8888;
++        final Config config = source.getConfig();
++        // GIF files generate null configs, assume ARGB_8888
++        if (config != null) {
++            switch (config) {
++                case RGB_565:
++                    newConfig = Config.RGB_565;
++                    break;
++                case ALPHA_8:
++                    newConfig = Config.ALPHA_8;
++                    break;
++                case RGBA_F16:
++                    newConfig = Config.RGBA_F16;
++                    break;
++                //noinspection deprecation
++                case ARGB_4444:
++                case ARGB_8888:
++                default:
++                    newConfig = Config.ARGB_8888;
++                    break;
+             }
+         }
+ 
+-        Bitmap result = null;
+-        try {
+-            // check if we can just return our argument unchanged
+-            if (!source.isMutable() && x == 0 && y == 0 && width == source.getWidth()
+-                    && height == source.getHeight() && (m == null || m.isIdentity())) {
+-                result = source;
+-                return result;
+-            }
+-
+-            boolean isHardware = source.getConfig() == Config.HARDWARE;
+-            if (isHardware) {
+-                source.noteHardwareBitmapSlowCall();
+-                source = nativeCopyPreserveInternalConfig(source.mNativePtr);
+-            }
+-
+-            int neww = width;
+-            int newh = height;
+-            Bitmap bitmap;
+-            Paint paint;
+-
+-            Rect srcR = new Rect(x, y, x + width, y + height);
+-            RectF dstR = new RectF(0, 0, width, height);
+-            RectF deviceR = new RectF();
+-
+-            Config newConfig = Config.ARGB_8888;
+-            final Config config = source.getConfig();
+-            // GIF files generate null configs, assume ARGB_8888
+-            if (config != null) {
+-                switch (config) {
+-                    case RGB_565:
+-                        newConfig = Config.RGB_565;
+-                        break;
+-                    case ALPHA_8:
+-                        newConfig = Config.ALPHA_8;
+-                        break;
+-                    case RGBA_F16:
+-                        newConfig = Config.RGBA_F16;
+-                        break;
+-                    //noinspection deprecation
+-                    case ARGB_4444:
+-                    case ARGB_8888:
+-                    default:
+-                        newConfig = Config.ARGB_8888;
+-                        break;
++        ColorSpace cs = source.getColorSpace();
++
++        if (m == null || m.isIdentity()) {
++            bitmap = createBitmap(null, neww, newh, newConfig, source.hasAlpha(), cs);
++            paint = null;   // not needed
++        } else {
++            final boolean transformed = !m.rectStaysRect();
++
++            m.mapRect(deviceR, dstR);
++
++            neww = Math.round(deviceR.width());
++            newh = Math.round(deviceR.height());
++
++            Config transformedConfig = newConfig;
++            if (transformed) {
++                if (transformedConfig != Config.ARGB_8888
++                        && transformedConfig != Config.RGBA_F16) {
++                    transformedConfig = Config.ARGB_8888;
++                    if (cs == null) {
++                        cs = ColorSpace.get(ColorSpace.Named.SRGB);
++                    }
+                 }
+             }
+ 
+-            ColorSpace cs = source.getColorSpace();
+-
+-            if (m == null || m.isIdentity()) {
+-                bitmap = createBitmap(null, neww, newh, newConfig, source.hasAlpha(), cs);
+-                paint = null;   // not needed
+-            } else {
+-                final boolean transformed = !m.rectStaysRect();
+-
+-                m.mapRect(deviceR, dstR);
+-
+-                neww = Math.round(deviceR.width());
+-                newh = Math.round(deviceR.height());
+-
+-                Config transformedConfig = newConfig;
+-                if (transformed) {
+-                    if (transformedConfig != Config.ARGB_8888
+-                            && transformedConfig != Config.RGBA_F16) {
+-                        transformedConfig = Config.ARGB_8888;
+-                        if (cs == null) {
+-                            cs = ColorSpace.get(ColorSpace.Named.SRGB);
+-                        }
+-                    }
+-                }
+-
+-                bitmap = createBitmap(null, neww, newh, transformedConfig,
+-                        transformed || source.hasAlpha(), cs);
+-
+-                paint = new Paint();
+-                paint.setFilterBitmap(filter);
+-                if (transformed) {
+-                    paint.setAntiAlias(true);
+-                }
++            bitmap = createBitmap(null, neww, newh, transformedConfig,
++                    transformed || source.hasAlpha(), cs);
++
++            paint = new Paint();
++            paint.setFilterBitmap(filter);
++            if (transformed) {
++                paint.setAntiAlias(true);
+             }
+-
+-            // The new bitmap was created from a known bitmap source so assume that
+-            // they use the same density
+-            bitmap.mDensity = source.mDensity;
+-            bitmap.setHasAlpha(source.hasAlpha());
+-            bitmap.setPremultiplied(source.mRequestPremultiplied);
+-
+-            Canvas canvas = new Canvas(bitmap);
+-            canvas.translate(-deviceR.left, -deviceR.top);
+-            canvas.concat(m);
+-            canvas.drawBitmap(source, srcR, dstR, paint);
+-            canvas.setBitmap(null);
+-
+-            // If the source has a gainmap, apply the same set of transformations to the gainmap
+-            // and set it on the output
+-            if (source.hasGainmap()) {
+-                Bitmap newMapContents = transformGainmap(source, bitmap, m, paint, srcR, dstR,
+-                        deviceR);
+-                if (newMapContents != null) {
+-                    bitmap.setGainmap(new Gainmap(source.getGainmap(), newMapContents));
+-                }
++        }
++
++        // The new bitmap was created from a known bitmap source so assume that
++        // they use the same density
++        bitmap.mDensity = source.mDensity;
++        bitmap.setHasAlpha(source.hasAlpha());
++        bitmap.setPremultiplied(source.mRequestPremultiplied);
++
++        Canvas canvas = new Canvas(bitmap);
++        canvas.translate(-deviceR.left, -deviceR.top);
++        canvas.concat(m);
++        canvas.drawBitmap(source, srcR, dstR, paint);
++        canvas.setBitmap(null);
++
++        // If the source has a gainmap, apply the same set of transformations to the gainmap
++        // and set it on the output
++        if (source.hasGainmap()) {
++            Bitmap newMapContents = transformGainmap(source, bitmap, m, paint, srcR, dstR,
++                    deviceR);
++            if (newMapContents != null) {
++                bitmap.setGainmap(new Gainmap(newMapContents));
+             }
+-
+-            if (isHardware) {
+-                result = bitmap.copy(Config.HARDWARE, false);
+-                return result;
+-            }
+-            result = bitmap;
+-            return result;
+-        } finally {
+-            if (PerfettoCategories.BITMAP_CATEGORY.isEnabled()) {
+-                if (android.os.Flags.perfettoSdkTracingV3()) {
+-                    PerfettoTrackEventBuilder builder =
+-                            com.android.internal.dev.perfetto.sdk.PerfettoTrace.end(
+-                                    PerfettoCategories.BITMAP_CATEGORY);
+-                    if (result != null) {
+-                        traceBitmap(builder, result);
+-                    }
+-                    builder.emit();
+-                }
+-            }
+-        }
+-    }
+-
+-    private static void traceBitmap(PerfettoTrackEventBuilder builder, Bitmap b) {
+-        if (b == null) return;
+-        Config config = b.getConfig();
+-        builder.beginProto()
+-                .beginNested(BITMAP)
+-                .addField(SIZE, b.getAllocationByteCount())
+-                .addField(WIDTH, b.getWidth())
+-                .addField(HEIGHT, b.getHeight())
+-                .addField(DENSITY, b.getDensity())
+-                .addField(CONFIG, config != null ? config.nativeInt : -1)
+-                .addField(MUTABLE_PIXELS, b.isMutable() ? 1 : 0)
+-                .addField(ID, b.mId)
+-                .endNested()
+-                .endProto();
++        }
++
++        if (isHardware) {
++            return bitmap.copy(Config.HARDWARE, false);
++        }
++        return bitmap;
+     }
+ 
+     private static Bitmap transformGainmap(Bitmap source, Bitmap newBase, Matrix m, Paint paint,
+@@ -1612,26 +1502,8 @@
+             throw new IllegalArgumentException("Config must not be null");
+         }
+         source.endRecording();
+-        if (source.requiresHardwareAcceleration() && config != Config.HARDWARE) {
+-            StrictMode.noteSlowCall("GPU readback");
+-        }
+         if (config == Config.HARDWARE || source.requiresHardwareAcceleration()) {
+-            final RenderNode node = RenderNode.create("BitmapTemporary", null);
+-            node.setLeftTopRightBottom(0, 0, width, height);
+-            node.setClipToBounds(false);
+-            node.setForceDarkAllowed(false);
+-            final RecordingCanvas canvas = node.beginRecording(width, height);
+-            if (source.getWidth() != width || source.getHeight() != height) {
+-                canvas.scale(width / (float) source.getWidth(),
+-                        height / (float) source.getHeight());
+-            }
+-            canvas.drawPicture(source);
+-            node.endRecording();
+-            Bitmap bitmap = ThreadedRenderer.createHardwareBitmap(node, width, height);
+-            if (config != Config.HARDWARE) {
+-                bitmap = bitmap.copy(config, false);
+-            }
+-            return bitmap;
++            throw new UnsupportedOperationException("Hardware bitmap rendering is unavailable");
+         } else {
+             Bitmap bitmap = Bitmap.createBitmap(width, height, config);
+             Canvas canvas = new Canvas(bitmap);
+@@ -1837,38 +1709,7 @@
+      * @param dumpFormat  if not null, specify the format of the compressed image
+      */
+     public static void dumpAll(ProtoOutputStream proto, @Nullable String dumpFormat) {
+-        final ArrayList<Bitmap> allBitmaps = getAllBitmaps();
+-
+-        if (allBitmaps.size() == 0) {
+-            return;
+-        }
+-
+-        for (Bitmap bitmap : allBitmaps) {
+-            int bytes = bitmap.getAllocationByteCount();
+-            int config = bitmap.getConfig().nativeInt;
+-
+-            final long token = proto.start(BitmapDumpProto.AppBitmapInfo.BITMAPS);
+-            proto.write(BitmapDumpProto.AppBitmapInfo.BitmapInfo.ID, bitmap.mId);
+-            proto.write(BitmapDumpProto.AppBitmapInfo.BitmapInfo.WIDTH, bitmap.mWidth);
+-            proto.write(BitmapDumpProto.AppBitmapInfo.BitmapInfo.HEIGHT, bitmap.mHeight);
+-            proto.write(BitmapDumpProto.AppBitmapInfo.BitmapInfo.SIZE, bytes);
+-            proto.write(BitmapDumpProto.AppBitmapInfo.BitmapInfo.MUTABLE, bitmap.isMutable());
+-            proto.write(BitmapDumpProto.AppBitmapInfo.BitmapInfo.CONFIG, config);
+-            proto.write(BitmapDumpProto.AppBitmapInfo.BitmapInfo.SOURCE, bitmap.mSourceId);
+-            if (dumpFormat != null) {
+-                try {
+-                    ByteArrayOutputStream bas = new ByteArrayOutputStream();
+-                    if (bitmap.compress(CompressFormat.from(dumpFormat), 90, bas)) {
+-                        proto.write(BitmapDumpProto.AppBitmapInfo.BitmapInfo.CONTENT,
+-                                    bas.toByteArray());
+-                    }
+-                    bas.close();
+-                } catch (IOException e) {
+-                    Log.e(TAG, "failed to compress bitmap-" + bitmap.mId + ": " + e);
+-                }
+-            }
+-            proto.end(token);
+-        }
++        throw new UnsupportedOperationException("System server bitmap dumps are unavailable");
+     }
+ 
+     /**
+@@ -1903,11 +1744,8 @@
+         if (quality < 0 || quality > 100) {
+             throw new IllegalArgumentException("quality must be 0..100");
+         }
+-        StrictMode.noteSlowCall("Compression of a bitmap is slow");
+-        Trace.traceBegin(Trace.TRACE_TAG_RESOURCES, "Bitmap.compress");
+         boolean result = nativeCompress(mNativePtr, format.nativeInt,
+                 quality, stream, new byte[WORKING_COMPRESS_STORAGE]);
+-        Trace.traceEnd(Trace.TRACE_TAG_RESOURCES);
+         return result;
+     }
+ 
+@@ -2346,7 +2184,7 @@
+     public void setGainmap(@Nullable Gainmap gainmap) {
+         checkRecycled("Bitmap is recycled");
+         mGainmap = gainmap;
+-        nativeSetGainmap(mNativePtr, gainmap == null ? 0 : gainmap.mNativePtr);
++        nativeSetGainmap(mNativePtr, gainmap == null ? 0 : 1);
+     }
+ 
+     /**
+@@ -2710,7 +2548,6 @@
+      */
+     @WorkerThread
+     public boolean sameAs(@Nullable Bitmap other) {
+-        StrictMode.noteSlowCall("sameAs compares pixel data, not expected to be fast");
+         checkRecycled("Can't call sameAs on a recycled bitmap!");
+         if (this == other) return true;
+         if (other == null) return false;

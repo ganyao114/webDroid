@@ -9,6 +9,9 @@ const families = [
 ];
 const latinSample = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 const wideSample = '桌面搜索应用浏览设置相册立方体';
+const ascii = Array.from({ length: 95 }, (_, i) => String.fromCharCode(i + 32));
+const weightsPerFace = 9;
+const advanceWords = 1 + ascii.length + 5;
 const argbCSS = value => '#' + ((value << 8 | value >>> 24) >>> 0).toString(16).padStart(8, '0');
 
 export function canvas2D(width, height) {
@@ -96,9 +99,8 @@ export class AtlasCache {
 
   calibrate(memory, face, weight) {
     const bucket = Math.max(1, Math.min(9, Math.round((weight || 400) / 100)));
-    const id = face * 9 + bucket - 1;
+    const id = face * weightsPerFace + bucket - 1;
     if (!this.metricsPointer || this.calibrated.has(id)) return;
-    this.calibrated.add(id);
     this.measure.font = font(64, bucket * 100, face);
     const latin = this.measure.measureText(latinSample);
     const wide = this.measure.measureText(wideSample);
@@ -107,11 +109,54 @@ export class AtlasCache {
     const seq = Atomics.load(words, at);
     const scale = 65536 / 64;
     Atomics.store(words, at, seq | 1);
-    Atomics.store(words, at + 1, Math.round(latin.width * scale / latinSample.length));
-    Atomics.store(words, at + 2, Math.round(wide.width * scale / wideSample.length));
+    Atomics.store(words, at + 1, Math.ceil(latin.width * scale / latinSample.length));
+    Atomics.store(words, at + 2, Math.ceil(wide.width * scale / wideSample.length));
     Atomics.store(words, at + 3, Math.round((latin.fontBoundingBoxAscent || 51.2) * scale));
     Atomics.store(words, at + 4, Math.round((latin.fontBoundingBoxDescent || 12.8) * scale));
-    Atomics.store(words, at, ((seq + 2) >>> 0) || 2);
+    Atomics.store(words, at, (((seq & ~1) + 2) >>> 0) || 2);
+    if (this.advancesPointer) this.calibrateAdvances(words, id, face, bucket * 100);
+    this.calibrated.add(id);
+  }
+
+  calibrateAdvances(words, id, face, weight) {
+    const advances = new Uint32Array(ascii.length);
+    let wide = 0;
+    this.measure.textAlign = 'left';
+    this.measure.textBaseline = 'alphabetic';
+    // System UI fonts can select different optical sizes for labels and titles.
+    // Measure both ranges and leave room for positive pair kerning.
+    for (const size of [13, 20, 32, 64]) {
+      this.measure.font = font(size, weight, face);
+      const scale = 65536 / size;
+      const extent = char => {
+        const metrics = this.measure.measureText(char);
+        return Math.ceil(Math.max(metrics.width, metrics.actualBoundingBoxRight || 0) * scale);
+      };
+      for (let i = 0; i < ascii.length; ++i) advances[i] = Math.max(advances[i], extent(ascii[i]));
+      for (const char of wideSample) wide = Math.max(wide, extent(char));
+    }
+    const upper = Math.max(...advances.subarray(65 - 32, 91 - 32));
+    const lower = Math.max(...advances.subarray(97 - 32, 123 - 32));
+    const digit = Math.max(...advances.subarray(48 - 32, 58 - 32));
+    const punct = Math.max(...advances.subarray(0, 48 - 32), ...advances.subarray(58 - 32, 65 - 32),
+      ...advances.subarray(91 - 32, 97 - 32), ...advances.subarray(123 - 32));
+    const at = this.advancesPointer / 4 + id * advanceWords;
+    const seq = Atomics.load(words, at);
+    const kerningAllowance = 1024;
+    Atomics.store(words, at, seq | 1);
+    for (let i = 0; i < ascii.length; ++i) Atomics.store(words, at + 1 + i, advances[i] + kerningAllowance);
+    for (const [i, value] of [upper, lower, digit, punct, wide || 65536].entries()) {
+      Atomics.store(words, at + 1 + ascii.length + i, value + kerningAllowance);
+    }
+    Atomics.store(words, at, (((seq & ~1) + 2) >>> 0) || 2);
+  }
+
+  calibrateFonts(memory, scene) {
+    this.advancesPointer = memory.module._wa_sf_font_advances?.(scene) ?? 0;
+    // The final row signals to the guest that it can remeasure with this set.
+    for (let face = 0; face < families.length; ++face) {
+      for (let weight = 100; weight <= 900; weight += 100) this.calibrate(memory, face, weight);
+    }
   }
 
   lookup(m, start, end, type, a, b, c, d, e) {

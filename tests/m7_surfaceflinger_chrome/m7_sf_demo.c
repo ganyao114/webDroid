@@ -1,4 +1,5 @@
 #include "wasmandroid/surfaceflinger.h"
+#include <emscripten/emscripten.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -434,6 +435,15 @@ void m7_demo_destroy(void) {
 }
 
 const demo_state_t *m7_demo_state(void) { return &demo; }
+
+EMSCRIPTEN_KEEPALIVE
+float m7_demo_measure_title(wa_sf_t *scene, uint32_t index, float size, uint32_t weight, uint32_t face) {
+    static const char *const titles[] = {"Apps", "Modes", "Communal", "WasmAndroid 3D Cube", "系统设置"};
+    if (index >= sizeof(titles) / sizeof(titles[0]))
+        return 0;
+    const char *title = titles[index];
+    return wa_canvas_measure_text(scene, title, strlen(title), size, weight, face).advance;
+}
 
 int32_t m7_demo_tick(void) {
     wa_sf_vsync_state_t vsync;

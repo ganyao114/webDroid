@@ -2,6 +2,7 @@
 
 #include "native_thunk.h"
 #include "ui_bridge.h"
+#include "../../hal_surfaceflinger/font_advances.h"
 
 #include <array>
 #include <limits>
@@ -14,9 +15,17 @@ struct Image {
     jlong identity;
     jint generation;
     uint32_t id;
+    uint32_t tint;
 };
 
 struct MatrixStore;
+template <class T> class GraphicsPeers;
+struct PaintData;
+struct BitmapData;
+struct GradientData;
+struct FontVariation;
+struct PathGeometry;
+struct CanvasData;
 
 struct State {
     JNIEnv* env = nullptr;
@@ -26,6 +35,7 @@ struct State {
     uint32_t layer_id = 0;
     uint32_t presented_layer = 0;
     uint32_t staged_layer = 0;
+    uint32_t font_generation = 0;
     bool transaction = false;
     bool needs_draw = true;
     int32_t result = WA_SF_OK;
@@ -44,6 +54,14 @@ struct State {
     std::vector<jfloat> path_coordinates;
     std::vector<wa_path_verb_t> path_verbs;
     std::shared_ptr<MatrixStore> matrices;
+    std::shared_ptr<GraphicsPeers<PaintData>> paints;
+    std::shared_ptr<GraphicsPeers<BitmapData>> bitmaps;
+    std::shared_ptr<GraphicsPeers<GradientData>> gradients;
+    std::shared_ptr<GraphicsPeers<FontVariation>> variations;
+    std::shared_ptr<GraphicsPeers<PathGeometry>> paths;
+    std::shared_ptr<GraphicsPeers<CanvasData>> canvases;
+    uint64_t recording_serial = 0;
+    jlong default_typeface = 0;
 
     std::string ime_text;
     uint32_t ime_action = 0;
@@ -88,6 +106,16 @@ template <class... Methods> void Register(interp::Vm& vm, const char* name, Meth
         throw std::runtime_error(std::string("UI JNI registration failed for ") + name + ": " +
                                  vm.ExceptionSummary());
     }
+}
+
+// During the framework migration the older boot DEX can still own a graphics
+// class. RegisterNatives checks the declaration without initializing the class.
+inline bool RegisterIfDeclared(interp::Vm& vm, const char* name, JNINativeMethod method) {
+    auto* env = vm.JniEnv();
+    const auto type = env->FindClass(name);
+    if (type && env->RegisterNatives(type, &method, 1) == JNI_OK) return true;
+    env->ExceptionClear();
+    return false;
 }
 
 void RegisterCanvas(interp::Vm& vm);

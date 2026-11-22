@@ -124,9 +124,30 @@ void BeginDraw(JNIEnv* env, jclass) {
         return;
     }
     state->canvas = wa_canvas_begin(state->sf, state->layer_id);
+    ++state->recording_serial;
     state->needs_draw = true;
     if (!state->canvas)
         state->result = WA_SF_STATE;
+}
+
+void ApplyFontCalibration(interp::Vm& vm, State& state) {
+    const uint32_t generation = wa_sf_font_calibration_generation(state.sf);
+    if (!generation || generation == state.font_generation)
+        return;
+    if (state.presented_layer) {
+        // An Activity can measure and draw while booting, before the browser
+        // can supply its font widths. Reflow before presenting that frame.
+        interp::ScopedHandleScope roots(vm);
+        auto* activity = roots.Hold(vm.CallStatic(kRuntime, "getActivity", "()Landroid/app/Activity;").ref());
+        if (activity) {
+            auto* window = roots.Hold(vm.CallVirtual(activity, "getWindow", "()Landroid/view/Window;").ref());
+            if (window) {
+                auto* decor = roots.Hold(vm.CallVirtual(window, "peekDecorView", "()Landroid/view/View;").ref());
+                if (decor) vm.CallVirtual(decor, "requestLayout", "()V");
+            }
+        }
+    }
+    state.font_generation = generation;
 }
 
 std::optional<std::string> StringOrNull(JNIEnv* env, jstring input) {
@@ -561,6 +582,7 @@ void UiBridge::BindSurfaceFlinger(wa_sf_t* sf, uint32_t layer_id) {
     state_->Abort();
     if (sf != state_->sf) {
         state_->presented_layer = 0;
+        state_->font_generation = 0;
         state_->images.clear();
         for (auto& frame : state_->published_images)
             frame.clear();
@@ -684,6 +706,7 @@ int32_t UiBridge::DoFrame(interp::Vm& vm, const wa_sf_vsync_state_t& tick) {
     state.result = WA_SF_OK;
     int outcome;
     try {
+        detail::ApplyFontCalibration(vm, state);
         const Value arguments[] = {Value::Long(tick.frame_time_ns), Value::Int(tick.viewport_w),
                                    Value::Int(tick.viewport_h), Value::Int(tick.density_dpi),
                                    Value::Int(state.needs_draw)};

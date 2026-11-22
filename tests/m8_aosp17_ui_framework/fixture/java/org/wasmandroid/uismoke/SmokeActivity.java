@@ -153,6 +153,9 @@ public final class SmokeActivity extends Activity {
                 && resources.getColor(android.R.color.white) == 0xffffffff;
     }
     public static float headingAdvance() { return active.headline.getPaint().measureText("XX"); }
+    public static float titleAdvance(String title) {
+        return active.headline.getPaint().measureText(title);
+    }
     public static float headingAscent() { return active.headline.getPaint().getFontMetrics().ascent; }
     public static int tileWidth() { return active.tile.getWidth(); }
     public static int tileHeight() { return active.tile.getHeight(); }

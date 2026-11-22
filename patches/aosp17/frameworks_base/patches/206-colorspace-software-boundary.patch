@@ -1,0 +1,136 @@
+--- a/frameworks/base/graphics/java/android/graphics/ColorSpace.java
++++ b/frameworks/base/graphics/java/android/graphics/ColorSpace.java
+@@ -25,12 +25,9 @@
+ import android.annotation.SuppressAutoDoc;
+ import android.annotation.SuppressLint;
+ import android.hardware.DataSpace;
+-import android.hardware.DataSpace.ColorDataSpace;
+ import android.util.SparseIntArray;
+ 
+-import com.android.graphics.flags.Flags;
+-
+-import libcore.util.NativeAllocationRegistry;
++
+ 
+ import java.util.Arrays;
+ import java.util.Collection;
+@@ -766,7 +763,6 @@
+          *     </tr>
+          * </table>
+          */
+-        @FlaggedApi(Flags.FLAG_OK_LAB_COLORSPACE)
+         OK_LAB,
+ 
+         /**
+@@ -803,7 +799,6 @@
+          *     <figcaption style="text-align: center;">BT.2020 (orange) vs sRGB (white)</figcaption>
+          * </p>
+          */
+-        @FlaggedApi(Flags.FLAG_DISPLAY_BT2020_COLORSPACE)
+         DISPLAY_BT2020
+         // Update the initialization block next to #get(Named) when adding new values
+     }
+@@ -1507,7 +1502,7 @@
+      */
+     @SuppressLint("MethodNameUnits")
+     @Nullable
+-    public static ColorSpace getFromDataSpace(@ColorDataSpace int dataSpace) {
++    public static ColorSpace getFromDataSpace(int dataSpace) {
+         int index = sDataToColorSpaces.get(dataSpace, -1);
+         if (index != -1) {
+             return ColorSpace.get(index);
+@@ -1526,7 +1521,7 @@
+      * @return the dataspace value.
+      */
+     @SuppressLint("MethodNameUnits")
+-    public @ColorDataSpace int getDataSpace() {
++    public int getDataSpace() {
+         int index = sDataToColorSpaces.indexOfValue(getId());
+         if (index != -1) {
+             return sDataToColorSpaces.keyAt(index);
+@@ -1751,25 +1746,12 @@
+                 Named.BT2020_PQ.ordinal()
+         ));
+         sDataToColorSpaces.put(DataSpace.DATASPACE_BT2020_PQ, Named.BT2020_PQ.ordinal());
+-        if (Flags.okLabColorspace()) {
+-            sNamedColorSpaceMap.put(Named.OK_LAB.ordinal(), new ColorSpace.OkLab(
+-                    "Oklab",
+-                    Named.OK_LAB.ordinal()
+-            ));
+-        }
+-
+-        if (Flags.displayBt2020Colorspace()) {
+-            sNamedColorSpaceMap.put(Named.DISPLAY_BT2020.ordinal(), new ColorSpace.Rgb(
+-                    "Display BT. 2020",
+-                    BT2020_PRIMARIES,
+-                    ILLUMINANT_D65,
+-                    null,
+-                    SRGB_TRANSFER_PARAMETERS,
+-                    Named.DISPLAY_BT2020.ordinal()
+-            ));
+-            sDataToColorSpaces.put(DataSpace.DATASPACE_DISPLAY_BT2020,
+-                    Named.DISPLAY_BT2020.ordinal());
+-        }
++
++    }
++
++    private static double copySign(double magnitude, double sign) {
++        return sign < 0 || (sign == 0 && 1 / sign < 0)
++                ? -Math.abs(magnitude) : Math.abs(magnitude);
+     }
+ 
+     private static double transferHLGOETF(Rgb.TransferParameters params, double x) {
+@@ -1852,14 +1834,14 @@
+     // spaces that allow negative values
+     @SuppressWarnings("SameParameterValue")
+     private static double absRcpResponse(double x, double a, double b, double c, double d, double g) {
+-        return Math.copySign(rcpResponse(x < 0.0 ? -x : x, a, b, c, d, g), x);
++        return copySign(rcpResponse(x < 0.0 ? -x : x, a, b, c, d, g), x);
+     }
+ 
+     // Piecewise gamma response, encoded as sign(x).f(abs(x)) for color spaces that
+     // allow negative values
+     @SuppressWarnings("SameParameterValue")
+     private static double absResponse(double x, double a, double b, double c, double d, double g) {
+-        return Math.copySign(response(x < 0.0 ? -x : x, a, b, c, d, g), x);
++        return copySign(response(x < 0.0 ? -x : x, a, b, c, d, g), x);
+     }
+ 
+     /**
+@@ -2556,7 +2538,7 @@
+                     // Next representable float after 1.0
+                     // We use doubles here but the representation inside our native code
+                     // is often floats
+-                    if (!(d >= 0.0 && d <= 1.0f + Math.ulp(1.0f))) {
++                    if (!(d >= 0.0 && d <= 0x1.000002p0f)) {
+                         throw new IllegalArgumentException(
+                                 "Parameter d must be in the range [0..1], " + "was " + d);
+                     }
+@@ -3148,26 +3130,12 @@
+                             + Arrays.toString(mTransform));
+                 }
+ 
+-                // This mimics the old code that was in native.
+-                float[] nativeTransform = adaptToIlluminantD50(mWhitePoint, mTransform);
+-                mNativePtr = Native.nativeCreate((float) mTransferParameters.a,
+-                                          (float) mTransferParameters.b,
+-                                          (float) mTransferParameters.c,
+-                                          (float) mTransferParameters.d,
+-                                          (float) mTransferParameters.e,
+-                                          (float) mTransferParameters.f,
+-                                          (float) mTransferParameters.g,
+-                                          nativeTransform);
+-                NoImagePreloadHolder.sRegistry.registerNativeAllocation(this, mNativePtr);
++                mNativePtr = getId() + 2L;
+             } else {
+                 mNativePtr = 0;
+             }
+         }
+ 
+-        private static class NoImagePreloadHolder {
+-            public static final NativeAllocationRegistry sRegistry = new NativeAllocationRegistry(
+-                ColorSpace.Rgb.class.getClassLoader(), Native.nativeGetNativeFinalizer(), 0);
+-        }
+ 
+         /**
+          * Creates a copy of the specified color space with a new transform.

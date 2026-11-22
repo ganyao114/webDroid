@@ -1,0 +1,78 @@
+--- a/frameworks/base/graphics/java/android/graphics/Canvas.java
++++ b/frameworks/base/graphics/java/android/graphics/Canvas.java
+@@ -78,6 +78,66 @@
+     private static native Runnable nRegisterNativeAllocation(Canvas canvas, long handle);
+ 
+     private Runnable mFinalizer;
++    private boolean mHostRecording;
++
++    private static native void nSetRecordingSize(long canvas, int width, int height);
++    private static native void nReleaseShader(long handle);
++
++    static final class ShaderRelease implements Runnable {
++        private final long handle;
++        ShaderRelease(long handle) { this.handle = handle; }
++        @Override public void run() { nReleaseShader(handle); }
++    }
++
++    private static native void nMultiplyAlpha(long canvas, float alpha);
++    private static native boolean nClipRoundRect(long canvas, float l, float t, float r, float b,
++            float rx, float ry);
++    private static native void nDrawLinearGradient(long canvas, float l, float t, float r, float b,
++            float radius, int start, int end, float degrees);
++    private static native void nDrawMaskedBitmap(long canvas, long bitmap, float sl, float st,
++            float sr, float sb, float dl, float dt, float dr, float db, long paint,
++            int mask, float radius);
++
++    /** @hide Host window canvas used by ViewRootImpl. */
++    public Canvas(int width, int height, int density) {
++        this();
++        mDensity = density;
++        mHostRecording = true;
++        nSetRecordingSize(mNativeCanvasWrapper, width, height);
++    }
++
++    /** @hide Applies the compatibility View hierarchy's alpha to subsequent drawing. */
++    public void multiplyAlpha(float alpha) {
++        nMultiplyAlpha(mNativeCanvasWrapper, alpha);
++    }
++
++    /** @hide */
++    public boolean clipRoundRect(float l, float t, float r, float b, float rx, float ry) {
++        return nClipRoundRect(mNativeCanvasWrapper, l, t, r, b, rx, ry);
++    }
++
++    /** @hide */
++    public boolean clipRoundRect(RectF rect, float rx, float ry) {
++        return clipRoundRect(rect.left, rect.top, rect.right, rect.bottom, rx, ry);
++    }
++
++    /** @hide */
++    public void drawLinearGradient(float l, float t, float r, float b, float radius,
++            int start, int end, float degrees) {
++        nDrawLinearGradient(mNativeCanvasWrapper, l, t, r, b, radius, start, end, degrees);
++    }
++
++    /** @hide */
++    public void drawMaskedBitmap(Bitmap bitmap, Rect src, RectF dst, Paint paint,
++            int mask, float radius) {
++        throwIfCannotDraw(bitmap);
++        nDrawMaskedBitmap(mNativeCanvasWrapper, bitmap.getNativeInstance(),
++                src != null ? src.left : 0, src != null ? src.top : 0,
++                src != null ? src.right : bitmap.getWidth(),
++                src != null ? src.bottom : bitmap.getHeight(),
++                dst.left, dst.top, dst.right, dst.bottom, paint == null ? 0 : paint.getNativeInstance(),
++                mask, radius);
++    }
+ 
+     /**
+      * Construct an empty raster canvas. Use setBitmap() to specify a bitmap to
+@@ -139,7 +199,7 @@
+      *         false otherwise.
+      */
+     public boolean isHardwareAccelerated() {
+-        return false;
++        return mHostRecording;
+     }
+ 
+     /**

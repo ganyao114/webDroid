@@ -1,5 +1,6 @@
 #include "art_interp.h"
 #include "ui_bridge.h"
+#include "../../runtime/hal_surfaceflinger/font_advances.h"
 
 #include <ziparchive/zip_archive.h>
 
@@ -353,11 +354,41 @@ void Run(Vm& vm, const char* framework, const char* apk, const char* system_reso
     __atomic_store_n(&font.ascent_q16, 49152u, __ATOMIC_RELAXED);
     __atomic_store_n(&font.descent_q16, 16384u, __ATOMIC_RELAXED);
     __atomic_store_n(&font.sequence, 2u, __ATOMIC_RELEASE);
-    Require(vm.CallStatic(kActivity, "headingAdvance", "()F").f() == 40.5f &&
+    const float heading_width = vm.CallStatic(kActivity, "headingAdvance", "()F").f();
+    Require(heading_width >= 40.5f && heading_width <= 41.f &&
                 vm.CallStatic(kActivity, "headingAscent", "()F").f() == -20.25f,
             "Paint measures text with SurfaceFlinger-published font metrics");
 
-    Require(frame(1000) == WA_SF_OK, "Initial screen commits");
+    auto& widths = wa_sf_font_advances(sf.get())[WA_FONT_ROBOTO * WA_FONT_WEIGHT_COUNT + 6];
+    std::ranges::fill(widths.ascii_q16, 32768u);
+    widths.ascii_q16['M' - WA_FONT_ASCII_FIRST] = 58983;
+    widths.ascii_q16['W' - WA_FONT_ASCII_FIRST] = 62260;
+    widths.ascii_q16['m' - WA_FONT_ASCII_FIRST] = 62260;
+    widths.ascii_q16['l' - WA_FONT_ASCII_FIRST] = 19661;
+    widths.ascii_q16[' ' - WA_FONT_ASCII_FIRST] = 16384;
+    widths.wide_q16 = 65536;
+    __atomic_store_n(&widths.sequence, 2u, __ATOMIC_RELEASE);
+    struct Title { const char* text; float width_at_16px; };
+    for (const auto& title : {Title{"Apps", 32}, Title{"Modes", 46.4f}, Title{"Communal", 75.2f},
+                             Title{"WasmAndroid 3D Cube", 158.4f}, Title{"系统设置", 64}}) {
+        const Value text[] = {Value::Ref(vm.NewString(title.text))};
+        const float measured = vm.CallStatic(kActivity, "titleAdvance", "(Ljava/lang/String;)F", text).f();
+        const float actual = title.width_at_16px * 27 / 16;
+        Require(measured >= actual && measured <= actual + 2, std::string("Calibrated Paint width for ") + title.text);
+    }
+    __atomic_store_n(&widths.sequence, 0u, __ATOMIC_RELEASE);
+
+    Require(frame(990) == WA_SF_OK, "Startup screen commits before browser calibration");
+    const auto text_measures = [&] {
+        return vm.GetInstanceMethodStats("Landroid/widget/TextView;", "onMeasure", "(II)V").invocations;
+    };
+    const auto startup_measures = text_measures();
+    auto* advances = wa_sf_font_advances(sf.get());
+    __atomic_store_n(&widths.sequence, 2u, __ATOMIC_RELEASE);
+    __atomic_store_n(&advances[WA_FONT_FACE_COUNT * WA_FONT_WEIGHT_COUNT - 1].sequence,
+                     2u, __ATOMIC_RELEASE);
+    Require(frame(1000) == WA_SF_OK && text_measures() > startup_measures,
+            "The first browser frame remeasures the startup screen after font calibration");
     Packet first(sf.get());
     auto initial = Inspect(sf.get(), first);
     PrintList("initial", initial);

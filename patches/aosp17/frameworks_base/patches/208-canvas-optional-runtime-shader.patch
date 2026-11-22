@@ -1,0 +1,24 @@
+--- a/frameworks/base/graphics/java/android/graphics/BaseCanvas.java
++++ b/frameworks/base/graphics/java/android/graphics/BaseCanvas.java
+@@ -730,10 +730,18 @@
+         }
+         if (shader instanceof BitmapShader) {
+             throwIfHwBitmapInSwMode(((BitmapShader) shader).mBitmap);
+-        } else if (shader instanceof RuntimeShader && onHwFeatureInSwMode()) {
+-            throw new IllegalArgumentException(
+-                    "Software rendering doesn't support RuntimeShader");
+         } else if (shader instanceof ComposeShader) {
+             throwIfHasHwFeaturesInSwMode(((ComposeShader) shader).mShaderA);
+             throwIfHasHwFeaturesInSwMode(((ComposeShader) shader).mShaderB);
++        } else if (onHwFeatureInSwMode()) {
++            // The hardware shader class is optional in the software framework.
++            // Keep the rejection when that class is present without resolving it
++            // when drawing ordinary gradients and other software shaders.
++            for (Class<?> type = shader.getClass(); type != Shader.class && type != null;
++                    type = type.getSuperclass()) {
++                if (type.getName().equals("android.graphics.RuntimeShader")) {
++                    throw new IllegalArgumentException(
++                            "Software rendering doesn't support RuntimeShader");
++                }
++            }
+         }
