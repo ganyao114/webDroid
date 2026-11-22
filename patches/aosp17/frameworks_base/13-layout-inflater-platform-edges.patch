@@ -1,0 +1,65 @@
+--- a/frameworks/base/core/java/android/view/LayoutInflater.java
++++ b/frameworks/base/core/java/android/view/LayoutInflater.java
+@@ -33,2 +32,0 @@
+-import android.os.StrictMode;
+-import android.os.Trace;
+@@ -79,3 +76,0 @@
+-    /** Empty stack trace used to avoid log spam in re-throw exceptions. */
+-    private static final StackTraceElement[] EMPTY_STACK_TRACE = new StackTraceElement[0];
+-
+@@ -114,4 +108,0 @@
+-
+-    @UnsupportedAppUsage
+-    static final Class<?>[] mConstructorSignature = new Class[] {
+-            Context.class, AttributeSet.class};
+@@ -241 +231,0 @@
+-        StrictMode.assertConfigurationContext(context, "LayoutInflater");
+@@ -254 +243,0 @@
+-        StrictMode.assertConfigurationContext(newContext, "LayoutInflater");
+@@ -472 +461 @@
+-    private void advanceToRootNode(XmlPullParser parser)
++    private static void advanceToRootNode(XmlPullParser parser)
+@@ -511 +499,0 @@
+-            Trace.traceBegin(Trace.TRACE_TAG_VIEW, "inflate");
+@@ -518,5 +505,0 @@
+-
+-            ViewRootImpl viewRootImpl = root != null ? root.getViewRootImpl() : null;
+-            if (viewRootImpl != null) {
+-                viewRootImpl.notifyRendererOfExpensiveFrame();
+-            }
+@@ -545,4 +527,0 @@
+-
+-                    if (root == null && temp != null && temp.getViewRootImpl() != null) {
+-                        temp.getViewRootImpl().notifyRendererOfExpensiveFrame();
+-                    }
+@@ -592 +571 @@
+-                ie.setStackTrace(EMPTY_STACK_TRACE);
++                ie.setStackTrace(new StackTraceElement[0]);
+@@ -598 +577 @@
+-                ie.setStackTrace(EMPTY_STACK_TRACE);
++                ie.setStackTrace(new StackTraceElement[0]);
+@@ -605 +583,0 @@
+-                Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+@@ -700 +677,0 @@
+-            Trace.traceBegin(Trace.TRACE_TAG_VIEW, name);
+@@ -713 +690 @@
+-                constructor = clazz.getConstructor(mConstructorSignature);
++                constructor = clazz.getConstructor(Context.class, AttributeSet.class);
+@@ -757 +734 @@
+-            ie.setStackTrace(EMPTY_STACK_TRACE);
++            ie.setStackTrace(new StackTraceElement[0]);
+@@ -765 +742 @@
+-            ie.setStackTrace(EMPTY_STACK_TRACE);
++            ie.setStackTrace(new StackTraceElement[0]);
+@@ -774 +751 @@
+-            ie.setStackTrace(EMPTY_STACK_TRACE);
++            ie.setStackTrace(new StackTraceElement[0]);
+@@ -776,2 +752,0 @@
+-        } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+@@ -910 +885 @@
+-            ie.setStackTrace(EMPTY_STACK_TRACE);
++            ie.setStackTrace(new StackTraceElement[0]);
+@@ -917 +892 @@
+-            ie.setStackTrace(EMPTY_STACK_TRACE);
++            ie.setStackTrace(new StackTraceElement[0]);

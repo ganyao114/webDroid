@@ -1,0 +1,162 @@
+--- a/frameworks/base/core/java/android/content/om/OverlayableInfo.java
++++ b/frameworks/base/core/java/android/content/om/OverlayableInfo.java
+@@ -22,2 +21,0 @@
+-import com.android.internal.util.DataClass;
+-
+@@ -31 +28,0 @@
+-@DataClass(genSetters = false, genEqualsHashCode = true, genHiddenConstructor = true)
+@@ -71 +67,0 @@
+-    @DataClass.Generated.Member
+@@ -75,3 +71 @@
+-        this.name = name;
+-        com.android.internal.util.AnnotationValidations.validate(
+-                NonNull.class, null, name);
++        this.name = Objects.requireNonNull(name);
+@@ -84 +77,0 @@
+-    @DataClass.Generated.Member
+@@ -101 +93,0 @@
+-    @DataClass.Generated.Member
+@@ -112,5 +103,0 @@
+-    @DataClass.Generated(
+-            time = 1570059850579L,
+-            codegenVersion = "1.0.3",
+-            sourceFile = "frameworks/base/core/java/android/content/om/OverlayableInfo.java",
+-            inputSignatures = "public final @android.annotation.NonNull java.lang.String name\npublic final @android.annotation.Nullable java.lang.String actor\nclass OverlayableInfo extends java.lang.Object implements []\n@com.android.internal.util.DataClass(genSetters=false, genEqualsHashCode=true, genHiddenConstructor=true)")
+--- a/frameworks/base/core/java/android/content/res/ApkAssets.java
++++ b/frameworks/base/core/java/android/content/res/ApkAssets.java
+@@ -26 +25,0 @@
+-import android.text.TextUtils;
+@@ -30 +28,0 @@
+-import com.android.internal.pm.pkg.component.AconfigFlags;
+@@ -362 +360,2 @@
+-            return TextUtils.emptyIfNull(nativeGetAssetPath(mNativePtr));
++            String path = nativeGetAssetPath(mNativePtr);
++            return path == null ? "" : path;
+@@ -525,10 +524,2 @@
+-        boolean[] values = new boolean[flagNames.length];
+-        for (int i = 0; i < flagNames.length; i++) {
+-            Boolean value = AconfigFlags.getInstance().getFlagValue(flagNames[i]);
+-            if (value == null) {
+-                Log.w("ApkAssets", "Couldn't find flag value for native: " + flagNames[i]);
+-            } else {
+-                values[i] = value;
+-            }
+-        }
+-        return values;
++        // The offline resource profile resolves read-only flags at link time.
++        return new boolean[flagNames.length];
+--- a/frameworks/base/core/java/android/content/res/Element.java
++++ b/frameworks/base/core/java/android/content/res/Element.java
+@@ -19,2 +18,0 @@
+-import static android.os.SystemProperties.PROP_VALUE_MAX;
+-
+@@ -21,0 +20 @@
++import android.annotation.StyleableRes;
+@@ -22,0 +22 @@
++import android.util.Log;
+@@ -24,3 +23,0 @@
+-import android.util.Slog;
+-
+-import androidx.annotation.StyleableRes;
+@@ -38,0 +36,2 @@
++    // android.os.SystemProperties.PROP_VALUE_MAX
++    private static final int PROP_VALUE_MAX = 91;
+@@ -862 +861 @@
+-                Slog.e(TAG, name + " is not a valid Java class name");
++                Log.e(TAG, name + " is not a valid Java class name");
+--- a/frameworks/base/core/java/android/content/res/StringBlock.java
++++ b/frameworks/base/core/java/android/content/res/StringBlock.java
+@@ -20,2 +19,0 @@
+-import android.app.ActivityThread;
+-import android.app.Application;
+@@ -206,35 +204 @@
+-        if (Flags.applyFontWeightAdjustmentOnCachedStrings()) {
+-            if (!(res instanceof Spanned spannedText)) {
+-                return res;
+-            }
+-            Application application = ActivityThread.currentApplication();
+-            if (application == null) {
+-                return res;
+-            }
+-            int fontWeightAdjustment =
+-                    application.getResources().getConfiguration()
+-                            .fontWeightAdjustment;
+-
+-            StyleSpan[] spans = spannedText.getSpans(0, res.length(), StyleSpan.class);
+-            if (spans.length == 0) {
+-                return res;
+-            }
+-            SpannableString buffer = null;
+-            for (StyleSpan span : spans) {
+-                if (span.getStyle() == Typeface.BOLD && span.getFontWeightAdjustment()
+-                        != fontWeightAdjustment) {
+-                    if (buffer == null) {
+-                        buffer = new SpannableString(res);
+-                    }
+-                    // Remove the old span to avoid duplication.
+-                    buffer.removeSpan(span);
+-                    buffer.setSpan(new StyleSpan(Typeface.BOLD, fontWeightAdjustment),
+-                            spannedText.getSpanStart(span),
+-                            spannedText.getSpanEnd(span),
+-                            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+-                }
+-            }
+-            if (buffer != null) {
+-                res = new SpannedString(buffer);
+-            }
+-        }
++        // The offline guest has no application font-weight override.
+@@ -297,4 +261 @@
+-                Application application = ActivityThread.currentApplication();
+-                int fontWeightAdjustment =
+-                        application.getResources().getConfiguration().fontWeightAdjustment;
+-                buffer.setSpan(new StyleSpan(Typeface.BOLD, fontWeightAdjustment),
++                buffer.setSpan(new StyleSpan(Typeface.BOLD),
+@@ -464,2 +425,2 @@
+-                                new LineBreakConfig(lbStyle, lbWordStyle,
+-                                        LineBreakConfig.HYPHENATION_UNSPECIFIED)),
++                                new LineBreakConfig.Builder().setLineBreakStyle(lbStyle)
++                                        .setLineBreakWordStyle(lbWordStyle).build()),
+--- a/frameworks/base/core/java/android/content/res/XmlBlock.java
++++ b/frameworks/base/core/java/android/content/res/XmlBlock.java
+@@ -20 +19,0 @@
+-import static android.system.OsConstants.EINVAL;
+@@ -31,2 +29,0 @@
+-import com.android.internal.pm.pkg.component.AconfigFlags;
+-import com.android.internal.util.XmlUtils;
+@@ -125 +122 @@
+-    private static final int ERROR_BAD_DOCUMENT = -EINVAL;
++    private static final int ERROR_BAD_DOCUMENT = -22; // Linux EINVAL
+@@ -349,21 +346 @@
+-            if (Flags.layoutReadwriteFlags() && mUsesFeatureFlags && ev == START_TAG) {
+-                FlagInfo flag = nativeGetFlagInfo(mParseState);
+-                if (flag != null && flag.mNameIndex > 0) {
+-                    AconfigFlags flags = AconfigFlags.getInstance();
+-                    String flagName = getSequenceString(mStrings.getSequence(flag.mNameIndex));
+-                    if (flags.skip(/* pkg= */ null, flagName, flag.mNegated)) {
+-                        int depth = 1;
+-                        while (depth > 0) {
+-                            int ev2 = nativeNext(mParseState);
+-                            if (ev2 == ERROR_BAD_DOCUMENT) {
+-                                throw new XmlPullParserException("Corrupt XML binary file");
+-                            } else if (ev2 == START_TAG) {
+-                                depth++;
+-                            } else if (ev2 == END_TAG) {
+-                                depth--;
+-                            }
+-                        }
+-                        return next();
+-                    }
+-                }
+-            }
++            // AAPT resolves the offline profile's resource flags at link time.
+@@ -508,2 +485,7 @@
+-                return XmlUtils.convertValueToList(
+-                    mStrings.getSequence(v), options, defaultValue);
++                CharSequence value = mStrings.getSequence(v);
++                if (value != null && value.length() != 0) {
++                    for (int i = 0; i < options.length; i++) {
++                        if (value.equals(options[i])) return i;
++                    }
++                }
++                return defaultValue;

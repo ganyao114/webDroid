@@ -3,11 +3,11 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const [program, mode, ...dexFiles] = process.argv.slice(2);
-assert.equal(dexFiles.length, mode === 'execute' ? 3 : 2);
+const [program, mode, ...files] = process.argv.slice(2);
+assert.equal(files.length, { verify: 2, execute: 3, resources: 4 }[mode]);
 const { default: createModule } = await import(pathToFileURL(program));
 const art = await createModule({ noInitialRun: true });
-const paths = dexFiles.map(file => {
+const paths = files.map(file => {
     const path = `/${basename(file)}`;
     art.FS.writeFile(path, readFileSync(file));
     return path;

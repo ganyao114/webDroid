@@ -21,6 +21,7 @@ set(WA_ANDROID_SDK "${sdk_default}" CACHE PATH "Android SDK directory")
 set(WA_JAVAC_EXECUTABLE "/usr/bin/javac" CACHE FILEPATH "JDK 17 javac")
 set(WA_D8_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/d8" CACHE FILEPATH "SDK 36 d8")
 set(WA_AIDL_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/aidl" CACHE FILEPATH "SDK 36 aidl")
+set(WA_AAPT2_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/aapt2" CACHE FILEPATH "SDK 36 aapt2")
 set(WA_ANDROID_JAR "${WA_ANDROID_SDK}/platforms/android-36/android.jar" CACHE FILEPATH "SDK 36 API")
 include("${repo}/cmake/Aosp17ArtInterp.cmake")
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
@@ -46,12 +47,15 @@ set(framework "${output}/aosp17_upstream_framework.dex")
 set(services "${output}/aosp17_upstream_services.dex")
 set(framework_classes "${output}/aosp17_upstream_framework_classes.jar")
 set(services_classes "${output}/aosp17_upstream_services_classes.jar")
+set(framework_res "${output}/framework-res-upstream.apk")
 set(provenance "${output}/framework_provenance.json")
-set(artifacts "${framework}" "${framework_classes}" "${services}" "${services_classes}" "${provenance}")
+set(artifacts "${framework}" "${framework_classes}" "${services}" "${services_classes}"
+    "${framework_res}" "${provenance}")
 set(build_command "${Python3_EXECUTABLE}" "${builder}"
     --aosp-root "${AOSP17_SOURCE_DIR}" --out-dir "${output}"
     --android-sdk "${WA_ANDROID_SDK}" --javac "${WA_JAVAC_EXECUTABLE}"
-    --android-jar "${WA_ANDROID_JAR}" --d8 "${WA_D8_EXECUTABLE}" --aidl "${WA_AIDL_EXECUTABLE}"
+    --android-jar "${WA_ANDROID_JAR}" --d8 "${WA_D8_EXECUTABLE}"
+    --aidl "${WA_AIDL_EXECUTABLE}" --aapt2 "${WA_AAPT2_EXECUTABLE}"
     --services-classes-jar)
 file(GLOB patches CONFIGURE_DEPENDS "${profile}/*.patch")
 add_custom_command(OUTPUT ${artifacts}
@@ -102,5 +106,8 @@ add_test(NAME m10_upstream_strict_patches
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_patches.py")
 add_test(NAME m10_upstream_verify COMMAND ${test_command} verify "${framework}" "${services}")
 add_test(NAME m10_upstream_execute COMMAND ${test_command} execute "${framework}" "${services}" "${fixture}")
-set_tests_properties(m10_upstream_reproducible m10_upstream_strict_patches m10_upstream_verify m10_upstream_execute
-    PROPERTIES TIMEOUT 120)
+add_test(NAME m10_upstream_resources
+    COMMAND ${test_command} resources "${framework}" "${services}" "${fixture}" "${framework_res}")
+set_tests_properties(m10_upstream_reproducible PROPERTIES TIMEOUT 600)
+set_tests_properties(m10_upstream_strict_patches m10_upstream_verify m10_upstream_execute
+    m10_upstream_resources PROPERTIES TIMEOUT 120)

@@ -5,6 +5,16 @@ frameworks/base/core/java/android/content/ComponentName.java
 frameworks/base/core/java/android/content/IntentFilter.java
 frameworks/base/core/java/android/content/UriRelativeFilter.java
 frameworks/base/core/java/android/content/UriRelativeFilterGroup.java
+frameworks/base/core/java/android/content/om/OverlayableInfo.java
+frameworks/base/core/java/android/content/res/ApkAssets.java
+frameworks/base/core/java/android/content/res/AssetFileDescriptor.java
+frameworks/base/core/java/android/content/res/Element.java
+frameworks/base/core/java/android/content/res/StringBlock.java
+frameworks/base/core/java/android/content/res/TagCounter.java
+frameworks/base/core/java/android/content/res/Validator.java
+frameworks/base/core/java/android/content/res/XmlBlock.java
+frameworks/base/core/java/android/content/res/XmlResourceParser.java
+frameworks/base/core/java/android/content/res/loader/AssetsProvider.java
 frameworks/base/core/java/android/os/BadParcelableException.java
 frameworks/base/core/java/android/os/BadTypeParcelableException.java
 frameworks/base/core/java/android/os/BaseBundle.java
@@ -22,6 +32,7 @@ frameworks/base/core/java/android/os/ThreadLocalWorkSource.java
 frameworks/base/core/java/android/os/TraceNameSupplier.java
 frameworks/base/core/java/android/text/GraphicsOperations.java
 frameworks/base/core/java/android/util/ArrayMap.java
+frameworks/base/core/java/android/util/AttributeSet.java
 frameworks/base/core/java/android/util/ContainerHelpers.java
 frameworks/base/core/java/android/util/EmptyArray.java
 frameworks/base/core/java/android/util/FastImmutableArraySet.java
@@ -45,6 +56,7 @@ frameworks/base/core/java/android/util/proto/ProtoStream.java
 frameworks/base/core/java/android/util/proto/WireTypeMismatchException.java
 frameworks/base/core/java/android/view/Gravity.java
 frameworks/base/core/java/android/view/InputEvent.java
+frameworks/base/core/java/android/view/LayoutInflater.java
 frameworks/base/core/java/com/android/internal/util/ArrayUtils.java
 frameworks/base/core/java/com/android/internal/util/FastMath.java
 frameworks/base/core/java/com/android/internal/util/FastPrintWriter.java
@@ -101,6 +113,7 @@ frameworks/base/services/core/java/com/android/server/wm/utils/RotationCache.jav
 # a separate directory and are never passed to D8 as program input.
 [annotations]
 android/annotation/AnyThread.java
+android/annotation/AnyRes.java
 android/annotation/CheckResult.java
 android/annotation/ColorInt.java
 android/annotation/ColorLong.java
@@ -110,15 +123,19 @@ android/annotation/FloatRange.java
 android/annotation/HalfFloat.java
 android/annotation/IntDef.java
 android/annotation/IntRange.java
+android/annotation/LayoutRes.java
 android/annotation/LongDef.java
 android/annotation/NonNull.java
 android/annotation/Nullable.java
 android/annotation/Px.java
 android/annotation/Size.java
+android/annotation/StyleableRes.java
 android/annotation/SuppressAutoDoc.java
 android/annotation/SuppressLint.java
 android/annotation/SystemApi.java
+android/annotation/SystemService.java
 android/annotation/TestApi.java
+android/annotation/UiContext.java
 android/annotation/UserIdInt.java
 android/compat/annotation/ChangeId.java
 android/compat/annotation/Disabled.java
@@ -161,3 +178,5 @@ frameworks/base/core/java/android/os/IMessenger.aidl
 09-bundle-platform-edges.patch
 10-canvas-platform-edges.patch
 11-paint-platform-edges.patch
+12-binary-resource-platform-edges.patch
+13-layout-inflater-platform-edges.patch
