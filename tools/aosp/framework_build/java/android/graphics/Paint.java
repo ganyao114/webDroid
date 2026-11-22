@@ -161,7 +161,13 @@ public class Paint {
         float[] m = fontMetricValues;
         nativeMeasure("", textSize, weight(), face(), m);
         if (out != null) {
-            out.ascent = out.top = -m[0]; out.descent = out.bottom = m[1]; out.leading = 0;
+            out.ascent = -m[0];
+            out.descent = m[1];
+            // The browser publishes its font metrics after drawing starts. Reserve a padded
+            // line box at first measure so a taller fallback font can fit the same layout.
+            out.top = Math.min(out.ascent, -textSize);
+            out.bottom = Math.max(out.descent, textSize * 0.25f);
+            out.leading = 0;
         }
         return m[0] + m[1];
     }
@@ -172,7 +178,11 @@ public class Paint {
         int ascent = NativeMath.round(metrics.ascent);
         int descent = NativeMath.round(metrics.descent);
         if (out != null) {
-            out.ascent = out.top = ascent; out.descent = out.bottom = descent; out.leading = 0;
+            out.ascent = ascent;
+            out.descent = descent;
+            out.top = (int) Math.floor(metrics.top);
+            out.bottom = (int) Math.ceil(metrics.bottom);
+            out.leading = 0;
         }
         return descent - ascent;
     }

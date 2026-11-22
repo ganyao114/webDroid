@@ -74,25 +74,29 @@ public class GradientDrawable extends Drawable {
 
     @Override public void draw(Canvas canvas) {
         Rect b = getBounds();
-        if (b.isEmpty()) return;
+        float inset = strokeWidth * 0.5f;
+        float l = b.left + inset, t = b.top + inset, r = b.right - inset, bottom = b.bottom - inset;
+        if (l >= r || t >= bottom) return;
+        // A uniform radius stays circular even if it exceeds half the shorter side.
+        float fittedRadius = Math.min(radius, Math.min(r - l, bottom - t) * 0.5f);
         if (colors != null && shape == RECTANGLE) {
-            canvas.drawLinearGradient(b, radius, modulateAlpha(colors[0]), modulateAlpha(colors[colors.length - 1]), angle);
+            canvas.drawLinearGradient(l, t, r, bottom, fittedRadius,
+                    modulateAlpha(colors[0]), modulateAlpha(colors[colors.length - 1]), angle);
         } else if (shape != LINE) {
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(modulateAlpha(fill.getColorForState(getState(), fill.getDefaultColor())));
-            drawShape(canvas, b, 0);
+            drawShape(canvas, l, t, r, bottom, fittedRadius);
         }
         if (strokeWidth != 0 || shape == LINE) {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(strokeWidth);
             paint.setColor(modulateAlpha(stroke.getColorForState(getState(), stroke.getDefaultColor())));
-            drawShape(canvas, b, strokeWidth * 0.5f);
+            drawShape(canvas, l, t, r, bottom, fittedRadius);
         }
     }
-    private void drawShape(Canvas canvas, Rect b, float inset) {
-        float l = b.left + inset, t = b.top + inset, r = b.right - inset, bottom = b.bottom - inset;
+    private void drawShape(Canvas canvas, float l, float t, float r, float bottom, float fittedRadius) {
         if (shape == OVAL) canvas.drawOval(l, t, r, bottom, paint);
-        else if (shape == LINE) canvas.drawLine(l, b.exactCenterY(), r, b.exactCenterY(), paint);
+        else if (shape == LINE) canvas.drawLine(l, (t + bottom) * 0.5f, r, (t + bottom) * 0.5f, paint);
         else if (cornerRadii != null) {
             final float maxX = Math.max(0, (r - l) * .5f), maxY = Math.max(0, (bottom - t) * .5f);
             float tlx = corner(0, maxX), tly = corner(1, maxY), trx = corner(2, maxX), try_ = corner(3, maxY);
@@ -110,7 +114,7 @@ public class GradientDrawable extends Drawable {
             cornerPath.cubicTo(l, t + tly * k, l + tlx * k, t, l + tlx, t);
             cornerPath.close();
             canvas.drawPath(cornerPath, paint);
-        } else if (radius > 0) canvas.drawRoundRect(l, t, r, bottom, radius, radius, paint);
+        } else if (fittedRadius > 0) canvas.drawRoundRect(l, t, r, bottom, fittedRadius, fittedRadius, paint);
         else canvas.drawRect(l, t, r, bottom, paint);
     }
     private float corner(int index, float max) { return Math.max(0, Math.min(cornerRadii[index], max)); }

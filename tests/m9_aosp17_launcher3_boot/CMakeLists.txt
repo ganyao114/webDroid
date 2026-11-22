@@ -35,5 +35,6 @@ else()
     target_compile_features(test_m9_launcher3_boot_host PRIVATE cxx_std_23)
     add_dependencies(test_m9_launcher3_boot_host m9_launcher3_fixtures)
     add_test(NAME test_m9_launcher3_boot_host COMMAND test_m9_launcher3_boot_host ${fixtures})
-    set_tests_properties(test_m9_launcher3_boot_host PROPERTIES TIMEOUT 120)
+    set_tests_properties(test_m9_launcher3_boot_host PROPERTIES TIMEOUT 120
+        FAIL_REGULAR_EXPRESSION "LauncherActivityCachingLogic: loadIcon")
 endif()

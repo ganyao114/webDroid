@@ -8,10 +8,13 @@ import android.util.DisplayMetrics;
 public final class Display {
     public static final int DEFAULT_DISPLAY = 0;
     private final Resources resources;
+    private int navigationBarInset = -1;
 
     public Display(Resources resources) { this.resources = resources; }
 
     public int getDisplayId() { return DEFAULT_DISPLAY; }
+    int getNavigationBarInset() { return navigationBarInset; }
+    void setNavigationBarInset(int pixels) { navigationBarInset = pixels; }
     public float getRefreshRate() {
         long interval = Choreographer.frameIntervalNanos();
         return interval > 0 ? 1_000_000_000f / interval : 60f;

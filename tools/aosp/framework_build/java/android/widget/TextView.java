@@ -30,7 +30,7 @@ public class TextView extends View implements TextViewPaintAccess {
             android.R.attr.gravity, android.R.attr.singleLine, android.R.attr.maxLines, android.R.attr.minLines,
             android.R.attr.fontFamily, android.R.attr.textStyle, android.R.attr.hint, android.R.attr.textColorHint,
             android.R.attr.includeFontPadding, android.R.attr.textAppearance, android.R.attr.lineSpacingExtra,
-            android.R.attr.lineSpacingMultiplier};
+            android.R.attr.lineSpacingMultiplier, android.R.attr.lines};
     private final TextPaint paint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
     private final Paint.FontMetrics fontMetrics = new Paint.FontMetrics();
     private final ArrayList<String> lines = new ArrayList<>();
@@ -60,6 +60,8 @@ public class TextView extends View implements TextViewPaintAccess {
             singleLine = a.getBoolean(4, false);
             maxLines = a.getInt(5, maxLines);
             minLines = a.getInt(6, minLines);
+            int exactLines = a.getInt(15, -1);
+            if (exactLines >= 0) setLines(exactLines);
             lineSpacingExtra = a.getDimension(13, 0);
             lineSpacingMultiplier = a.getFloat(14, 1);
         }
@@ -148,7 +150,21 @@ public class TextView extends View implements TextViewPaintAccess {
     public void setIncludeFontPadding(boolean flag) { includeFontPadding = flag; requestLayout(); }
     public boolean getIncludeFontPadding() { return includeFontPadding; }
     public void setLineSpacing(float extra, float multiplier) { lineSpacingExtra = extra; lineSpacingMultiplier = multiplier; requestLayout(); }
-    public int getLineHeight() { return (int) (paint.getFontSpacing() * lineSpacingMultiplier + lineSpacingExtra + 0.5f); }
+    public int getLineHeight() {
+        paint.getFontMetrics(fontMetrics);
+        return lineAdvance();
+    }
+    private int lineAdvance() {
+        float spacing = fontMetrics.descent - fontMetrics.ascent + fontMetrics.leading;
+        return Math.round(spacing * lineSpacingMultiplier + lineSpacingExtra);
+    }
+    private float firstLineTop() { return includeFontPadding ? fontMetrics.top : fontMetrics.ascent; }
+    private float paragraphHeight(int count) {
+        if (count == 0) return 0;
+        float lastLineBottom = includeFontPadding ? fontMetrics.bottom : fontMetrics.descent;
+        float height = lastLineBottom - firstLineTop();
+        return count == 1 ? height : height + (count - 1) * lineAdvance();
+    }
     public void setEllipsize(TextUtils.TruncateAt where) { ellipsize = where; requestLayout(); invalidate(); }
     public TextUtils.TruncateAt getEllipsize() { return ellipsize; }
     public void setCompoundDrawablePadding(int padding) {
@@ -247,24 +263,37 @@ public class TextView extends View implements TextViewPaintAccess {
         if (bottom != null) maxWidth = Math.max(maxWidth, bottom.getBounds().width());
         int width = resolveSizeAndState(Math.max(getSuggestedMinimumWidth(), hp + (int) (maxWidth + 0.999f)), w, 0);
         wrap(source, Math.max(0, (width & MEASURED_SIZE_MASK) - hp));
-        int desiredHeight = Math.max(getSuggestedMinimumHeight(), vp + getLineHeight() * Math.max(minLines, lines.size()));
+        paint.getFontMetrics(fontMetrics);
+        int desiredHeight = Math.max(getSuggestedMinimumHeight(),
+                vp + (int) java.lang.Math.ceil(paragraphHeight(Math.max(minLines, lines.size()))));
         setMeasuredDimension(width, resolveSizeAndState(desiredHeight, h, 0));
     }
-    private float paragraphTop() {
-        int height = getHeight() == 0 ? getMeasuredHeight() : getHeight();
-        float rest = height - getCompoundPaddingTop() - getCompoundPaddingBottom() - lines.size() * getLineHeight();
+    private float paragraphTop(float textHeight) {
+        float rest = layoutHeight() - getCompoundPaddingTop() - getCompoundPaddingBottom() - textHeight;
         int vertical = gravity & Gravity.VERTICAL_GRAVITY_MASK;
         float shift = vertical == Gravity.BOTTOM ? rest : vertical == Gravity.CENTER_VERTICAL ? rest * 0.5f : 0;
         return getCompoundPaddingTop() + Math.max(0, shift);
     }
-    private float baseline() {
-        paint.getFontMetrics(fontMetrics);
-        return paragraphTop() - (includeFontPadding ? fontMetrics.top : fontMetrics.ascent);
+    private int layoutHeight() { return getHeight() == 0 ? getMeasuredHeight() : getHeight(); }
+    private float firstBaseline(float textTop, int lineAdvance) {
+        float baseline = textTop - firstLineTop();
+        if (includeFontPadding && !lines.isEmpty()) {
+            // An exact height can fit the glyphs while leaving less room for font padding.
+            float lastGlyphBottom = baseline + (lines.size() - 1) * lineAdvance + fontMetrics.descent;
+            float overflow = lastGlyphBottom - (layoutHeight() - getCompoundPaddingBottom());
+            if (overflow > 0) baseline -= Math.min(overflow, fontMetrics.ascent - fontMetrics.top);
+        }
+        return baseline;
     }
-    @Override public int getBaseline() { return org.wasmandroid.ui.NativeMath.round(baseline()); }
+    @Override public int getBaseline() {
+        paint.getFontMetrics(fontMetrics);
+        return Math.round(firstBaseline(paragraphTop(paragraphHeight(lines.size())),
+                lines.size() > 1 ? lineAdvance() : 0));
+    }
     @Override protected void onDraw(Canvas canvas) {
-        float textTop = paragraphTop();
-        float textHeight = lines.size() * getLineHeight();
+        paint.getFontMetrics(fontMetrics);
+        float textHeight = paragraphHeight(lines.size());
+        float textTop = paragraphTop(textHeight);
         Drawable left = leftDrawable(), right = rightDrawable();
         if (left != null) drawCompound(canvas, left, getPaddingLeft(), (getHeight() - left.getBounds().height()) * 0.5f);
         if (right != null) drawCompound(canvas, right, getWidth() - getPaddingRight() - right.getBounds().width(),
@@ -283,13 +312,13 @@ public class TextView extends View implements TextViewPaintAccess {
                 paint.setTextAlign(Paint.Align.CENTER); break;
             default: x = getCompoundPaddingLeft(); paint.setTextAlign(Paint.Align.LEFT); break;
         }
-        float y = baseline();
+        int advance = lines.size() > 1 ? lineAdvance() : 0;
+        float y = firstBaseline(textTop, advance);
         int state = canvas.save();
         try {
             canvas.clipRect(getCompoundPaddingLeft(), getCompoundPaddingTop(), getWidth() - getCompoundPaddingRight(),
                     getHeight() - getCompoundPaddingBottom());
-            int lineHeight = getLineHeight();
-            for (int i = 0; i < lines.size(); i++) { canvas.drawText(lines.get(i), x, y, paint); y += lineHeight; }
+            for (int i = 0; i < lines.size(); i++) { canvas.drawText(lines.get(i), x, y, paint); y += advance; }
         } finally {
             canvas.restoreToCount(state);
         }

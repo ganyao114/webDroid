@@ -219,7 +219,11 @@ public class Canvas {
         drawText(result.toString(), x, y, paint);
     }
     public void drawLinearGradient(Rect bounds, float radius, int start, int end, float degrees) {
-        nativeDrawGradient(bounds.left, bounds.top, bounds.right, bounds.bottom, radius,
+        drawLinearGradient(bounds.left, bounds.top, bounds.right, bounds.bottom, radius, start, end, degrees);
+    }
+    public void drawLinearGradient(float left, float top, float right, float bottom, float radius,
+                                   int start, int end, float degrees) {
+        nativeDrawGradient(left, top, right, bottom, radius,
                 drawColorWithAlpha(start), drawColorWithAlpha(end), degrees);
     }
 

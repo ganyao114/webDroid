@@ -12,7 +12,14 @@ const [glue, dex, fallback, resources, launcher, systemUi, ...apps] = process.ar
 assert.match(process.version, /^v26\./);
 const wasm = await readFile(glue.replace(/\.mjs$/, '.wasm'));
 const { default: createRuntime } = await import(pathToFileURL(glue));
-const module = await createRuntime({ wasmBinary: wasm, printErr: console.error });
+const iconWarnings = [];
+const module = await createRuntime({
+  wasmBinary: wasm,
+  printErr(message) {
+    if (message.includes('LauncherActivityCachingLogic: loadIcon')) iconWarnings.push(message);
+    console.error(message);
+  },
+});
 const memory = new Memory(module);
 const linearMemoryBytes = 256 * 1024 * 1024;
 assert.equal(memory.buffer.byteLength, linearMemoryBytes);
@@ -97,6 +104,15 @@ function drag(x, y, dx, dy) {
   motion(Action.UP, x + dx, y + dy, 15);
 }
 
+const centerX = ([left, , right]) => (left + right) / 2;
+const rectWidth = ([left, , right]) => right - left;
+const rectHeight = ([, top, , bottom]) => bottom - top;
+const intersect = (a, b) => [
+  Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.min(a[2], b[2]), Math.min(a[3], b[3]),
+];
+const hasArea = bounds => rectWidth(bounds) > 0 && rectHeight(bounds) > 0;
+const near = (a, b) => Math.abs(a - b) < 0.02;
+
 function inspectFrame() {
   const { width, height } = viewport;
   const pointer = module._wa_sf_frame_acquire(scene);
@@ -110,10 +126,11 @@ function inspectFrame() {
       const layer = frame.layer(i);
       assert.equal(memory.u32(layer + 80), Surface.DISPLAY_LIST);
       assert.equal(memory.i32(layer + 8), i);
-      const info = { ops: new Set(), texts: [], paths: [], gestureHandle: false };
+      const info = { ops: new Set(), texts: [], paths: [], bitmaps: [], rounds: [], gestureHandle: false };
       layers.set(i, info);
       const begin = frame.list(layer), end = begin + memory.u32(layer + 92);
       let transform = [1, 0, 0, 1, 0, 0];
+      let clip = [0, 0, width, height];
       const stack = [];
       for (let at = begin; at < end;) {
         const size = checkedRecordSize(memory, at, end);
@@ -121,8 +138,14 @@ function inspectFrame() {
         const arg = n => memory.f32(at + 4 + n * 4);
         const [a, b, c, d, tx, ty] = transform;
         const translate = (x, y) => [a, b, c, d, tx + a * x + c * y, ty + b * x + d * y];
-        if (op === Op.SAVE) stack.push(transform);
-        if (op === Op.RESTORE) transform = stack.pop();
+        const mapRect = (left, top, right, bottom) => {
+          const points = [translate(left, top), translate(right, top),
+            translate(left, bottom), translate(right, bottom)];
+          const xs = points.map(point => point[4]), ys = points.map(point => point[5]);
+          return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+        };
+        if (op === Op.SAVE) stack.push([transform, clip]);
+        if (op === Op.RESTORE) [transform, clip] = stack.pop();
         if (op === Op.TRANSLATE) transform = translate(arg(0), arg(1));
         if (op === Op.SCALE) transform = [a * arg(0), b * arg(0), c * arg(1), d * arg(1), tx, ty];
         if (op === Op.ROTATE) {
@@ -132,21 +155,43 @@ function inspectFrame() {
           const offset = translate(x, y);
           transform = [aa, bb, cc, dd, offset[4] - aa*x - cc*y, offset[5] - bb*x - dd*y];
         }
+        if (op === Op.CLIP_RECT || op === Op.CLIP_ROUND)
+          clip = intersect(clip, mapRect(arg(0), arg(1), arg(2), arg(3)));
         if (op === Op.TEXT) {
           const text = memory.utf8(at + memory.u32(at + 4), memory.u32(at + 8));
           const [,,,, x, y] = translate(arg(2), arg(3));
-          if (x >= 0 && x < frame.width && y >= 0 && y < frame.height)
-            info.texts.push({ text, x, y });
+          if (x >= 0 && x < frame.width && y >= 0 && y < frame.height && memory.u32(at + 36) >>> 24) {
+            const size = arg(5), weight = memory.u32(at + 28), face = memory.u32(at + 40);
+            const [ascent, descent] = fontExtents(size, weight, face);
+            const line = mapRect(arg(2), arg(3) - ascent, arg(2), arg(3) + descent);
+            info.texts.push({ text, x, y, top: line[1], bottom: line[3], clip });
+          }
+        }
+        if (op === Op.BITMAP && arg(11) > 0) {
+          const bounds = mapRect(arg(6), arg(7), arg(8), arg(9));
+          if (hasArea(intersect(bounds, clip))) info.bitmaps.push({ id: memory.u32(at + 4), bounds, clip });
         }
         if (op === Op.PATH && size >= 36 && memory.u32(at + 24) === 1 && memory.u32(at + 4) >>> 24) {
           const x = arg(6), y = arg(7);
           info.paths.push({ x, y, windowY: translate(x, y)[5] });
         }
         if (op === Op.ROUND) {
-          const [,,,, left, top] = translate(arg(0), arg(1));
-          const [,,,, right, bottom] = translate(arg(2), arg(3));
+          const bounds = mapRect(arg(0), arg(1), arg(2), arg(3));
+          const [left, top, right, bottom] = bounds;
+          const alpha = memory.u32(at + 28) >>> 24;
+          if (alpha && hasArea(intersect(bounds, clip))) {
+            info.rounds.push({ bounds, clip, rx: arg(4), ry: arg(5), alpha, style: memory.u32(at + 32) });
+          }
           info.gestureHandle ||= top > height - 32 && bottom <= height && right - left > 60 &&
-            bottom - top <= 8 && arg(4) > 0 && (memory.u32(at + 28) >>> 24) !== 0;
+            bottom - top <= 8 && arg(4) > 0 && alpha > 0;
+        }
+        if (op === Op.CIRCLE) {
+          const [x, y, radius] = [arg(0), arg(1), arg(2)];
+          const bounds = mapRect(x - radius, y - radius, x + radius, y + radius);
+          const alpha = memory.u32(at + 16) >>> 24;
+          if (alpha && hasArea(intersect(bounds, clip))) {
+            info.rounds.push({ bounds, clip, rx: radius, ry: radius, alpha, style: memory.u32(at + 20) });
+          }
         }
         info.ops.add(op);
         at += size;
@@ -156,6 +201,110 @@ function inspectFrame() {
     return layers;
   } finally {
     module._wa_sf_frame_release(scene, pointer);
+  }
+}
+
+function fontExtents(size, weight, face) {
+  const bucket = Math.max(1, Math.min(9, Math.round((weight || 400) / 100)));
+  const font = module._wa_sf_font_metrics(scene) + (face * 9 + bucket - 1) * 20;
+  const sequence = memory.u32(font);
+  if (!sequence || sequence & 1) return [size * 0.8, size * 0.2];
+  return [size * memory.u32(font + 12) / 65536, size * memory.u32(font + 16) / 65536];
+}
+
+function publishBrowserFontMetrics() {
+  const fonts = module._wa_sf_font_metrics(scene);
+  for (let i = 0; i < 27; i++) {
+    const font = fonts + i * 20;
+    // A browser can publish a taller font box after the first frame has been laid out.
+    [2, 35389, 65536, 60416, 15360].forEach((value, field) =>
+      memory.view.setUint32(font + field * 4, value, true));
+  }
+}
+
+function checkIconLabel(window, icon) {
+  const labels = window.texts.filter(text => Math.abs(centerX(icon.bounds) - text.x) < 1 &&
+    text.y > icon.bounds[3] && text.y < icon.bounds[3] + 36 &&
+    text.x >= text.clip[0] && text.x < text.clip[2]);
+  assert(labels.length, `No visible label below icon ${JSON.stringify(icon.bounds)}`);
+  for (const label of labels) {
+    assert(label.top >= icon.bounds[3] - 0.02 &&
+      label.top >= label.clip[1] - 0.02 && label.bottom <= label.clip[3] + 0.02,
+      `Clipped or misplaced app label ${JSON.stringify(label)}`);
+  }
+  return labels.map(label => label.text);
+}
+
+function paginationDots(window, hotseatTop) {
+  return window.rounds.filter(dot => dot.style === 0 && rectHeight(dot.bounds) >= 4 &&
+    rectHeight(dot.bounds) <= 10 && rectWidth(dot.bounds) <= 24 &&
+    dot.bounds[3] <= hotseatTop && dot.bounds[3] >= hotseatTop - 48 &&
+    Math.abs(centerX(dot.bounds) - viewport.width / 2) < 24)
+    .sort((a, b) => a.bounds[0] - b.bounds[0]);
+}
+
+function checkHome(window, page, navigationInset) {
+  const { width, height } = viewport;
+  const qsb = window.rounds.find(shape => shape.style === 0 && rectWidth(shape.bounds) > width / 2 &&
+    shape.bounds[1] > height * 0.65 && shape.bounds[3] <= height - navigationInset);
+  assert(qsb && qsb.bounds.every((value, i) => near(intersect(qsb.bounds, qsb.clip)[i], value)),
+    'The entire Hotseat Search pill is visible above SystemUI');
+  assert(window.texts.some(label => label.text === 'Search' || label.text === '搜索'), 'Visible QSB label');
+  const iconBottom = Math.max(...window.bitmaps.map(icon => icon.bounds[3]));
+  const hotseat = window.bitmaps.filter(icon => near(icon.bounds[3], iconBottom));
+  assert.equal(hotseat.length, width === 960 ? 4 : 3, 'All configured Hotseat icons draw');
+  for (const icon of hotseat)
+    assert(icon.bounds[3] <= qsb.bounds[1] && !hasArea(intersect(icon.bounds, qsb.bounds)), 'Hotseat icon overlaps QSB');
+  const hotseatTop = Math.min(...hotseat.map(icon => icon.bounds[1]));
+  const dots = paginationDots(window, hotseatTop);
+  assert.equal(dots.length, 2, 'Both workspace page dots draw on Home');
+  assert(dots.every(dot => dot.bounds.every((value, i) => near(intersect(dot.bounds, dot.clip)[i], value))),
+    'Page indicator dots fit their clips');
+  assert(dots[page].alpha > dots[1 - page].alpha &&
+    rectWidth(dots[page].bounds) > rectWidth(dots[1 - page].bounds), 'Current page dot is active');
+  const workspace = window.bitmaps.filter(icon => icon.bounds[3] <= dots[0].bounds[1]);
+  assert(workspace.length, 'Visible workspace icons');
+  for (const icon of workspace) checkIconLabel(window, icon);
+  return { hotseatTop, dots };
+}
+
+function checkIconPixels(id, rgb) {
+  const store = module._wa_sf_bitmaps(scene);
+  const view = module._wa_bitmap_acquire(store, id);
+  assert(view, 'Bitmap pixels are available');
+  try {
+    const red = rgb >>> 16, green = rgb >>> 8 & 255, blue = rgb & 255;
+    const end = view + 24 + memory.u32(view + 20);
+    for (let pixel = view + 24; pixel < end; pixel += 4) {
+      const bytes = memory.bytes;
+      if (bytes[pixel] === red && bytes[pixel + 1] === green &&
+          bytes[pixel + 2] === blue && bytes[pixel + 3] === 255) return;
+    }
+    assert.fail(`App bitmap is missing fixture color #${rgb.toString(16)}`);
+  } finally {
+    module._wa_bitmap_release(store, view);
+  }
+}
+
+function checkDrawer(window, search, labels, cubeLabel) {
+  const pills = window.rounds.filter(({ bounds }) => [
+    search.left, search.top, search.right, search.bottom,
+  ].every((edge, i) => Math.abs(edge - bounds[i]) <= 1));
+  const fill = pills.find(shape => shape.style === 0);
+  const stroke = pills.find(shape => shape.style === 1);
+  assert(fill && stroke, 'All Apps Search fill and stroke draw');
+  for (const shape of [fill, stroke]) {
+    assert(near(shape.rx, shape.ry) && near(shape.rx, rectHeight(shape.bounds) / 2) &&
+      shape.bounds.every((edge, i) => near(edge, fill.bounds[i])), 'Search pill has concentric circular ends');
+  }
+  const icons = window.bitmaps.filter(icon => icon.clip[1] >= search.top && icon.bounds[1] >= search.bottom);
+  const drawnApps = icons.map(icon => ({ icon, labels: checkIconLabel(window, icon) }));
+  const expected = [...labels, [cubeLabel, null]];
+  assert.equal(drawnApps.length, expected.length, 'All Apps icons draw');
+  for (const [name, rgb] of expected) {
+    const app = drawnApps.find(({ labels: drawn }) => drawn.some(text => matchesDrawnLabel(text, name)));
+    assert(app, `No rendered app icon and label for "${name}"`);
+    if (rgb !== null) checkIconPixels(app.icon.id, rgb);
   }
 }
 
@@ -189,7 +338,7 @@ function textPosition(text) {
   return label;
 }
 
-function verifySwipe(from, to) {
+function verifySwipe(from, to, home) {
   const { width, height } = viewport;
   const start = state().workspaceScrollX;
   assert.equal(state().workspacePage, from);
@@ -197,9 +346,15 @@ function verifySwipe(from, to) {
   const dx = width * (to > from ? -.64 : .64);
   motion(Action.DOWN, x, y, 1);
   tick();
+  let dotsMoved = false;
   for (let step = 1; step <= 4; ++step) {
     motion(Action.MOVE, x + dx * step / 4, y, 1);
     tick();
+    const dots = paginationDots(inspectFrame().get(1), home.hotseatTop);
+    dotsMoved ||= dots.length === 2 && dots[0].alpha !== home.dots[0].alpha &&
+      dots[1].alpha !== home.dots[1].alpha &&
+      !near(rectWidth(dots[0].bounds), rectWidth(home.dots[0].bounds)) &&
+      !near(rectWidth(dots[1].bounds), rectWidth(home.dots[1].bounds));
   }
   motion(Action.UP, x + dx, y, 1);
   const scrolls = [];
@@ -208,6 +363,7 @@ function verifySwipe(from, to) {
   const end = scrolls.at(-1);
   assert(Math.abs(start - end) > width * .65, `Page travel ${start} to ${end}`);
   assert(scrolls.some(x => x > Math.min(start, end) && x < Math.max(start, end)), 'Intermediate animation positions');
+  assert(dotsMoved, 'Page indicator widths and opacity animate with the swipe');
 }
 
 async function verifyDisplay(width, height, locale, query, cubeLabel) {
@@ -247,18 +403,25 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
     assert(frame.get(0).ops.has(Op.GRADIENT) && frame.get(0).ops.has(Op.PATH));
     assert(frame.get(1).ops.has(Op.ROUND) && frame.get(1).ops.has(Op.BITMAP) && frame.get(1).ops.has(Op.TEXT));
     verifySystemUiFrame(frame.get(1), height);
+    const navigationInset = boot.systemUiInsets.bottom;
+    checkHome(frame.get(1), 0, navigationInset);
+    publishBrowserFontMetrics();
 
     tick(120);
     const home = state();
     console.log(JSON.stringify({ locale, width, height, phase: 'home-120', ...home }));
     assert.equal(home.frames, 120);
-    const firstPage = new Set(inspectFrame().get(1).texts.filter(entry => entry.y >= 24).map(entry => entry.text));
+    const firstWindow = inspectFrame().get(1);
+    const firstPage = new Set(firstWindow.texts.filter(entry => entry.y >= 24).map(entry => entry.text));
     assert(firstPage.size > 0);
-    verifySwipe(0, 1);
-    assert(inspectFrame().get(1).texts.some(entry => entry.y >= 24 && !firstPage.has(entry.text)),
+    const firstHome = checkHome(firstWindow, 0, navigationInset);
+    verifySwipe(0, 1, firstHome);
+    const secondWindow = inspectFrame().get(1);
+    const secondHome = checkHome(secondWindow, 1, navigationInset);
+    assert(secondWindow.texts.some(entry => entry.y >= 24 && !firstPage.has(entry.text)),
       'Real app label on second page');
-    verifySwipe(1, 0);
-    verifySwipe(0, 1);
+    verifySwipe(1, 0, secondHome);
+    verifySwipe(0, 1, firstHome);
 
     drag(width * .54, height * .78, 0, -height * .42);
     tick(36);
@@ -267,11 +430,8 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
     assert.equal(drawer.searchResults, apps.length);
     const labels = locale === 'en-US' ? ['Settings', 'Browser', 'Gallery', 'Calculator', 'Clock']
                                      : ['设置', '浏览器', '图库', '计算器', '时钟'];
-    const drawerLabels = inspectFrame().get(1).texts.map(entry => entry.text);
-    for (const label of [...labels, cubeLabel]) {
-      assert(drawerLabels.some(text => matchesDrawnLabel(text, label)),
-        `Missing "${label}" among ${drawerLabels.join(', ')}`);
-    }
+    const colors = [0x366990, 0x1a7866, 0x725296, 0x9c5200, 0x344da0];
+    checkDrawer(inspectFrame().get(1), drawer.searchBounds, labels.map((name, i) => [name, colors[i]]), cubeLabel);
     const { left, top, right, bottom } = drawer.searchBounds;
     tap((left + right) / 2, (top + bottom) / 2);
     const prefix = query.slice(0, 1);
@@ -379,6 +539,7 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
 try {
   const desktop = await verifyDisplay(960, 660, 'en-US', 'Cube', 'WasmAndroid 3D Cube');
   const phone = await verifyDisplay(448, 896, 'zh-CN', '立方体', 'WasmAndroid 3D 立方体');
+  assert.deepEqual(iconWarnings, [], 'Launcher3 loads its declared app icons without fallback warnings');
   for (const { home, final } of [desktop, phone]) {
     assert(home.avgFrameMs < 3 && home.p95FrameMs < 6, 'Home frame budget');
     assert(final.avgFrameMs < 3 && final.p95FrameMs < 6, 'Interactive frame budget');

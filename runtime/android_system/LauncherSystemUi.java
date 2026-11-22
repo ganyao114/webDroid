@@ -9,7 +9,6 @@ import android.view.ContextThemeWrapper;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
-import android.view.WindowInsets;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
@@ -68,19 +67,7 @@ public final class LauncherSystemUi extends ContextThemeWrapper implements Consu
             navParams.height = height;
             navigation.setLayoutParams(navParams);
         }
-        // The framework's edge-to-edge window already insets Launcher3 for its gesture bar.
-        // Reserve the extra height of the inflated navigation bar outside the app content.
-        var window = activity.getWindow();
-        var metrics = window.getWindowManager().getCurrentWindowMetrics();
-        int inset = metrics.getWindowInsets().getInsets(WindowInsets.Type.navigationBars()).bottom;
-        int scaledInset = Math.round(inset * resources.getDisplayMetrics().density / metrics.getDensity());
-        var content = window.getContentParent();
-        var contentParams = (FrameLayout.LayoutParams) content.getLayoutParams();
-        int margin = Math.max(0, height - scaledInset);
-        if (contentParams.bottomMargin != margin) {
-            contentParams.bottomMargin = margin;
-            content.setLayoutParams(contentParams);
-        }
+        activity.getWindow().setNavigationBarInset(height);
     }
 
     public void tintSignals(View status, int tint) {

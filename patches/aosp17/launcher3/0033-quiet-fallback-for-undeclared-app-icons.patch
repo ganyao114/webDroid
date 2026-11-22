@@ -1,0 +1,23 @@
+--- a/frameworks/libs/systemui/iconloaderlib/src/com/android/launcher3/icons/cache/LauncherActivityCachingLogic.kt
++++ b/frameworks/libs/systemui/iconloaderlib/src/com/android/launcher3/icons/cache/LauncherActivityCachingLogic.kt
+@@ -41,12 +41,14 @@
+         request.run {
+             val iconDrawable = getIcon(item.activityInfo)
+             if (isDefaultApplicationIcon(iconDrawable)) {
+-                Log.w(
+-                    TAG,
+-                    "loadIcon: Default app icon returned from PackageManager." +
+-                        " component=${item.componentName}, user=${item.user}",
+-                    Exception(),
+-                )
++                if (item.activityInfo.iconResource != 0) {
++                    Log.w(
++                        TAG,
++                        "loadIcon: Default app icon returned from PackageManager." +
++                            " component=${item.componentName}, user=${item.user}",
++                        Exception(),
++                    )
++                }
+                 // Make sure this default icon always matches BaseIconCache#getDefaultIcon
+                 return getDefaultIcon()
+             }

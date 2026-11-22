@@ -1,6 +1,7 @@
 package android.view;
 
 import android.content.Context;
+import android.content.res.Resources;
 import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.util.DisplayMetrics;
@@ -72,15 +73,31 @@ public class Window {
     public boolean isStatusBarContrastEnforced() { return statusBarContrastEnforced; }
     public void setNavigationBarContrastEnforced(boolean enforced) { navigationBarContrastEnforced = enforced; }
     public boolean isNavigationBarContrastEnforced() { return navigationBarContrastEnforced; }
-    private static WindowInsets makeInsets(float density) {
-        return new WindowInsets((int) (24 * density + 0.5f), (int) (22 * density + 0.5f));
+    /** Publishes the bottom navigation inset of the system bar mounted on this display. */
+    public void setNavigationBarInset(int pixels) {
+        Display display = context.getDisplay();
+        if (display.getNavigationBarInset() == pixels) return;
+        display.setNavigationBarInset(pixels);
+        decor.requestApplyInsets();
+    }
+    private static WindowInsets makeInsets(Context context) {
+        Resources resources = context.getResources();
+        float density = resources.getDisplayMetrics().density;
+        Display display = context.getDisplay();
+        int navigation = display.getNavigationBarInset();
+        if (navigation < 0) {
+            // Activity creation can query metrics before the system bar has been mounted.
+            int id = resources.getIdentifier("navigation_bar_height", "dimen", "android");
+            navigation = id == 0 ? (int) (22 * density + 0.5f) : resources.getDimensionPixelSize(id);
+        }
+        return new WindowInsets((int) (24 * density + 0.5f), navigation);
     }
     public static WindowMetrics displayMetrics(Context context) {
         DisplayMetrics metrics = context.getResources().getDisplayMetrics();
         return new WindowMetrics(new Rect(0, 0, metrics.widthPixels, metrics.heightPixels),
-                makeInsets(metrics.density), metrics.density);
+                makeInsets(context), metrics.density);
     }
-    WindowInsets makeInsets() { return makeInsets(context.getResources().getDisplayMetrics().density); }
+    WindowInsets makeInsets() { return makeInsets(context); }
     void applyLegacySystemBarAppearance(int visibility) {
         int status = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS;
         int navigation = WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;

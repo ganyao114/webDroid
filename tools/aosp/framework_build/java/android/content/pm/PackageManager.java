@@ -145,12 +145,14 @@ public class PackageManager {
             Resources resources = packageResources.get(key);
             if (resources == null) {
                 try {
-                    resources = Resources.forApk(path, locale, density);
+                    resources = local.forPackage(path, locale, density);
                 } catch (IOException error) {
                     throw new NameNotFoundException(info.packageName + ": " + error.getMessage());
                 }
                 packageResources.put(key, resources);
             }
+            resources.updateDisplay(local.getDisplayMetrics().widthPixels,
+                    local.getDisplayMetrics().heightPixels, density);
             return resources;
         }
     }
