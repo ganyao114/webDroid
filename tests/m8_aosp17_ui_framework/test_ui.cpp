@@ -1,7 +1,9 @@
 #include "art_interp.h"
+#include "jni_bridge.h"
 #include "ui_bridge.h"
 #include "../../runtime/hal_surfaceflinger/font_advances.h"
 
+#include <dex/class_accessor-inl.h>
 #include <ziparchive/zip_archive.h>
 
 #include <algorithm>
@@ -30,6 +32,40 @@ constexpr uint32_t kLayer = 42, kWidth = 400, kHeight = 432, kDpi = 240;
 void Require(bool condition, std::string_view message) {
     if (!condition)
         throw std::runtime_error(std::string(message));
+}
+
+void AuditFrameworkNatives(Vm& vm) {
+    auto& linker = wa::interp::JniBridge::From(vm.JniEnv()).Vm().linker;
+    const auto* dex = linker.Resolve("Landroid/graphics/Bitmap;").dex;
+    Require(dex != nullptr, "The JNI audit requires the upstream framework DEX");
+    size_t declarations = 0;
+    std::string missing;
+    for (uint32_t i = 0; i < dex->NumClassDefs(); ++i) {
+        const auto& definition = dex->GetClassDef(i);
+        const auto name = dex->GetTypeDescriptorView(definition.class_idx_);
+        if (!name.starts_with("Landroid/graphics/") &&
+            !name.starts_with("Lcom/android/internal/util/") &&
+            name != "Landroid/text/AndroidCharacter;" && name != "Landroid/text/Hyphenator;" &&
+            name != "Landroid/view/MotionEvent;" && name != "Landroid/view/KeyEvent;")
+            continue;
+        const auto* type = linker.FindLinkedClass(name);
+        for (const auto& method : art::ClassAccessor(*dex, definition).GetMethods()) {
+            if (!(method.GetAccessFlags() & art::kAccNative)) continue;
+            ++declarations;
+            const auto& id = dex->GetMethodId(method.GetIndex());
+            const auto method_name = dex->GetMethodNameView(id);
+            const auto signature = dex->GetMethodSignature(id).ToString();
+            if (type) {
+                const auto found = type->methods.find(wa::interp::MemberKey(method_name, signature));
+                if (found != type->methods.end() && (found->second.native || found->second.builtin))
+                    continue;
+            }
+            missing += std::string(name) + "->" + std::string(method_name) + signature + '\n';
+        }
+    }
+    Require(declarations != 0, "The upstream DEX declares native methods");
+    std::cout << "Audited " << declarations << " upstream framework JNI declarations\n";
+    Require(missing.empty(), "Unregistered upstream JNI declarations\n" + missing);
 }
 
 std::vector<uint8_t> ExtractDex(const char* apk) {
@@ -81,6 +117,7 @@ struct DisplayList {
     bool even_odd = false;
     bool authored_bitmap = false;
     bool resource_bitmap = false;
+    unsigned shader_bitmaps = 0;
     std::vector<std::string> text;
 
     bool HasText(std::string_view value) const {
@@ -218,6 +255,18 @@ DisplayList Inspect(wa_sf_t* sf, const Packet& packet) {
                 const auto center = view->height / 2 * view->stride + view->width / 2 * 4;
                 stats.adaptive_mask |= pixels[3] < 255 && pixels[center + 3] == 255;
             }
+            if (view->width >= 16 && view->width <= 26 && view->height >= 16 && view->height <= 26) {
+                bool blue = false, orange = false, transparent = false;
+                for (uint32_t y = 0; y < view->height; ++y) {
+                    for (uint32_t x = 0; x < view->width; ++x) {
+                        const auto* p = pixels + y * view->stride + x * 4;
+                        blue |= p[0] == 0x21 && p[1] == 0x63 && p[2] == 0xce && p[3] == 128;
+                        orange |= p[0] == 0xdf && p[1] == 0x97 && p[2] == 0x31 && p[3] == 128;
+                        transparent |= p[3] == 0;
+                    }
+                }
+                stats.shader_bitmaps += blue && orange && transparent;
+            }
             wa_bitmap_release(store, view);
             break;
         }
@@ -306,6 +355,7 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     wa::ui_jni::UiBridge bridge;
     bridge.BindSurfaceFlinger(sf.get(), kLayer);
     bridge.RegisterNatives(vm);
+    AuditFrameworkNatives(vm);
 
     const auto icon = static_cast<uint32_t>(ReadInt(vm, "iconResource"));
     unsigned queried = 0, applications = 0, launches = 0;
@@ -361,6 +411,7 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
             "Compiled resources, styles, included layout, and merge inflated");
     Require(ReadBool(vm, "packagesVerified") && user_forwarded && queried == 2 && applications >= 1,
             "PackageManager and LauncherApps query the host and load icon resources");
+    vm.CallStatic("Lorg/wasmandroid/uismoke/NativeGraphicsProbe;", "verify", "()V");
 
     wa_font_metric_t& font =
         wa_sf_font_metrics(sf.get())[WA_FONT_ROBOTO * WA_FONT_WEIGHT_COUNT + 6];
@@ -421,6 +472,7 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
                 initial.verbs[WA_PATH_CLOSE] > 0,
             "Vector paths preserve stroke, fill rule and curve verbs");
     Require(initial.authored_bitmap, "The programmatic bitmap preserves its authored pixels");
+    Require(initial.shader_bitmaps == 3, "Recorded round rect, circle and path preserve shader pixels and masks");
     Require(initial.resource_bitmap, "The density-scaled PNG preserves its edge colors and alpha");
     Require(initial.HasText("Ready to launch") && initial.HasText("Launcher tile"),
             "The display list contains both fixture labels");

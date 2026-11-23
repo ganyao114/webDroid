@@ -1,9 +1,30 @@
+struct PathClip {
+    std::vector<interp::software_raster::Edge> edges;
+    bool even_odd;
+};
+
+struct CanvasClip {
+    Matrix9 inverse;
+    std::variant<PathClip, std::shared_ptr<const ShaderData>> source;
+    bool difference;
+};
+
 struct CanvasData {
+    struct Backdrop {
+        wa_rect_t local;
+        Matrix9 transform;
+        jint left, top, width, height;
+        std::vector<jint> pixels;
+        std::vector<uint8_t> saved;
+    };
+
     struct Frame {
         Matrix9 matrix = kIdentity;
         wa_rect_t clip{};
         float alpha = 1;
         std::vector<interp::Value> raster_clips;
+        std::vector<std::shared_ptr<const CanvasClip>> masks;
+        std::shared_ptr<Backdrop> backdrop;
     };
     jlong bitmap = 0;
     jint width = 0, height = 0;
@@ -106,6 +127,7 @@ jint SaveCanvas(JNIEnv* env, jclass, jlong id, jint) {
             return count;
         }
         canvas.data->stack.push_back(canvas.data->frame);
+        canvas.data->frame.backdrop.reset();
         if (canvas.display) canvas.state->result = wa_canvas_save(canvas.display);
         return count;
     });
@@ -117,6 +139,18 @@ jint CanvasSaveCount(JNIEnv* env, jclass, jlong id) {
 jboolean RestoreCanvas(JNIEnv* env, jclass, jlong id) {
     const auto canvas = Canvas(env, id);
     if (!canvas || canvas.data->stack.empty()) return false;
+    if (const auto& backdrop = canvas.data->frame.backdrop; canvas.bitmap && backdrop) {
+        auto& bitmap = *canvas.bitmap;
+        for (jint y = 0; y < backdrop->height && y + backdrop->top < bitmap.height; ++y) {
+            for (jint x = 0; x < backdrop->width && x + backdrop->left < bitmap.width; ++x) {
+                const auto index = static_cast<size_t>(y) * backdrop->width + x;
+                if (!backdrop->saved[index]) continue;
+                auto& pixel = bitmap.pixels[static_cast<size_t>(y + backdrop->top) * bitmap.width + x + backdrop->left];
+                pixel = bitmap.PutColor(interp::software_raster::SourceOver(pixel, backdrop->pixels[index]));
+            }
+        }
+        bitmap.Changed();
+    }
     canvas.data->frame = std::move(canvas.data->stack.back());
     canvas.data->stack.pop_back();
     if (canvas.display) canvas.state->result = wa_canvas_restore(canvas.display);
@@ -205,7 +239,7 @@ bool ClipCanvas(const CanvasTarget& canvas, wa_round_rect_t clip) {
     auto& frame = canvas.data->frame;
     frame.clip = Intersect(frame.clip, MapRect(frame.matrix, clip.rect));
     if (!HasArea(frame.clip)) frame.clip = {};
-    if (canvas.bitmap && HasArea(frame.clip)) {
+    if (HasArea(frame.clip) && ((clip.rx > 0 && clip.ry > 0) || !RectStaysRect(frame.matrix))) {
         if (auto inverse = Inverse(frame.matrix)) {
             for (size_t i = 0; i < 6; ++i) frame.raster_clips.push_back(Value::Float((*inverse)[i]));
             const auto [l, t, r, b] = clip.rect;
@@ -221,13 +255,31 @@ bool ClipCanvas(const CanvasTarget& canvas, wa_round_rect_t clip) {
     return HasArea(frame.clip);
 }
 
+void AddPathClip(const CanvasTarget& canvas, const PathGeometry& path, bool difference) {
+    auto& frame = canvas.data->frame;
+    const auto inverse = Inverse(frame.matrix);
+    if (!inverse) return;
+    PathClip clip{{}, (path.fill & 1) != 0};
+    const auto values = RasterPathValues(path);
+    for (const auto& contour : interp::software_raster::Flatten(values, path.verbs.size()))
+        interp::software_raster::AppendEdges(clip.edges, contour.points, {}, false);
+    frame.masks.push_back(
+        std::make_shared<CanvasClip>(CanvasClip{*inverse, std::move(clip), difference}));
+}
+
 jboolean ClipCanvasRect(JNIEnv* env, jclass, jlong id, jfloat l, jfloat t, jfloat r, jfloat b, jint op) {
     return CallSafely(env, [&]() -> jboolean {
         const auto canvas = Canvas(env, id);
         if (!canvas) return false;
         auto rect = wa_rect_t{l, t, r, b};
         if (op == 0) {
-            // Exact for exclusions that leave one rectangular strip.
+            if (!HasArea(rect)) return HasArea(canvas.data->frame.clip);
+            PathGeometry excluded;
+            excluded.Rect(rect);
+            AddPathClip(canvas, excluded, true);
+            // Narrow the rectangular bounds when the exclusion leaves one strip.
+            if (canvas.data->frame.matrix[1] || canvas.data->frame.matrix[3])
+                return HasArea(canvas.data->frame.clip);
             const auto inverse = Inverse(canvas.data->frame.matrix);
             if (!inverse) return false;
             const auto old = MapRect(*inverse, canvas.data->frame.clip);
@@ -255,16 +307,29 @@ jboolean ClipCanvasRound(JNIEnv* env, jclass, jlong id, jfloat l, jfloat t, jflo
         return canvas && ClipCanvas(canvas, {{l, t, r, b}, std::max(0.f, rx), std::max(0.f, ry)});
     });
 }
-jboolean ClipCanvasPath(JNIEnv* env, jclass cls, jlong id, jlong path, jint op) {
+jboolean ClipCanvasPath(JNIEnv* env, jclass, jlong id, jlong path, jint op) {
     return CallSafely(env, [&]() -> jboolean {
         const auto canvas = Canvas(env, id);
         const auto* geometry = Path(env, path);
         if (!canvas || !geometry) return false;
         if (geometry->fill >= 2) op = 1 - op;
-        const auto [l, t, r, b] = geometry->Bounds();
-        if (op == 0) return ClipCanvasRect(env, cls, id, l, t, r, b, op);
+        if (geometry->Empty() && op == 0) return HasArea(canvas.data->frame.clip);
+        if (op == 0 || !geometry->clip) AddPathClip(canvas, *geometry, op == 0);
+        if (op == 0) return HasArea(canvas.data->frame.clip);
         if (geometry->clip) return ClipCanvas(canvas, *geometry->clip);
-        return ClipCanvas(canvas, {{l, t, r, b}, 0, 0});
+        return ClipCanvas(canvas, {geometry->Bounds(), 0, 0});
+    });
+}
+
+void ClipCanvasShader(JNIEnv* env, jclass, jlong id, jlong shader, jint op) {
+    CallSafely(env, [&] {
+        const auto canvas = Canvas(env, id);
+        auto source = GetShader(env, shader);
+        if (!canvas || !source) return;
+        auto& frame = canvas.data->frame;
+        if (auto inverse = Inverse(frame.matrix))
+            frame.masks.push_back(std::make_shared<CanvasClip>(
+                CanvasClip{*inverse, std::move(source), op == 0}));
     });
 }
 jboolean GetClipBounds(JNIEnv* env, jclass, jlong id, jobject out) {
@@ -328,60 +393,16 @@ Object RasterTransform(const CanvasData::Frame& frame) {
     transform.elements.insert(transform.elements.end(), frame.raster_clips.begin(), frame.raster_clips.end());
     return transform;
 }
-Object RasterPixels(const BitmapData& bitmap) {
-    Object pixels;
-    pixels.elements.reserve(bitmap.pixels.size());
-    for (jint color : bitmap.pixels) pixels.elements.push_back(Value::Int(color));
-    return pixels;
-}
-void StoreRasterPixels(BitmapData& bitmap, const Object& pixels) {
-    for (size_t i = 0; i < bitmap.pixels.size(); ++i)
-        bitmap.pixels[i] = bitmap.PutColor(pixels.elements[i].i());
-    bitmap.Changed();
+const GradientData* PaintGradient(const PaintData& paint) {
+    return paint.shader ? std::get_if<GradientData>(&paint.shader->content) : nullptr;
 }
 
-const GradientData* PaintGradient(JNIEnv* env, const CanvasTarget& canvas, const PaintData& paint) {
-    if (!paint.shader || !canvas.state->gradients) return nullptr;
-    return canvas.state->gradients->Get(env, paint.shader);
-}
+#include "shader_raster.inc"
 
-void SoftwarePath(JNIEnv* env, const CanvasTarget& canvas, const PathGeometry& path, const PaintData& paint,
-                  std::span<const jint> clip = {}, const GradientData* vector_gradient = nullptr) {
-    auto dst = RasterPixels(*canvas.bitmap);
-    auto transform = RasterTransform(canvas.data->frame);
-    Object verbs;
-    verbs.elements.reserve(path.verbs.size() * 7);
-    for (const auto& verb : path.verbs) {
-        verbs.elements.push_back(Value::Float(verb.command));
-        for (float coordinate : verb.points) verbs.elements.push_back(Value::Float(coordinate));
-    }
-    const auto color = DisplayPaint(canvas, paint).argb;
-    Object geometry, stops, colors;
-    const auto* gradient = vector_gradient ? vector_gradient : PaintGradient(env, canvas, paint);
-    if (env->ExceptionCheck()) return;
-    if (gradient) {
-        for (auto coordinate : gradient->geometry) geometry.elements.push_back(Value::Float(coordinate));
-        for (auto stop : gradient->positions) stops.elements.push_back(Value::Float(stop));
-        for (auto color : gradient->colors) colors.elements.push_back(Value::Int(FilterColor(paint, color)));
-    }
-    const uint64_t mask = paint.mask_filter;
-    const float blur = mask ? std::bit_cast<float>(uint32_t(mask)) : 0.f;
-    const jint blur_style = mask ? (mask >> 32) - 1 : 0;
-    const Value args[] = {
-        Value::Ref(&dst), Value::Int(canvas.bitmap->width), Value::Int(canvas.bitmap->height),
-        Value::Ref(&verbs), Value::Int(path.verbs.size()), Value::Int(path.fill), Value::Ref(&transform),
-        Value::Int(color), Value::Float(blur), Value::Int(blur_style), Value::Int(canvas.bitmap->config == 1),
-        Value::Int(gradient ? gradient->type : 0), Value::Int(gradient ? gradient->tile : 0),
-        Value::Ref(&geometry), Value::Ref(&stops), Value::Ref(&colors), Value::Int(paint.style), Value::Float(paint.stroke_width),
-        Value::Int(paint.cap), Value::Int(paint.join), Value::Float(paint.miter)};
-    interp::software_raster::DrawPathWithClip(interp::JniBridge::From(env).Vm(), args, clip);
-    StoreRasterPixels(*canvas.bitmap, dst);
-}
-
-void EmitPath(JNIEnv* env, const CanvasTarget& canvas, const PathGeometry& path, const PaintData& paint) {
+void EmitPath(const CanvasTarget& canvas, const PathGeometry& path, const PaintData& paint) {
     if (!HasArea(canvas.data->frame.clip)) return;
-    if (canvas.bitmap) {
-        SoftwarePath(env, canvas, path, paint);
+    if (canvas.bitmap || paint.shader || !canvas.data->frame.masks.empty()) {
+        RasterizePath(canvas, path, paint);
     } else if (canvas.display && !path.Empty()) {
         auto verbs = std::span<const wa_path_verb_t>(path.verbs);
         PathGeometry inverse;
@@ -404,21 +425,11 @@ void MaskCanvasBitmap(JNIEnv* env, jclass, jlong bitmap_id, jlong path_id) {
         auto* bitmap = Bitmap(env, bitmap_id);
         const auto* path = Path(env, path_id);
         if (!bitmap || !path || bitmap->immutable || bitmap->recycled) return;
-        BitmapData mask;
-        mask.width = bitmap->width;
-        mask.height = bitmap->height;
-        mask.pixels.resize(bitmap->pixels.size());
-        CanvasData data;
-        data.width = mask.width;
-        data.height = mask.height;
-        data.Reset();
-        const CanvasTarget target{GetState(env), &data, &mask};
-        SoftwarePath(env, target, *path, PaintData{});
-        if (env->ExceptionCheck()) return;
-        for (size_t i = 0; i < mask.pixels.size(); ++i) {
-            const auto alpha = (uint32_t(mask.pixels[i]) >> 24) / 255.f;
-            bitmap->pixels[i] = Opacity(bitmap->pixels[i], alpha);
-        }
+        const auto transform = RasterTransform(CanvasData::Frame{});
+        const auto coverage = RasterizeCoverage(*path, PaintData{}, transform.elements,
+                                                {0, 0, bitmap->width, bitmap->height});
+        for (size_t i = 0; i < coverage.size(); ++i)
+            bitmap->pixels[i] = Opacity(bitmap->pixels[i], coverage[i] / 255.f);
         bitmap->Changed();
     });
 }
@@ -427,17 +438,30 @@ void DrawCanvasColor(JNIEnv* env, jclass, jlong id, jint color, jint mode) {
     CallSafely(env, [&] {
         const auto canvas = Canvas(env, id);
         if (!canvas || !HasArea(canvas.data->frame.clip)) return;
+        if (!canvas.data->frame.masks.empty()) {
+            PaintData paint;
+            paint.color = color;
+            paint.blend = mode;
+            PathGeometry coverage;
+            coverage.fill = 2;
+            EmitPath(canvas, coverage, paint);
+            return;
+        }
         const auto value = Opacity(color, canvas.data->frame.alpha);
         if (canvas.bitmap) {
             const auto& frame = canvas.data->frame;
             auto transform = RasterTransform(frame);
             const auto [l, t, r, b] = frame.clip;
-            for (jint y = std::max(0.f, std::floor(t)); y < b && y < canvas.bitmap->height; ++y) {
-                for (jint x = std::max(0.f, std::floor(l)); x < r && x < canvas.bitmap->width; ++x) {
+            const auto pixel = [](float edge, jint limit) {
+                return static_cast<jint>(std::clamp(std::ceil(edge - .5f), 0.f, float(limit)));
+            };
+            const jint right = pixel(r, canvas.bitmap->width), bottom = pixel(b, canvas.bitmap->height);
+            const jint left = pixel(l, canvas.bitmap->width), top = pixel(t, canvas.bitmap->height);
+            for (jint y = top; y < bottom; ++y) {
+                for (jint x = left; x < right; ++x) {
                     if (!interp::software_raster::InsideClips(transform.elements, x + 0.5, y + 0.5)) continue;
                     auto& pixel = canvas.bitmap->pixels[y * canvas.bitmap->width + x];
-                    const auto blended = mode == 0 ? 0u : mode == 1 ? value
-                        : interp::software_raster::SourceOver(value, pixel);
+                    const auto blended = BlendColor(value, pixel, mode);
                     pixel = canvas.bitmap->PutColor(blended);
                 }
             }
@@ -455,21 +479,21 @@ void DrawCanvasPaint(JNIEnv* env, jclass cls, jlong id, jlong paint) {
         const auto* p = Paint(env, paint);
         const auto canvas = Canvas(env, id);
         if (!canvas || !p) return;
-        if (canvas.bitmap && p->shader) {
+        if (p->shader || !canvas.data->frame.masks.empty()) {
             PathGeometry coverage;
             coverage.fill = 2;
             auto fill = *p;
             fill.style = 0;
-            EmitPath(env, canvas, coverage, fill);
+            EmitPath(canvas, coverage, fill);
         } else {
             DrawCanvasColor(env, cls, id, FilterColor(*p, p->color), p->blend);
         }
     });
 }
 
-bool DrawGradientShape(JNIEnv* env, const CanvasTarget& canvas, wa_round_rect_t shape, const PaintData& paint) {
-    const auto* gradient = PaintGradient(env, canvas, paint);
-    if (!gradient || gradient->type != 1 || paint.style == 1) return false;
+bool DrawGradientShape(const CanvasTarget& canvas, wa_round_rect_t shape, const PaintData& paint) {
+    const auto* gradient = PaintGradient(paint);
+    if (!gradient || gradient->type != 1 || paint.style == 1 || !canvas.data->frame.masks.empty()) return false;
     const auto [x, y, end_x, end_y] = gradient->geometry;
     const float angle = std::atan2(end_y - y, end_x - x) * (180.f / std::numbers::pi_v<float>);
     const float alpha = canvas.data->frame.alpha * (paint.color >> 24) / 255.f;
@@ -485,11 +509,12 @@ void DrawCanvasRect(JNIEnv* env, jclass, jlong id, jfloat l, jfloat t, jfloat r,
         const auto* p = Paint(env, paint);
         const auto rect = wa_rect_t{l, t, r, b};
         if (!canvas || !p || !HasArea(rect)) return;
-        if (canvas.bitmap) {
+        if (canvas.display && DrawGradientShape(canvas, {rect, 0, 0}, *p)) return;
+        if (canvas.bitmap || p->shader || !canvas.data->frame.masks.empty()) {
             PathGeometry path;
             path.Rect(rect);
-            EmitPath(env, canvas, path, *p);
-        } else if (canvas.display && !DrawGradientShape(env, canvas, {rect, 0, 0}, *p)) {
+            EmitPath(canvas, path, *p);
+        } else if (canvas.display) {
             DisplayShape(canvas, *p, [&](const auto& style) { return wa_canvas_draw_rect(canvas.display, rect, style); });
         }
     });
@@ -501,13 +526,13 @@ void DrawCanvasRoundRect(JNIEnv* env, jclass, jlong id, jfloat l, jfloat t, jflo
         const auto* p = Paint(env, paint);
         const auto rect = wa_rect_t{l, t, r, b};
         if (!canvas || !p || !HasArea(rect)) return;
-        if (canvas.bitmap) {
+        const auto round = wa_round_rect_t{rect, std::max(0.f, rx), std::max(0.f, ry)};
+        if (canvas.display && DrawGradientShape(canvas, round, *p)) return;
+        if (canvas.bitmap || p->shader || !canvas.data->frame.masks.empty()) {
             PathGeometry path;
             path.RoundRect(rect, {rx, ry, rx, ry, rx, ry, rx, ry});
-            EmitPath(env, canvas, path, *p);
+            EmitPath(canvas, path, *p);
         } else if (canvas.display) {
-            const auto round = wa_round_rect_t{rect, std::max(0.f, rx), std::max(0.f, ry)};
-            if (DrawGradientShape(env, canvas, round, *p)) return;
             DisplayShape(canvas, *p, [&](const auto& style) {
                 return wa_canvas_draw_round_rect(canvas.display, round, style);
             });
@@ -521,7 +546,7 @@ void DrawCanvasOval(JNIEnv* env, jclass, jlong id, jfloat l, jfloat t, jfloat r,
         if (!canvas || !p) return;
         PathGeometry path;
         path.Oval({l, t, r, b});
-        EmitPath(env, canvas, path, *p);
+        EmitPath(canvas, path, *p);
     });
 }
 void DrawCanvasCircle(JNIEnv* env, jclass, jlong id, jfloat x, jfloat y, jfloat radius, jlong paint) {
@@ -529,10 +554,10 @@ void DrawCanvasCircle(JNIEnv* env, jclass, jlong id, jfloat x, jfloat y, jfloat 
         const auto canvas = Canvas(env, id);
         const auto* p = Paint(env, paint);
         if (!canvas || !p || !(radius > 0)) return;
-        if (canvas.bitmap) {
+        if (canvas.bitmap || p->shader || !canvas.data->frame.masks.empty()) {
             PathGeometry path;
             path.Oval({x - radius, y - radius, x + radius, y + radius});
-            EmitPath(env, canvas, path, *p);
+            EmitPath(canvas, path, *p);
         } else if (canvas.display) {
             DisplayShape(canvas, *p, [&](const auto& style) {
                 return wa_canvas_draw_circle(canvas.display, x, y, radius, style);
@@ -553,7 +578,7 @@ void DrawCanvasArc(JNIEnv* env, jclass, jlong id, jfloat l, jfloat t, jfloat r, 
             path.Arc({l, t, r, b}, from, sweep, !center);
             if (center) path.Close();
         }
-        EmitPath(env, canvas, path, *p);
+        EmitPath(canvas, path, *p);
     });
 }
 void DrawCanvasPath(JNIEnv* env, jclass, jlong id, jlong path, jlong paint) {
@@ -561,18 +586,18 @@ void DrawCanvasPath(JNIEnv* env, jclass, jlong id, jlong path, jlong paint) {
         const auto canvas = Canvas(env, id);
         const auto* g = Path(env, path);
         const auto* p = Paint(env, paint);
-        if (canvas && g && p) EmitPath(env, canvas, *g, *p);
+        if (canvas && g && p) EmitPath(canvas, *g, *p);
     });
 }
 void EmitLine(JNIEnv* env, const CanvasTarget& canvas, const PaintData& paint, float x0, float y0,
               float x1, float y1) {
-    if (canvas.bitmap) {
+    if (canvas.bitmap || paint.shader || !canvas.data->frame.masks.empty()) {
         auto p = paint;
         p.style = 1;
         PathGeometry path;
         path.Move(x0, y0);
         path.Line(x1, y1);
-        EmitPath(env, canvas, path, p);
+        EmitPath(canvas, path, p);
     } else if (canvas.display) {
         canvas.state->result = wa_canvas_draw_line(canvas.display, x0, y0, x1, y1,
                                                    DisplayPaint(canvas, paint, WA_PAINT_STROKE));
@@ -588,19 +613,19 @@ void DrawCanvasLine(JNIEnv* env, jclass, jlong id, jfloat x0, jfloat y0, jfloat 
 }
 void EmitPoint(JNIEnv* env, const CanvasTarget& canvas, const PaintData& paint, float x, float y) {
     const auto radius = std::max(1.f, paint.stroke_width) / 2;
-    if (canvas.display) {
+    if (canvas.display && !paint.shader && canvas.data->frame.masks.empty()) {
         const auto style = DisplayPaint(canvas, paint);
         auto* display = canvas.display;
         canvas.state->result = paint.cap == 1 ? wa_canvas_draw_circle(display, x, y, radius, style)
             : wa_canvas_draw_rect(display, {x - radius, y - radius, x + radius, y + radius}, style);
-    } else if (canvas.bitmap) {
+    } else if (canvas.bitmap || canvas.display) {
         PathGeometry point;
         const auto rect = wa_rect_t{x - radius, y - radius, x + radius, y + radius};
         if (paint.cap == 1) point.Oval(rect);
         else point.Rect(rect);
         auto p = paint;
         p.style = 0;
-        EmitPath(env, canvas, point, p);
+        EmitPath(canvas, point, p);
     }
 }
 void DrawCanvasPoint(JNIEnv* env, jclass, jlong id, jfloat x, jfloat y, jlong paint) {
@@ -636,10 +661,10 @@ void DrawCanvasPoints(JNIEnv* env, jclass, jlong id, jfloatArray xy, jint offset
     });
 }
 
-void EmitText(JNIEnv* env, jlong id, jlong paint, std::u16string_view text, float x, float y) {
-    const auto canvas = Canvas(env, id);
-    const auto* p = Paint(env, paint);
-    if (!canvas || !p || text.empty() || !(p->text_size > 0) || env->ExceptionCheck()) return;
+void EmitText(JNIEnv* env, const CanvasTarget& canvas, const PaintData& paint,
+              std::u16string_view text, float x, float y) {
+    const auto* p = &paint;
+    if (text.empty() || !(p->text_size > 0) || env->ExceptionCheck()) return;
     if (!canvas.display) {
         if (canvas.bitmap) Throw(env, "java/lang/UnsupportedOperationException", "Text requires the browser glyph rasterizer");
         return;
@@ -674,6 +699,11 @@ void EmitText(JNIEnv* env, jlong id, jlong paint, std::u16string_view text, floa
     draw(x, y, p->color);
     if (transform && status == WA_SF_OK) status = wa_canvas_restore(canvas.display);
 }
+void EmitText(JNIEnv* env, jlong id, jlong paint, std::u16string_view text, float x, float y) {
+    const auto canvas = Canvas(env, id);
+    const auto* p = Paint(env, paint);
+    if (canvas && p) EmitText(env, canvas, *p, text, x, y);
+}
 template <typename Text>
 void DrawCanvasText(JNIEnv* env, jclass, jlong id, Text text, jint start, jint end, jfloat x, jfloat y,
                     jint, jlong paint) {
@@ -691,27 +721,13 @@ void DrawCanvasTextRunArray(JNIEnv* env, jclass cls, jlong id, jcharArray text, 
     DrawCanvasText<jcharArray>(env, cls, id, text, index, count, x, y, rtl, paint);
 }
 
-void PaintBitmap(JNIEnv* env, const CanvasTarget& canvas, const BitmapData& bitmap, jlong identity,
+void PaintBitmap(const CanvasTarget& canvas, const BitmapData& bitmap, jlong identity,
                  wa_rect_t src, wa_rect_t dst, const PaintData& paint, jint mask = WA_MASK_RECT, float radius = 0) {
     if (!HasArea(src) || !HasArea(dst) || bitmap.recycled) return;
     const float alpha = canvas.data->frame.alpha * (paint.color >> 24) / 255.f;
     if (canvas.bitmap) {
-        auto output = RasterPixels(*canvas.bitmap);
-        auto source = RasterPixels(bitmap);
-        auto transform = RasterTransform(canvas.data->frame);
-        Object rectangles;
-        rectangles.elements = {Value::Float(src.l), Value::Float(src.t), Value::Float(src.r), Value::Float(src.b),
-                               Value::Float(dst.l), Value::Float(dst.t), Value::Float(dst.r), Value::Float(dst.b)};
-        const Value args[] = {
-            Value::Ref(&output), Value::Int(canvas.bitmap->width), Value::Int(canvas.bitmap->height),
-            Value::Ref(&source), Value::Int(bitmap.width), Value::Int(bitmap.height),
-            Value::Ref(&rectangles), Value::Ref(&transform), Value::Float(alpha),
-            Value::Int(paint.color), Value::Int(bitmap.has_alpha), Value::Int(bitmap.config == 1),
-            Value::Int(canvas.bitmap->config == 1), Value::Int((paint.flags & 2) != 0),
-            Value::Int(mask), Value::Float(radius)};
-        interp::software_raster::DrawBitmap(interp::JniBridge::From(env).Vm(), nullptr, args);
-        StoreRasterPixels(*canvas.bitmap, output);
-    } else if (canvas.display) {
+        RasterizeBitmap(canvas, bitmap, src, dst, paint, mask, radius);
+    } else if (canvas.display && canvas.data->frame.masks.empty()) {
         const auto handle = PublishBitmapPixels(*canvas.state, bitmap.pixels, bitmap.width, bitmap.height,
                                                 identity, bitmap.generation, bitmap.has_alpha,
                                                 bitmap.config == 1 ? paint.color & 0xffffffu : 0);
@@ -720,6 +736,20 @@ void PaintBitmap(JNIEnv* env, const CanvasTarget& canvas, const BitmapData& bitm
             canvas.state->recording_images.push_back(handle);
         const wa_canvas_bitmap_t draw{handle, static_cast<uint32_t>(mask), src, dst, radius, alpha};
         canvas.state->result = wa_canvas_draw_bitmap(canvas.display, &draw);
+    } else if (canvas.display) {
+        PathGeometry path;
+        if (mask == WA_MASK_ROUNDED_RECT)
+            path.RoundRect(dst, {radius, radius, radius, radius, radius, radius, radius, radius});
+        else if (mask >= WA_MASK_CIRCLE) path.Oval(dst);
+        else path.Rect(dst);
+        auto copy = paint;
+        copy.style = 0;
+        RasterizePaintedPath(canvas, path, copy, [&](float x, float y) {
+            const auto sx = std::lerp(src.l, src.r, (x - dst.l) / (dst.r - dst.l));
+            const auto sy = std::lerp(src.t, src.b, (y - dst.t) / (dst.b - dst.t));
+            return Opacity(FilterColor(paint, SampleBitmap(bitmap, 0, 0, paint.flags & 2, sx, sy, paint.color)),
+                           alpha);
+        });
     }
 }
 
@@ -730,32 +760,6 @@ const PaintData* BitmapPaint(JNIEnv* env, jlong paint) {
         return p;
     }();
     return paint ? Paint(env, paint) : &fallback;
-}
-
-struct PatchSpan {
-    float from, to, dst_from, dst_to;
-};
-
-std::vector<PatchSpan> PartitionPatch(std::span<const int32_t> divisions, float size,
-                                      float start, float end, float density) {
-    float stretch = 0;
-    for (size_t i = 0; i < divisions.size(); i += 2)
-        stretch += std::min<float>(size, divisions[i + 1]) - std::min<float>(size, divisions[i]);
-    const float fixed = size - stretch, extent = end - start;
-    const float fixed_scale = fixed > 0 ? std::min(density, extent / fixed) : density;
-    const float stretch_scale = stretch > 0 ? std::max(0.f, extent - fixed * fixed_scale) / stretch : 0;
-    std::vector<PatchSpan> spans;
-    spans.reserve(divisions.size() + 1);
-    float from = 0, dst = start;
-    for (size_t i = 0; i <= divisions.size(); ++i) {
-        const float to = i == divisions.size() ? size : std::min<float>(size, divisions[i]);
-        const float next = i == divisions.size() ? end :
-            std::min(end, dst + (to - from) * (i % 2 ? stretch_scale : fixed_scale));
-        if (to > from && next > dst) spans.push_back({from, to, dst, next});
-        from = to;
-        dst = next;
-    }
-    return spans;
 }
 
 void DrawCanvasNinePatch(JNIEnv* env, jclass, jlong id, jlong bitmap, jlong chunk, jfloat left,
@@ -774,7 +778,7 @@ void DrawCanvasNinePatch(JNIEnv* env, jclass, jlong id, jlong bitmap, jlong chun
         for (const auto& row : y) {
             for (const auto& col : x) {
                 if (canvas.state->result != WA_SF_OK) return;
-                PaintBitmap(env, canvas, *image, bitmap, {col.from, row.from, col.to, row.to},
+                PaintBitmap(canvas, *image, bitmap, {col.from, row.from, col.to, row.to},
                             {col.dst_from, row.dst_from, col.dst_to, row.dst_to}, *p);
             }
         }
@@ -787,7 +791,7 @@ void DrawCanvasBitmapRect(JNIEnv* env, jclass, jlong id, jlong bitmap, jfloat sl
         const auto canvas = Canvas(env, id);
         const auto* image = Bitmap(env, bitmap);
         const auto* p = BitmapPaint(env, paint);
-        if (canvas && image && p) PaintBitmap(env, canvas, *image, bitmap, {sl, st, sr, sb}, {dl, dt, dr, db}, *p);
+        if (canvas && image && p) PaintBitmap(canvas, *image, bitmap, {sl, st, sr, sb}, {dl, dt, dr, db}, *p);
     });
 }
 void DrawCanvasBitmapAt(JNIEnv* env, jclass cls, jlong id, jlong bitmap, jfloat x, jfloat y, jlong paint,
@@ -828,7 +832,7 @@ void DrawCanvasBitmapPixels(JNIEnv* env, jclass, jlong id, jintArray colors, jin
             if (!alpha)
                 for (jint col = 0; col < width; ++col) pixels.pixels[row * width + col] |= 0xff000000;
         }
-        PaintBitmap(env, canvas, pixels, 0, {0, 0, float(width), float(height)}, {x, y, x + width, y + height}, *p);
+        PaintBitmap(canvas, pixels, 0, {0, 0, float(width), float(height)}, {x, y, x + width, y + height}, *p);
     });
 }
 void DrawCanvasMaskedBitmap(JNIEnv* env, jclass, jlong id, jlong bitmap, jfloat sl, jfloat st, jfloat sr,
@@ -838,7 +842,7 @@ void DrawCanvasMaskedBitmap(JNIEnv* env, jclass, jlong id, jlong bitmap, jfloat 
         const auto canvas = Canvas(env, id);
         const auto* image = Bitmap(env, bitmap);
         const auto* p = BitmapPaint(env, paint);
-        if (canvas && image && p) PaintBitmap(env, canvas, *image, bitmap,
+        if (canvas && image && p) PaintBitmap(canvas, *image, bitmap,
             {sl, st, sr, sb}, {dl, dt, dr, db}, *p, mask, radius);
     });
 }
@@ -852,6 +856,8 @@ void DrawCanvasGradient(JNIEnv* env, jclass, jlong id, jfloat l, jfloat t, jfloa
                                     Opacity(last, alpha), degrees};
     canvas.state->result = wa_canvas_draw_linear_gradient(canvas.display, &draw);
 }
+#include "canvas_draw_ops.inc"
+
 void FreeCanvasCaches(JNIEnv* env, jclass) {
     if (auto* state = GetState(env)) state->CollectImages();
 }
@@ -879,6 +885,8 @@ bool RegisterModernCanvas(interp::Vm& vm) {
              Method<SaveCanvas>(vm, "nSave", "(JI)I"),
              Method<SaveLayer>(vm, "nSaveLayer", "(JFFFFJ)I"),
              Method<SaveLayerAlpha>(vm, "nSaveLayerAlpha", "(JFFFFI)I"),
+             Method<SaveUnclippedLayer>(vm, "nSaveUnclippedLayer", "(JIIII)I"),
+             Method<RestoreUnclippedLayer>(vm, "nRestoreUnclippedLayer", "(JIJ)V"),
              Method<RestoreCanvas>(vm, "nRestore", "(J)Z"),
              Method<RestoreCanvasToCount>(vm, "nRestoreToCount", "(JI)V"),
              Method<CanvasSaveCount>(vm, "nGetSaveCount", "(J)I"),
@@ -892,6 +900,8 @@ bool RegisterModernCanvas(interp::Vm& vm) {
              Method<GetCanvasMatrix>(vm, "nGetMatrix", "(JJ)V"),
              Method<ClipCanvasRect>(vm, "nClipRect", "(JFFFFI)Z"),
              Method<ClipCanvasPath>(vm, "nClipPath", "(JJI)Z"),
+             Method<ClipCanvasShader>(vm, "nClipShader", "(JJI)V"),
+             Method<SetCanvasDrawFilter>(vm, "nSetDrawFilter", "(JJ)V"),
              Method<GetClipBounds>(vm, "nGetClipBounds", "(JLandroid/graphics/Rect;)Z"),
              Method<QuickRejectRect>(vm, "nQuickReject", "(JFFFF)Z"),
              Method<QuickRejectPath>(vm, "nQuickReject", "(JJ)Z"));
@@ -914,18 +924,28 @@ bool RegisterModernCanvas(interp::Vm& vm) {
              Method<DrawCanvasPoints<true>>(vm, "nDrawLines", "(J[FIIJ)V"),
              Method<DrawCanvasRect>(vm, "nDrawRect", "(JFFFFJ)V"),
              Method<DrawCanvasRoundRect>(vm, "nDrawRoundRect", "(JFFFFFFJ)V"),
+             Method<DrawDoubleRoundRect>(vm, "nDrawDoubleRoundRect", "(JFFFFFFFFFFFFJ)V"),
+             Method<DrawDoubleRoundRectRadii>(vm, "nDrawDoubleRoundRect", "(JFFFF[FFFFF[FJ)V"),
              Method<DrawCanvasOval>(vm, "nDrawOval", "(JFFFFJ)V"),
              Method<DrawCanvasCircle>(vm, "nDrawCircle", "(JFFFJ)V"),
              Method<DrawCanvasArc>(vm, "nDrawArc", "(JFFFFFFZJ)V"),
              Method<DrawCanvasPath>(vm, "nDrawPath", "(JJJ)V"),
+             Method<DrawCanvasRegion>(vm, "nDrawRegion", "(JJJ)V"),
              Method<DrawCanvasText<jstring>>(vm, "nDrawText", "(JLjava/lang/String;IIFFIJ)V"),
              Method<DrawCanvasText<jcharArray>>(vm, "nDrawText", "(J[CIIFFIJ)V"),
              Method<DrawCanvasTextRun>(vm, "nDrawTextRun", "(JLjava/lang/String;IIIIFFZJ)V"),
              Method<DrawCanvasTextRunArray>(vm, "nDrawTextRun", "(J[CIIIIFFZJJ)V"),
+             Method<DrawTextOnPathString>(vm, "nDrawTextOnPath", "(JLjava/lang/String;JFFIJ)V"),
+             Method<DrawTextOnPathArray>(vm, "nDrawTextOnPath", "(J[CIIJFFIJ)V"),
+             Method<DrawCanvasGlyphs>(vm, "nDrawGlyphs", "(J[I[FIIIJJ)V"),
              Method<DrawCanvasBitmapAt>(vm, "nDrawBitmap", "(JJFFJIII)V"),
              Method<DrawCanvasBitmapRect>(vm, "nDrawBitmap", "(JJFFFFFFFFJII)V"),
              Method<DrawCanvasBitmapPixels>(vm, "nDrawBitmap", "(J[IIIFFIIZJ)V"),
-             Method<DrawCanvasBitmapMatrix>(vm, "nDrawBitmapMatrix", "(JJJJ)V"));
+             Method<DrawCanvasBitmapMatrix>(vm, "nDrawBitmapMatrix", "(JJJJ)V"),
+             Method<DrawBitmapMesh>(vm, "nDrawBitmapMesh", "(JJII[FI[IIJ)V"),
+             Method<DrawCanvasVertices>(vm, "nDrawVertices", "(JII[FI[FI[II[SIIJ)V"),
+             Method<DrawCanvasMesh>(vm, "nDrawMesh", "(JJIJ)V"),
+             Method<PunchCanvasHole>(vm, "nPunchHole", "(JFFFFFFF)V"));
     return true;
 }
 

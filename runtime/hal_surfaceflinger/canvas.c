@@ -1,6 +1,7 @@
 #include "internal.h"
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef __EMSCRIPTEN__
@@ -25,6 +26,13 @@ wa_canvas_t *wa_canvas_begin(wa_sf_t *sf, uint32_t id) {
     if (slot < 0 || sf->staged[slot].desc.surface_kind != WA_SF_SURFACE_DISPLAY_LIST)
         return NULL;
     uint32_t bank = sf->committed[slot].bank ^ 1u;
+    if (!sf->lists[slot][bank]) {
+        sf->lists[slot][bank] = malloc(WA_SF_LAYER_LIST_CAPACITY);
+        if (!sf->lists[slot][bank]) {
+            sf->txn_error = WA_SF_NOMEM;
+            return NULL;
+        }
+    }
     sf->canvas = (wa_canvas_t){sf, (uint32_t)slot, bank, 0, 0, WA_SF_OK, sf->lists[slot][bank]};
     return &sf->canvas;
 }

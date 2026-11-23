@@ -17,6 +17,12 @@
 #include "text_layout_jni.cpp"
 
 namespace wa::ui_jni::detail {
+#include "text_util.inc"
+#include "native_allocation.inc"
+#include "launcher_drag_compat.inc"
+} // namespace wa::ui_jni::detail
+
+namespace wa::ui_jni::detail {
 namespace {
 
 thread_local std::unordered_map<JNIEnv*, State*> bindings;
@@ -582,6 +588,9 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     detail::RegisterVectors(vm);
     detail::RegisterViewInput(vm);
     detail::RegisterTextLayout(vm);
+    detail::RegisterTextUtilities(vm);
+    detail::RegisterHostAllocationRegistry(vm);
+    detail::RegisterLauncherDragCollections(vm);
     detail::bindings.emplace(env, state_.get());
     state_->env = env;
     state_->vm = &vm;

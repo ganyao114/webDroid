@@ -491,12 +491,16 @@ jint TargetSdkVersion(JNIEnv* env, jclass) {
 }
 
 jobject WrapFont(JNIEnv* env, jclass, jlong handle) {
+    if (!interp::JniBridge::From(env).Vm().linker.HasClass("Landroid/graphics/fonts/Font;"))
+        return nullptr;
     const auto cls = env->FindClass("android/graphics/fonts/Font");
     if (!cls) return nullptr;
     const auto ctor = env->GetMethodID(cls, "<init>", "(J)V");
     const jvalue argument{.j = handle};
     return ctor ? env->NewObjectA(cls, ctor, &argument) : nullptr;
 }
+
+#include "glyph_run.inc"
 
 } // namespace text_layout
 
@@ -532,6 +536,7 @@ void RegisterTextLayout(interp::Vm& vm) {
              Method<TargetSdkVersion>(vm, "nGetTargetSdkVersion", "()I"));
     Register(vm, "android/graphics/text/PositionedGlyphs",
              Method<WrapFont>(vm, "nWrapFont", "(J)Landroid/graphics/fonts/Font;"));
+    RegisterGlyphRuns(vm);
     Register(vm, "android/text/TextDirectionHeuristics",
              Method<StrongDirection>(vm, "nGetStrongDirection", "(I)B"));
     Register(vm, "android/text/AndroidBidi", Method<BidiLevels>(vm, "nBidi", "(I[C[B)I"));

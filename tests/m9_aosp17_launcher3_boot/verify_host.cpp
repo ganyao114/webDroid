@@ -593,6 +593,53 @@ struct Session {
     int64_t time = 0;
 };
 
+void LongPressWorkspaceIcon(Session& session, const Layer& home, const HomeGeometry& geometry,
+                            std::string_view label) {
+    const auto title = home.Find(label);
+    const auto icon = std::ranges::find_if(home.bitmaps, [&](const auto& bitmap) {
+        const auto r = bitmap.bounds;
+        return r.b < geometry.dots.front().bounds.t && std::abs(CenterX(r) - title.x) < 1 &&
+               r.b < title.y && title.y - r.b < 36;
+    });
+    Require(icon != home.bitmaps.end(), "Workspace icon is visible for the long press");
+    const float x = CenterX(icon->bounds), y = (icon->bounds.t + icon->bounds.b) / 2;
+    const float dx = session.width * (x < session.width / 2.f ? .18f : -.18f);
+    const float dy = session.height * (y < geometry.hotseat_top / 2 ? .25f : -.25f);
+    const int launches = State().Integer("launchCount");
+
+    session.Push(WA_INPUT_MOTION, WA_ACTION_DOWN, 1, x, y);
+    session.Tick(36);
+    const auto popup = session.ReadFrame()[1];
+    const bool app_info = std::ranges::any_of(popup.labels, [](const auto& text) {
+        return text.label == "App info";
+    });
+    const bool pickup = std::ranges::any_of(popup.bitmaps, [&](const auto& bitmap) {
+        const auto r = bitmap.bounds;
+        return std::abs(CenterX(r) - x) < 2 && std::abs((r.t + r.b) / 2 - y) < 2 &&
+               std::ranges::none_of(home.bitmaps, [&](const auto& previous) { return previous.id == bitmap.id; });
+    });
+    Require(app_info && pickup, "Launcher3 rendered App info and the lifted icon");
+    session.Push(WA_INPUT_MOTION, WA_ACTION_MOVE, 1, x + dx / 2, y + dy / 2);
+    session.Tick();
+    session.Push(WA_INPUT_MOTION, WA_ACTION_MOVE, 1, x + dx, y + dy);
+    session.Tick(12);
+    const auto dragging = session.ReadFrame()[1];
+    const auto at_drag_location = [&](const auto& path) {
+        return std::abs(path.position.x - (x + dx)) < Width(icon->bounds) / 3 &&
+               std::abs(path.position.y - (y + dy)) < Height(icon->bounds) / 3;
+    };
+    // The preview switches from the pickup bitmap to the adaptive icon paths.
+    Require(std::ranges::any_of(dragging.paths, at_drag_location) &&
+            std::ranges::none_of(home.paths, at_drag_location), "Launcher3 rendered the moved icon preview");
+
+    session.Push(WA_INPUT_MOTION, WA_ACTION_CANCEL, 1, x + dx, y + dy);
+    session.Tick(24);
+    const State after;
+    Require(after.Integer("launchCount") == launches && after.Integer("workspacePage") == 0 &&
+            !after.Boolean("drawerOpen"), after.text);
+    std::puts("Launcher3 workspace icon long press opened App info and rendered a drag preview");
+}
+
 void Run(int width, int height, const char* locale, const char* composition, const char* query,
          const char* cube_label, const File& dex, const File& fallback, const File& resources,
          const File& launcher, const File& systemui, const std::vector<File>& apps) {
@@ -727,6 +774,13 @@ void Run(int width, int height, const char* locale, const char* composition, con
     session.Tick();
     CheckSystemUiFrame(session.ReadFrame()[1], session.height);
     session.TapSystemUi("home", 3);
+    if (english) {
+        session.Tick(36);
+        const auto home = session.ReadFrame()[1];
+        const auto geometry = CheckHome(home, session.width, session.height, 0,
+                                        State().NavigationInset(), first_labels);
+        LongPressWorkspaceIcon(session, home, geometry, first_labels.front());
+    }
 }
 
 }  // namespace
