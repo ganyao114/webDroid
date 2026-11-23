@@ -18,6 +18,7 @@ import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
 import android.hardware.display.DisplayManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -140,7 +141,8 @@ public final class UiRuntime {
         @Override public SharedPreferences getSharedPreferences(String name, int mode) {
             synchronized (packagePreferences) {
                 return packagePreferences.computeIfAbsent(info.packageName, key -> new android.util.ArrayMap<>())
-                        .computeIfAbsent(name, key -> new MemorySharedPreferences(info.targetSdkVersion >= 30));
+                        .computeIfAbsent(name, key -> new SharedPreferencesImpl(
+                                info.targetSdkVersion >= Build.VERSION_CODES.R));
             }
         }
         @Override public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter, String permission,

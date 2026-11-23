@@ -168,6 +168,34 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def read_libcore_source(args, name, inputs):
+    """Resolve a libcore source excluded from a sparse checkout without fetching blobs."""
+    relative = Path(name).relative_to(JAVA_BASE)
+    repo = args.aosp_root / "libcore"
+    git = ("git", "--no-optional-locks", "-C", repo)
+    env = {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
+    head = subprocess.check_output(
+        [*git, "rev-parse", "--path-format=absolute", "--git-path", "HEAD"],
+        env=env, text=True).strip()
+    inputs.add(Path(head))
+    tree_path = Path(name).relative_to("libcore").as_posix()
+    blob = subprocess.check_output([*git, "rev-parse", "--verify", f"HEAD:{tree_path}"],
+                                   env=env).strip()
+    local = subprocess.run([*git, "cat-file", "blob", blob.decode("ascii")],
+                           env=env, capture_output=True, check=False)
+    if local.returncode == 0:
+        return local.stdout
+    # The SDK source bundle also contains libcore Java sources. Only accept it
+    # when Git confirms that every byte matches the selected libcore blob.
+    mirror = args.sdk_sources / relative
+    data = mirror.read_bytes()
+    actual = subprocess.check_output([*git, "hash-object", "--stdin"], input=data, env=env)
+    if actual.strip() != blob:
+        raise ValueError(f"{mirror}: does not match libcore {tree_path} at HEAD")
+    inputs.add(mirror)
+    return data
+
+
 def profile_sources(aosp_root, inputs, manifest=PROFILE / "sources.txt"):
     groups = defaultdict(list)
     directories = defaultdict(list)
@@ -482,6 +510,18 @@ def compile_only_platform_sources(args, stage, inputs):
         yield stage_java(stage, name, (code + "}\n").encode())
 
 
+def sdk_annotation_sources(args, names, inputs):
+    """Resolve the SDK annotations shared by the two framework javac invocations."""
+    for name in sorted(names):
+        path = args.sdk_sources / name
+        if not name.startswith(("android/annotation/", "android/compat/annotation/",
+                                "android/ravenwood/annotation/", "com/android/internal/annotations/",
+                                "dalvik/annotation/optimization/")) or path.suffix != ".java":
+            raise ValueError(f"{PROFILE / 'sources.txt'}: expected a compile-only SDK annotation: {name}")
+        inputs.add(path)
+        yield path
+
+
 def dex_from_jar(args, stage, jar, output, classpath, *, compressed_archive=False):
     out = stage / output
     out.mkdir()
@@ -540,8 +580,11 @@ def build(args, stage):
             path = args.aosp_root / name
             if (not name.startswith(("frameworks/base/", "libcore/")) or path.suffix != ".java"):
                 raise ValueError(f"{manifest}: expected an upstream Java file in [{group}]: {name}")
-            inputs.add(path)
-            java[name] = path.read_bytes()
+            if group == "java-base" and not path.is_file():
+                java[name] = read_libcore_source(args, name, inputs)
+            else:
+                inputs.add(path)
+                java[name] = path.read_bytes()
     originals = {name: digest(data) for name, data in java.items()}
     patches = {}
     for name in groups["patches"]:
@@ -615,17 +658,10 @@ def build(args, stage):
                               "inputs": sorted(groups["aidl"]), "sha256": digest(file.read_bytes())})
             records.append({"path": name, "kind": "aidl", "sha256": digest(data)})
 
-    sdk_sources = []
-    for name in sorted(groups["annotations"]):
-        path = args.sdk_sources / name
-        if not name.startswith(("android/annotation/", "android/compat/annotation/",
-                                "android/ravenwood/annotation/", "com/android/internal/annotations/",
-                                "dalvik/annotation/optimization/")) or path.suffix != ".java":
-            raise ValueError(f"{manifest}: expected a compile-only SDK annotation: {name}")
-        inputs.add(path)
-        sdk_sources.append({"path": name, "sha256": digest(path.read_bytes())})
+    annotation_files = list(sdk_annotation_sources(args, groups["annotations"], inputs))
+    sdk_sources = [{"path": path.relative_to(args.sdk_sources).as_posix(),
+                    "sha256": digest(path.read_bytes())} for path in annotation_files]
     annotations = stage / "annotations"
-    annotation_files = [args.sdk_sources / item["path"] for item in sdk_sources]
     for file, record in resource_flag_declarations(symbols, stage / "resource-annotations", program_flags):
         annotation_files.append(file)
         generated.append(record)

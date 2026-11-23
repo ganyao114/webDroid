@@ -1,0 +1,26 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/TimeUnit.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/TimeUnit.java
+@@ -477,14 +477,15 @@
+      * @since 9
+      */
+     public static TimeUnit of(ChronoUnit chronoUnit) {
+-        switch (Objects.requireNonNull(chronoUnit, "chronoUnit")) {
+-        case NANOS:   return TimeUnit.NANOSECONDS;
+-        case MICROS:  return TimeUnit.MICROSECONDS;
+-        case MILLIS:  return TimeUnit.MILLISECONDS;
+-        case SECONDS: return TimeUnit.SECONDS;
+-        case MINUTES: return TimeUnit.MINUTES;
+-        case HOURS:   return TimeUnit.HOURS;
+-        case DAYS:    return TimeUnit.DAYS;
++        // Keep ChronoUnit out of the enum switch table used by convert().
++        switch (Objects.requireNonNull(chronoUnit, "chronoUnit").name()) {
++        case "NANOS":   return TimeUnit.NANOSECONDS;
++        case "MICROS":  return TimeUnit.MICROSECONDS;
++        case "MILLIS":  return TimeUnit.MILLISECONDS;
++        case "SECONDS": return TimeUnit.SECONDS;
++        case "MINUTES": return TimeUnit.MINUTES;
++        case "HOURS":   return TimeUnit.HOURS;
++        case "DAYS":    return TimeUnit.DAYS;
+         default:
+             throw new IllegalArgumentException(
+                 "No TimeUnit equivalent for " + chronoUnit);

@@ -1,0 +1,352 @@
+--- a/libcore/ojluni/src/main/java/java/util/stream/Stream.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/Stream.java
+@@ -1052,57 +1052,6 @@
+                  BinaryOperator<U> combiner);
+ 
+     /**
+-     * Returns a stream consisting of the results of applying the given
+-     * {@link Gatherer} to the elements of this stream.
+-     *
+-     * <p>This is a <a href="package-summary.html#StreamOps">stateful
+-     * intermediate operation</a> that is an
+-     * <a href="package-summary.html#Extensibility">extension point</a>.
+-     *
+-     * <p>Gatherers are highly flexible and can describe a vast array of
+-     * possibly stateful operations, with support for short-circuiting, and
+-     * parallelization.
+-     *
+-     * <p>When executed in parallel, multiple intermediate results may be
+-     * instantiated, populated, and merged so as to maintain isolation of
+-     * mutable data structures.  Therefore, even when executed in parallel
+-     * with non-thread-safe data structures (such as {@code ArrayList}), no
+-     * additional synchronization is needed for a parallel reduction.
+-     *
+-     * <p>Implementations are allowed, but not required, to detect consecutive
+-     * invocations and compose them into a single, fused, operation. This would
+-     * make the first expression below behave like the second:
+-     *
+-     * <pre>{@code
+-     *     var stream1 = Stream.of(...).gather(gatherer1).gather(gatherer2);
+-     *     var stream2 = Stream.of(...).gather(gatherer1.andThen(gatherer2));
+-     * }</pre>
+-     *
+-     * @implSpec
+-     * The default implementation obtains the {@link #spliterator() spliterator}
+-     * of this stream, wraps that spliterator so as to support the semantics
+-     * of this operation on traversal, and returns a new stream associated with
+-     * the wrapped spliterator.  The returned stream preserves the execution
+-     * characteristics of this stream (namely parallel or sequential execution
+-     * as per {@link #isParallel()}) but the wrapped spliterator may choose to
+-     * not support splitting.  When the returned stream is closed, the close
+-     * handlers for both the returned and this stream are invoked.
+-     * Implementations of this interface should provide their own
+-     * implementation of this method.
+-     *
+-     * @see Gatherers
+-     * @param <R> The element type of the new stream
+-     * @param gatherer a gatherer
+-     * @return the new stream
+-     * @since 24
+-     */
+-    default <R> Stream<R> gather(Gatherer<? super T, ?, R> gatherer) {
+-        return StreamSupport.stream(spliterator(), isParallel())
+-                            .gather(gatherer)
+-                            .onClose(this::close);
+-    }
+-
+-    /**
+      * Performs a <a href="package-summary.html#MutableReduction">mutable
+      * reduction</a> operation on the elements of this stream.  A mutable
+      * reduction is one in which the reduced value is a mutable result container,
+@@ -1426,6 +1375,15 @@
+      */
+     public static<T> Builder<T> builder() {
+         return new Streams.StreamBuilderImpl<>();
++    }
++
++    // Entry points of the interpreter's Collection.stream and Arrays.stream.
++    static <T> Stream<T> fromCollection(Collection<T> values) {
++        return StreamSupport.stream(Spliterators.spliterator(values, Spliterator.ORDERED), false);
++    }
++
++    static <T> Stream<T> fromArray(T[] values) {
++        return StreamSupport.stream(Spliterators.spliterator(values, Spliterator.ORDERED), false);
+     }
+ 
+     /**
+--- a/libcore/ojluni/src/main/java/java/util/stream/AbstractPipeline.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/AbstractPipeline.java
+@@ -162,7 +162,8 @@
+         // StreamOpFlag.combineOpFlags(sourceOrOpFlags, StreamOpFlag.INITIAL_OPS_VALUE);
+         this.combinedFlags = (~(sourceOrOpFlags << 1)) & StreamOpFlag.INITIAL_OPS_VALUE;
+         this.depth = 0;
+-        this.parallel = parallel;
++        // The interpreter executes streams on one thread.
++        this.parallel = false;
+     }
+ 
+     /**
+@@ -183,7 +184,8 @@
+         // StreamOpFlag.combineOpFlags(sourceOrOpFlags, StreamOpFlag.INITIAL_OPS_VALUE);
+         this.combinedFlags = (~(sourceOrOpFlags << 1)) & StreamOpFlag.INITIAL_OPS_VALUE;
+         this.depth = 0;
+-        this.parallel = parallel;
++        // The interpreter executes streams on one thread.
++        this.parallel = false;
+     }
+ 
+     /**
+@@ -343,7 +345,6 @@
+     @Override
+     @SuppressWarnings("unchecked")
+     public final S parallel() {
+-        sourceStage.parallel = true;
+         return (S) this;
+     }
+ 
+--- a/libcore/ojluni/src/main/java/java/util/stream/StreamOpFlag.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/StreamOpFlag.java
+@@ -24,7 +24,7 @@
+  */
+ package java.util.stream;
+ 
+-import java.util.EnumMap;
++import java.util.HashMap;
+ import java.util.Map;
+ import java.util.Spliterator;
+ 
+@@ -395,7 +395,7 @@
+     private static final int PRESERVE_BITS = 0b11;
+ 
+     private static MaskBuilder set(Type t) {
+-        return new MaskBuilder(new EnumMap<>(Type.class)).set(t);
++        return new MaskBuilder(new HashMap<>()).set(t);
+     }
+ 
+     private static class MaskBuilder {
+--- a/libcore/ojluni/src/main/java/java/util/stream/SliceOps.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/SliceOps.java
+@@ -50,7 +50,7 @@
+      * @return the sliced size
+      */
+     private static long calcSize(long size, long skip, long limit) {
+-        return size >= 0 ? Math.clamp(size - skip, 0, limit) : -1;
++        return size >= 0 ? Math.min(Math.max(size - skip, 0L), limit) : -1;
+     }
+ 
+     /**
+--- a/libcore/ojluni/src/main/java/java/util/stream/Tripwire.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/Tripwire.java
+@@ -43,10 +43,8 @@
+  * @since 1.8
+  */
+ final class Tripwire {
+-    private static final String TRIPWIRE_PROPERTY = "org.openjdk.java.util.stream.tripwire";
+-
+     /** Should debugging checks be enabled? */
+-    static final boolean ENABLED = Boolean.getBoolean(TRIPWIRE_PROPERTY);
++    static final boolean ENABLED = false;
+ 
+     private Tripwire() { }
+ 
+--- a/libcore/ojluni/src/main/java/java/util/stream/ForEachOps.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/ForEachOps.java
+@@ -24,18 +24,15 @@
+  */
+ package java.util.stream;
+ 
+-import jdk.internal.invoke.MhUtil;
+-
+ import java.util.Objects;
+ import java.util.Spliterator;
+ import java.util.concurrent.CountedCompleter;
++import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+ import java.util.function.Consumer;
+ import java.util.function.DoubleConsumer;
+ import java.util.function.IntConsumer;
+ import java.util.function.IntFunction;
+ import java.util.function.LongConsumer;
+-import java.lang.invoke.VarHandle;
+-import java.lang.invoke.MethodHandles;
+ 
+ /**
+  * Factory for creating instances of {@code TerminalOp} that perform an
+@@ -371,9 +368,10 @@
+         private final ForEachOrderedTask<S, T> leftPredecessor;
+         private Node<T> node;
+ 
+-        private ForEachOrderedTask<S, T> next;
+-        private static final VarHandle NEXT = MhUtil.findVarHandle(
+-                MethodHandles.lookup(), "next", ForEachOrderedTask.class);
++        private volatile ForEachOrderedTask<S, T> next;
++        private static final AtomicReferenceFieldUpdater<ForEachOrderedTask, ForEachOrderedTask> NEXT =
++                AtomicReferenceFieldUpdater.newUpdater(ForEachOrderedTask.class,
++                        ForEachOrderedTask.class, "next");
+ 
+         protected ForEachOrderedTask(PipelineHelper<T> helper,
+                                      Spliterator<S> spliterator,
+--- a/libcore/ojluni/src/main/java/java/util/stream/ReferencePipeline.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/ReferencePipeline.java
+@@ -50,7 +50,6 @@
+ import java.util.function.ToDoubleFunction;
+ import java.util.function.ToIntFunction;
+ import java.util.function.ToLongFunction;
+-import jdk.internal.access.SharedSecrets;
+ 
+ /**
+  * Abstract base class for an intermediate pipeline stage or pipeline source
+@@ -685,7 +684,7 @@
+ 
+     @Override
+     public List<P_OUT> toList() {
+-        return SharedSecrets.getJavaUtilCollectionAccess().listFromTrustedArrayNullsAllowed(this.toArray());
++        return Stream.super.toList();
+     }
+ 
+     @Override
+@@ -726,11 +725,6 @@
+     @Override
+     public final <R> R reduce(R identity, BiFunction<R, ? super P_OUT, R> accumulator, BinaryOperator<R> combiner) {
+         return evaluate(ReduceOps.makeRef(identity, accumulator, combiner));
+-    }
+-
+-    @Override
+-    public final <R> Stream<R> gather(Gatherer<? super P_OUT, ?, R> gatherer) {
+-        return GathererOp.of(this, gatherer);
+     }
+ 
+     @Override
+--- a/libcore/ojluni/src/main/java/java/util/stream/IntStream.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/IntStream.java
+@@ -915,7 +915,8 @@
+      * @return the new stream
+      */
+     public static IntStream of(int... values) {
+-        return Arrays.stream(values);
++        return StreamSupport.intStream(
++                Spliterators.spliterator(values, Spliterator.ORDERED), false);
+     }
+ 
+     /**
+--- a/libcore/ojluni/src/main/java/java/util/stream/LongStream.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/LongStream.java
+@@ -904,7 +904,8 @@
+      * @return the new stream
+      */
+     public static LongStream of(long... values) {
+-        return Arrays.stream(values);
++        return StreamSupport.longStream(
++                Spliterators.spliterator(values, Spliterator.ORDERED), false);
+     }
+ 
+     /**
+--- a/libcore/ojluni/src/main/java/java/util/stream/DoubleStream.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/DoubleStream.java
+@@ -974,7 +974,8 @@
+      * @return the new stream
+      */
+     public static DoubleStream of(double... values) {
+-        return Arrays.stream(values);
++        return StreamSupport.doubleStream(
++                Spliterators.spliterator(values, Spliterator.ORDERED), false);
+     }
+ 
+     /**
+--- a/libcore/ojluni/src/main/java/java/util/stream/IntPipeline.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/IntPipeline.java
+@@ -491,7 +491,7 @@
+ 
+     @Override
+     public final int sum() {
+-        return reduce(0, Integer::sum);
++        return reduce(0, (left, right) -> left + right);
+     }
+ 
+     @Override
+--- a/libcore/ojluni/src/main/java/java/util/stream/LongPipeline.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/LongPipeline.java
+@@ -474,7 +474,7 @@
+     @Override
+     public final long sum() {
+         // use better algorithm to compensate for intermediate overflow?
+-        return reduce(0, Long::sum);
++        return reduce(0, (left, right) -> left + right);
+     }
+ 
+     @Override
+--- a/libcore/ojluni/src/main/java/java/util/stream/Nodes.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/Nodes.java
+@@ -667,7 +667,7 @@
+ 
+         @Override
+         public Spliterator<T> spliterator() {
+-            return Arrays.spliterator(array, 0, curSize);
++            return Spliterators.spliterator(array, 0, curSize, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+         }
+ 
+         @Override
+@@ -1345,7 +1345,7 @@
+ 
+         @Override
+         public Spliterator.OfInt spliterator() {
+-            return Arrays.spliterator(array, 0, curSize);
++            return Spliterators.spliterator(array, 0, curSize, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+         }
+ 
+         @Override
+@@ -1399,7 +1399,7 @@
+ 
+         @Override
+         public Spliterator.OfLong spliterator() {
+-            return Arrays.spliterator(array, 0, curSize);
++            return Spliterators.spliterator(array, 0, curSize, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+         }
+ 
+         @Override
+@@ -1453,7 +1453,7 @@
+ 
+         @Override
+         public Spliterator.OfDouble spliterator() {
+-            return Arrays.spliterator(array, 0, curSize);
++            return Spliterators.spliterator(array, 0, curSize, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+         }
+ 
+         @Override
+--- a/libcore/ojluni/src/main/java/java/util/stream/SpinedBuffer.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/SpinedBuffer.java
+@@ -390,7 +390,7 @@
+                     if (t == 0)
+                         return null;
+                     else {
+-                        Spliterator<E> ret = Arrays.spliterator(splChunk, splElementIndex, splElementIndex + t);
++                        Spliterator<E> ret = Spliterators.spliterator(splChunk, splElementIndex, splElementIndex + t, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+                         splElementIndex += t;
+                         return ret;
+                     }
+@@ -816,7 +816,7 @@
+ 
+                 @Override
+                 Spliterator.OfInt arraySpliterator(int[] array, int offset, int len) {
+-                    return Arrays.spliterator(array, offset, offset+len);
++                    return Spliterators.spliterator(array, offset, offset+len, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+                 }
+             }
+             return new Splitr(0, spineIndex, 0, elementIndex);
+@@ -936,7 +936,7 @@
+ 
+                 @Override
+                 Spliterator.OfLong arraySpliterator(long[] array, int offset, int len) {
+-                    return Arrays.spliterator(array, offset, offset+len);
++                    return Spliterators.spliterator(array, offset, offset+len, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+                 }
+             }
+             return new Splitr(0, spineIndex, 0, elementIndex);
+@@ -1056,7 +1056,7 @@
+ 
+                 @Override
+                 Spliterator.OfDouble arraySpliterator(double[] array, int offset, int len) {
+-                    return Arrays.spliterator(array, offset, offset+len);
++                    return Spliterators.spliterator(array, offset, offset+len, Spliterator.ORDERED | Spliterator.IMMUTABLE);
+                 }
+             }
+             return new Splitr(0, spineIndex, 0, elementIndex);

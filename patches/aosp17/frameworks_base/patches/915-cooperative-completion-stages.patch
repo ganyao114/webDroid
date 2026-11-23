@@ -1,0 +1,344 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/CompletableFuture.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/CompletableFuture.java
+@@ -35,9 +35,8 @@
+ 
+ package java.util.concurrent;
+ 
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+-import java.util.concurrent.locks.LockSupport;
++import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
++import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+ import java.util.function.BiConsumer;
+ import java.util.function.BiFunction;
+ import java.util.function.Consumer;
+@@ -403,33 +402,11 @@
+     public static interface AsynchronousCompletionTask {
+     }
+ 
+-    private static final boolean USE_COMMON_POOL =
+-        (ForkJoinPool.getCommonPoolParallelism() > 1);
+-
+-    /**
+-     * Default executor -- ForkJoinPool.commonPool() unless it cannot
+-     * support parallelism.
+-     */
+-    private static final Executor ASYNC_POOL = USE_COMMON_POOL ?
+-        ForkJoinPool.commonPool() : new ThreadPerTaskExecutor();
+-
+-    /** Fallback if ForkJoinPool.commonPool() cannot support parallelism */
+-    private static final class ThreadPerTaskExecutor implements Executor {
+-        public void execute(Runnable r) {
+-            Objects.requireNonNull(r);
+-            new Thread(r).start();
+-        }
+-    }
+-
+-    /**
+-     * Null-checks user executor argument, and translates uses of
+-     * commonPool to ASYNC_POOL in case parallelism disabled.
+-     */
++    // A guest cannot start a worker. Explicit executors keep their own scheduling.
++    private static final Executor ASYNC_POOL = Runnable::run;
++
+     static Executor screenExecutor(Executor e) {
+-        if (!USE_COMMON_POOL && e == ForkJoinPool.commonPool())
+-            return ASYNC_POOL;
+-        if (e == null) throw new NullPointerException();
+-        return e;
++        return Objects.requireNonNull(e);
+     }
+ 
+     // Modes for Completion.tryFire. Signedness matters.
+@@ -440,7 +417,7 @@
+     /* ------------- Base Completion classes and operations -------------- */
+ 
+     @SuppressWarnings("serial")
+-    abstract static class Completion extends ForkJoinTask<Void>
++    abstract static class Completion
+         implements Runnable, AsynchronousCompletionTask {
+         volatile Completion next;      // Treiber stack link
+ 
+@@ -456,9 +433,6 @@
+         abstract boolean isLive();
+ 
+         public final void run()                { tryFire(ASYNC); }
+-        public final boolean exec()            { tryFire(ASYNC); return false; }
+-        public final Void getRawResult()       { return null; }
+-        public final void setRawResult(Void v) {}
+     }
+ 
+     /**
+@@ -524,6 +498,9 @@
+     /** A Completion with a source, dependent, and executor. */
+     @SuppressWarnings("serial")
+     abstract static class UniCompletion<T,V> extends Completion {
++        private static final AtomicIntegerFieldUpdater<UniCompletion> CLAIMED =
++                AtomicIntegerFieldUpdater.newUpdater(UniCompletion.class, "claimed");
++        private volatile int claimed;
+         Executor executor;                 // executor to use (null if none)
+         CompletableFuture<V> dep;          // the dependent to complete
+         CompletableFuture<T> src;          // source for action
+@@ -535,13 +512,12 @@
+ 
+         /**
+          * Returns true if action can be run. Call only when known to
+-         * be triggerable. Uses FJ tag bit to ensure that only one
+-         * thread claims ownership.  If async, starts as task -- a
++         * be triggerable. If async, starts as task -- a
+          * later call to tryFire will run action.
+          */
+         final boolean claim() {
+             Executor e = executor;
+-            if (compareAndSetForkJoinTaskTag((short)0, (short)1)) {
++            if (CLAIMED.compareAndSet(this, 0, 1)) {
+                 if (e == null)
+                     return true;
+                 executor = null; // disable
+@@ -1724,16 +1700,13 @@
+     /* ------------- Zero-input Async forms -------------- */
+ 
+     @SuppressWarnings("serial")
+-    static final class AsyncSupply<T> extends ForkJoinTask<Void>
++    static final class AsyncSupply<T>
+         implements Runnable, AsynchronousCompletionTask {
+         CompletableFuture<T> dep; Supplier<? extends T> fn;
+         AsyncSupply(CompletableFuture<T> dep, Supplier<? extends T> fn) {
+             this.dep = dep; this.fn = fn;
+         }
+ 
+-        public final Void getRawResult() { return null; }
+-        public final void setRawResult(Void v) {}
+-        public final boolean exec() { run(); return false; }
+ 
+         public void run() {
+             CompletableFuture<T> d; Supplier<? extends T> f;
+@@ -1760,16 +1733,13 @@
+     }
+ 
+     @SuppressWarnings("serial")
+-    static final class AsyncRun extends ForkJoinTask<Void>
++    static final class AsyncRun
+         implements Runnable, AsynchronousCompletionTask {
+         CompletableFuture<Void> dep; Runnable fn;
+         AsyncRun(CompletableFuture<Void> dep, Runnable fn) {
+             this.dep = dep; this.fn = fn;
+         }
+ 
+-        public final Void getRawResult() { return null; }
+-        public final void setRawResult(Void v) {}
+-        public final boolean exec() { run(); return false; }
+ 
+         public void run() {
+             CompletableFuture<Void> d; Runnable f;
+@@ -1795,145 +1765,29 @@
+         return d;
+     }
+ 
+-    /* ------------- Signallers -------------- */
+-
+-    /**
+-     * Completion for recording and releasing a waiting thread.  This
+-     * class implements ManagedBlocker to avoid starvation when
+-     * blocking actions pile up in ForkJoinPools.
+-     */
+-    @SuppressWarnings("serial")
+-    static final class Signaller extends Completion
+-        implements ForkJoinPool.ManagedBlocker {
+-        long nanos;                    // remaining wait time if timed
+-        final long deadline;           // non-zero if timed
+-        final boolean interruptible;
+-        boolean interrupted;
+-        volatile Thread thread;
+-
+-        Signaller(boolean interruptible, long nanos, long deadline) {
+-            this.thread = Thread.currentThread();
+-            this.interruptible = interruptible;
+-            this.nanos = nanos;
+-            this.deadline = deadline;
+-        }
+-        final CompletableFuture<?> tryFire(int ignore) {
+-            Thread w; // no need to atomically claim
+-            if ((w = thread) != null) {
+-                thread = null;
+-                LockSupport.unpark(w);
+-            }
++    /** A guest cannot block the only interpreter thread on an unfinished stage. */
++    private Object waitingGet(boolean interruptible) {
++        if (interruptible && Thread.interrupted()) {
+             return null;
+         }
+-        public boolean isReleasable() {
+-            if (Thread.interrupted())
+-                interrupted = true;
+-            return ((interrupted && interruptible) ||
+-                    (deadline != 0L &&
+-                     (nanos <= 0L ||
+-                      (nanos = deadline - System.nanoTime()) <= 0L)) ||
+-                    thread == null);
+-        }
+-        public boolean block() {
+-            while (!isReleasable()) {
+-                if (deadline == 0L)
+-                    LockSupport.park(this);
+-                else
+-                    LockSupport.parkNanos(this, nanos);
+-            }
+-            return true;
+-        }
+-        final boolean isLive() { return thread != null; }
+-    }
+-
+-    /**
+-     * Returns raw result after waiting, or null if interruptible and
+-     * interrupted.
+-     */
+-    private Object waitingGet(boolean interruptible) {
+-        if (interruptible && Thread.interrupted())
+-            return null;
+-        Signaller q = null;
+-        boolean queued = false;
+-        Object r;
+-        while ((r = result) == null) {
+-            if (q == null) {
+-                q = new Signaller(interruptible, 0L, 0L);
+-                if (Thread.currentThread() instanceof ForkJoinWorkerThread)
+-                    ForkJoinPool.helpAsyncBlocker(defaultExecutor(), q);
+-            }
+-            else if (!queued)
+-                queued = tryPushStack(q);
+-            else if (interruptible && q.interrupted) {
+-                q.thread = null;
+-                cleanStack();
+-                return null;
+-            }
+-            else {
+-                try {
+-                    ForkJoinPool.managedBlock(q);
+-                } catch (InterruptedException ie) { // currently cannot happen
+-                    q.interrupted = true;
+-                }
+-            }
+-        }
+-        if (q != null) {
+-            q.thread = null;
+-            if (q.interrupted)
+-                Thread.currentThread().interrupt();
++        Object r = result;
++        if (r == null) {
++            throw new IllegalStateException("Waiting would block the interpreter thread");
+         }
+         postComplete();
+         return r;
+     }
+ 
+-    /**
+-     * Returns raw result after waiting, or null if interrupted, or
+-     * throws TimeoutException on timeout.
+-     */
+-    private Object timedGet(long nanos) throws TimeoutException {
+-        long d = System.nanoTime() + nanos;
+-        long deadline = (d == 0L) ? 1L : d; // avoid 0
+-        boolean interrupted = false, queued = false;
+-        Signaller q = null;
+-        Object r = null;
+-        for (;;) { // order of checking interrupt, result, timeout matters
+-            if (interrupted || (interrupted = Thread.interrupted()))
+-                break;
+-            else if ((r = result) != null)
+-                break;
+-            else if (nanos <= 0L)
+-                break;
+-            else if (q == null) {
+-                q = new Signaller(true, nanos, deadline);
+-                if (Thread.currentThread() instanceof ForkJoinWorkerThread)
+-                    ForkJoinPool.helpAsyncBlocker(defaultExecutor(), q);
+-            }
+-            else if (!queued)
+-                queued = tryPushStack(q);
+-            else {
+-                try {
+-                    ForkJoinPool.managedBlock(q);
+-                    interrupted = q.interrupted;
+-                    nanos = q.nanos;
+-                } catch (InterruptedException ie) {
+-                    interrupted = true;
+-                }
+-            }
+-        }
+-        if (q != null) {
+-            q.thread = null;
+-            if (r == null)
+-                cleanStack();
+-        }
+-        if (r != null) {
+-            if (interrupted)
+-                Thread.currentThread().interrupt();
+-            postComplete();
+-            return r;
+-        } else if (interrupted)
++    private Object timedGet() throws TimeoutException {
++        if (Thread.interrupted()) {
+             return null;
+-        else
++        }
++        Object r = result;
++        if (r == null) {
+             throw new TimeoutException();
++        }
++        postComplete();
++        return r;
+     }
+ 
+     /* ------------- public methods -------------- */
+@@ -1948,7 +1802,7 @@
+      * Creates a new complete CompletableFuture with given encoded result.
+      */
+     CompletableFuture(Object r) {
+-        RESULT.setRelease(this, r);
++        RESULT.lazySet(this, r);
+     }
+ 
+     /**
+@@ -2065,10 +1919,10 @@
+     @SuppressWarnings("unchecked")
+     public T get(long timeout, TimeUnit unit)
+         throws InterruptedException, ExecutionException, TimeoutException {
+-        long nanos = unit.toNanos(timeout);
++        Objects.requireNonNull(unit);
+         Object r;
+         if ((r = result) == null)
+-            r = timedGet(nanos);
++            r = timedGet();
+         return (T) reportGet(r);
+     }
+ 
+@@ -2994,22 +2848,10 @@
+         }
+     }
+ 
+-    // VarHandle mechanics
+-    private static final VarHandle RESULT;
+-    private static final VarHandle STACK;
+-    private static final VarHandle NEXT;
+-    static {
+-        try {
+-            MethodHandles.Lookup l = MethodHandles.lookup();
+-            RESULT = l.findVarHandle(CompletableFuture.class, "result", Object.class);
+-            STACK = l.findVarHandle(CompletableFuture.class, "stack", Completion.class);
+-            NEXT = l.findVarHandle(Completion.class, "next", Completion.class);
+-        } catch (ReflectiveOperationException e) {
+-            throw new ExceptionInInitializerError(e);
+-        }
+-
+-        // Reduce the risk of rare disastrous classloading in first call to
+-        // LockSupport.park: https://bugs.openjdk.org/browse/JDK-8074773
+-        Class<?> ensureLoaded = LockSupport.class;
+-    }
++    private static final AtomicReferenceFieldUpdater<CompletableFuture, Object> RESULT =
++            AtomicReferenceFieldUpdater.newUpdater(CompletableFuture.class, Object.class, "result");
++    private static final AtomicReferenceFieldUpdater<CompletableFuture, Completion> STACK =
++            AtomicReferenceFieldUpdater.newUpdater(CompletableFuture.class, Completion.class, "stack");
++    private static final AtomicReferenceFieldUpdater<Completion, Completion> NEXT =
++            AtomicReferenceFieldUpdater.newUpdater(Completion.class, Completion.class, "next");
+ }

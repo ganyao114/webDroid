@@ -2,9 +2,7 @@
 
 `upstream.txt` lists the Java sources compiled directly from the pinned Android 17
 checkout. The builder regenerates Java AssetManager native declarations from the
-same upstream JNI registration table linked by `aosp17_core_jni`. The small
-package-local math classes supply the interpreter operations used by upstream
-`TypedValue`, interpolators, `Scroller` and `OverScroller` at compile time.
+same upstream JNI registration table linked by `aosp17_core_jni`.
 An `@patch` entry names a unified diff in `patches/`. The builder copies the
 affected source into its temporary directory before applying the diff. Source
 files and patch files are recorded in the build dependencies.
@@ -14,6 +12,12 @@ embedded runtime. Graphics geometry compatibility classes cover the source files
 missing from the sparse checkout. The interpreter supplies `Log` and `Slog`.
 Classes under `java_base` supply boot library APIs that the frozen interpreter does
 not define.
+
+The primary framework profile also compiles selected libcore sources under
+`[java-base]`. Its application preferences, concurrency primitives and
+sequential stream pipeline use the audited patches in
+`patches/aosp17/frameworks_base/patches/`. Both framework builders use the SDK
+annotation sources for compilation.
 
 Handler threads run against cooperative queues drained by the frame pump.
 Preferences and the embedded database live in the VM process. The package

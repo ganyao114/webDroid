@@ -13,7 +13,10 @@ import zipfile
 
 sys.dont_write_bytecode = True
 from build_pm_dex import dex_profile, run, write_depfile, write_jar
-from build_upstream_framework_dex import apply_patch, dex_entries, dex_from_jar, stage_java
+from build_upstream_framework_dex import (
+    PROFILE, apply_patch, dex_entries, dex_from_jar, javac, profile_sources,
+    sdk_annotation_sources, stage_java,
+)
 from framework_build.generate_unicode import generate as generate_unicode
 
 HERE = Path(__file__).resolve().parent
@@ -60,13 +63,13 @@ def build(args, stage):
     sources.append(REPO / "tests/m7_aosp17_art_interp/java/com/android/internal/util/XmlUtils.java")
     boot_api = SOURCES / "boot_api"
     sources.extend(sorted(boot_api.rglob("*.java")))
-    compile_only_annotations = [
-        HERE / f"pm_build/android/annotation/{name}.java" for name in ("SystemApi", "TestApi")
-    ]
+    profile = PROFILE / "sources.txt"
     inputs = {Path(__file__).resolve(), HERE / "build_pm_dex.py",
-              HERE / "build_upstream_framework_dex.py", manifest, *compile_only_annotations, *patches,
+              HERE / "build_upstream_framework_dex.py", manifest, profile, *patches,
               SOURCES / "generate_unicode.py",
               args.upstream_classes, args.javac, args.d8, args.android_jar, *sources, *java_base, *libcore}
+    groups = profile_sources(args.aosp_root, set(), profile)
+    annotation_files = list(sdk_annotation_sources(args, groups["annotations"], inputs))
     if args.upstream_dex:
         inputs.add(args.upstream_dex)
     d8_jar = args.d8.parent / "lib/d8.jar"
@@ -92,13 +95,11 @@ def build(args, stage):
         primary = {name: upstream_jar.read(name) for name in upstream_jar.namelist() if name.endswith(".class")}
     if "android/content/res/AssetManager.class" not in primary:
         raise ValueError(f"{args.upstream_classes}: expected the upstream resource subsystem")
+    annotations = stage / "annotations"
+    javac(args, annotation_files, annotations, [args.android_jar])
     classes = stage / "classes"
-    classes.mkdir()
     sources = [path for path in sources if class_entry(path) not in primary]
-    run(args.javac, "--release", "17", "-encoding", "UTF-8", "-proc:none",
-        "-g:source,lines", "-XDstringConcat=inline", "-sourcepath", "",
-        "-classpath", os.pathsep.join(map(str, (args.upstream_classes, args.android_jar))),
-        "-d", classes, *sorted(sources), *compile_only_annotations)
+    javac(args, sources, classes, [args.upstream_classes, annotations, args.android_jar])
     base = stage / "java-base"
     staged_sources = []
     for original, root in [(path, SOURCES / "java_base") for path in java_base] + [
@@ -127,9 +128,6 @@ def build(args, stage):
     del entries["android/util/Slog.class"]
     del entries["org/wasmandroid/ui/ThreadContext.class"]
     del entries["org/wasmandroid/ui/SoftwareRaster.class"]
-    del entries["android/annotation/SystemApi.class"]
-    del entries["android/annotation/SystemApi$Client.class"]
-    del entries["android/annotation/TestApi.class"]
     with zipfile.ZipFile(args.android_jar) as sdk:
         # These SDK classes contain only interface declarations and constants.
         for name in ("org/xmlpull/v1/XmlPullParser", "java/util/Map$Entry",
@@ -155,7 +153,9 @@ def build(args, stage):
             profile = dex_profile(dex, set(), defined)
             defined.update(line.split(maxsplit=1)[0] for line in profile.splitlines()
                            if line.startswith("L"))
-    write_jar(stage / JAR, entries | primary)
+    compile_only = {path.relative_to(annotations).as_posix(): path.read_bytes()
+                    for path in annotations.rglob("*.class")}
+    write_jar(stage / JAR, compile_only | entries | primary)
     return inputs, len(upstream)
 
 
@@ -168,6 +168,7 @@ def main():
                         or os.environ.get("ANDROID_HOME") or default_sdk)
     parser.add_argument("--javac", type=Path, default=Path("/usr/bin/javac"))
     parser.add_argument("--android-jar", type=Path)
+    parser.add_argument("--sdk-sources", type=Path)
     parser.add_argument("--upstream-classes", type=Path, required=True,
                         help="Javac classpath built by build_upstream_framework_dex.py")
     parser.add_argument("--upstream-dex", type=Path, help="validate class definitions in the primary DEX")
@@ -176,6 +177,7 @@ def main():
     parser.add_argument("--check", action="store_true", help="rebuild and compare the DEX and JAR")
     args = parser.parse_args()
     args.android_jar = args.android_jar or args.android_sdk / "platforms/android-36/android.jar"
+    args.sdk_sources = args.sdk_sources or args.android_sdk / "sources/android-36"
     args.d8 = args.d8 or args.android_sdk / "build-tools/36.0.0/d8"
     args.aosp_root = args.aosp_root.absolute()
     args.out_dir = args.out_dir.absolute()
