@@ -16,8 +16,8 @@ resource inputs can also come from `--host-build`. The stager requires the
 upstream Settings, DeskClock, Browser2, Gallery2, and Music APKs plus the 3D
 Cube APK. The runner checks the SystemUI clock and battery and taps the
 canvas Back, Home, and Recents buttons. It opens Settings in ART, verifies
-all six entries on the Apps page, opens Display, and uses SystemUI Back and
-Home to return. It also searches for the Cube and verifies its Tier-1
+all six entries on the Apps page, opens Dark theme from Display, and uses
+SystemUI Back to return one page at a time. It also searches for the Cube and verifies its Tier-1
 rendering, AudioWorklet, and SystemUI Home return.
 
 The runner reports GPU and ART timings in JSON and writes four PNGs to the

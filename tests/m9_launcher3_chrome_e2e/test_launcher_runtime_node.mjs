@@ -263,7 +263,8 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.equal(fontLoads, 1, 'Launcher and foreground scenes share the loaded face');
     assert.deepEqual(steps, ['screenshot-home', 'swipe-workspace', 'open-allapps', 'systemui-back', 'open-allapps',
       'systemui-home', 'systemui-recents', 'launch-settings', 'screenshot-settings',
-      'open-settings-page', 'systemui-back', 'open-settings-page', 'systemui-back', 'scroll-settings',
+      'open-settings-page', 'systemui-back', 'open-settings-page', 'open-settings-page', 'systemui-back',
+      'systemui-back', 'scroll-settings',
       'systemui-home', 'open-allapps', 'focus-search', 'type-search', 'screenshot-allapps',
       'launch-cube', 'screenshot-app', 'return-home']);
     assert.deepEqual(screenshots.map(({ phase }) => phase), ['launcher', 'app', 'launcher', 'app']);
@@ -285,6 +286,7 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.equal(report.settings.activity, 'com.android.settings.homepage.SettingsHomepageActivity');
     assert.equal(report.settings_installed_apps, 6);
     assert.equal(report.settings_display_opened, true);
+    assert.equal(report.settings_nested_back, true);
     assert.equal(report.settings_back_to_homepage, true);
     assert.equal(report.settings_returned_home, true);
     assert(report.cube_frames >= 10);
@@ -302,7 +304,8 @@ test('runs the complete browser journey at 60 Hz using the real compositor, DOM 
     assert.notEqual(foreground.module, fake.module);
     assert.deepEqual(foreground.calls.filter(([call]) => call === 'catalog').map(([, name]) => name),
       [cubeName, ...systemAppNames.filter(name => name !== settingsName)]);
-    assert.deepEqual(foreground.calls.filter(([call]) => call === 'app-back'), [['app-back', 'Apps'], ['app-back', 'Display']]);
+    assert.deepEqual(foreground.calls.filter(([call]) => call === 'app-back'),
+      [['app-back', 'Apps'], ['app-back', 'Dark theme'], ['app-back', 'Display']]);
     assert.deepEqual(foreground.calls.at(-1), ['app-destroy']);
     assert.equal(foreground.allocations.size, 0);
     assert(browser.workers[0].didShutdown && browser.workers[0].terminated);
@@ -338,8 +341,9 @@ test('returns from all six foreground apps and releases isolated sessions and in
   const document = documentFrom(e2eHtml), browser = installBrowser(document);
   const fake = mockLauncherWasm(), errors = [];
   const appSurface = document.querySelector('.wa-app-surface');
+  let viewport;
   const host = new LauncherHost({ ...fake.options, canvas: document.querySelector('canvas'), appSurface,
-    onError: error => errors.push(error) });
+    viewport: () => viewport, onError: error => errors.push(error) });
   const tap = async point => {
     pointer(host.canvas, 'pointerdown', point, browser.time());
     await browser.step();
@@ -364,6 +368,46 @@ test('returns from all six foreground apps and releases isolated sessions and in
         assert.equal(host.app.wasmLinearBytes, 268435456);
       }
       const canvas = appSurface.querySelector('canvas');
+      if (id === 4) {
+        const now = performance.now;
+        try {
+          performance.now = () => browser.time() - 100;
+          viewport = { width: 448, height: 896 };
+          await browser.step();
+          await browser.step();
+          assert.equal(host.phase, 'app');
+          assert(foreground.calls.some(([name, width]) => name === 'resize' && width === 448));
+        } finally {
+          viewport = undefined;
+          performance.now = now;
+          await browser.step();
+        }
+        const tick = foreground.module._wa_system_app_tick;
+        let publishes = 0;
+        foreground.module._wa_system_app_tick = time => {
+          ++publishes;
+          if (publishes === 1) return -16;
+          if (publishes === 2) return 0;
+          return tick(time);
+        };
+        try {
+          await browser.step();
+          const rect = canvas.getBoundingClientRect();
+          const point = { x: rect.left + 48, y: rect.top + 36 };
+          pointer(canvas, 'pointerdown', point, browser.time());
+          pointer(canvas, 'pointerup', point, browser.time());
+          await browser.step();
+          assert.equal(host.app.imeFocused, undefined, 'Publishing the pending frame skips input');
+          await browser.step();
+          assert.equal(host.app.imeFocused, true);
+          assert.equal(document.activeElement.attributes.get('aria-label'), 'Android text input');
+        } finally {
+          foreground.module._wa_system_app_tick = tick;
+        }
+        await tap(host.state().systemUiButtons.back);
+        await browser.step();
+        assert.equal(host.phase, 'app', 'First Back closes the active Settings search');
+      }
       const button = id === 4 ? 'back' : 'home';
       const before = host.state();
       await tap(before.systemUiButtons[button]);

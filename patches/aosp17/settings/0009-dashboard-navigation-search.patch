@@ -1,0 +1,722 @@
+diff --git a/packages/apps/Settings/res/layout/preference_widget_switch_compat.xml b/packages/apps/Settings/res/layout/preference_widget_switch_compat.xml
+--- a/packages/apps/Settings/res/layout/preference_widget_switch_compat.xml
++++ b/packages/apps/Settings/res/layout/preference_widget_switch_compat.xml
+@@ -15,7 +15,7 @@
+   ~ limitations under the License.
+   -->
+ 
+-<androidx.appcompat.widget.SwitchCompat
++<Switch
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     android:id="@+id/switchWidget"
+     android:layout_width="wrap_content"
+diff --git a/packages/apps/Settings/res/layout/search_bar.xml b/packages/apps/Settings/res/layout/search_bar.xml
+--- a/packages/apps/Settings/res/layout/search_bar.xml
++++ b/packages/apps/Settings/res/layout/search_bar.xml
+@@ -29,7 +29,7 @@
+         android:orientation="horizontal"
+         android:paddingStart="24dp"
+         android:paddingEnd="24dp"
+-        android:focusedByDefault="true"
++        android:focusable="false"
+         android:background="@drawable/search_bar_selected_background">
+ 
+         <ImageView
+@@ -46,5 +46,17 @@
+             android:layout_marginStart="8dp"
+             android:paddingEnd="8dp"
+             android:text="@string/homepage_search"/>
++        <EditText
++            android:id="@+id/search_query"
++            style="@style/TextAppearance.SearchBar"
++            android:layout_width="0dp"
++            android:layout_height="wrap_content"
++            android:layout_weight="1"
++            android:layout_marginStart="8dp"
++            android:background="@null"
++            android:hint="@string/homepage_search"
++            android:inputType="text"
++            android:singleLine="true"
++            android:visibility="gone" />
+     </LinearLayout>
+ </FrameLayout>
+diff --git a/packages/apps/Settings/src/com/android/settings/core/BasePreferenceController.java b/packages/apps/Settings/src/com/android/settings/core/BasePreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/core/BasePreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/core/BasePreferenceController.java
+@@ -22,6 +22,8 @@
+ 
+ public abstract class BasePreferenceController extends AbstractPreferenceController {
+     public static final int AVAILABLE = 0;
++    public static final int AVAILABLE_UNSEARCHABLE = 1;
++    public static final int UNSUPPORTED_ON_DEVICE = 3;
+     protected final String mPreferenceKey;
+ 
+     public BasePreferenceController(Context context, String preferenceKey) {
+@@ -36,7 +38,8 @@
+ 
+     @Override
+     public final boolean isAvailable() {
+-        return getAvailabilityStatus() == AVAILABLE;
++        final int status = getAvailabilityStatus();
++        return status == AVAILABLE || status == AVAILABLE_UNSEARCHABLE;
+     }
+ 
+     @Override
+diff --git a/packages/apps/Settings/src/com/android/settings/core/PreferenceControllerListHelper.java b/packages/apps/Settings/src/com/android/settings/core/PreferenceControllerListHelper.java
+--- a/packages/apps/Settings/src/com/android/settings/core/PreferenceControllerListHelper.java
++++ b/packages/apps/Settings/src/com/android/settings/core/PreferenceControllerListHelper.java
+@@ -16,135 +16,51 @@
+ 
+ package com.android.settings.core;
+ 
+-import static com.android.settings.core.PreferenceXmlParserUtils.METADATA_CONTROLLER;
+-import static com.android.settings.core.PreferenceXmlParserUtils.METADATA_FOR_WORK;
+-import static com.android.settings.core.PreferenceXmlParserUtils.METADATA_KEY;
+-
+-import android.annotation.XmlRes;
+ import android.content.Context;
+-import android.os.Bundle;
++import android.content.res.XmlResourceParser;
+ import android.text.TextUtils;
+ import android.util.Log;
+ 
+-import androidx.annotation.NonNull;
+-import androidx.preference.PreferenceManager;
+-import androidx.preference.PreferenceScreen;
+-
+-import com.android.settings.core.PreferenceXmlParserUtils.MetadataFlag;
+-import com.android.settingslib.core.AbstractPreferenceController;
+-
++import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+ 
+ import java.io.IOException;
+ import java.util.ArrayList;
+ import java.util.List;
+-import java.util.Set;
+-import java.util.TreeSet;
+ 
+-/**
+- * Helper to load {@link BasePreferenceController} lists from Xml.
+- */
++/** Helper to load {@link BasePreferenceController} lists from XML. */
+ public class PreferenceControllerListHelper {
++    private static final String TAG = "PrefCtrlListHelper";
++    private static final String ANDROID = "http://schemas.android.com/apk/res/android";
++    private static final String SETTINGS = "http://schemas.android.com/apk/res-auto";
+ 
+-    private static final String TAG = "PrefCtrlListHelper";
+-
+-    /**
+-     * Instantiates a list of controller based on xml definition.
+-     */
+-    @NonNull
+-    public static List<BasePreferenceController> getPreferenceControllersFromXml(Context context,
+-            @XmlRes int xmlResId) {
++    public static List<BasePreferenceController> getPreferenceControllersFromXml(
++            Context context, int xmlResId) {
+         final List<BasePreferenceController> controllers = new ArrayList<>();
+-        List<Bundle> preferenceMetadata;
+-        try {
+-            preferenceMetadata = PreferenceXmlParserUtils.extractMetadata(context, xmlResId,
+-                    MetadataFlag.FLAG_NEED_KEY | MetadataFlag.FLAG_NEED_PREF_CONTROLLER
+-                            | MetadataFlag.FLAG_INCLUDE_PREF_SCREEN  | MetadataFlag.FLAG_FOR_WORK);
+-        } catch (IOException | XmlPullParserException e) {
+-            Log.e(TAG, "Failed to parse preference xml for getting controllers", e);
+-            return controllers;
+-        }
+-
+-        for (Bundle metadata : preferenceMetadata) {
+-            final String controllerName = metadata.getString(METADATA_CONTROLLER);
+-            if (TextUtils.isEmpty(controllerName)) {
+-                continue;
+-            }
+-            BasePreferenceController controller;
+-            try {
+-                controller = BasePreferenceController.createInstance(context, controllerName);
+-            } catch (IllegalStateException e) {
+-                Log.d(TAG, "Could not find Context-only controller for pref: " + controllerName);
+-                final String key = metadata.getString(METADATA_KEY);
+-                final boolean isWorkProfile = metadata.getBoolean(METADATA_FOR_WORK, false);
+-                if (TextUtils.isEmpty(key)) {
+-                    Log.w(TAG, "Controller requires key but it's not defined in xml: "
+-                            + controllerName);
+-                    continue;
+-                }
++        try (XmlResourceParser parser = context.getResources().getXml(xmlResId)) {
++            while (parser.next() != XmlPullParser.END_DOCUMENT) {
++                if (parser.getEventType() != XmlPullParser.START_TAG) continue;
++                final String name = parser.getAttributeValue(SETTINGS, "controller");
++                if (TextUtils.isEmpty(name)) continue;
++                final int keyId = parser.getAttributeResourceValue(ANDROID, "key", 0);
++                final String key = keyId != 0 ? context.getString(keyId)
++                        : parser.getAttributeValue(ANDROID, "key");
++                if (TextUtils.isEmpty(key)) continue;
+                 try {
+-                    controller = BasePreferenceController.createInstance(context, controllerName,
+-                            key, isWorkProfile);
+-                } catch (IllegalStateException e2) {
+-                    Log.w(TAG, "Cannot instantiate controller from reflection: " + controllerName);
+-                    continue;
++                    final Class<? extends BasePreferenceController> type =
++                            Class.forName(name, false, context.getClassLoader())
++                                    .asSubclass(BasePreferenceController.class);
++                    controllers.add(type.getConstructor(Context.class, String.class)
++                            .newInstance(context, key));
++                } catch (ClassNotFoundException unavailable) {
++                    // The system image can declare controllers supplied by other features.
++                } catch (ReflectiveOperationException | RuntimeException | LinkageError failure) {
++                    Log.e(TAG, "Unable to load " + name, failure);
+                 }
+             }
+-            controllers.add(controller);
++        } catch (IOException | XmlPullParserException failure) {
++            Log.e(TAG, "Failed to parse preference controllers", failure);
+         }
+         return controllers;
+     }
+-
+-    /**
+-     * Checks if the given PreferenceScreen will be empty due to all preferences being unavailable.
+-     *
+-     * @param xmlResId resource id of the PreferenceScreen to check
+-     * @return {@code true} if none of the preferences in the given screen will appear
+-     */
+-    public static boolean areAllPreferencesUnavailable(@NonNull Context context,
+-            @NonNull PreferenceManager preferenceManager, @XmlRes int xmlResId) {
+-        PreferenceScreen screen = preferenceManager.inflateFromResource(context, xmlResId,
+-                /* rootPreferences= */ null);
+-        List<BasePreferenceController> preferenceControllers =
+-                getPreferenceControllersFromXml(context, xmlResId);
+-        if (screen.getPreferenceCount() != preferenceControllers.size()) {
+-            // There are some preferences without controllers, which will show regardless.
+-            return false;
+-        }
+-        return preferenceControllers.stream().noneMatch(BasePreferenceController::isAvailable);
+-    }
+-
+-    /**
+-     * Return a sub list of {@link AbstractPreferenceController} to only contain controller that
+-     * doesn't exist in filter.
+-     *
+-     * @param filter The filter. This list will be unchanged.
+-     * @param input  This list will be filtered into a sublist and element is kept
+-     *               IFF the controller key is not used by anything from {@param filter}.
+-     */
+-    @NonNull
+-    public static List<BasePreferenceController> filterControllers(
+-            @NonNull List<BasePreferenceController> input,
+-            List<AbstractPreferenceController> filter) {
+-        if (input == null || filter == null) {
+-            return input;
+-        }
+-        final Set<String> keys = new TreeSet<>();
+-        final List<BasePreferenceController> filteredList = new ArrayList<>();
+-        for (AbstractPreferenceController controller : filter) {
+-            final String key = controller.getPreferenceKey();
+-            if (key != null) {
+-                keys.add(key);
+-            }
+-        }
+-        for (BasePreferenceController controller : input) {
+-            if (keys.contains(controller.getPreferenceKey())) {
+-                Log.w(TAG, controller.getPreferenceKey() + " already has a controller");
+-                continue;
+-            }
+-            filteredList.add(controller);
+-        }
+-        return filteredList;
+-    }
+-
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/dashboard/DashboardFragment.java b/packages/apps/Settings/src/com/android/settings/dashboard/DashboardFragment.java
+--- a/packages/apps/Settings/src/com/android/settings/dashboard/DashboardFragment.java
++++ b/packages/apps/Settings/src/com/android/settings/dashboard/DashboardFragment.java
+@@ -34,13 +34,19 @@
+ import androidx.preference.PreferenceManager;
+ import androidx.preference.PreferenceViewHolder;
+ import androidx.preference.PreferenceScreen;
++import androidx.preference.SeekBarPreference;
++import androidx.preference.TwoStatePreference;
++import androidx.recyclerview.widget.RecyclerView;
+ 
+ import com.android.settings.R;
++import com.android.settings.core.PreferenceControllerListHelper;
++import com.android.settings.homepage.SettingsHomepageActivity;
+ import com.android.settingslib.core.AbstractPreferenceController;
+ 
+ import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.List;
++import java.util.Locale;
+ import java.util.Map;
+ 
+ /** Base fragment for dashboards with XML preferences and their controllers. */
+@@ -51,6 +57,8 @@
+     private final Map<Class, List<AbstractPreferenceController>> mPreferenceControllers =
+             new ArrayMap<>();
+     private PreferenceManager mPreferenceManager;
++    private GridView mList;
++    private PreferenceListAdapter mAdapter;
+ 
+     @Override
+     public void onAttach(Context context) {
+@@ -74,15 +82,30 @@
+     public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+         displayResourceTiles();
+         updatePreferenceStates();
+-        preparePreferences(getPreferenceScreen());
+     }
+ 
+     @Override
+     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
+         final View view = inflater.inflate(R.layout.preference_list_fragment, container, false);
+-        final GridView list = view.findViewById(android.R.id.list);
+-        list.setAdapter(new PreferenceListAdapter(getPreferenceScreen()));
++        preparePreferences(getPreferenceScreen());
++        mList = view.findViewById(android.R.id.list);
++        mAdapter = new PreferenceListAdapter(getPreferenceScreen());
++        mList.setAdapter(mAdapter);
+         return view;
++    }
++
++    @Override
++    public void onDestroyView() {
++        if (mList != null) mList.setAdapter(null);
++        mList = null;
++        mAdapter = null;
++        super.onDestroyView();
++    }
++
++    public final void filterPreferences(CharSequence query) {
++        if (mAdapter == null) return;
++        mAdapter.filter(query);
++        mList.setSelection(0);
+     }
+ 
+     protected final Context requireContext() {
+@@ -100,7 +123,8 @@
+     }
+ 
+     protected final <T extends Preference> T findPreference(CharSequence key) {
+-        return getPreferenceScreen().findPreference(key);
++        final PreferenceScreen screen = getPreferenceScreen();
++        return screen == null ? null : screen.findPreference(key);
+     }
+ 
+     // The embedded GridView owns scrolling and reuses rows. AndroidX still flattens the hierarchy,
+@@ -108,15 +132,46 @@
+     private static final class PreferenceListAdapter extends BaseAdapter {
+         private final PreferenceGroupAdapter mRows;
+         private final ArrayList<Integer> mPositions = new ArrayList<>();
++        private String mQuery = "";
+ 
+         PreferenceListAdapter(PreferenceScreen screen) {
+             mRows = new PreferenceGroupAdapter(screen);
++            rebuildPositions();
++            mRows.registerAdapterDataObserver(new RecyclerView.AdapterDataObserver() {
++                @Override
++                public void onChanged() {
++                    rebuildPositions();
++                    notifyDataSetChanged();
++                }
++
++                @Override
++                public void onItemRangeChanged(int positionStart, int itemCount, Object payload) {
++                    // GridView uses its own data observer and binds visible rows again.
++                    notifyDataSetChanged();
++                }
++            });
++        }
++
++        void filter(CharSequence query) {
++            mQuery = query.toString().trim().toLowerCase(Locale.ROOT);
++            rebuildPositions();
++            notifyDataSetChanged();
++        }
++
++        private void rebuildPositions() {
++            mPositions.clear();
+             for (int i = 0; i < mRows.getItemCount(); i++) {
+                 final Preference row = mRows.getItem(i);
+-                if (!(row instanceof PreferenceCategory) || !TextUtils.isEmpty(row.getTitle())) {
++                if (row instanceof PreferenceCategory) {
++                    if (mQuery.isEmpty() && !TextUtils.isEmpty(row.getTitle())) mPositions.add(i);
++                } else if (mQuery.isEmpty() || matches(row.getTitle()) || matches(row.getSummary())) {
+                     mPositions.add(i);
+                 }
+             }
++        }
++
++        private boolean matches(CharSequence text) {
++            return text != null && text.toString().toLowerCase(Locale.ROOT).contains(mQuery);
+         }
+ 
+         @Override
+@@ -161,26 +216,39 @@
+         }
+     }
+ 
+-    private void preparePreferences(PreferenceGroup group) {
+-        // Controllers and destination classes are optional on the single-window appliance.
++    private boolean preparePreferences(PreferenceGroup group) {
++        boolean hasVisibleRows = false;
+         for (int i = 0; i < group.getPreferenceCount(); i++) {
+             final Preference preference = group.getPreference(i);
++            if (!preference.isVisible()) continue;
+             if (preference instanceof PreferenceGroup) {
+-                preparePreferences((PreferenceGroup) preference);
++                preference.setVisible(preparePreferences((PreferenceGroup) preference));
+             } else {
+-                preference.setPersistent(false);
+                 preference.setCopyingEnabled(false);
+                 final String fragment = preference.getFragment();
+                 if (fragment != null) {
+-                    try {
+-                        Class.forName(fragment, false, requireContext().getClassLoader());
+-                    } catch (ClassNotFoundException missing) {
+-                        preference.setFragment(null);
+-                    }
+-                }
+-                preference.setIntent(null);
+-                preference.setSelectable(preference.getFragment() != null);
+-            }
++                    preference.setVisible(canOpen(fragment));
++                    preference.setIntent(null);
++                } else if (preference instanceof TwoStatePreference
++                        || preference instanceof SeekBarPreference) {
++                    preference.setVisible(preference.getOnPreferenceChangeListener() != null);
++                } else if (preference.getOnPreferenceClickListener() == null) {
++                    // Plain informational rows are marked non-selectable in the upstream XML.
++                    preference.setVisible(!preference.isSelectable()
++                            && preference.getIntent() == null);
++                }
++            }
++            hasVisibleRows |= preference.isVisible();
++        }
++        return hasVisibleRows;
++    }
++
++    private boolean canOpen(String fragment) {
++        try {
++            return DashboardFragment.class.isAssignableFrom(
++                    Class.forName(fragment, false, requireContext().getClassLoader()));
++        } catch (ClassNotFoundException | LinkageError unavailable) {
++            return false;
+         }
+     }
+ 
+@@ -196,16 +264,16 @@
+ 
+     @Override
+     public boolean onPreferenceTreeClick(Preference preference) {
+-        final Collection<List<AbstractPreferenceController>> controllers =
+-                mPreferenceControllers.values();
+-        for (List<AbstractPreferenceController> controllerList : controllers) {
++        for (List<AbstractPreferenceController> controllerList : mPreferenceControllers.values()) {
+             for (AbstractPreferenceController controller : controllerList) {
+-                if (controller.handlePreferenceTreeClick(preference)) {
++                if (controller.isAvailable() && controller.handlePreferenceTreeClick(preference)) {
+                     return true;
+                 }
+             }
+         }
+-        return false;
++        return preference.getFragment() != null
++                && ((SettingsHomepageActivity) getActivity())
++                        .onPreferenceStartFragment(this, preference);
+     }
+ 
+     protected void addPreferenceController(AbstractPreferenceController controller) {
+@@ -230,6 +298,11 @@
+         }
+         mPreferenceManager.setPreferences(mPreferenceManager.inflateFromResource(
+                 requireContext(), resId, null));
++        for (AbstractPreferenceController controller :
++                PreferenceControllerListHelper.getPreferenceControllersFromXml(
++                        requireContext(), resId)) {
++            addPreferenceController(controller);
++        }
+         displayResourceTilesToScreen(getPreferenceScreen());
+     }
+ 
+@@ -243,6 +316,7 @@
+ 
+     protected void updatePreferenceStates() {
+         final PreferenceScreen screen = getPreferenceScreen();
++        if (screen == null) return;
+         Collection<List<AbstractPreferenceController>> controllerLists =
+                 mPreferenceControllers.values();
+         for (List<AbstractPreferenceController> controllerList : controllerLists) {
+diff --git a/packages/apps/Settings/src/com/android/settings/homepage/SettingsHomepageActivity.java b/packages/apps/Settings/src/com/android/settings/homepage/SettingsHomepageActivity.java
+--- a/packages/apps/Settings/src/com/android/settings/homepage/SettingsHomepageActivity.java
++++ b/packages/apps/Settings/src/com/android/settings/homepage/SettingsHomepageActivity.java
+@@ -17,11 +17,14 @@
+ package com.android.settings.homepage;
+ 
+ import android.app.Activity;
+-import android.app.Fragment;
+ import android.content.Context;
+ import android.os.Bundle;
++import android.text.Editable;
++import android.text.TextWatcher;
++import android.util.Log;
+ import android.view.View;
+ import android.view.ViewGroup;
++import android.widget.EditText;
+ import android.widget.TextView;
+ 
+ import androidx.preference.Preference;
+@@ -29,18 +32,30 @@
+ import com.android.settings.R;
+ import com.android.settings.dashboard.DashboardFragment;
+ 
++import java.util.ArrayDeque;
++
+ /** Settings homepage activity. */
+ public class SettingsHomepageActivity extends Activity {
++    private static final String TAG = "SettingsHomepage";
++    private final ArrayDeque<PageEntry> mPages = new ArrayDeque<>();
+     private TopLevelSettings mMainFragment;
+-    private DashboardFragment mSubpage;
+-    private View mHomepageView;
++    private ViewGroup mContent;
++    private View mSearchBar;
+     private TextView mTitle;
++    private EditText mQuery;
+     private View mSearchIcon;
+-
+-    private interface FragmentCreator<T extends Fragment> {
+-        T create();
+-
+-        default void init(Fragment fragment) {}
++    private boolean mSearching;
++
++    private static final class PageEntry {
++        final DashboardFragment fragment;
++        final View view;
++        final CharSequence title;
++
++        PageEntry(DashboardFragment fragment, View view, CharSequence title) {
++            this.fragment = fragment;
++            this.view = view;
++            this.title = title;
++        }
+     }
+ 
+     /** Returns the main content fragment. */
+@@ -55,79 +70,136 @@
+         // The embedded window hosts one pane and owns provisioning and system bars.
+         getTheme().applyStyle(androidx.preference.R.style.PreferenceThemeOverlay, false);
+         setContentView(R.layout.settings_homepage_container);
++        mContent = findViewById(R.id.main_content);
+         mTitle = findViewById(R.id.search_bar_title);
++        mQuery = findViewById(R.id.search_query);
+         mSearchIcon = findViewById(R.id.imageView);
+-        mMainFragment = showFragment(TopLevelSettings::new, R.id.main_content);
+-        final ViewGroup content = findViewById(R.id.main_content);
+-        mHomepageView = content.getChildAt(0);
++        mSearchBar = findViewById(R.id.search_action_bar);
++        mSearchBar.setOnClickListener(view -> startSearch());
++        mMainFragment = new TopLevelSettings();
++        final PageEntry home = createPage(mMainFragment, getText(R.string.homepage_search));
++        mContent.addView(home.view);
++        mPages.addLast(home);
++        updateHeader();
++
++        mQuery.addTextChangedListener(new TextWatcher() {
++            @Override
++            public void beforeTextChanged(CharSequence text, int start, int count, int after) {}
++
++            @Override
++            public void onTextChanged(CharSequence text, int start, int before, int count) {
++                mMainFragment.filterPreferences(text);
++            }
++
++            @Override
++            public void afterTextChanged(Editable text) {}
++        });
+     }
+ 
+     public boolean onPreferenceStartFragment(DashboardFragment caller, Preference pref) {
+-        if (caller != mMainFragment || pref.getFragment() == null || mSubpage != null) {
++        final PageEntry current = mPages.peekLast();
++        final String destination = pref.getFragment();
++        if (current == null || caller != current.fragment || destination == null) {
+             return false;
+         }
+-        final DashboardFragment page;
++        PageEntry next = null;
+         try {
+-            page = Class.forName(pref.getFragment()).asSubclass(DashboardFragment.class)
+-                    .getDeclaredConstructor().newInstance();
+-        } catch (ReflectiveOperationException missing) {
+-            throw new IllegalStateException(pref.getFragment(), missing);
+-        }
+-        mSubpage = showFragment(new FragmentCreator<DashboardFragment>() {
+-            @Override
+-            public DashboardFragment create() {
+-                return page;
+-            }
+-
+-            @Override
+-            public void init(Fragment fragment) {
+-                fragment.setArguments(pref.getExtras());
+-            }
+-        }, R.id.main_content);
+-        mTitle.setText(pref.getTitle());
+-        mSearchIcon.setVisibility(View.GONE);
++            final DashboardFragment page = Class.forName(destination, true, getClassLoader())
++                    .asSubclass(DashboardFragment.class).getDeclaredConstructor().newInstance();
++            page.setArguments(new Bundle(pref.getExtras()));
++            next = createPage(page, pref.getTitle());
++            // Prepare the first rows before removing the current page from the window.
++            if (mContent.getWidth() > 0 && mContent.getHeight() > 0) {
++                next.view.measure(View.MeasureSpec.makeMeasureSpec(
++                                mContent.getWidth(), View.MeasureSpec.EXACTLY),
++                        View.MeasureSpec.makeMeasureSpec(
++                                mContent.getHeight(), View.MeasureSpec.EXACTLY));
++                next.view.layout(0, 0, mContent.getWidth(), mContent.getHeight());
++            }
++            mContent.removeView(current.view);
++            mContent.addView(next.view);
++        } catch (ReflectiveOperationException | RuntimeException | LinkageError failure) {
++            Log.e(TAG, "Unable to open " + destination, failure);
++            if (next != null) {
++                mContent.removeView(next.view);
++                closePage(next);
++            }
++            if (current.view.getParent() == null) mContent.addView(current.view);
++            return true;
++        }
++        current.fragment.onPause();
++        mPages.addLast(next);
++        updateHeader();
+         return true;
+     }
+ 
+     @Override
+     public void onBackPressed() {
+-        if (mSubpage == null) {
+-            super.onBackPressed();
++        if (mPages.size() <= 1) {
++            if (mSearching) {
++                mSearching = false;
++                mQuery.setText("");
++                updateHeader();
++            } else {
++                super.onBackPressed();
++            }
+             return;
+         }
+-        final ViewGroup content = findViewById(R.id.main_content);
+-        content.removeAllViews();
+-        closeFragment(mSubpage);
+-        mSubpage = null;
+-        content.addView(mHomepageView);
+-        mMainFragment.onResume();
+-        mTitle.setText(R.string.homepage_search);
+-        mSearchIcon.setVisibility(View.VISIBLE);
++        final PageEntry page = mPages.removeLast();
++        page.fragment.onPause();
++        mContent.removeView(page.view);
++        closePage(page);
++        final PageEntry previous = mPages.getLast();
++        mContent.addView(previous.view);
++        previous.fragment.onResume();
++        updateHeader();
+     }
+ 
+     @Override
+     protected void onDestroy() {
+-        if (mSubpage != null) closeFragment(mSubpage);
+-        if (mMainFragment != null) closeFragment(mMainFragment);
++        if (!mPages.isEmpty()) mPages.getLast().fragment.onPause();
++        while (!mPages.isEmpty()) closePage(mPages.removeLast());
+         super.onDestroy();
+     }
+ 
+-    private void closeFragment(Fragment fragment) {
+-        fragment.onDestroyView();
+-        fragment.onDestroy();
+-        fragment.onDetach();
+-    }
+-
+-    private <T extends Fragment> T showFragment(FragmentCreator<T> fragmentCreator, int id) {
+-        final T showFragment = fragmentCreator.create();
+-        fragmentCreator.init(showFragment);
+-        showFragment.onAttach((Context) this);
+-        showFragment.onCreate(null);
+-        final ViewGroup container = findViewById(id);
+-        final View view = showFragment.onCreateView(getLayoutInflater(), container, null);
+-        container.removeAllViews();
+-        container.addView(view);
+-        showFragment.onResume();
+-        return showFragment;
++    private void startSearch() {
++        if (mPages.size() != 1) return;
++        mSearching = true;
++        updateHeader();
++        mQuery.requestFocus();
++    }
++
++    private void updateHeader() {
++        final boolean home = mPages.size() == 1;
++        final boolean showQuery = home && mSearching;
++        if (!showQuery) mQuery.clearFocus();
++        mQuery.setVisibility(showQuery ? View.VISIBLE : View.GONE);
++        mTitle.setVisibility(showQuery ? View.GONE : View.VISIBLE);
++        mTitle.setText(mPages.getLast().title);
++        mSearchIcon.setVisibility(home ? View.VISIBLE : View.GONE);
++        mSearchBar.setClickable(home);
++    }
++
++    private PageEntry createPage(DashboardFragment fragment, CharSequence title) {
++        View view = null;
++        try {
++            fragment.onAttach((Context) this);
++            fragment.onCreate(null);
++            view = fragment.onCreateView(getLayoutInflater(), mContent, null);
++            fragment.onViewCreated(view, null);
++            fragment.onResume();
++            return new PageEntry(fragment, view, title);
++        } catch (RuntimeException | LinkageError failure) {
++            if (view != null) fragment.onDestroyView();
++            fragment.onDestroy();
++            fragment.onDetach();
++            throw failure;
++        }
++    }
++
++    private void closePage(PageEntry page) {
++        page.fragment.onDestroyView();
++        page.fragment.onDestroy();
++        page.fragment.onDetach();
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/homepage/TopLevelSettings.java b/packages/apps/Settings/src/com/android/settings/homepage/TopLevelSettings.java
+--- a/packages/apps/Settings/src/com/android/settings/homepage/TopLevelSettings.java
++++ b/packages/apps/Settings/src/com/android/settings/homepage/TopLevelSettings.java
+@@ -16,8 +16,6 @@
+ 
+ package com.android.settings.homepage;
+ 
+-import androidx.preference.Preference;
+-
+ import com.android.settings.R;
+ import com.android.settings.dashboard.DashboardFragment;
+ 
+@@ -35,13 +33,4 @@
+         return R.xml.top_level_settings;
+     }
+ 
+-    @Override
+-    public boolean onPreferenceTreeClick(Preference preference) {
+-        return super.onPreferenceTreeClick(preference)
+-                || onPreferenceStartFragment(this, preference);
+-    }
+-
+-    public boolean onPreferenceStartFragment(DashboardFragment caller, Preference pref) {
+-        return ((SettingsHomepageActivity) getActivity()).onPreferenceStartFragment(caller, pref);
+-    }
+ }

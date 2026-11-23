@@ -1,0 +1,3446 @@
+diff --git a/packages/apps/Settings/res/drawable/ic_adaptive_font_download.xml b/packages/apps/Settings/res/drawable/ic_adaptive_font_download.xml
+--- a/packages/apps/Settings/res/drawable/ic_adaptive_font_download.xml
++++ b/packages/apps/Settings/res/drawable/ic_adaptive_font_download.xml
+@@ -17,10 +17,12 @@
+ 
+ <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+     <item>
+-        <com.android.settingslib.widget.AdaptiveIconShapeDrawable
+-            android:width="@dimen/accessibility_icon_size"
+-            android:height="@dimen/accessibility_icon_size"
+-            android:color="@color/accessibility_feature_background"/>
++        <shape android:shape="oval">
++            <size
++                android:width="@dimen/accessibility_icon_size"
++                android:height="@dimen/accessibility_icon_size"/>
++            <solid android:color="@color/accessibility_feature_background"/>
++        </shape>
+     </item>
+     <item android:gravity="center"
+         android:drawable="@drawable/ic_font_download"/>
+diff --git a/packages/apps/Settings/res/drawable/ic_audio_adjustment.xml b/packages/apps/Settings/res/drawable/ic_audio_adjustment.xml
+--- a/packages/apps/Settings/res/drawable/ic_audio_adjustment.xml
++++ b/packages/apps/Settings/res/drawable/ic_audio_adjustment.xml
+@@ -16,10 +16,12 @@
+ 
+ <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+     <item>
+-        <com.android.settingslib.widget.AdaptiveIconShapeDrawable
+-            android:width="@dimen/accessibility_icon_size"
+-            android:height="@dimen/accessibility_icon_size"
+-            android:color="@color/accessibility_feature_background"/>
++        <shape android:shape="oval">
++            <size
++                android:width="@dimen/accessibility_icon_size"
++                android:height="@dimen/accessibility_icon_size"/>
++            <solid android:color="@color/accessibility_feature_background"/>
++        </shape>
+     </item>
+     <item android:gravity="center">
+         <vector
+diff --git a/packages/apps/Settings/res/drawable/ic_audio_description.xml b/packages/apps/Settings/res/drawable/ic_audio_description.xml
+--- a/packages/apps/Settings/res/drawable/ic_audio_description.xml
++++ b/packages/apps/Settings/res/drawable/ic_audio_description.xml
+@@ -16,10 +16,12 @@
+ 
+ <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+     <item>
+-        <com.android.settingslib.widget.AdaptiveIconShapeDrawable
+-            android:width="@dimen/accessibility_icon_size"
+-            android:height="@dimen/accessibility_icon_size"
+-            android:color="@color/accessibility_feature_background"/>
++        <shape android:shape="oval">
++            <size
++                android:width="@dimen/accessibility_icon_size"
++                android:height="@dimen/accessibility_icon_size"/>
++            <solid android:color="@color/accessibility_feature_background"/>
++        </shape>
+     </item>
+     <item android:gravity="center">
+         <vector
+diff --git a/packages/apps/Settings/res/layout/preference_widget_radiobutton.xml b/packages/apps/Settings/res/layout/preference_widget_radiobutton.xml
+--- a/packages/apps/Settings/res/layout/preference_widget_radiobutton.xml
++++ b/packages/apps/Settings/res/layout/preference_widget_radiobutton.xml
+@@ -18,9 +18,10 @@
+      inside android.R.layout.preference. -->
+ <RadioButton xmlns:android="http://schemas.android.com/apk/res/android"
+     android:id="@android:id/checkbox"
+-    android:layout_width="wrap_content"
+-    android:layout_height="wrap_content"
++    android:layout_width="32dp"
++    android:layout_height="32dp"
+     android:layout_gravity="center"
+-    android:background="@null"
++    android:button="@null"
++    android:background="@android:drawable/btn_radio"
+     android:focusable="false"
+     android:clickable="false" />
+diff --git a/packages/apps/Settings/res/xml/about_legal.xml b/packages/apps/Settings/res/xml/about_legal.xml
+--- a/packages/apps/Settings/res/xml/about_legal.xml
++++ b/packages/apps/Settings/res/xml/about_legal.xml
+@@ -24,42 +24,19 @@
+        list. -->
+ 
+     <!-- Copyright information -->
+-    <Preference
+-        android:key="copyright"
+-        android:title="@string/copyright_title"
+-        settings:controller="com.android.settings.deviceinfo.legal.CopyrightPreferenceController" />
+ 
+     <!-- License information -->
+     <Preference
+         android:key="license"
+         android:title="@string/license_title"
+-        settings:controller="com.android.settings.deviceinfo.legal.LicensePreferenceController" />
++        android:selectable="false"
++        android:persistent="false"
++        android:summary="@string/settings_license_activity_unavailable"/>
+ 
+     <!-- Terms and conditions -->
+-    <Preference
+-        android:key="terms"
+-        android:title="@string/terms_title"
+-        settings:controller="com.android.settings.deviceinfo.legal.TermsPreferenceController" />
+ 
+     <!-- Mainline Module License information -->
+-    <Preference
+-        android:key="module_license"
+-        android:title="@string/module_license_title"
+-        android:fragment="com.android.settings.deviceinfo.legal.ModuleLicensesDashboard"
+-        settings:controller="com.android.settings.deviceinfo.legal.ModuleLicensesListPreferenceController" />
+ 
+     <!-- System WebView License information -->
+-    <Preference
+-        android:key="webview_license"
+-        android:title="@string/webview_license_title"
+-        settings:controller="com.android.settings.deviceinfo.legal.WebViewLicensePreferenceController" />
+-
+-    <Preference
+-        android:key="wallpaper_attributions"
+-        android:title="@string/wallpaper_attributions"
+-        android:summary="@string/wallpaper_attributions_values"
+-        android:selectable="false"
+-        settings:controller="com.android.settings.deviceinfo.legal.WallpaperAttributionsPreferenceController" />
+ 
+ </PreferenceScreen>
+-
+diff --git a/packages/apps/Settings/res/xml/accessibility_audio_adjustment.xml b/packages/apps/Settings/res/xml/accessibility_audio_adjustment.xml
+--- a/packages/apps/Settings/res/xml/accessibility_audio_adjustment.xml
++++ b/packages/apps/Settings/res/xml/accessibility_audio_adjustment.xml
+@@ -23,13 +23,9 @@
+ 
+     <SwitchPreferenceCompat
+         android:key="master_mono"
+-        android:persistent="true"
++        android:persistent="false"
+         android:summary="@string/accessibility_toggle_primary_mono_summary"
+         android:title="@string/accessibility_toggle_primary_mono_title"
+         settings:controller="com.android.settings.accessibility.PrimaryMonoPreferenceController"/>
+ 
+-    <com.android.settings.accessibility.BalanceSeekBarPreference
+-        android:key="master_balance"
+-        android:persistent="false"
+-        android:title="@string/accessibility_toggle_primary_balance_title"/>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/accessibility_settings.xml b/packages/apps/Settings/res/xml/accessibility_settings.xml
+--- a/packages/apps/Settings/res/xml/accessibility_settings.xml
++++ b/packages/apps/Settings/res/xml/accessibility_settings.xml
+@@ -23,16 +23,6 @@
+     settings:keywords="@string/keywords_accessibility">
+ 
+     <PreferenceCategory
+-        android:key="user_installed_services_category"
+-        android:persistent="false"
+-        android:title="@string/user_installed_services_category_title"/>
+-
+-    <PreferenceCategory
+-        android:key="screen_reader_category"
+-        android:persistent="false"
+-        android:title="@string/screen_reader_category_title"/>
+-
+-    <PreferenceCategory
+         android:key="display_category"
+         android:persistent="false"
+         android:title="@string/display_category_title">
+@@ -44,114 +34,6 @@
+             android:persistent="false"
+             android:title="@string/accessibility_text_reading_options_title"
+             settings:controller="com.android.settings.accessibility.TextReadingFragmentForA11ySettingsController"/>
+-
+-        <Preference
+-            android:fragment="com.android.settings.accessibility.ColorAndMotionFragment"
+-            android:key="accessibility_color_and_motion"
+-            android:icon="@drawable/ic_color_and_motion"
+-            android:persistent="false"
+-            android:summary="@string/accessibility_color_and_motion_subtext"
+-            android:title="@string/accessibility_color_and_motion_title"
+-            settings:searchable="true"/>
+-
+-        <com.android.settingslib.PrimarySwitchPreference
+-            android:fragment="com.android.settings.accessibility.ToggleReduceBrightColorsPreferenceFragment"
+-            android:key="reduce_bright_colors_preference"
+-            android:icon="@drawable/ic_reduce_bright_colors"
+-            android:persistent="false"
+-            android:title="@string/reduce_bright_colors_preference_title"
+-            settings:keywords="@string/keywords_reduce_bright_colors"
+-            settings:controller="com.android.settings.accessibility.ReduceBrightColorsPreferenceController"/>
+-
+-        <Preference
+-            android:fragment="com.android.settings.accessibility.screenmagnification.ui.MagnificationPreferenceFragment"
+-            android:key="magnification_preference_screen"
+-            android:icon="@drawable/ic_accessibility_magnification"
+-            android:persistent="false"
+-            android:title="@string/accessibility_screen_magnification_title"
+-            settings:keywords="@string/keywords_magnification"
+-            settings:controller="com.android.settings.accessibility.MagnificationPreferenceController"/>
+-
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="interaction_control_category"
+-        android:persistent="false"
+-        android:title="@string/interaction_control_category_title">
+-
+-        <Preference
+-            android:fragment="com.android.settings.accessibility.TapAssistanceFragment"
+-            android:key="tap_assistance_preference_screen"
+-            android:icon="@drawable/ic_tap_assistance"
+-            android:persistent="false"
+-            android:summary="@string/accessibility_tap_assistance_subtext"
+-            android:title="@string/accessibility_tap_assistance_title"
+-            settings:searchable="true"/>
+-
+-        <Preference
+-            android:fragment="com.android.settings.accessibility.systemcontrols.ui.SystemControlsFragment"
+-            android:key="system_controls_preference_screen"
+-            android:icon="@drawable/ic_system_controls"
+-            android:title="@string/accessibility_system_controls_title"
+-            settings:controller="com.android.settings.accessibility.SystemControlsPreferenceController"
+-            settings:searchable="true"/>
+-
+-        <Preference
+-            android:fragment="com.android.settings.accessibility.VibrationSettings"
+-            android:key="vibration_preference_screen"
+-            android:icon="@drawable/ic_vibration"
+-            android:persistent="false"
+-            android:title="@string/accessibility_vibration_settings_title"
+-            settings:controller="com.android.settings.accessibility.VibrationPreferenceController"
+-            settings:keywords="@string/keywords_vibration"/>
+-
+-        <Preference
+-            android:fragment="com.android.settings.inputmethod.PointerTouchpadFragment"
+-            android:key="pointer_and_touchpad"
+-            android:icon="@drawable/ic_pointer_and_touchpad"
+-            android:persistent="false"
+-            android:title="@string/accessibility_pointer_and_touchpad_title"
+-            android:summary="@string/accessibility_pointer_and_touchpad_summary"
+-            settings:controller="com.android.settings.inputmethod.PointerTouchpadPreferenceController"
+-            settings:searchable="true"/>
+-
+-        <Preference
+-            android:icon="@drawable/ic_sticky_keys"
+-            android:key="physical_keyboard_a11y"
+-            android:title="@string/keyboard_a11y_settings"
+-            android:summary="@string/keyboard_a11y_settings_summary"
+-            android:persistent="false"
+-            android:fragment="com.android.settings.inputmethod.PhysicalKeyboardA11yFragment"
+-            settings:controller="com.android.settings.inputmethod.PhysicalKeyboardA11yPreferenceController" />
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="captions_category"
+-        android:persistent="false"
+-        android:title="@string/captions_category_title">
+-
+-        <Preference
+-            android:key="live_caption"
+-            android:icon="@drawable/ic_live_caption"
+-            android:persistent="false"
+-            android:title="@string/live_caption_title"
+-            settings:keywords="@string/keywords_live_caption"
+-            settings:controller="com.android.settings.accessibility.LiveCaptionPreferenceController"/>
+-
+-        <Preference
+-            android:fragment="com.android.settings.accessibility.CaptioningPropertiesFragment"
+-            android:key="captioning_preference_screen"
+-            android:icon="@drawable/ic_captioning"
+-            android:title="@string/accessibility_captioning_title"
+-            settings:controller="com.android.settings.accessibility.CaptioningPreferenceController"/>
+-
+-        <Preference
+-            android:key="rtt_setting"
+-            android:icon="@drawable/ic_rtt_settings"
+-            android:summary="@string/rtt_settings_summary"
+-            android:title="@string/rtt_settings_title"
+-            settings:keywords="@string/keywords_rtt"
+-            settings:controller="com.android.settings.accessibility.RTTSettingPreferenceController"/>
+ 
+     </PreferenceCategory>
+ 
+@@ -171,25 +53,6 @@
+             settings:controller="com.android.settings.accessibility.AudioDescriptionPreferenceController"/>
+ 
+         <Preference
+-            android:fragment="com.android.settings.accessibility.FlashNotificationsPreferenceFragment"
+-            android:key="flash_notifications_preference_accessibility"
+-            android:icon="@drawable/ic_flash_notification"
+-            android:persistent="false"
+-            android:title="@string/flash_notifications_title"
+-            settings:keywords="@string/flash_notifications_keywords"
+-            settings:searchable="true"
+-            settings:controller="com.android.settings.accessibility.FlashNotificationsPreferenceController" />
+-
+-        <Preference
+-            android:key="hearing_aid_preference"
+-            android:icon="@drawable/ic_hearing_aid"
+-            android:persistent="false"
+-            android:summary="@string/accessibility_hearingaid_not_connected_summary"
+-            android:title="@string/accessibility_hearingaid_title"
+-            settings:keywords="@string/keywords_hearing_aids"
+-            settings:controller="com.android.settings.accessibility.AccessibilityHearingAidPreferenceController"/>
+-
+-        <Preference
+             android:fragment="com.android.settings.accessibility.AudioAdjustmentFragment"
+             android:key="audio_adjustment_preference_screen"
+             android:icon="@drawable/ic_audio_adjustment"
+@@ -200,38 +63,4 @@
+ 
+     </PreferenceCategory>
+ 
+-    <PreferenceCategory
+-        android:key="speech_category"
+-        android:persistent="false"
+-        android:title="@string/speech_category_title"/>
+-
+-    <PreferenceCategory
+-        android:persistent="false"
+-        android:title="@string/general_category_title">
+-
+-        <Preference
+-            android:fragment="com.android.settings.accessibility.ShortcutsSettingsFragment"
+-            android:key="accessibility_shortcuts_preference_screen"
+-            android:persistent="false"
+-            android:summary="@string/accessibility_shortcuts_settings_subtext"
+-            android:title="@string/accessibility_shortcuts_settings_title"
+-            settings:searchable="true"/>
+-
+-        <Preference
+-            android:fragment="com.android.settings.tts.TextToSpeechSettings"
+-            android:key="tts_settings_preference"
+-            android:persistent="false"
+-            android:summary="@string/tts_subtext"
+-            android:title="@string/tts_settings_title"
+-            settings:controller="com.android.settings.language.TtsPreferenceController"/>
+-
+-    </PreferenceCategory>
+-
+-    <com.android.settingslib.widget.ButtonPreference
+-        android:key="disability_support"
+-        android:title="@string/accessibility_disability_support_title"
+-        android:icon="@drawable/ic_contact_support"
+-        settings:buttonPreferenceSize="normal"
+-        settings:buttonPreferenceType="tonal"
+-        settings:controller="com.android.settings.accessibility.DisabilitySupportButtonPreferenceController" />
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/accounts_and_backup_dashboard.xml b/packages/apps/Settings/res/xml/accounts_and_backup_dashboard.xml
+--- a/packages/apps/Settings/res/xml/accounts_and_backup_dashboard.xml
++++ b/packages/apps/Settings/res/xml/accounts_and_backup_dashboard.xml
+@@ -29,8 +29,11 @@
+             android:fragment="com.android.settings.accounts.ManageAccountsDashboardFragment"/>
+     </PreferenceCategory>
+ 
+-    <PreferenceCategory
+-        android:key="accounts_and_backup_backup_category"
+-        android:title="@string/accounts_and_backup_backup_category_title" />
++    <Preference
++        android:key="backup_account"
++        android:title="@string/accounts_and_backup_backup_category_title"
++        android:persistent="false"
++        android:selectable="false"
++        android:summary="@string/backup_configure_account_default_summary" />
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/accounts_dashboard_settings.xml b/packages/apps/Settings/res/xml/accounts_dashboard_settings.xml
+--- a/packages/apps/Settings/res/xml/accounts_dashboard_settings.xml
++++ b/packages/apps/Settings/res/xml/accounts_dashboard_settings.xml
+@@ -21,54 +21,10 @@
+     android:title="@string/account_dashboard_title"
+     settings:keywords="@string/keywords_accounts">
+ 
+-    <PreferenceCategory
+-        android:key="passwords_category"
+-        android:order="10"
++    <Preference
++        android:key="accounts_unavailable"
++        android:title="@string/credentials_settings_not_available"
+         android:persistent="false"
+-        android:title="@string/autofill_passwords"
+-        settings:controller="com.android.settings.applications.autofill.PasswordsPreferenceController"
+-        settings:keywords="@string/autofill_keywords" />
+-
+-    <PreferenceCategory
+-        android:key="default_service_category"
+-        android:order="20"
+-        android:title="@string/autofill_app">
+-
+-        <com.android.settings.widget.GearPreference
+-            android:fragment="com.android.settings.applications.defaultapps.DefaultAutofillPicker"
+-            android:key="default_autofill_main"
+-            android:title="@string/autofill_app"
+-            settings:keywords="@string/autofill_keywords">
+-            <extra
+-                android:name="for_work"
+-                android:value="false" />
+-        </com.android.settings.widget.GearPreference>
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="dashboard_tile_placeholder"
+-        android:order="130"/>
+-
+-    <com.android.settingslib.widget.UntitledPreferenceCategory>
+-      <SwitchPreferenceCompat
+-          android:key="auto_sync_account_data"
+-          android:title="@string/auto_sync_account_title"
+-          android:summary="@string/auto_sync_account_summary"
+-          android:order="202"
+-          settings:allowDividerAbove="true"/>
+-
+-      <SwitchPreferenceCompat
+-          android:key="auto_sync_work_account_data"
+-          android:title="@string/account_settings_menu_auto_sync_work"
+-          android:summary="@string/auto_sync_account_summary"
+-          settings:forWork="true"
+-          android:order="203"/>
+-
+-      <SwitchPreferenceCompat
+-          android:key="auto_sync_personal_account_data"
+-          android:title="@string/account_settings_menu_auto_sync_personal"
+-          android:summary="@string/auto_sync_account_summary"
+-          android:order="204"/>
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
++        android:selectable="false" />
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/app_info_settings.xml b/packages/apps/Settings/res/xml/app_info_settings.xml
+--- a/packages/apps/Settings/res/xml/app_info_settings.xml
++++ b/packages/apps/Settings/res/xml/app_info_settings.xml
+@@ -20,216 +20,24 @@
+     xmlns:settings="http://schemas.android.com/apk/res-auto"
+     android:key="installed_app_detail_settings_screen">
+ 
+-    <com.android.settingslib.widget.LayoutPreference
++    <Preference
+         android:key="header_view"
+-        android:layout="@layout/settings_entity_header"
+         android:selectable="false"
+-        android:order="-10000" />
+-
+-    <com.android.settingslib.widget.LayoutPreference
+-        android:key="instant_app_buttons"
+-        android:layout="@layout/instant_app_buttons"
+-        android:selectable="false"
+-        android:order="-9999" />
+-
+-    <com.android.settingslib.widget.ActionButtonsPreference
+-        android:key="action_buttons"
+-        android:order="-9998" />
+-
+-    <Preference
+-        android:key="app_settings_link"
+-        android:title="@string/app_settings_link"
+-        settings:controller="com.android.settings.applications.appinfo.AppSettingPreferenceController" />
+-
+-    <Preference
+-        android:key="all_services_settings"
+-        android:title="@string/app_info_all_services_label"
+-        android:summary="@string/summary_placeholder"
+-        settings:controller="com.android.settings.applications.appinfo.AppAllServicesPreferenceController" />
+-
+-    <Preference
+-        android:key="notification_settings"
+-        android:title="@string/notifications_label"
+-        settings:controller="com.android.settings.applications.appinfo.AppNotificationPreferenceController" />
+-
+-    <com.android.settings.widget.FixedLineSummaryPreference
+-        android:key="permission_settings"
+-        android:title="@string/permissions_label"
+-        android:summary="@string/summary_placeholder"
+-        settings:summaryLineCount="1"
+-        settings:controller="com.android.settings.applications.appinfo.AppPermissionPreferenceController" />
+-
+-    <Preference
+-        android:key="manage_target_app_function_access_settings"
+-        android:title="@string/manage_target_app_function_access_settings_title"
+-        android:summary="@string/manage_target_app_function_access_settings_summary"
+-        settings:controller="com.android.settings.applications.appinfo.ManageTargetAppFunctionAccessPreferenceController" />
+-
+-    <Preference
+-        android:key="manage_agent_app_function_access_settings"
+-        android:title="@string/manage_agent_app_function_access_settings_title"
+-        android:summary="@string/manage_agent_app_function_access_settings_summary"
+-        settings:controller="com.android.settings.applications.appinfo.ManageAgentAppFunctionAccessPreferenceController" />
+-
+-    <Preference
+-        android:key="storage_settings"
+-        android:title="@string/storage_settings_for_app"
+-        android:summary="@string/summary_placeholder"
+-        settings:controller="com.android.settings.applications.appinfo.AppStoragePreferenceController" />
+-
+-    <com.android.settings.applications.AppDomainsPreference
+-        android:key="instant_app_launch_supported_domain_urls"
+-        android:title="@string/app_launch_supported_domain_urls_title"
+-        android:selectable="true"
+-        settings:controller="com.android.settings.applications.appinfo.InstantAppDomainsPreferenceController" />
+-
+-    <Preference
+-        android:key="data_settings"
+-        android:title="@string/data_usage_app_summary_title"
+-        android:summary="@string/summary_placeholder"
+-        settings:controller="com.android.settings.applications.appinfo.AppDataUsagePreferenceController" />
+-
+-    <Preference
+-        android:key="time_spent_in_app"
+-        android:title="@string/time_spent_in_app_pref_title"
+-        android:summary="@string/summary_placeholder"
+-        settings:controller="com.android.settings.applications.appinfo.TimeSpentInAppPreferenceController" />
+-
+-    <Preference
+-        android:key="battery"
+-        android:title="@string/battery_details_title"
+-        android:summary="@string/summary_placeholder" />
+-
+-    <Preference
+-        android:key="app_language_setting"
+-        android:title="@string/app_locale_preference_title"
+-        android:summary="@string/summary_placeholder"
+-        settings:controller="com.android.settings.applications.appinfo.AppLocalePreferenceController" />
+-
+-    <Preference
+-        android:key="preferred_settings"
+-        android:title="@string/launch_by_default"
+-        android:summary="@string/summary_placeholder"
+-        android:selectable="true"
+-        settings:controller="com.android.settings.applications.appinfo.AppOpenByDefaultPreferenceController" />
+-
+-    <Preference
+-        android:key="memory"
+-        android:title="@string/memory_settings_title"
+-        android:summary="@string/summary_placeholder"
+-        android:enabled="false" />
++        android:order="-10000"
++        android:persistent="false"/>
+ 
+     <!-- Default apps shortcuts -->
+-    <Preference
+-        android:key="default_home"
+-        android:title="@string/home_app"
+-        android:summary="@string/summary_placeholder" />
+-
+-    <Preference
+-        android:key="default_browser"
+-        android:title="@string/default_browser_title"
+-        android:summary="@string/summary_placeholder" />
+-
+-    <Preference
+-        android:key="default_phone_app"
+-        android:title="@string/default_phone_title"
+-        android:summary="@string/default_phone_title" />
+-
+-    <Preference
+-        android:key="default_emergency_app"
+-        android:title="@string/default_emergency_app"
+-        android:summary="@string/summary_placeholder" />
+-
+-    <Preference
+-        android:key="default_sms_app"
+-        android:title="@string/sms_application_title"
+-        android:summary="@string/summary_placeholder" />
+-
+-    <PreferenceCategory
+-        android:key="app_hibernation_info"
+-        android:title="@string/unused_apps_category"
+-        settings:controller=
+-            "com.android.settings.applications.appinfo.AppHibernationPreferenceCategoryController">
+-
+-        <SwitchPreferenceCompat
+-            android:key="hibernation_switch"
+-            android:title="@string/unused_apps_switch"
+-            android:summary="@string/unused_apps_switch_summary"
+-            settings:controller=
+-                "com.android.settings.applications.appinfo.HibernationSwitchPreferenceController" />
+-    </PreferenceCategory>
+ 
+     <!-- Advanced apps settings -->
+-    <PreferenceCategory
+-        android:key="advanced_app_info"
+-        android:title="@string/advanced_apps"
+-        settings:controller="com.android.settings.applications.appinfo.AdvancedAppInfoPreferenceCategoryController">
+-
+-        <Preference
+-            android:key="system_alert_window"
+-            android:title="@string/draw_overlay"
+-            android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.applications.appinfo.DrawOverlayDetailPreferenceController" />
+-
+-        <Preference
+-            android:key="write_settings_apps"
+-            android:title="@string/write_settings"
+-            android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.applications.appinfo.WriteSystemSettingsPreferenceController" />
+-
+-        <Preference
+-            android:key="picture_in_picture"
+-            android:title="@string/picture_in_picture_app_detail_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.applications.specialaccess.pictureinpicture.PictureInPictureDetailPreferenceController" />
+-
+-        <Preference
+-            android:key="install_other_apps"
+-            android:title="@string/install_other_apps"
+-            android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.applications.appinfo.ExternalSourceDetailPreferenceController" />
+-
+-        <Preference
+-            android:key="interact_across_profiles"
+-            android:title="@string/interact_across_profiles_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.applications.specialaccess.interactacrossprofiles.InteractAcrossProfilesDetailsPreferenceController" />
+-
+-        <Preference
+-            android:key="alarms_and_reminders"
+-            android:title="@string/alarms_and_reminders_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.applications.appinfo.AlarmsAndRemindersDetailPreferenceController" />
+-
+-        <Preference
+-            android:key="long_background_tasks"
+-            android:title="@string/long_background_tasks_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:isPreferenceVisible="false"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.applications.appinfo.LongBackgroundTasksDetailsPreferenceController" />
+-
+-    </PreferenceCategory>
+ 
+     <!-- App installer info -->
+-    <PreferenceCategory
+-        android:key="app_installer"
+-        android:title="@string/app_install_details_group_title"
+-        settings:controller="com.android.settings.applications.appinfo.AppInstallerPreferenceCategoryController">
+-
+-        <Preference
+-            android:key="app_info_store"
+-            android:title="@string/app_install_details_title"
+-            settings:controller="com.android.settings.applications.appinfo.AppInstallerInfoPreferenceController" />
+-
+-    </PreferenceCategory>
+ 
+     <Preference
+         android:key="app_version"
+         android:selectable="false"
+         android:order="9999"
+-        settings:controller="com.android.settings.applications.appinfo.AppVersionPreferenceController"
+         settings:allowDividerAbove="true"
+-        settings:enableCopying="true"/>
++        settings:enableCopying="true"
++        android:persistent="false"/>
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/apps.xml b/packages/apps/Settings/res/xml/apps.xml
+--- a/packages/apps/Settings/res/xml/apps.xml
++++ b/packages/apps/Settings/res/xml/apps.xml
+@@ -21,14 +21,6 @@
+     android:key="apps_screen"
+     android:title="@string/apps_dashboard_title">
+ 
+-    <Preference
+-        android:key="all_app_infos"
+-        android:title="@string/all_apps"
+-        android:summary="@string/summary_placeholder"
+-        android:order="-999"
+-        android:fragment="com.android.settings.applications.manageapplications.ManageApplications"
+-        settings:keywords="@string/keywords_applications_settings"/>
+-
+     <PreferenceCategory
+         android:key="recent_apps_category"
+         android:title="@string/recent_app_category_title"
+@@ -47,79 +39,4 @@
+         </Preference>
+     </PreferenceCategory>
+ 
+-    <PreferenceCategory
+-        android:key="general_category"
+-        android:title="@string/category_name_general"
+-        android:order="-997"
+-        android:visibility="gone"
+-        settings:searchable="false"/>
+-
+-    <Preference
+-        android:key="default_apps"
+-        android:title="@string/app_default_dashboard_title"
+-        android:order="-996"
+-        settings:controller="com.android.settings.applications.DefaultAppsPreferenceController"/>
+-
+-    <Preference
+-        android:key="cloned_apps"
+-        android:title="@string/cloned_apps_dashboard_title"
+-        android:summary="@string/summary_placeholder"
+-        android:order="-995"
+-        settings:controller="com.android.settings.applications.ClonedAppsPreferenceController"
+-        android:fragment="com.android.settings.applications.manageapplications.ManageApplications">
+-    </Preference>
+-
+-    <PreferenceCategory
+-        android:key="dashboard_tile_placeholder"
+-        android:order="10"/>
+-
+-    <Preference
+-        android:key="contacts_storage"
+-        android:title="@string/contacts_storage_settings_title"
+-        android:summary="@string/summary_placeholder"
+-        android:order="13"
+-        settings:controller="com.android.settings.applications.contacts.ContactsStoragePreferenceController"
+-        android:fragment="com.android.settings.applications.contacts.ContactsStorageSettings"
+-        settings:keywords="@string/keywords_contacts_storage">
+-    </Preference>
+-
+-    <Preference
+-        android:key="hibernated_apps"
+-        android:title="@string/unused_apps"
+-        android:summary="@string/summary_placeholder"
+-        android:order="15"
+-        settings:keywords="app_hibernation_key"
+-        settings:controller="com.android.settings.applications.HibernatedAppsPreferenceController"/>
+-
+-    <Preference
+-        android:key="app_battery_usage"
+-        android:order="17"
+-        android:title="@string/app_battery_usage_title"
+-        android:summary="@string/app_battery_usage_summary"
+-        settings:controller="com.android.settings.applications.AppBatteryUsagePreferenceController"
+-        android:fragment="com.android.settings.applications.manageapplications.ManageApplications">
+-    </Preference>
+-
+-    <Preference
+-        android:key="special_access"
+-        android:fragment="com.android.settings.applications.specialaccess.SpecialAccessSettings"
+-        android:title="@string/special_access"
+-        android:order="20"/>
+-
+-    <PreferenceCategory
+-        android:key="advanced_category"
+-        android:title="@string/advanced_apps"
+-        android:order="21"
+-        settings:searchable="false">
+-
+-        <Preference
+-            android:key="aspect_ratio_apps"
+-            android:title="@string/aspect_ratio_title"
+-            android:summary="@string/summary_placeholder"
+-            android:order="22"
+-            settings:controller="com.android.settings.applications.appcompat.UserAspectRatioAppsPreferenceController"
+-            android:fragment="com.android.settings.applications.manageapplications.ManageApplications">
+-        </Preference>
+-    </PreferenceCategory>
+-
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/battery_saver_settings.xml b/packages/apps/Settings/res/xml/battery_saver_settings.xml
+--- a/packages/apps/Settings/res/xml/battery_saver_settings.xml
++++ b/packages/apps/Settings/res/xml/battery_saver_settings.xml
+@@ -20,31 +20,18 @@
+     android:title="@string/battery_saver"
+     settings:keywords="@string/keywords_battery_saver">
+ 
+-    <com.android.settingslib.widget.MainSwitchPreference
++    <SwitchPreferenceCompat
+         android:order="-100"
+         android:key="battery_saver"
+         android:title="@string/battery_saver_master_switch_title"
+-        settings:controller="com.android.settings.fuelgauge.batterysaver.BatterySaverButtonPreferenceController"/>
++        settings:controller="com.android.settings.fuelgauge.batterysaver.BatterySaverButtonPreferenceController"
++        android:persistent="false"/>
+ 
+     <Preference
+-        android:order="50"
+-        android:key="battery_saver_schedule"
+-        android:fragment="com.android.settings.fuelgauge.batterysaver.BatterySaverScheduleSettings"
+-        android:title="@string/battery_saver_schedule_settings_title"
+-        settings:keywords="@string/keywords_battery_saver_schedule"
+-        settings:controller="com.android.settings.fuelgauge.batterysaver.BatterySaverSchedulePreferenceController"/>
+-
+-    <SwitchPreferenceCompat
+-        android:order="80"
+-        android:key="battery_saver_sticky"
+-        android:title="@string/battery_saver_sticky_title_new"
+-        android:summary="@string/summary_placeholder"
+-        settings:keywords="@string/keywords_battery_saver_sticky"
+-        settings:controller="com.android.settings.fuelgauge.batterysaver.BatterySaverStickyPreferenceController"/>
+-
+-    <com.android.settingslib.widget.FooterPreference
+         android:order="100"
+         android:key="battery_saver_footer_preference"
+         android:title="@*android:string/battery_saver_description"
+-        settings:searchable="false"/>
++        settings:searchable="false"
++        android:selectable="false"
++        android:persistent="false"/>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/communal_settings.xml b/packages/apps/Settings/res/xml/communal_settings.xml
+--- a/packages/apps/Settings/res/xml/communal_settings.xml
++++ b/packages/apps/Settings/res/xml/communal_settings.xml
+@@ -17,4 +17,11 @@
+ <PreferenceScreen
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     android:key="communal_preference_screen"
+-    android:title="@string/communal_settings_title" />
++    android:title="@string/communal_settings_title">
++    <Preference
++        android:key="communal_unavailable"
++        android:title="@string/device_info_not_available"
++        android:persistent="false"
++        android:selectable="false" />
++
++</PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/configure_notification_settings.xml b/packages/apps/Settings/res/xml/configure_notification_settings.xml
+--- a/packages/apps/Settings/res/xml/configure_notification_settings.xml
++++ b/packages/apps/Settings/res/xml/configure_notification_settings.xml
+@@ -20,211 +20,23 @@
+                   android:key="configure_notification_settings">
+ 
+     <PreferenceCategory
+-        android:key="general_notifications_category"
+-        android:title="@string/general_notification_header">
+-        <!-- See all apps button -->
+-        <Preference
+-            android:key="all_notifications"
+-            android:order="1"
+-            android:title="@string/app_notification_field"
+-            android:summary="@string/app_notification_field_summary"
+-            android:fragment="com.android.settings.applications.manageapplications.ManageApplications">
+-            <extra
+-                android:name="classname"
+-                android:value="com.android.settings.Settings$NotificationAppListActivity"/>
+-        </Preference>
+-        <Preference
+-            android:key="notification_history"
+-            android:order="2"
+-            android:title="@string/notification_history"
+-            android:summary="@string/notification_history_summary">
+-            <intent
+-                android:action="android.intent.action.MAIN"
+-                android:targetPackage="com.android.settings"
+-                android:targetClass="com.android.settings.notification.history.NotificationHistoryActivity" />
+-        </Preference>
+-
+-        <Preference
+-            android:fragment="com.android.settings.notification.SummarizationPreferenceFragment"
+-            android:key="summarization_notifications_preference"
+-            android:order="3"
+-            android:persistent="false"
+-            android:title="@string/notification_summarization_title"
+-            settings:controller="com.android.settings.notification.SummarizationPreferenceController" />
+-
+-        <Preference
+-            android:fragment="com.android.settings.notification.BundlePreferenceFragment"
+-            android:key="bundle_notifications_preference"
+-            android:persistent="false"
+-            android:order="4"
+-            android:title="@string/notification_bundle_title"
+-            settings:controller="com.android.settings.notification.BundlePreferenceController" />
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="conversation_category"
+-        android:title="@string/conversation_notifs_category">
+-        <Preference
+-            android:key="conversations"
+-            android:order="1"
+-            android:title="@string/conversations_category_title"
+-            android:summary=" "
+-            settings:controller="com.android.settings.notification.ConversationListSummaryPreferenceController"
+-            android:fragment="com.android.settings.notification.app.ConversationListSettings"
+-        />
+-        <Preference
+-            android:key="notification_bubbles"
+-            android:order="2"
+-            android:title="@string/notification_bubbles_title"
+-            android:summary="@string/notifications_bubble_setting_on_summary"
+-            settings:controller="com.android.settings.notification.BubbleSummaryNotificationPreferenceController"
+-            android:fragment="com.android.settings.notification.BubbleNotificationSettings"
+-        />
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="configure_notifications_lock"
+-        android:title="@string/lock_screen_notifications_title">
+-        <Preference
+-            android:key="notification_access"
+-            android:order="12"
+-            android:title="@string/manage_notification_access_title"
+-            android:summary="@string/manage_notification_access_summary"
+-            android:fragment="com.android.settings.notification.NotificationAccessSettings"
+-            settings:controller="com.android.settings.applications.specialaccess.notificationaccess.NotificationAccessController" />
+-        <!-- When device is locked -->
+-        <com.android.settings.RestrictedListPreference
+-            android:key="lock_screen_notifications"
+-            android:order="13"
+-            android:title="@string/lock_screen_notifs_title"
+-            android:singleLineTitle="false"
+-            android:summary="@string/summary_placeholder" />
+-
+-        <Preference
+-            android:key="lock_screen_notifications_page"
+-            android:order="14"
+-            android:persistent="false"
+-            android:title="@string/lock_screen_notifs_title"
+-            android:fragment="com.android.settings.notification.LockScreenNotificationsPreferencePageFragment"
+-            settings:controller="com.android.settings.notification.LockScreenNotificationsPreferencePageController" />
+-
+-        <com.android.settingslib.RestrictedSwitchPreference
+-            android:key="lock_screen_redact"
+-            android:order="15"
+-            android:title="@string/lock_screen_notifs_redact"
+-            android:summary="@string/lock_screen_notifs_redact_summary"
+-            settings:controller="com.android.settings.notification.RedactNotificationPreferenceController" />
+-
+-        <com.android.settingslib.RestrictedSwitchPreference
+-            android:key="lock_screen_work_redact"
+-            android:order="16"
+-            android:title="@string/lock_screen_notifs_redact_work"
+-            android:summary="@string/lock_screen_notifs_redact_work_summary"
+-            settings:controller="com.android.settings.notification.RedactNotificationPreferenceController" />
+-
+-        <SwitchPreferenceCompat
+-            android:key="notification_lockscreen_bypass"
+-            android:order="17"
+-            android:title="@string/lockscreen_bypass_title"
+-            android:summary="@string/lockscreen_bypass_summary"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.biometrics.face.FaceSettingsLockscreenBypassPreferenceController" />
+-
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="sync_across_devices"
+-        android:title="@string/sync_across_devices_title"
+-        settings:controller="com.android.settings.notification.syncacrossdevices.SyncAcrossDevicesPreferenceController"/>
+-
+-    <PreferenceCategory
+         android:key="advanced_section_header"
+         android:title="@string/advanced_section_header">
+-
+-        <!--Adaptive Notifications-->
+-        <Preference
+-            android:fragment="com.android.settings.notification.PoliteNotificationsPreferenceFragment"
+-            android:key="polite_notifications_preference"
+-            android:order="18"
+-            android:persistent="false"
+-            android:title="@string/notification_polite_title"
+-            settings:controller="com.android.settings.notification.PoliteNotificationsPreferenceController" />
+-
+-        <SwitchPreferenceCompat
+-            android:key="lock_screen_notif_minimalism"
+-            android:order="20"
+-            android:title="@string/lock_screen_notif_minimalism"
+-            android:summary="@string/lock_screen_notif_minimalism_summary"
+-            settings:controller="com.android.settings.notification.LockscreenNotificationMinimalismPreferenceController"
+-            />
+-
+-        <SwitchPreferenceCompat
+-            android:key="lock_screen_show_only_unseen_notifs"
+-            android:order="21"
+-            android:title="@string/unseen_notifs_lock_screen"
+-            android:summary="@string/unseen_notifs_lock_screen_summary"
+-            settings:controller="com.android.settings.notification.ShowOnlyUnseenNotificationsOnLockscreenPreferenceController"
+-        />
+-
+-        <Preference
+-            android:fragment="com.android.settings.accessibility.FlashNotificationsPreferenceFragment"
+-            android:key="flash_notifications_preference"
+-            android:order="22"
+-            android:persistent="false"
+-            android:title="@string/flash_notifications_title"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.accessibility.FlashNotificationsPreferenceController" />
+-
+-        <com.android.settingslib.RestrictedPreference
+-            android:key="app_and_notif_cell_broadcast_settings"
+-            android:order="23"
+-            android:title="@string/cell_broadcast_settings"
+-            settings:useAdminDisabledSummary="true">
+-            <intent
+-                android:action="android.intent.action.MAIN"
+-                android:targetPackage="@string/config_cell_broadcast_receiver_package"
+-                android:targetClass="com.android.cellbroadcastreceiver.CellBroadcastSettings"/>
+-        </com.android.settingslib.RestrictedPreference>
+-
+-        <Preference
+-            android:key="shade_panels_settings"
+-            android:title="@string/shade_panels_title"
+-            android:order="24"
+-            android:fragment="com.android.settings.system.ShadePanelsFragment"
+-            settings:controller="com.android.settings.system.ShadePanelsPreferenceController"/>
+-
+-        <SwitchPreferenceCompat
+-             android:key="silent_icons"
+-             android:order="25"
+-             android:title="@string/silent_notifications_status_bar"
+-             settings:controller="com.android.settings.notification.SilentStatusBarPreferenceController"/>
+ 
+         <SwitchPreferenceCompat
+             android:key="show_snooze_options"
+             android:order="26"
+             android:title="@string/snooze_options_title"
+-            settings:controller="com.android.settings.notification.SnoozeNotificationPreferenceController" />
++            settings:controller="com.android.settings.notification.SnoozeNotificationPreferenceController"
++            android:persistent="false"/>
+ 
+         <!-- Notification badging -->
+         <SwitchPreferenceCompat
+             android:key="notification_badging"
+             android:order="27"
+             android:title="@string/notification_badging_title"
+-            settings:controller="com.android.settings.notification.BadgingNotificationPreferenceController"/>
+-
+-        <!-- Pulse notification light, on devices that support it -->
+-        <SwitchPreferenceCompat
+-            android:key="notification_pulse"
+-            android:order="28"
+-            android:title="@string/notification_pulse_title"
+-            settings:controller="com.android.settings.notification.PulseNotificationPreferenceController"/>
+-
+-        <SwitchPreferenceCompat
+-            android:key="notification_assistant"
+-            android:order="29"
+-            android:title="@string/notification_assistant_title"
+-            android:summary="@string/notification_assistant_summary"
+-            settings:controller="com.android.settings.notification.NotificationAssistantPreferenceController"/>
++            settings:controller="com.android.settings.notification.BadgingNotificationPreferenceController"
++            android:persistent="false"/>
+ 
+     </PreferenceCategory>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/connected_devices.xml b/packages/apps/Settings/res/xml/connected_devices.xml
+--- a/packages/apps/Settings/res/xml/connected_devices.xml
++++ b/packages/apps/Settings/res/xml/connected_devices.xml
+@@ -20,51 +20,6 @@
+     android:key="connected_devices_screen"
+     android:title="@string/connected_devices_dashboard_title">
+ 
+-    <com.android.settingslib.widget.UntitledPreferenceCategory>
+-      <com.android.settings.slices.SlicePreference
+-          android:key="bt_nearby_slice"
+-          android:title="@string/summary_placeholder"
+-          settings:allowDividerBelow="true"
+-          settings:controller="com.android.settings.slices.SlicePreferenceController" />
+-
+-      <Preference
+-          android:fragment="com.android.settings.connecteddevice.audiosharing.AudioSharingDashboardFragment"
+-          android:icon="@drawable/ic_bt_le_audio_sharing"
+-          android:key="connected_device_audio_sharing_settings"
+-          android:title="@string/audio_sharing_title"
+-          settings:controller="com.android.settings.connecteddevice.audiosharing.AudioSharingPreferenceController"
+-          settings:searchable="false" />
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="audio_sharing_device_list"
+-        android:title="@string/audio_sharing_device_group_title"
+-        settings:controller="com.android.settings.connecteddevice.audiosharing.AudioSharingDevicePreferenceController">
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="available_device_list"
+-        android:title="@string/connected_device_media_device_title"
+-        settings:controller="com.android.settings.connecteddevice.AvailableMediaDeviceGroupController" />
+-
+-    <PreferenceCategory
+-        android:key="connected_device_list"
+-        android:title="@string/connected_device_other_device_title"
+-        settings:controller="com.android.settings.connecteddevice.ConnectedDeviceGroupController" />
+-
+-    <com.android.settingslib.widget.UntitledPreferenceCategory>
+-      <com.android.settingslib.RestrictedPreference
+-          android:fragment="com.android.settings.bluetooth.BluetoothPairingDetail"
+-          android:icon="@drawable/ic_add_24dp"
+-          android:key="add_bt_devices"
+-          android:summary="@string/connected_device_add_device_summary"
+-          android:title="@string/bluetooth_pairing_pref_title"
+-          settings:controller="com.android.settings.connecteddevice.AddDevicePreferenceController"
+-          settings:keywords="@string/keywords_add_bt_device"
+-          settings:useAdminDisabledSummary="true"
+-          settings:userRestriction="no_config_bluetooth" />
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+-
+     <PreferenceCategory
+         android:key="previously_connected_devices"
+         android:title="@string/connected_device_saved_title"
+@@ -79,40 +34,10 @@
+             settings:searchable="false" />
+     </PreferenceCategory>
+ 
+-    <PreferenceCategory
+-        android:key="fast_pair_devices"
+-        android:title="@string/connected_device_previously_associated_fast_pair_device_title"
+-        settings:controller=
+-            "com.android.settings.connecteddevice.fastpair.FastPairDevicePreferenceController">
+-
+-        <Preference
+-            android:fragment=
+-                "com.android.settings.connecteddevice.fastpair.FastPairDeviceDashboardFragment"
+-            android:icon="@drawable/ic_chevron_right_24dp"
+-            android:key="fast_pair_devices_see_all"
+-            android:order="10"
+-            android:title="@string/connected_device_fast_pair_device_see_all"
+-            settings:searchable="false" />
+-    </PreferenceCategory>
+-
+-    <com.android.settingslib.widget.UntitledPreferenceCategory>
+-      <Preference
+-          android:fragment="com.android.settings.connecteddevice.AdvancedConnectedDeviceDashboardFragment"
+-          android:key="connection_preferences"
+-          android:summary="@string/summary_placeholder"
+-          android:title="@string/connected_device_connections_title"
+-          settings:allowDividerAbove="true"
+-          settings:controller="com.android.settings.connecteddevice.AdvancedConnectedDeviceController" />
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+-
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:key="bluetooth_diagnostics_category">
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+-
+-    <com.android.settingslib.widget.FooterPreference
+-        android:key="discoverable_footer"
+-        android:title="@string/bluetooth_off_footer"
+-        settings:controller="com.android.settings.connecteddevice.DiscoverableFooterPreferenceController">
+-    </com.android.settingslib.widget.FooterPreference>
++    <Preference
++        android:key="bluetooth_off"
++        android:title="@string/device_info_not_available"
++        android:persistent="false"
++        android:selectable="false" />
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/dark_mode_settings.xml b/packages/apps/Settings/res/xml/dark_mode_settings.xml
+--- a/packages/apps/Settings/res/xml/dark_mode_settings.xml
++++ b/packages/apps/Settings/res/xml/dark_mode_settings.xml
+@@ -20,96 +20,10 @@
+     android:title="@string/dark_ui_mode"
+     settings:keywords="@string/keywords_dark_ui_mode">
+ 
+-    <com.android.settingslib.widget.TopIntroPreference
+-        android:key="dark_ui_top_intro"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.display.darkmode.DarkModeTopIntroPreferenceController"/>
+-
+-    <com.android.settingslib.widget.MainSwitchPreference
++    <SwitchPreferenceCompat
+         android:key="dark_ui_activated"
+         android:title="@string/dark_theme_main_switch_title"
+-        settings:controller="com.android.settings.display.darkmode.DarkModeActivationPreferenceController"/>
++        settings:controller="com.android.settings.display.darkmode.DarkModeActivationPreferenceController"
++        android:persistent="false"/>
+ 
+-    <com.android.settingslib.widget.BannerMessagePreference
+-        android:key="dark_ui_location_off"
+-        android:title="@string/twilight_mode_location_off_dialog_message"
+-        android:persistent="false"
+-        settings:controller="com.android.settings.display.TwilightLocationPreferenceController"/>
+-
+-    <PreferenceCategory
+-        android:key="dark_theme_group"
+-        android:title="@string/dark_theme_version_category"
+-        settings:controller="com.android.settings.accessibility.ForceInvertPreferenceController">
+-        <com.android.settingslib.widget.SelectorWithWidgetPreference
+-            android:key="standard_dark_theme"
+-            android:summary="@string/accessibility_standard_dark_theme_summary"
+-            settings:searchable="true"/>
+-
+-        <com.android.settingslib.widget.SelectorWithWidgetPreference
+-            android:key="expanded_dark_theme"
+-            android:summary="@string/accessibility_expanded_dark_theme_summary"
+-            settings:searchable="true"/>
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="display_category"
+-        android:title="@string/dark_theme_timing_category">
+-        <DropDownPreference
+-            android:key="dark_ui_auto_mode"
+-            android:title="@string/dark_ui_auto_mode_title"
+-            android:summary="%s"
+-            android:persistent="true"
+-            android:entries="@array/dark_ui_scheduler_preference_titles"
+-            android:entryValues="@array/dark_ui_scheduler_preference_titles"
+-            settings:controller="com.android.settings.display.darkmode.DarkModeScheduleSelectorController"
+-            settings:keywords="@string/keywords_dark_ui_mode"/>
+-
+-        <Preference
+-            android:key="dark_theme_start_time"
+-            android:title="@string/night_display_start_time_title"
+-            settings:searchable="false"/>
+-
+-        <Preference
+-            android:key="dark_theme_end_time"
+-            android:title="@string/night_display_end_time_title"
+-            settings:searchable="false"/>
+-    </PreferenceCategory>
+-
+-    <com.android.settingslib.widget.FooterPreference
+-        android:key="dark_theme_connection_footer"
+-        android:title= "@string/twilight_mode_pending_location"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.display.darkmode.DarkModePendingLocationPreferenceController" />
+-
+-    <com.android.settingslib.widget.FooterPreference
+-        android:key="dark_theme_expanded_footer"
+-        android:title="@string/accessibility_expanded_dark_theme_footer"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.display.darkmode.DarkModeExpandedFooterPreferenceController" />
+-
+-    <com.android.settingslib.widget.FooterPreference
+-        android:key="dark_theme_custom_bedtime_footer"
+-        android:title="@string/dark_ui_bedtime_footer_summary"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.display.darkmode.DarkModeCustomModesPreferenceController" />
+-
+-    <com.android.settingslib.widget.ButtonPreference
+-        android:key="feedback"
+-        android:title="@string/accessibility_send_feedback_title"
+-        android:icon="@drawable/ic_feedback"
+-        settings:searchable="false"
+-        android:persistent="false"
+-        settings:buttonPreferenceSize="normal"
+-        settings:buttonPreferenceType="tonal"
+-        settings:controller="com.android.settings.accessibility.FeedbackButtonPreferenceController" />
+-
+-    <com.android.settingslib.widget.ButtonPreference
+-        android:key="survey"
+-        android:title="@string/accessibility_send_survey_title"
+-        android:icon="@drawable/ic_rate_review"
+-        settings:searchable="false"
+-        android:persistent="false"
+-        settings:buttonPreferenceSize="normal"
+-        settings:buttonPreferenceType="tonal"
+-        settings:controller="com.android.settings.accessibility.ForceInvertSurveyButtonPreferenceController" />
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/data_saver.xml b/packages/apps/Settings/res/xml/data_saver.xml
+--- a/packages/apps/Settings/res/xml/data_saver.xml
++++ b/packages/apps/Settings/res/xml/data_saver.xml
+@@ -20,16 +20,10 @@
+     android:title="@string/data_saver_title">
+ 
+     <Preference
+-        android:key="unrestricted_access"
+-        android:title="@string/unrestricted_data_saver"
+-        android:summary="@string/summary_two_lines_placeholder"
+-        android:fragment="com.android.settings.datausage.UnrestrictedDataAccess"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.applications.specialaccess.DataSaverController" />
+-
+-    <com.android.settingslib.widget.FooterPreference
+         android:key="data_saver_footer"
+         android:title="@*android:string/data_saver_description"
+-        settings:searchable="false"/>
++        settings:searchable="false"
++        android:selectable="false"
++        android:persistent="false"/>
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/date_time_prefs.xml b/packages/apps/Settings/res/xml/date_time_prefs.xml
+--- a/packages/apps/Settings/res/xml/date_time_prefs.xml
++++ b/packages/apps/Settings/res/xml/date_time_prefs.xml
+@@ -20,66 +20,27 @@
+     android:title="@string/date_and_time"
+     settings:keywords="@string/keywords_date_and_time">
+ 
+-    <com.android.settingslib.RestrictedSwitchPreference
++    <SwitchPreferenceCompat
+         android:key="auto_time"
+         android:title="@string/date_time_auto"
+         android:summary="@string/summary_placeholder"
+         settings:userRestriction="no_config_date_time"
+-        settings:controller="com.android.settings.datetime.AutoTimePreferenceController" />
+-
+-    <com.android.settingslib.RestrictedPreference
+-        android:key="date"
+-        android:title="@string/date_time_set_date_title"
+-        android:summary="@string/summary_placeholder"
+-        settings:userRestriction="no_config_date_time"
+-        settings:controller="com.android.settings.datetime.DatePreferenceController" />
+-
+-    <com.android.settingslib.RestrictedPreference
+-        android:key="time"
+-        android:title="@string/date_time_set_time_title"
+-        android:summary="@string/summary_placeholder"
+-        settings:userRestriction="no_config_date_time"
+-        settings:controller="com.android.settings.datetime.TimePreferenceController" />
++        settings:controller="com.android.settings.datetime.AutoTimePreferenceController"
++        android:persistent="false"/>
+ 
+     <PreferenceCategory
+         android:key="timezone_preference_category"
+         android:title="@string/date_time_set_timezone_title">
+ 
+-        <com.android.settingslib.RestrictedSwitchPreference
++        <SwitchPreferenceCompat
+             android:key="auto_zone"
+             android:title="@string/zone_auto_title"
+             android:summary="@string/summary_placeholder"
+             settings:userRestriction="no_config_date_time"
+-            settings:controller="com.android.settings.datetime.AutoTimeZonePreferenceController" />
+-
+-        <com.android.settingslib.widget.BannerMessagePreference
+-            android:key="location_time_zone_detection_status"
+-            android:title="@string/location_time_zone_detection_status_title"
+-            settings:controller="com.android.settings.datetime.LocationProviderStatusPreferenceController"/>
++            settings:controller="com.android.settings.datetime.AutoTimeZonePreferenceController"
++            android:persistent="false"/>
+ 
+         <!-- This preference gets removed if location-based time zone detection is not supported -->
+-        <SwitchPreferenceCompat
+-            android:key="location_time_zone_detection"
+-            android:title="@string/location_time_zone_detection_toggle_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.datetime.LocationTimeZoneDetectionPreferenceController"/>
+-
+-        <com.android.settingslib.RestrictedPreference
+-            android:key="timezone"
+-            android:title="@string/date_time_set_timezone_title"
+-            android:summary="@string/summary_placeholder"
+-            android:fragment="com.android.settings.datetime.timezone.TimeZoneSettings"
+-            settings:userRestriction="no_config_date_time"
+-            settings:keywords="@string/keywords_time_zone"
+-            settings:controller="com.android.settings.datetime.TimeZonePreferenceController" />
+-
+-        <com.android.settingslib.RestrictedPreference
+-            android:key="home_time_zone"
+-            android:title="@string/home_time_zone_title"
+-            android:summary="@string/summary_placeholder"
+-            android:fragment="com.android.settings.datetime.timezone.HomeTimeZoneSettings"
+-            settings:userRestriction="no_config_date_time"
+-            settings:controller="com.android.settings.datetime.HomeTimeZonePreferenceController"/>
+ 
+     </PreferenceCategory>
+ 
+@@ -91,49 +52,12 @@
+             android:key="24_hour"
+             android:title="@string/date_time_24hour"
+             settings:keywords="@string/keywords_time_format"
+-            settings:controller="com.android.settings.datetime.TimeFormatPreferenceController" />
++            settings:controller="com.android.settings.datetime.TimeFormatPreferenceController"
++            android:persistent="false"/>
+     </PreferenceCategory>
+ 
+     <!-- An optional preference category for notifications. Only displayed up if enabled via flags and config. -->
+-    <PreferenceCategory
+-        android:key="time_notifications_category"
+-        android:title="@string/time_notifications_title"
+-        settings:controller="com.android.settings.datetime.NotificationsPreferenceCategoryController">
+-
+-        <SwitchPreferenceCompat
+-            android:key="time_zone_change_notifications"
+-            android:title="@string/time_zone_change_notifications_toggle_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:keywords="@string/keywords_time_notification_category"
+-            settings:controller="com.android.settings.datetime.TimeZoneNotificationsPreferenceController" />
+-
+-        <SwitchPreferenceCompat
+-            android:key="time_zone_offset_change_notification"
+-            android:title="@string/time_zone_offset_change_notification_toggle_title"
+-            android:summary="@string/time_zone_offset_change_notification_toggle_summary"
+-            settings:keywords="@string/keywords_time_zone_offset_change_notification_category"
+-            settings:controller="com.android.settings.datetime.TimeZoneOffsetChangeNotificationsPreferenceController" />
+-
+-        <Preference
+-            android:key="time_zone_offset_change_footer"
+-            android:title="@string/footer_time_zone_offset_change_next_change"
+-            android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.datetime.TimeZoneOffsetInfoPreferenceController" />
+-
+-    </PreferenceCategory>
+ 
+     <!-- An optional preference category for feedback. Only displayed up if enabled via flags and config. Always put time feedback at the end. -->
+-    <PreferenceCategory
+-        android:key="time_feedback_preference_category"
+-        android:title="@string/time_feedback_category_title"
+-        settings:controller="com.android.settings.datetime.TimeFeedbackPreferenceCategoryController"
+-        settings:keywords="@string/keywords_time_feedback_category">
+-
+-        <Preference
+-            android:key="time_feedback"
+-            android:title="@string/time_feedback_title"
+-            settings:controller="com.android.settings.datetime.TimeFeedbackPreferenceController"
+-            settings:keywords="@string/keywords_time_feedback" />
+-    </PreferenceCategory>
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/display_settings.xml b/packages/apps/Settings/res/xml/display_settings.xml
+--- a/packages/apps/Settings/res/xml/display_settings.xml
++++ b/packages/apps/Settings/res/xml/display_settings.xml
+@@ -32,16 +32,16 @@
+             android:persistent="false"
+             settings:keywords="@string/keywords_display_brightness_level"
+             settings:useAdminDisabledSummary="true"
+-            settings:userRestriction="no_config_brightness"/>
++            settings:userRestriction="no_config_brightness"
++            android:selectable="false"/>
+ 
+-        <Preference
++        <SwitchPreference
+             android:key="@string/preference_key_auto_brightness"
+             android:title="@string/auto_brightness_title"
+-            android:fragment="com.android.settings.display.AutoBrightnessSettings"
+             settings:useAdminDisabledSummary="true"
+             settings:userRestriction="no_config_brightness"
+-            settings:controller="com.android.settings.display.AutoBrightnessPreferenceController" />
+-
++            settings:controller="com.android.settings.display.AutoBrightnessPreferenceController"
++            android:persistent="false"/>
+ 
+     </PreferenceCategory>
+ 
+@@ -57,8 +57,6 @@
+             settings:keywords="@string/keywords_ambient_display_screen"
+             settings:controller="com.android.settings.security.screenlock.LockScreenPreferenceController"/>
+ 
+-
+-
+         <Preference
+             android:key="screen_timeout"
+             android:title="@string/screen_timeout"
+@@ -72,7 +70,7 @@
+         android:title="@string/category_name_appearance"
+         android:order="-180">
+ 
+-        <com.android.settings.display.darkmode.DarkModePreference
++        <Preference
+             android:key="dark_ui_mode"
+             android:title="@string/dark_ui_mode"
+             android:fragment="com.android.settings.display.darkmode.DarkModeSettingsFragment"
+@@ -89,112 +87,4 @@
+             settings:controller="com.android.settings.accessibility.TextReadingFragmentForDisplaySettingsController"/>
+     </PreferenceCategory>
+ 
+-    <PreferenceCategory
+-        android:title="@string/category_name_color"
+-        android:order="-170">
+-
+-        <Preference
+-            android:key="night_display"
+-            android:title="@string/night_display_title"
+-            android:fragment="com.android.settings.display.NightDisplaySettings"
+-            settings:controller="com.android.settings.display.NightDisplayPreferenceController"
+-            settings:keywords="@string/keywords_display_night_display"/>
+-
+-        <Preference
+-            android:key="color_mode"
+-            android:title="@string/color_mode_title"
+-            android:fragment="com.android.settings.display.ColorModePreferenceFragment"
+-            settings:controller="com.android.settings.display.ColorModePreferenceController"
+-            settings:keywords="@string/keywords_color_mode"/>
+-
+-        <Preference
+-            android:fragment="com.android.settings.display.ColorContrastFragment"
+-            android:key="color_contrast"
+-            android:persistent="false"
+-            android:title="@string/accessibility_color_contrast_title"
+-            settings:controller="com.android.settings.display.ContrastPreferenceController"
+-            settings:searchable="true"/>
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="category_other"
+-        android:title="@string/category_name_display_controls"
+-        android:order="-150">
+-
+-        <!--
+-            Standard auto-rotation preference that will be shown when device state based
+-            auto-rotation settings are NOT available.
+-          -->
+-        <Preference
+-            android:key="auto_rotate"
+-            android:title="@string/accelerometer_title"
+-            settings:keywords="@string/keywords_auto_rotate"
+-            settings:controller="com.android.settings.display.AutoRotatePreferenceController"/>
+-
+-        <!--
+-            Auto-rotation preference that will be shown when device state based auto-rotation
+-            settings are available.
+-          -->
+-        <Preference
+-            android:key="device_state_auto_rotate"
+-            android:title="@string/accelerometer_title"
+-            android:fragment="com.android.settings.display.DeviceStateAutoRotateDetailsFragment"
+-            settings:keywords="@string/keywords_auto_rotate"
+-            settings:controller="com.android.settings.display.DeviceStateAutoRotateOverviewController"/>
+-
+-        <Preference
+-            android:key="screen_resolution"
+-            android:title="@string/screen_resolution_title"
+-            android:fragment="com.android.settings.display.ScreenResolutionFragment"
+-            settings:keywords="@string/keywords_screen_resolution"
+-            settings:controller="com.android.settings.display.ScreenResolutionController"/>
+-
+-        <Preference
+-            android:key="display_white_balance"
+-            android:title="@string/display_white_balance_title"
+-            android:summary="@string/display_white_balance_summary"
+-            settings:controller="com.android.settings.display.DisplayWhiteBalancePreferenceController"/>
+-
+-        <Preference
+-            android:key="peak_refresh_rate"
+-            android:title="@string/peak_refresh_rate_title"
+-            android:summary="@string/peak_refresh_rate_summary"
+-            settings:controller="com.android.settings.display.PeakRefreshRatePreferenceController"/>
+-
+-        <Preference
+-            android:key="show_operator_name"
+-            android:title="@string/show_operator_name_title"
+-            android:summary="@string/show_operator_name_summary"/>
+-
+-        <Preference
+-            android:key="screensaver"
+-            android:title="@string/screensaver_settings_title"
+-            android:fragment="com.android.settings.dream.DreamSettings"
+-            settings:keywords="@string/keywords_screensaver"
+-            settings:controller="com.android.settings.display.ScreenSaverPreferenceController"/>
+-
+-        <Preference
+-            android:key="camera_gesture"
+-            android:title="@string/camera_gesture_title"
+-            android:summary="@string/camera_gesture_desc"/>
+-
+-        <Preference
+-            android:key="lift_to_wake"
+-            android:title="@string/lift_to_wake_title"/>
+-
+-        <Preference
+-            android:key="tap_to_wake"
+-            android:title="@string/tap_to_wake"
+-            android:summary="@string/tap_to_wake_summary"/>
+-
+-        <Preference
+-            android:key="theme"
+-            android:title="@string/device_theme"
+-            android:summary="@string/summary_placeholder"/>
+-
+-        <Preference
+-            android:key="vr_display_pref"
+-            android:title="@string/display_vr_pref_title"
+-            android:fragment="com.android.settings.display.VrDisplayPreferencePicker"/>
+-    </PreferenceCategory>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/emergency_gesture_settings.xml b/packages/apps/Settings/res/xml/emergency_gesture_settings.xml
+--- a/packages/apps/Settings/res/xml/emergency_gesture_settings.xml
++++ b/packages/apps/Settings/res/xml/emergency_gesture_settings.xml
+@@ -20,32 +20,10 @@
+     xmlns:app="http://schemas.android.com/apk/res-auto"
+     android:title="@string/emergency_gesture_screen_title">
+ 
+-    <com.android.settingslib.widget.MainSwitchPreference
+-        android:key="gesture_emergency_button_switch_bar"
+-        app:controller="com.android.settings.emergency.EmergencyGesturePreferenceController"/>
++    <Preference
++        android:key="emergency_unavailable"
++        android:title="@string/device_info_not_available"
++        android:persistent="false"
++        android:selectable="false" />
+ 
+-    <com.android.settingslib.widget.TopIntroPreference
+-        android:title="@string/emergency_gesture_screen_summary"
+-        app:allowDividerAbove="false"/>
+-
+-    <SwitchPreferenceCompat
+-        android:key="emergency_gesture_sound"
+-        android:icon="@drawable/ic_hearing"
+-        android:title="@string/emergency_gesture_sound_setting_title"
+-        android:summary="@string/emergency_gesture_sound_setting_summary"
+-        app:keywords="@string/keywords_gesture"
+-        app:controller="com.android.settings.emergency.EmergencyGestureSoundPreferenceController"/>
+-    <PreferenceCategory
+-        android:key="emergency_gesture_notify_for_help"
+-        android:title="@string/emergency_gesture_category_call_for_help_title">
+-        <com.android.settings.emergency.EmergencyGestureNumberOverridePreference
+-            android:key="emregency_gesture_number_override"
+-            android:title="@string/emergency_gesture_call_for_help_title"
+-            android:summary="@string/summary_placeholder"
+-            android:icon="@drawable/ic_call_grey_24dp"
+-            android:dialogTitle="@string/emergency_gesture_call_for_help_dialog_title"
+-            android:dialogLayout="@layout/emergency_gesture_number_override_dialog"
+-            android:positiveButtonText="@string/save"
+-            app:controller="com.android.settings.emergency.EmergencyGestureNumberOverridePreferenceController"/>
+-    </PreferenceCategory>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/emergency_settings.xml b/packages/apps/Settings/res/xml/emergency_settings.xml
+--- a/packages/apps/Settings/res/xml/emergency_settings.xml
++++ b/packages/apps/Settings/res/xml/emergency_settings.xml
+@@ -20,12 +20,6 @@
+     xmlns:settings="http://schemas.android.com/apk/res-auto"
+     android:key="safety_and_emergency_screen"
+     android:title="@string/emergency_settings_preference_title">
+-    <com.android.settingslib.widget.LayoutPreference
+-        android:key="more_emergency_settings"
+-        android:layout="@layout/more_settings_button"
+-        android:order="0"
+-        android:selectable="false"
+-        settings:controller="com.android.settings.emergency.MoreSettingsPreferenceController" />
+     <Preference
+         android:key="gesture_emergency_summary"
+         android:title="@string/emergency_gesture_screen_title"
+@@ -33,17 +27,4 @@
+         android:order="100"
+         android:fragment="com.android.settings.emergency.EmergencyGestureSettings"
+         settings:controller="com.android.settings.emergency.EmergencyGestureEntrypointPreferenceController" />
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:order="170"
+-        settings:allowDividerAbove="true"/>
+-    <com.android.settingslib.RestrictedPreference
+-        android:key="app_and_notif_cell_broadcast_settings"
+-        android:title="@string/cell_broadcast_settings"
+-        android:order="200"
+-        settings:useAdminDisabledSummary="true">
+-        <intent
+-            android:action="android.intent.action.MAIN"
+-            android:targetPackage="@string/config_cell_broadcast_receiver_package"
+-            android:targetClass="com.android.cellbroadcastreceiver.CellBroadcastSettings"/>
+-    </com.android.settingslib.RestrictedPreference>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/firmware_version.xml b/packages/apps/Settings/res/xml/firmware_version.xml
+--- a/packages/apps/Settings/res/xml/firmware_version.xml
++++ b/packages/apps/Settings/res/xml/firmware_version.xml
+@@ -28,6 +28,8 @@
+         android:summary="@string/summary_placeholder"
+         settings:enableCopying="true"
+         settings:searchable="false"
++        android:selectable="false"
++        android:persistent="false"
+         settings:controller="com.android.settings.deviceinfo.firmwareversion.FirmwareVersionDetailPreferenceController"/>
+ 
+     <!-- Security patch -->
+@@ -35,33 +37,15 @@
+         android:key="security_key"
+         android:title="@string/security_patch"
+         settings:enableCopying="true"
++        android:selectable="false"
++        android:persistent="false"
+         settings:controller="com.android.settings.deviceinfo.firmwareversion.SecurityPatchLevelPreferenceController"/>
+ 
+     <!-- Mainline module version -->
+-    <Preference
+-        android:key="module_version"
+-        android:title="@string/module_version"
+-        android:summary="@string/summary_placeholder"
+-        settings:enableCopying="true"
+-        settings:controller="com.android.settings.deviceinfo.firmwareversion.MainlineModuleVersionPreferenceController"/>
+ 
+     <!-- Baseband -->
+-    <Preference
+-        android:key="base_band"
+-        android:title="@string/baseband_version"
+-        android:summary="@string/summary_placeholder"
+-        android:selectable="false"
+-        settings:enableCopying="true"
+-        settings:controller="com.android.settings.deviceinfo.firmwareversion.BasebandVersionPreferenceController"/>
+ 
+     <!-- Kernel -->
+-    <Preference
+-        android:key="kernel_version"
+-        android:title="@string/kernel_version"
+-        android:summary="@string/summary_placeholder"
+-        android:selectable="false"
+-        settings:enableCopying="true"
+-        settings:controller="com.android.settings.deviceinfo.firmwareversion.KernelVersionPreferenceController"/>
+ 
+     <!-- Build -->
+     <Preference
+@@ -70,6 +54,7 @@
+         android:summary="@string/summary_placeholder"
+         android:selectable="false"
+         settings:enableCopying="true"
++        android:persistent="false"
+         settings:controller="com.android.settings.deviceinfo.firmwareversion.SimpleBuildNumberPreferenceController"/>
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/gestures.xml b/packages/apps/Settings/res/xml/gestures.xml
+--- a/packages/apps/Settings/res/xml/gestures.xml
++++ b/packages/apps/Settings/res/xml/gestures.xml
+@@ -22,69 +22,10 @@
+     android:title="@string/gesture_preference_title">
+ 
+     <Preference
+-        android:key="gesture_swipe_down_fingerprint_input_summary"
+-        android:title="@string/fingerprint_swipe_for_notifications_title"
+-        android:fragment="com.android.settings.gestures.SwipeToNotificationSettings"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.gestures.SwipeToNotificationPreferenceController" />
+-
+-    <Preference
+-        android:key="gesture_double_tap_power_input_summary"
+-        android:title="@string/double_tap_power_title"
+-        android:fragment="com.android.settings.gestures.DoubleTapPowerSettings"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.gestures.DoubleTapPowerPreferenceController" />
+-
+-    <Preference
+-        android:key="gesture_double_twist_input_summary"
+-        android:title="@string/double_twist_for_camera_mode_title"
+-        android:fragment="com.android.settings.gestures.DoubleTwistGestureSettings"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.gestures.DoubleTwistPreferenceController" />
+-
+-    <Preference
+         android:key="gesture_system_navigation_input_summary"
+         android:title="@string/system_navigation_title"
+         android:fragment="com.android.settings.gestures.SystemNavigationGestureSettings"
+         settings:controller="com.android.settings.gestures.SystemNavigationPreferenceController"
+         settings:keywords="@string/keywords_system_navigation" />
+ 
+-    <Preference
+-        android:key="gesture_one_handed"
+-        android:title="@string/one_handed_title"
+-        android:fragment="com.android.settings.gestures.OneHandedSettings"
+-        settings:controller="com.android.settings.gestures.OneHandedEnablePreferenceController" />
+-
+-    <Preference
+-        android:key="gesture_tap_screen_input_summary"
+-        android:title="@string/ambient_display_tap_screen_title"
+-        android:fragment="com.android.settings.gestures.TapScreenGestureSettings"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.gestures.TapScreenGesturePreferenceController" />
+-
+-    <Preference
+-        android:key="gesture_double_tap_screen_input_summary"
+-        android:title="@string/ambient_display_title"
+-        android:fragment="com.android.settings.gestures.DoubleTapScreenSettings"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.gestures.DoubleTapScreenPreferenceController" />
+-
+-    <Preference
+-        android:key="gesture_pick_up_input_summary"
+-        android:title="@string/ambient_display_pickup_title"
+-        android:fragment="com.android.settings.gestures.PickupGestureSettings"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.gestures.PickupGesturePreferenceController" />
+-
+-    <Preference
+-        android:key="gesture_power_menu_summary"
+-        android:title="@string/power_menu_setting_name"
+-        android:fragment="com.android.settings.gestures.PowerMenuSettings"
+-        settings:controller="com.android.settings.gestures.PowerMenuPreferenceController" />
+-
+-    <com.android.settingslib.PrimarySwitchPreference
+-        android:key="gesture_prevent_ringing_summary"
+-        android:title="@string/gesture_prevent_ringing_screen_title"
+-        android:fragment="com.android.settings.gestures.PreventRingingGestureSettings"
+-        settings:controller="com.android.settings.gestures.PreventRingingParentPreferenceController" />
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/keyboard_settings.xml b/packages/apps/Settings/res/xml/keyboard_settings.xml
+--- a/packages/apps/Settings/res/xml/keyboard_settings.xml
++++ b/packages/apps/Settings/res/xml/keyboard_settings.xml
+@@ -19,25 +19,6 @@
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:settings="http://schemas.android.com/apk/res-auto"
+     android:title="@string/keyboard_settings">
+-    <PreferenceCategory
+-        android:key="keyboards_category">
+-        <Preference
+-            android:key="virtual_keyboard_pref"
+-            android:title="@string/keyboard_apps_category"
+-            android:fragment="com.android.settings.inputmethod.AvailableVirtualKeyboardFragment"
+-            settings:keywords="@string/keywords_keyboard_apps"/>
+-
+-        <Preference
+-            android:key="physical_keyboard_pref"
+-            android:title="@string/physical_keyboard_title"
+-            android:summary="@string/summary_placeholder"/>
+-
+-        <SwitchPreferenceCompat
+-            android:key="ime_switcher_button_in_navbar_enabled"
+-            android:title="@string/ime_switcher_button_in_navbar_title"
+-            android:summary="@string/ime_switcher_button_in_navbar_summary"
+-            settings:controller="com.android.settings.inputmethod.ImeSwitcherButtonInNavBarPreferenceController"/>
+-    </PreferenceCategory>
+ 
+     <PreferenceCategory
+         android:key="input_assistance_category"
+@@ -52,37 +33,6 @@
+             android:fragment="com.android.settings.inputmethod.SpellCheckersSettings" />
+ 
+         <!-- User dictionary preference title and fragment will be set programmatically. -->
+-        <Preference
+-            android:key="key_user_dictionary_settings"
+-            android:title="@string/user_dict_settings_title"
+-            android:summary="@string/user_dict_settings_summary"
+-            android:fragment="com.android.settings.inputmethod.UserDictionaryList"
+-            settings:controller="com.android.settings.language.UserDictionaryPreferenceController" />
+     </PreferenceCategory>
+ 
+-    <SwitchPreferenceCompat
+-        android:key="vibrate_input_devices"
+-        android:title="@string/vibrate_input_devices"
+-        android:summary="@string/vibrate_input_devices_summary"
+-        settings:controller="com.android.settings.inputmethod.GameControllerPreferenceController" />
+-
+-    <com.android.settings.widget.WorkOnlyCategory
+-        android:key="language_and_input_for_work_category"
+-        android:title="@string/language_and_input_for_work_category_title"
+-        settings:searchable="false">
+-
+-        <Preference
+-            android:key="spellcheckers_settings_for_work_pref"
+-            android:title="@string/spellcheckers_settings_for_work_title"
+-            android:fragment="com.android.settings.inputmethod.SpellCheckersSettings"
+-            settings:forWork="true"
+-            settings:controller="com.android.settings.core.WorkPreferenceController" />
+-
+-        <Preference
+-            android:key="user_dictionary_settings_for_work_pref"
+-            android:title="@string/user_dict_settings_for_work_title"
+-            android:fragment="com.android.settings.inputmethod.UserDictionaryList"
+-            settings:forWork="true"
+-            settings:controller="com.android.settings.inputmethod.SpellCheckerForWorkPreferenceController" />
+-    </com.android.settings.widget.WorkOnlyCategory>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/location_settings.xml b/packages/apps/Settings/res/xml/location_settings.xml
+--- a/packages/apps/Settings/res/xml/location_settings.xml
++++ b/packages/apps/Settings/res/xml/location_settings.xml
+@@ -20,6 +20,10 @@
+     android:key="location_settings"
+     android:title="@string/location_settings_title"
+     settings:keywords="@string/keywords_location">
++    <SwitchPreferenceCompat
++        android:key="location_settings_primary_switch"
++        android:title="@string/location_settings_primary_switch_title"
++        android:persistent="false" />
+ 
+     <PreferenceCategory
+         android:key="recent_location_access"
+@@ -27,61 +31,10 @@
+         settings:controller=
+             "com.android.settings.location.RecentLocationAccessPreferenceController"/>
+ 
+-    <com.android.settingslib.widget.UntitledPreferenceCategory>
+-        <Preference
+-            android:key="recent_location_access_see_all_button"
+-            android:title="@string/location_recent_location_access_see_all"
+-            android:icon="@drawable/ic_chevron_right_24dp"
+-            android:fragment="com.android.settings.location.RecentLocationAccessSeeAllFragment"
+-            settings:controller="com.android.settings.location.RecentLocationAccessSeeAllButtonPreferenceController"
+-            settings:searchable="false"/>
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
++    <Preference
++        android:key="location_no_recent_accesses"
++        android:title="@string/location_no_recent_accesses"
++        android:persistent="false"
++        android:selectable="false" />
+ 
+-    <com.android.settingslib.widget.SectionButtonPreference
+-        android:key="recent_location_access_see_all_button_expressive"
+-        android:title="@string/location_recent_location_access_see_all"
+-        android:icon="@drawable/ic_bluetooth_more_vert"
+-        android:fragment="com.android.settings.location.RecentLocationAccessSeeAllFragment"
+-        settings:controller="com.android.settings.location.RecentLocationAccessSeeAllExpressiveButtonPreferenceController" />
+-
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:key="location_advanced_settings">
+-
+-        <!-- This preference gets removed if there is no managed profile -->
+-        <com.android.settingslib.RestrictedSwitchPreference
+-            android:enabled="false"
+-            android:key="managed_profile_location_switch"
+-            android:selectable="true"
+-            android:title="@string/managed_profile_location_switch_title"
+-            settings:controller="com.android.settings.location.LocationForWorkPreferenceController"
+-            settings:forWork="true"
+-            settings:useAdminDisabledSummary="true"/>
+-
+-        <!-- This preference gets removed if there is no private profile -->
+-        <com.android.settingslib.RestrictedSwitchPreference
+-            android:enabled="false"
+-            android:key="private_profile_location_switch"
+-            android:selectable="true"
+-            android:title="@string/private_profile_location_switch_title"
+-            settings:controller="com.android.settings.location.LocationForPrivateProfilePreferenceController"/>
+-
+-        <!-- This preference category gets removed if new_recent_location_ui is disabled -->
+-        <Preference
+-            android:key="app_level_permissions"
+-            android:title="@string/location_app_level_permissions"
+-            settings:controller="com.android.settings.location.AppLocationPermissionPreferenceController"/>
+-
+-        <Preference
+-            android:fragment="com.android.settings.location.LocationServices"
+-            android:key="location_services"
+-            android:title="@string/location_services_preference_title"
+-            settings:controller="com.android.settings.location.LocationServicesPreferenceController"/>
+-
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+-
+-    <com.android.settingslib.widget.FooterPreference
+-        android:title="@string/location_settings_footer_general"
+-        android:key="location_footer"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.location.LocationSettingsFooterPreferenceController"/>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/manage_accounts_dashboard_settings.xml b/packages/apps/Settings/res/xml/manage_accounts_dashboard_settings.xml
+--- a/packages/apps/Settings/res/xml/manage_accounts_dashboard_settings.xml
++++ b/packages/apps/Settings/res/xml/manage_accounts_dashboard_settings.xml
+@@ -21,36 +21,11 @@
+     android:title="@string/accounts_and_backup_manage_accounts_title">
+ 
+     <!--    Moved from accounts_dashboard_settings.xml that previously hosted account settings. -->
+-    <PreferenceCategory
+-        android:key="dashboard_tile_placeholder"
+-        android:order="130"/>
+ 
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:order="200">
+-        <SwitchPreferenceCompat
+-            android:key="auto_sync_account_data"
+-            android:title="@string/auto_sync_account_title"
+-            android:summary="@string/auto_sync_account_summary"
+-            android:order="202"
+-            settings:allowDividerAbove="true" />
++    <Preference
++        android:key="accounts_unavailable"
++        android:title="@string/credentials_settings_not_available"
++        android:persistent="false"
++        android:selectable="false" />
+ 
+-        <SwitchPreferenceCompat
+-            android:key="auto_sync_work_account_data"
+-            android:title="@string/account_settings_menu_auto_sync_work"
+-            android:summary="@string/auto_sync_account_summary"
+-            settings:forWork="true"
+-            android:order="203"/>
+-
+-        <SwitchPreferenceCompat
+-            android:key="auto_sync_personal_account_data"
+-            android:title="@string/account_settings_menu_auto_sync_personal"
+-            android:summary="@string/auto_sync_account_summary"
+-            android:order="204"/>
+-
+-        <SwitchPreferenceCompat
+-            android:key="auto_sync_private_account_data"
+-            android:title="@string/account_settings_menu_auto_sync_private"
+-            android:summary="@string/auto_sync_account_summary"
+-            android:order="210"/>
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/modes_list_settings.xml b/packages/apps/Settings/res/xml/modes_list_settings.xml
+--- a/packages/apps/Settings/res/xml/modes_list_settings.xml
++++ b/packages/apps/Settings/res/xml/modes_list_settings.xml
+@@ -21,20 +21,14 @@
+     android:title="@string/zen_modes_list_title"
+     android:key="modes_list_settings">
+ 
+-    <com.android.settingslib.widget.TopIntroPreference
++    <Preference
++        android:key="zen_modes_intro"
++        android:selectable="false"
+         android:title="@string/zen_modes_list_intro" />
+ 
+-    <PreferenceCategory
+-        android:key="zen_modes_list">
+-        <!-- Preferences leading to individual mode pages are added in this PreferenceCategory. -->
+-    </PreferenceCategory>
+-
+-    <com.android.settingslib.widget.UntitledPreferenceCategory>
+-      <Preference
+-          android:key="add_mode"
+-          android:title="@string/zen_modes_add_mode"
+-          android:icon="@drawable/ic_add_24dp"
+-          settings:allowDividerAbove="false"/>
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+-
++    <Preference
++        android:key="zen_modes_unavailable"
++        android:title="@string/device_info_not_available"
++        android:persistent="false"
++        android:selectable="false" />
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/my_device_info.xml b/packages/apps/Settings/res/xml/my_device_info.xml
+--- a/packages/apps/Settings/res/xml/my_device_info.xml
++++ b/packages/apps/Settings/res/xml/my_device_info.xml
+@@ -21,7 +21,6 @@
+     android:key="my_device_info_pref_screen"
+     android:title="@string/about_settings">
+ 
+-
+     <PreferenceCategory
+         android:key="basic_info_category"
+         android:selectable="false"
+@@ -33,17 +32,11 @@
+             android:order="1"
+             android:title="@string/my_device_info_device_name_preference_title"
+             android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.deviceinfo.DeviceNamePreferenceController"
+-            settings:enableCopying="true"/>
++            settings:enableCopying="true"
++            android:selectable="false"
++            android:persistent="false"/>
+ 
+         <!-- Account name -->
+-        <Preference
+-            android:key="branded_account"
+-            android:order="2"
+-            android:title="@string/my_device_info_account_preference_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:enableCopying="true"
+-            settings:controller="com.android.settings.deviceinfo.BrandedAccountPreferenceController"/>
+ 
+         <!-- Phone number -->
+     </PreferenceCategory>
+@@ -60,17 +53,8 @@
+             android:fragment="com.android.settings.LegalSettings"/>
+ 
+         <!-- Regulatory labels -->
+-        <Preference
+-            android:key="regulatory_info"
+-            android:order="16"
+-            android:title="@string/regulatory_labels">
+-        </Preference>
+ 
+         <!-- Safety & regulatory manual -->
+-        <Preference
+-            android:key="safety_info"
+-            android:order="18"
+-            android:title="@string/safety_and_regulatory_info"/>
+     </PreferenceCategory>
+ 
+     <PreferenceCategory
+@@ -81,15 +65,6 @@
+         <!-- SIM status -->
+ 
+         <!-- Model & hardware -->
+-        <Preference
+-            android:key="device_model"
+-            android:order="30"
+-            android:title="@string/model_info"
+-            android:summary="@string/summary_placeholder"
+-            android:fragment="com.android.settings.deviceinfo.hardwareinfo.HardwareInfoFragment"
+-            settings:enableCopying="true"
+-            settings:keywords="@string/keywords_model_and_hardware"
+-            settings:controller="com.android.settings.deviceinfo.HardwareInfoPreferenceController"/>
+ 
+         <!-- EID -->
+ 
+@@ -120,26 +95,10 @@
+         <!-- Bluetooth address -->
+ 
+         <!-- Device up time -->
+-        <Preference
+-            android:key="up_time"
+-            android:order="48"
+-            android:title="@string/status_up_time"
+-            android:summary="@string/summary_placeholder"
+-            android:selectable="false"/>
+ 
+         <!-- Manual -->
+-        <Preference
+-            android:key="manual"
+-            android:order="50"
+-            android:title="@string/manual">
+-        </Preference>
+ 
+         <!-- Feedback on the device -->
+-        <Preference
+-            android:key="device_feedback"
+-            android:order="51"
+-            android:title="@string/device_feedback"
+-            settings:keywords="@string/keywords_device_feedback"/>
+ 
+         <!-- Device FCC equipment id -->
+ 
+@@ -150,7 +109,9 @@
+             android:title="@string/build_number"
+             android:summary="@string/summary_placeholder"
+             settings:enableCopying="true"
+-            settings:controller="com.android.settings.deviceinfo.BuildNumberPreferenceController"/>
++            android:selectable="false"
++            android:persistent="false"
++            settings:controller="com.android.settings.deviceinfo.firmwareversion.SimpleBuildNumberPreferenceController"/>
+     </PreferenceCategory>
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/network_provider_internet.xml b/packages/apps/Settings/res/xml/network_provider_internet.xml
+--- a/packages/apps/Settings/res/xml/network_provider_internet.xml
++++ b/packages/apps/Settings/res/xml/network_provider_internet.xml
+@@ -33,16 +33,14 @@
+         settings:userRestriction="no_config_wifi"
+         settings:controller="com.android.settings.network.InternetPreferenceControllerV2" />
+ 
+-
+-
+-    <Preference
++    <SwitchPreference
+         android:key="airplane_mode_on"
+         android:title="@string/airplane_mode"
+         android:icon="@drawable/ic_airplanemode_active"
+         android:order="-5"
+         settings:controller="com.android.settings.network.AirplaneModePreferenceController"
+-        settings:userRestriction="no_airplane_mode"/>
+-
++        settings:userRestriction="no_airplane_mode"
++        android:persistent="false"/>
+ 
+     <Preference
+         android:key="restrict_background_parent_entry"
+@@ -63,20 +61,4 @@
+         settings:userRestriction="no_config_vpn"
+         settings:useAdminDisabledSummary="true" />
+ 
+-    <Preference
+-        android:key="private_dns_settings"
+-        android:title="@string/select_private_dns_configuration_title"
+-        android:order="20"
+-        android:dialogTitle="@string/select_private_dns_configuration_dialog_title"
+-        android:positiveButtonText="@string/save"
+-        android:negativeButtonText="@android:string/cancel" />
+-
+-    <Preference
+-        android:fragment="com.android.settings.network.AdaptiveConnectivitySettings"
+-        android:key="adaptive_connectivity"
+-        android:title="@string/adaptive_connectivity_title"
+-        android:summary="@string/summary_placeholder"
+-        android:order="25"
+-        settings:controller="com.android.settings.network.AdaptiveConnectivityPreferenceController"/>
+-
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/network_provider_settings.xml b/packages/apps/Settings/res/xml/network_provider_settings.xml
+--- a/packages/apps/Settings/res/xml/network_provider_settings.xml
++++ b/packages/apps/Settings/res/xml/network_provider_settings.xml
+@@ -21,89 +21,13 @@
+         settings:keywords="@string/keywords_wifi">
+ 
+     <!-- Resetting your internet description -->
+-    <com.android.settingslib.widget.LayoutPreference
+-        android:key="resetting_your_internet"
+-        android:title="@string/resetting_internet_text"
+-        android:selectable="false"
+-        android:layout="@layout/resetting_internet"
+-        settings:allowDividerBelow="true"/>
+ 
+     <!-- Airplane mode message -->
+-    <com.android.settingslib.widget.LayoutPreference
+-        android:key="airplane_mode_message"
+-        android:title="@string/condition_airplane_title"
+-        android:selectable="false"
+-        android:layout="@layout/airplane_mode_message_preference"
+-        settings:searchable="false"
+-        settings:allowDividerBelow="true"/>
+ 
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:key="ethernet_interfaces"
+-        settings:isPreferenceVisible="false">
+-        <com.android.settingslib.RestrictedSwitchPreference
+-            android:key="main_toggle_ethernet"
+-            android:title="@string/ethernet"
+-            settings:restrictedSwitchSummary="@string/not_allowed_by_ent"
+-            settings:allowDividerAbove="true"/>
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
++    <Preference
++        android:key="networks_empty"
++        android:title="@string/empty_networks_list"
++        android:persistent="false"
++        android:selectable="false" />
+ 
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:key="connected_ethernet_category"
+-        settings:isPreferenceVisible="false">
+-        <Preference
+-            android:key="connected_ethernet_network"
+-            android:title="@string/ethernet"
+-            android:summary="@string/to_switch_networks_disconnect_ethernet"
+-            android:icon="@drawable/ic_settings_ethernet"/>
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="provider_model_mobile_network"
+-        android:title="@string/mobile_data_settings_title"
+-        settings:isPreferenceVisible="@bool/config_show_sim_info"
+-        settings:controller="com.android.settings.network.NetworkMobileProviderController"/>
+-
+-    <PreferenceCategory
+-        android:key="wifi_category"
+-        android:title="@string/wifi_settings">
+-        <com.android.settingslib.RestrictedSwitchPreference
+-            android:key="main_toggle_wifi"
+-            android:title="@string/wifi_settings_primary_switch_title"
+-            settings:keywords="@string/keywords_wifi"
+-            settings:restrictedSwitchSummary="@string/not_allowed_by_ent"/>
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="access_points"
+-        android:title="@string/wifi_networks_category">
+-
+-        <com.android.settings.wifi.AddWifiNetworkPreference
+-            android:key="add_wifi_network"
+-            android:title="@string/wifi_add_network"
+-            android:icon="@drawable/ic_add_24dp"/>
+-    </PreferenceCategory>
+-
+-
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:key="wifi_ext_category">
+-      <Preference
+-          android:key="configure_network_settings"
+-          android:title="@string/network_and_internet_preferences_title"
+-          settings:allowDividerAbove="true"
+-          android:fragment="com.android.settings.wifi.ConfigureWifiSettings"/>
+-
+-      <Preference
+-          android:key="saved_networks"
+-          android:title="@string/wifi_saved_access_points_label"
+-          android:fragment="com.android.settings.wifi.savedaccesspoints2.SavedAccessPointsWifiSettings2"/>
+-
+-      <com.android.settings.datausage.DataUsagePreference
+-          android:key="non_carrier_data_usage"
+-          android:title="@string/non_carrier_data_usage"/>
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+-
+-    <com.android.settingslib.widget.FooterPreference
+-        android:key="wifi_status_message_footer"
+-        settings:allowDividerAbove="false"
+-        settings:searchable="false"/>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/power_usage_advanced.xml b/packages/apps/Settings/res/xml/power_usage_advanced.xml
+--- a/packages/apps/Settings/res/xml/power_usage_advanced.xml
++++ b/packages/apps/Settings/res/xml/power_usage_advanced.xml
+@@ -21,52 +21,22 @@
+     android:title="@string/advanced_battery_title"
+     settings:keywords="@string/keywords_battery_usage">
+ 
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:key="battery_tips_category">
+-
+-        <com.android.settingslib.widget.BannerMessagePreference
+-            android:key="battery_tips_card"
+-            settings:controller=
+-                "com.android.settings.fuelgauge.batteryusage.BatteryTipsController"
+-            settings:isPreferenceVisible="false" />
+-
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+-
+-    <com.android.settings.fuelgauge.batteryusage.BatteryHistoryPreference
+-        android:key="battery_chart"
+-        settings:controller=
+-            "com.android.settings.fuelgauge.batteryusage.BatteryChartPreferenceController" />
+-
+-    <PreferenceCategory
+-        android:key="screen_on_time_category"
+-        settings:controller=
+-            "com.android.settings.fuelgauge.batteryusage.ScreenOnTimeController"
+-        settings:isPreferenceVisible="false">
+-
+-        <com.android.settings.fuelgauge.batteryusage.TextViewPreference
+-            android:key="screen_on_time_text"
+-            settings:isPreferenceVisible="false" />
+-
+-    </PreferenceCategory>
+-
+     <PreferenceCategory
+         android:key="battery_usage_breakdown"
+         settings:controller=
+             "com.android.settings.fuelgauge.batteryusage.BatteryUsageBreakdownController"
+         settings:isPreferenceVisible="false">
+ 
+-        <com.android.settingslib.widget.SettingsSpinnerPreference
+-            android:key="battery_usage_spinner"
+-            android:order="0"
+-            settings:isPreferenceVisible="false" />
+-
+         <!-- App usage preference list will be added here with the order in range [100, 1000). -->
+ 
+-        <com.android.settingslib.widget.FooterPreference
++        <Preference
+             android:key="battery_usage_footer"
+             android:order="1000"
+             settings:isPreferenceVisible="false"
+-            settings:searchable="false" />
++            settings:searchable="false"
++            android:selectable="false"
++            android:persistent="false"
++            android:title="@string/device_info_not_available"/>
+ 
+     </PreferenceCategory>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/power_usage_summary.xml b/packages/apps/Settings/res/xml/power_usage_summary.xml
+--- a/packages/apps/Settings/res/xml/power_usage_summary.xml
++++ b/packages/apps/Settings/res/xml/power_usage_summary.xml
+@@ -23,13 +23,10 @@
+ 
+     <Preference
+         android:key="battery_header"
+-        android:title="@string/summary_placeholder"
++        android:title="@string/power_usage_summary_title"
+         android:selectable="false"
+         android:paddingBottom="0px"
+-        settings:controller="com.android.settings.fuelgauge.BatteryHeaderPreferenceController" />
+-
+-
+-
++        android:persistent="false"/>
+ 
+     <com.android.settingslib.widget.UntitledPreferenceCategory
+         android:key="power_usage_summary_category">
+@@ -47,25 +44,22 @@
+             settings:keywords="@string/keywords_battery_saver"
+             settings:controller="com.android.settings.fuelgauge.BatterySaverController" />
+ 
+-        <Preference
+-            android:fragment="com.android.settings.fuelgauge.SmartBatterySettings"
+-            android:key="smart_battery_manager"
+-            android:title="@string/smart_battery_manager_title"
+-            settings:controller="com.android.settings.fuelgauge.batterytip.BatteryManagerPreferenceController"
+-            settings:keywords="@string/keywords_battery_adaptive_preferences" />
+     </com.android.settingslib.widget.UntitledPreferenceCategory>
+ 
+     <com.android.settingslib.widget.UntitledPreferenceCategory
+         android:key="percentage_category">
+-        <Preference
++        <SwitchPreferenceCompat
+             android:key="status_bar_show_battery_percent"
+             android:title="@string/battery_percentage"
+             android:summary="@string/battery_percentage_description"
+-            settings:controller="com.android.settings.display.BatteryPercentagePreferenceController" />
++            settings:controller="com.android.settings.display.BatteryPercentagePreferenceController"
++            android:persistent="false"/>
+     </com.android.settingslib.widget.UntitledPreferenceCategory>
+ 
+     <Preference
+         android:key="power_usage_footer"
+         android:title="@string/battery_footer_summary"
+-        settings:searchable="false" />
++        settings:searchable="false"
++        android:selectable="false"
++        android:persistent="false"/>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/previously_connected_devices.xml b/packages/apps/Settings/res/xml/previously_connected_devices.xml
+--- a/packages/apps/Settings/res/xml/previously_connected_devices.xml
++++ b/packages/apps/Settings/res/xml/previously_connected_devices.xml
+@@ -19,8 +19,10 @@
+     xmlns:settings="http://schemas.android.com/apk/res-auto"
+     android:title="@string/connected_device_saved_title">
+ 
+-    <PreferenceCategory
+-        android:key="saved_device_list"
+-        settings:controller="com.android.settings.connecteddevice.SavedDeviceGroupController"/>
++    <Preference
++        android:key="connected_devices_empty"
++        android:title="@string/bluetooth_no_devices_found"
++        android:persistent="false"
++        android:selectable="false" />
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/privacy_dashboard_settings.xml b/packages/apps/Settings/res/xml/privacy_dashboard_settings.xml
+--- a/packages/apps/Settings/res/xml/privacy_dashboard_settings.xml
++++ b/packages/apps/Settings/res/xml/privacy_dashboard_settings.xml
+@@ -22,131 +22,43 @@
+     android:title="@string/privacy_dashboard_title">
+ 
+     <!-- Work Policy info -->
+-    <Preference
+-        android:key="work_policy_info"
+-        android:title="@string/work_policy_privacy_settings"
+-        android:summary="@string/work_policy_privacy_settings_summary"
+-        settings:controller="com.android.settings.privacy.WorkPolicyInfoPreferenceController"/>
+ 
+     <!-- Connected work and personal apps -->
+-    <Preference
+-        android:key="interact_across_profiles_privacy"
+-        android:title="@string/interact_across_profiles_title"
+-        android:fragment="com.android.settings.applications.specialaccess.interactacrossprofiles.InteractAcrossProfilesSettings"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.applications.specialaccess.interactacrossprofiles.InteractAcrossProfilesController" />
+ 
+     <!-- Accessibility usage -->
+-    <Preference
+-        android:key="privacy_accessibility_usage"
+-        android:title="@string/accessibility_usage_title"
+-        settings:controller="com.android.settings.privacy.AccessibilityUsagePreferenceController"/>
+ 
+     <!-- Permissions usage -->
+-    <Preference
+-        android:key="privacy_permissions_usage"
+-        android:title="@string/permissions_usage_title"
+-        android:summary="@string/permissions_usage_summary"
+-        settings:controller="com.android.settings.privacy.PrivacyHubPreferenceController"/>
+ 
+     <!-- App permissions -->
+-    <Preference
+-        android:key="privacy_manage_perms"
+-        android:title="@string/app_permissions"
+-        android:summary="@string/runtime_permissions_summary_control_app_access"
+-        settings:controller="com.android.settings.privacy.ManagePermissionsPreferenceController"/>
+ 
+     <!-- App Function access -->
+-    <Preference
+-        android:key="privacy_app_function_access"
+-        android:title="@string/app_function_access_settings_title"
+-        android:summary="@string/app_function_access_settings_summary"
+-        settings:controller="com.android.settings.privacy.AppFunctionAccessPreferenceController"/>
+ 
+     <!-- App Data Sharing Update -->
+-    <Preference
+-        android:key="privacy_app_data_sharing_updates"
+-        android:title="@string/app_data_sharing_updates_title"
+-        android:summary="@string/app_data_sharing_updates_summary"
+-        settings:controller="com.android.settings.privacy.AppDataSharingUpdatesPreferenceController"/>
+-
+ 
+     <!-- Camera toggle -->
+-    <com.android.settingslib.RestrictedSwitchPreference
+-        android:key="privacy_camera_toggle"
+-        android:title="@string/camera_toggle_title"
+-        android:summary="@string/perm_toggle_description"
+-        settings:controller="com.android.settings.privacy.CameraToggleController"/>
+ 
+     <!-- Microphone toggle -->
+-    <com.android.settingslib.RestrictedSwitchPreference
+-        android:key="privacy_mic_toggle"
+-        android:title="@string/mic_toggle_title"
+-        android:summary="@string/mic_toggle_description"
+-        settings:controller="com.android.settings.privacy.MicToggleController"/>
+ 
+     <!-- Show passwords -->
+     <SwitchPreferenceCompat
+         android:key="show_password"
+         android:title="@string/show_password"
+         android:summary="@string/show_password_summary"
+-        settings:controller="com.android.settings.security.ShowPasswordPreferenceController"/>
++        settings:controller="com.android.settings.security.ShowPasswordPreferenceController"
++        android:persistent="false"/>
+ 
+     <!-- Show secrets (touch) -->
+-    <SwitchPreferenceCompat
+-        android:key="show_secrets_touch"
+-        android:title="@string/show_secrets_touch_title"
+-        android:summary="@string/show_secrets_touch_summary"
+-        settings:controller="com.android.settings.security.ShowSecretsTouchPreferenceController"/>
+ 
+     <!-- Show secrets (physical) -->
+-    <SwitchPreferenceCompat
+-        android:key="show_secrets_physical"
+-        android:title="@string/show_secrets_physical_title"
+-        android:summary="@string/show_secrets_physical_summary"
+-        settings:controller="com.android.settings.security.ShowSecretsPhysicalPreferenceController"/>
+ 
+     <!-- On lock screen notifications -->
+-    <com.android.settings.RestrictedListPreference
+-        android:key="privacy_lock_screen_notifications"
+-        android:title="@string/lock_screen_notifs_title"
+-        android:summary="@string/summary_placeholder"/>
+-
+-    <Preference
+-        android:key="privacy_lock_screen_notifications_page"
+-        android:title="@string/lock_screen_notifs_title"
+-        android:fragment="com.android.settings.notification.LockScreenNotificationsPreferencePageFragment"
+-        settings:controller="com.android.settings.notification.LockScreenNotificationsPreferencePageController" />
+ 
+     <!-- Show media on lock screen -->
+-    <SwitchPreferenceCompat
+-        android:key="privacy_media_controls_lockscreen"
+-        android:title="@string/media_controls_lockscreen_title"
+-        android:summary="@string/media_controls_lockscreen_description"
+-        settings:controller=
+-            "com.android.settings.sound.MediaControlsLockScreenPreferenceController" />
+ 
+     <!-- Privacy Service -->
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:key="privacy_services"/>
+-
+-    <PreferenceCategory
+-        android:key="dashboard_tile_placeholder"/>
+ 
+     <!-- Work profile settings are at the bottom with high order value to avoid users thinking that
+          any of the above settings (including dynamic) are specific to the work profile. -->
+-    <PreferenceCategory
+-        android:key="privacy_work_profile_notifications_category"
+-        android:title="@string/profile_section_header"
+-        android:order="998"
+-        settings:searchable="false">
+-
+-        <com.android.settings.RestrictedListPreference
+-            android:key="privacy_lock_screen_work_profile_notifications"
+-            android:title="@string/locked_work_profile_notification_title"
+-            android:summary="@string/summary_placeholder"
+-            android:order="999"/>
+-    </PreferenceCategory>
+ 
+     <!-- Content Capture -->
+ 
+@@ -155,23 +67,6 @@
+          Hence, we show both here, but the controller itself will decide if it's available or not.
+     -->
+ 
+-    <SwitchPreferenceCompat
+-        android:key="content_capture"
+-        android:title="@string/content_capture"
+-        android:summary="@string/content_capture_summary"
+-        settings:controller="com.android.settings.privacy.EnableContentCapturePreferenceController"/>
+-
+-    <com.android.settingslib.PrimarySwitchPreference
+-        android:key="content_capture_custom_settings"
+-        android:title="@string/content_capture"
+-        android:summary="@string/content_capture_summary"
+-        settings:controller="com.android.settings.privacy.EnableContentCaptureWithServiceSettingsPreferenceController"/>
+-
+     <!-- Clipboard access notifications -->
+-    <SwitchPreferenceCompat
+-        android:key="show_clip_access_notification"
+-        android:title="@string/show_clip_access_notification"
+-        android:summary="@string/show_clip_access_notification_summary"
+-        settings:controller="com.android.settings.privacy.ShowClipAccessNotificationPreferenceController"/>
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/security_dashboard_settings.xml b/packages/apps/Settings/res/xml/security_dashboard_settings.xml
+--- a/packages/apps/Settings/res/xml/security_dashboard_settings.xml
++++ b/packages/apps/Settings/res/xml/security_dashboard_settings.xml
+@@ -22,14 +22,6 @@
+     android:title="@string/security_settings_title">
+ 
+     <!-- security_settings_status.xml -->
+-    <PreferenceCategory
+-        android:order="-10"
+-        android:key="security_status"
+-        android:title="@string/security_status_title" />
+-
+-    <PreferenceCategory
+-        android:order="1"
+-        android:key="dashboard_tile_placeholder" />
+ 
+     <!-- security section -->
+     <PreferenceCategory
+@@ -37,38 +29,13 @@
+         android:key="security_category"
+         android:title="@string/lock_settings_title">
+ 
+-        <com.android.settingslib.RestrictedPreference
++        <Preference
+             android:key="unlock_set_or_change"
+-            android:title="@string/unlock_set_unlock_launch_picker_title"
++            android:title="@string/lockscreen_settings_title"
+             android:summary="@string/summary_placeholder"
+-            settings:keywords="@string/keywords_lockscreen" />
++            settings:keywords="@string/keywords_lockscreen"
++            android:fragment="com.android.settings.security.LockscreenDashboardFragment"/>
+ 
+-        <com.android.settingslib.RestrictedPreference
+-            android:key="fingerprint_settings"
+-            android:title="@string/security_settings_fingerprint_preference_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:keywords="@string/keywords_fingerprint_settings" />
+-
+-        <com.android.settingslib.RestrictedPreference
+-            android:key="face_settings"
+-            android:title="@string/security_settings_face_preference_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:keywords="@string/keywords_face_settings" />
+-
+-        <com.android.settingslib.RestrictedPreference
+-            android:key="biometric_settings"
+-            android:title="@string/security_settings_biometric_preference_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:keywords="@string/keywords_biometric_settings" />
+     </PreferenceCategory>
+ 
+-    <Preference
+-        android:order="100"
+-        android:key="security_advanced_settings"
+-        android:title="@string/security_advanced_settings"
+-        android:summary="@string/summary_placeholder"
+-        android:fragment="com.android.settings.security.SecurityAdvancedSettings"
+-        settings:controller="com.android.settings.security.SecurityAdvancedSettingsController"
+-        settings:keywords="@string/security_advanced_settings_keywords" />
+-
+-</PreferenceScreen>
+\ No newline at end of file
++</PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/security_lockscreen_settings.xml b/packages/apps/Settings/res/xml/security_lockscreen_settings.xml
+--- a/packages/apps/Settings/res/xml/security_lockscreen_settings.xml
++++ b/packages/apps/Settings/res/xml/security_lockscreen_settings.xml
+@@ -23,122 +23,18 @@
+     <PreferenceCategory
+         android:key="lockscreen_what_to_show"
+         android:title="@string/lockscreen_settings_what_to_show_category">
+-        <com.android.settings.RestrictedListPreference
+-            android:key="security_setting_lock_screen_notif"
+-            android:title="@string/lock_screen_notifications_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:keywords="@string/keywords_lock_screen_notif"/>
+-
+-        <Preference
+-            android:key="security_lock_screen_notifications_page"
+-            android:title="@string/lock_screen_notifs_title"
+-            android:fragment="com.android.settings.notification.LockScreenNotificationsPreferencePageFragment"
+-            settings:controller="com.android.settings.notification.LockScreenNotificationsPreferencePageController" />
+-
+-        <SwitchPreferenceCompat
+-            android:key="security_display_lockscreen_bypass"
+-            android:title="@string/lockscreen_bypass_title"
+-            android:summary="@string/lockscreen_bypass_summary"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.biometrics.face.FaceSettingsLockscreenBypassPreferenceController" />
+-
+-        <com.android.settingslib.RestrictedSwitchPreference
+-            android:key="security_lockscreen_add_users_when_locked"
+-            android:title="@string/user_add_on_lockscreen_menu"
+-            settings:controller="com.android.settings.users.AddUserWhenLockedPreferenceController" />
+-
+-        <com.android.settingslib.RestrictedPreference
+-            android:key="owner_info_settings"
+-            android:title="@string/owner_info_settings_title"
+-            android:summary="@string/owner_info_settings_summary" />
+-
+-        <SwitchPreferenceCompat
+-            android:key="lockscreen_privacy_wallet_switch"
+-            android:title="@string/lockscreen_privacy_wallet_setting_toggle"
+-            android:summary="@string/lockscreen_privacy_wallet_summary"
+-            settings:controller="com.android.settings.display.WalletPrivacyPreferenceController" />
+-
+-        <SwitchPreferenceCompat
+-            android:key="lock_screen_show_qr_scanner"
+-            android:title="@string/lockscreen_privacy_qr_code_scanner_setting_toggle"
+-            android:summary="@string/lockscreen_privacy_qr_code_scanner_summary"
+-            settings:controller="com.android.settings.display.QRCodeScannerPreferenceController" />
+-
+-        <SwitchPreferenceCompat
+-            android:key="lockscreen_privacy_controls_switch"
+-            android:title="@string/lockscreen_privacy_controls_setting_toggle"
+-            android:summary="@string/lockscreen_privacy_controls_summary"
+-            settings:controller="com.android.settings.display.ControlsPrivacyPreferenceController" />
+-
+-        <SwitchPreferenceCompat
+-            android:key="lockscreen_trivial_controls_switch"
+-            android:title="@string/lockscreen_trivial_controls_setting_toggle"
+-            android:summary="@string/lockscreen_trivial_controls_summary"
+-            settings:controller="com.android.settings.display.ControlsTrivialPrivacyPreferenceController"/>
+ 
+         <!-- Shortcuts -->
+-        <Preference
+-            android:key="customizable_lock_screen_quick_affordances"
+-            android:title="@string/lockscreen_quick_affordances_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:controller="com.android.settings.display.CustomizableLockScreenQuickAffordancesPreferenceController" />
+ 
+         <SwitchPreferenceCompat
+             android:key="lockscreen_double_line_clock_switch"
+             android:title="@string/lockscreen_double_line_clock_setting_toggle"
+             android:summary="@string/lockscreen_double_line_clock_summary"
+-            settings:controller="com.android.settings.display.LockscreenClockPreferenceController" />
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="ambient_display_category_when_to_show"
+-        android:title="@string/ambient_display_category_triggers"
+-        settings:controller="com.android.settings.display.AmbientDisplayWhenToShowPreferenceController"
+-        android:order="1000">
+-
+-        <Preference
+-            android:key="ambient_display_tap"
+-            android:title="@string/ambient_display_tap_screen_title"
+-            android:fragment="com.android.settings.gestures.TapScreenGestureSettings"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.gestures.TapScreenGesturePreferenceController" />
+-
+-        <Preference
+-            android:key="ambient_display_double_tap"
+-            android:title="@string/ambient_display_title"
+-            android:fragment="com.android.settings.gestures.DoubleTapScreenSettings"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.gestures.DoubleTapScreenPreferenceController" />
+-
+-        <Preference
+-            android:key="ambient_display_pick_up"
+-            android:title="@string/ambient_display_pickup_title"
+-            android:fragment="com.android.settings.gestures.PickupGestureSettings"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.gestures.PickupGesturePreferenceController" />
+-
+-        <SwitchPreferenceCompat
+-            android:key="ambient_display_notification"
+-            android:title="@string/doze_title"
+-            android:summary="@string/doze_summary"
+-            settings:controller="com.android.settings.display.AmbientDisplayNotificationsPreferenceController" />
+-
++            settings:controller="com.android.settings.display.LockscreenClockPreferenceController"
++            android:persistent="false"/>
+     </PreferenceCategory>
+ 
+     <!-- Work profile settings are at the bottom with high order value to avoid users thinking that
+          any of the above settings (including dynamic) are specific to the work profile. -->
+-    <PreferenceCategory
+-        android:key="security_setting_lock_screen_notif_work_header"
+-        android:title="@string/profile_section_header"
+-        android:order="1001"
+-        settings:searchable="false">
+-
+-        <com.android.settings.RestrictedListPreference
+-            android:key="security_setting_lock_screen_notif_work"
+-            android:title="@string/locked_work_profile_notification_title"
+-            android:summary="@string/summary_placeholder"
+-            settings:searchable="false"/>
+-
+-    </PreferenceCategory>
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/sound_settings.xml b/packages/apps/Settings/res/xml/sound_settings.xml
+--- a/packages/apps/Settings/res/xml/sound_settings.xml
++++ b/packages/apps/Settings/res/xml/sound_settings.xml
+@@ -22,171 +22,14 @@
+     settings:keywords="@string/keywords_sounds">
+ 
+     <!-- Remote volume group -->
+-    <PreferenceCategory
+-        android:key="remote_media_group"
+-        android:title=""
+-        android:order="-185"
+-        settings:allowDividerBelow="true"
+-        settings:controller="com.android.settings.notification.RemoteVolumeGroupController">
+-    </PreferenceCategory>
+ 
+     <!-- Volume controls category -->
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:key="volume_controls_category"
+-        android:order="-160">
+-        <!-- Media output switcher -->
+-        <Preference
+-            android:key="media_output"
+-            android:title="@string/media_output_title"
+-            android:dialogTitle="@string/media_output_title"
+-            android:order="-185"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.sound.MediaOutputPreferenceController"/>
+-
+-        <!-- Media volume -->
+-        <com.android.settings.sound.VolumeSliderPreference
+-            android:key="media_volume"
+-            android:icon="@drawable/ic_media_stream"
+-            android:title="@string/media_volume_option_title"
+-            android:order="-180"
+-            settings:userRestriction="no_adjust_volume"
+-            settings:controller="com.android.settings.notification.MediaVolumePreferenceController"/>
+-
+-        <!-- Call volume -->
+-        <com.android.settings.sound.VolumeSliderPreference
+-            android:key="call_volume"
+-            android:icon="@drawable/ic_local_phone_24_lib"
+-            android:title="@string/call_volume_option_title"
+-            android:order="-170"
+-            settings:userRestriction="no_adjust_volume"
+-            settings:controller="com.android.settings.notification.CallVolumePreferenceController"/>
+-
+-        <!-- Hands free profile output switcher -->
+-        <ListPreference
+-            android:key="take_call_on_output"
+-            android:title="@string/take_call_on_title"
+-            android:dialogTitle="@string/take_call_on_title"
+-            android:order="-165"
+-            settings:searchable="false"
+-            settings:controller="com.android.settings.sound.HandsFreeProfileOutputPreferenceController"/>
+-
+-        <!-- Separate Ring volume -->
+-        <com.android.settings.sound.VolumeSliderPreference
+-            android:key="separate_ring_volume"
+-            android:icon="@drawable/ic_ring_volume"
+-            android:title="@string/separate_ring_volume_option_title"
+-            android:order="-155"
+-            settings:userRestriction="no_adjust_volume"
+-            settings:controller="com.android.settings.notification.SeparateRingVolumePreferenceController"/>
+-
+-        <!-- Notification volume -->
+-        <com.android.settings.sound.VolumeSliderPreference
+-            android:key="notification_volume"
+-            android:icon="@drawable/ic_notifications"
+-            android:title="@string/notification_volume_option_title"
+-            android:order="-150"
+-            settings:userRestriction="no_adjust_volume"
+-            settings:controller="com.android.settings.notification.NotificationVolumePreferenceController"
+-            settings:unavailableSliceSubtitle="@string/notification_volume_disabled_summary"/>
+-
+-        <!-- Alarm volume -->
+-        <com.android.settings.sound.VolumeSliderPreference
+-            android:key="alarm_volume"
+-            android:icon="@*android:drawable/ic_audio_alarm"
+-            android:title="@string/alarm_volume_option_title"
+-            android:order="-140"
+-            settings:userRestriction="no_adjust_volume"
+-            settings:controller="com.android.settings.notification.AlarmVolumePreferenceController"/>
+-
+-        <!-- Assistant volume -->
+-        <com.android.settings.sound.VolumeSliderPreference
+-            android:key="assistant_volume"
+-            android:icon="@*android:drawable/ic_volume_voice_chat"
+-            android:title="@string/assistant_volume_option_title"
+-            android:order="-130"
+-            settings:userRestriction="no_adjust_volume"
+-            settings:controller="com.android.settings.notification.AssistantVolumePreferenceController"/>
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+ 
+     <!-- Vibrations and haptics category -->
+-    <com.android.settingslib.widget.UntitledPreferenceCategory
+-        android:key="vibration_category"
+-        android:order="-150">
+-        <!-- Also vibration -->
+-        <Preference
+-            android:fragment="com.android.settings.accessibility.VibrationSettings"
+-            android:key="vibration_and_haptics"
+-            android:title="@string/accessibility_vibration_settings_title"
+-            android:order="-90"
+-            settings:controller="com.android.settings.accessibility.VibrationPreferenceController"
+-            settings:keywords="@string/keywords_vibration"/>
+-    </com.android.settingslib.widget.UntitledPreferenceCategory>
+ 
+     <!-- Sound patterns category -->
+-    <PreferenceCategory
+-        android:key="sound_patterns_category"
+-        android:order="-140"
+-        android:title="@string/sound_patterns_category_title">
+-        <!-- Phone ringtone -->
+-        <com.android.settings.DefaultRingtonePreference
+-            android:key="phone_ringtone"
+-            android:title="@string/ringtone_title"
+-            android:dialogTitle="@string/ringtone_title"
+-            android:summary="@string/summary_placeholder"
+-            android:ringtoneType="ringtone"
+-            android:order="-120"
+-            settings:keywords="@string/sound_settings"/>
+-
+-        <!-- Default notification ringtone -->
+-        <com.android.settings.DefaultRingtonePreference
+-            android:key="notification_ringtone"
+-            android:title="@string/notification_ringtone_title"
+-            android:dialogTitle="@string/notification_ringtone_title"
+-            android:summary="@string/summary_placeholder"
+-            android:ringtoneType="notification"
+-            android:order="-70"/>
+-
+-        <!-- Default alarm ringtone -->
+-        <com.android.settings.DefaultRingtonePreference
+-            android:key="alarm_ringtone"
+-            android:title="@string/alarm_ringtone_title"
+-            android:dialogTitle="@string/alarm_ringtone_title"
+-            android:summary="@string/summary_placeholder"
+-            android:persistent="false"
+-            android:ringtoneType="alarm"
+-            android:order="-60"/>
+-    </PreferenceCategory>
+ 
+     <!-- Audio category -->
+-    <PreferenceCategory
+-        android:key="audio_category"
+-        android:order="-120"
+-        android:title="@string/sound_audio_category_title">
+-        <!-- Live Caption -110 and Now Playing -105-->
+-
+-        <!-- Spatial audio -->
+-        <Preference
+-            android:key="spatial_audio_summary"
+-            android:title="@string/spatial_audio_title"
+-            android:fragment="com.android.settings.notification.SpatialAudioSettings"
+-            android:order="-107"
+-            settings:controller="com.android.settings.notification.SpatialAudioParentPreferenceController"/>
+-
+-        <Preference
+-            android:key="media_controls"
+-            android:title="@string/media_controls_title"
+-            android:fragment="com.android.settings.sound.MediaControlsSettings"
+-            android:order="-100"
+-            settings:controller="com.android.settings.sound.MediaControlsParentPreferenceController"
+-            settings:keywords="@string/keywords_media_controls"/>
+-
+-        <com.android.settingslib.PrimarySwitchPreference
+-            android:key="gesture_prevent_ringing_sound"
+-            android:title="@string/gesture_prevent_ringing_sound_title"
+-            android:order="-80"
+-            android:fragment="com.android.settings.gestures.PreventRingingGestureSettings"
+-            settings:controller="com.android.settings.gestures.PreventRingingParentPreferenceController"/>
+-    </PreferenceCategory>
+ 
+     <!-- System sounds and vibrations category -->
+     <PreferenceCategory
+@@ -197,70 +40,44 @@
+         <SwitchPreferenceCompat
+             android:key="dtmf_tone"
+             android:title="@string/dial_pad_tones_title"
+-            android:order="-50"/>
++            android:order="-50"
++            android:persistent="false"
++            settings:controller="com.android.settings.notification.DialPadTonePreferenceController"/>
+ 
+         <!-- Screen locking sounds -->
+         <SwitchPreferenceCompat
+             android:key="lockscreen_sounds_enabled"
+             android:title="@string/screen_locking_sounds_title"
+-            android:order="-45"/>
++            android:order="-45"
++            android:persistent="false"
++            settings:controller="com.android.settings.notification.ScreenLockSoundPreferenceController"/>
+ 
+         <!-- Charging sounds -->
+         <SwitchPreferenceCompat
+             android:key="charging_sounds_enabled"
+             android:title="@string/charging_sounds_title"
+-            android:order="-40"/>
++            android:order="-40"
++            android:persistent="false"
++            settings:controller="com.android.settings.notification.ChargingSoundPreferenceController"/>
+ 
+         <!-- Docking sounds -->
+-        <SwitchPreferenceCompat
+-            android:key="dock_sounds_enabled"
+-            android:title="@string/docking_sounds_title"
+-            android:order="-35"/>
+ 
+         <!-- Touch sounds -->
+         <SwitchPreferenceCompat
+             android:key="sound_effects_enabled"
+             android:title="@string/touch_sounds_title"
+-            android:order="-30"/>
++            android:order="-30"
++            android:persistent="false"
++            settings:controller="com.android.settings.notification.TouchSoundPreferenceController"/>
+ 
+         <!-- Show vibrate icon in status bar -->
+-        <SwitchPreferenceCompat
+-            android:key="vibrate_icon"
+-            android:title="@string/vibrate_icon_title"
+-            android:order="-27"/>
+ 
+         <!-- Dock speaker plays -->
+-        <DropDownPreference
+-            android:key="dock_audio_media"
+-            android:title="@string/dock_audio_media_title"
+-            android:summary="%s"
+-            android:order="-20"/>
+ 
+         <!-- Boot sounds -->
+-        <SwitchPreferenceCompat
+-            android:key="boot_sounds"
+-            android:title="@string/boot_sounds_title"
+-            android:order="-15"/>
+ 
+         <!-- Emergency tone -->
+-        <DropDownPreference
+-            android:key="emergency_tone"
+-            android:title="@string/emergency_tone_title"
+-            android:summary="%s"
+-            android:order="-10"/>
+     </PreferenceCategory>
+ 
+     <!-- Work profile sound category -->
+-    <PreferenceCategory
+-        android:key="work_sound_category"
+-        android:order="-100"
+-        android:title="@string/work_profile_sound_category_title"
+-        settings:controller="com.android.settings.widget.PreferenceCategoryController">
+-        <Preference
+-            android:key="sound_work_settings"
+-            android:title="@string/sound_work_settings"
+-            android:fragment="com.android.settings.notification.SoundWorkSettings"
+-            android:order="100"
+-            settings:controller="com.android.settings.notification.WorkSoundsPreferenceController"/>
+-    </PreferenceCategory>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/spellchecker_prefs.xml b/packages/apps/Settings/res/xml/spellchecker_prefs.xml
+--- a/packages/apps/Settings/res/xml/spellchecker_prefs.xml
++++ b/packages/apps/Settings/res/xml/spellchecker_prefs.xml
+@@ -17,8 +17,9 @@
+ <PreferenceScreen
+     xmlns:android="http://schemas.android.com/apk/res/android"
+     android:title="@string/spellcheckers_settings_title">
+-    <Preference
+-        android:key="spellchecker_language"
+-        android:title="@string/phone_language"
++    <SwitchPreference
++        android:key="spell_checker_enabled"
++        android:title="@string/spellcheckers_settings_title"
+         android:persistent="false" />
++
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/storage_dashboard_fragment.xml b/packages/apps/Settings/res/xml/storage_dashboard_fragment.xml
+--- a/packages/apps/Settings/res/xml/storage_dashboard_fragment.xml
++++ b/packages/apps/Settings/res/xml/storage_dashboard_fragment.xml
+@@ -20,98 +20,13 @@
+     android:key="storage_dashboard_fragment"
+     android:title="@string/storage_settings"
+     settings:keywords="@string/keywords_storage">
+-    <com.android.settingslib.widget.SettingsSpinnerPreference
+-        android:key="storage_spinner"
+-        android:order="1"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.deviceinfo.storage.StorageSelectionPreferenceController"/>
+-    <com.android.settingslib.widget.UsageProgressBarPreference
+-        android:key="storage_summary"
+-        android:order="2"
+-        android:selectable="false"
+-        settings:searchable="false"
+-        settings:controller="com.android.settings.deviceinfo.storage.StorageUsageProgressBarPreferenceController"/>
+-    <com.android.settingslib.PrimarySwitchPreference
+-        android:fragment="com.android.settings.deletionhelper.AutomaticStorageManagerSettings"
+-        android:key="toggle_asm"
+-        android:title="@string/automatic_storage_manager_preference_title"
+-        android:icon="@drawable/ic_storage"
+-        android:order="3"
+-        settings:controller="com.android.settings.deviceinfo.storage.AutomaticStorageManagementSwitchPreferenceController"/>
+-    <com.android.settingslib.widget.CardPreference
+-        android:key="free_up_space"
+-        android:order="4"
+-        android:title="@string/storage_free_up_space_title"
+-        android:summary="@string/storage_free_up_space_summary"
+-        android:icon="@drawable/ic_delete"
+-        settings:controller="com.android.settings.deviceinfo.storage.ManageStoragePreferenceController"/>
+     <!-- Preference order 100~200 are 'ONLY' for storage category preferences below. -->
+     <Preference
+-        android:key="pref_public_storage"
+-        android:title="@string/storage_files"
+-        android:icon="@drawable/ic_folder_vd_theme_24"
+-        android:order="100"/>
+-    <com.android.settings.deviceinfo.StorageItemPreference
+-        android:key="pref_images"
+-        android:title="@string/storage_images"
+-        android:icon="@drawable/ic_photo_library"
+-        android:order="101"/>
+-    <com.android.settings.deviceinfo.StorageItemPreference
+-        android:key="pref_videos"
+-        android:title="@string/storage_videos"
+-        android:icon="@drawable/ic_local_movies"
+-        android:order="102"/>
+-    <com.android.settings.deviceinfo.StorageItemPreference
+-        android:key="pref_audio"
+-        android:title="@string/storage_audio"
+-        android:icon="@drawable/ic_media_stream"
+-        android:order="103"/>
+-    <com.android.settings.deviceinfo.StorageItemPreference
+         android:key="pref_apps"
+         android:title="@string/storage_apps"
+         android:icon="@drawable/ic_storage_apps"
+-        android:order="104"/>
+-    <com.android.settings.deviceinfo.StorageItemPreference
+-        android:key="pref_games"
+-        android:title="@string/storage_games"
+-        android:icon="@drawable/ic_videogame_vd_theme_24"
+-        android:order="105"/>
+-    <com.android.settings.deviceinfo.StorageItemPreference
+-        android:key="pref_documents"
+-        android:title="@string/storage_documents"
+-        android:icon="@drawable/ic_folder_vd_theme_24"
+-        android:order="106"/>
+-    <com.android.settings.deviceinfo.StorageItemPreference
+-        android:key="pref_other"
+-        android:title="@string/storage_other"
+-        android:icon="@drawable/ic_category_vd_theme_24"
+-        android:order="107"/>
+-    <com.android.settings.deviceinfo.StorageItemPreference
+-        android:key="pref_trash"
+-        android:title="@string/storage_trash"
+-        android:icon="@drawable/ic_trash_can"
+-        android:order="108"/>
++        android:order="104"
++        android:fragment="com.android.settings.applications.manageapplications.ManageApplications"/>
+     <!-- Preference order 100~200 are 'ONLY' for storage category
+     preferences that are sorted by size. -->
+-    <PreferenceCategory
+-        android:key="storage_category_splitter"
+-        android:title="@string/storage_system_label"
+-        android:order="201"
+-        settings:searchable="false">
+-        <com.android.settings.deviceinfo.StorageItemPreference
+-            android:key="pref_system"
+-            android:title="@string/storage_os_name"
+-            android:icon="@drawable/ic_android_vd_theme_24"
+-            android:order="202"
+-            settings:searchable="false"/>
+-        <com.android.settings.deviceinfo.StorageItemPreference
+-            android:key="temporary_files"
+-            android:title="@string/storage_temporary_files"
+-            android:icon="@drawable/ic_database_vd_theme_24"
+-            android:order="203"/>
+-    </PreferenceCategory>
+-    <PreferenceCategory
+-        android:key="pref_non_current_users"
+-        android:title="@string/storage_other_users"
+-        android:order="204" />
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/system_dashboard_fragment.xml b/packages/apps/Settings/res/xml/system_dashboard_fragment.xml
+--- a/packages/apps/Settings/res/xml/system_dashboard_fragment.xml
++++ b/packages/apps/Settings/res/xml/system_dashboard_fragment.xml
+@@ -21,43 +21,6 @@
+     android:title="@string/header_category_system">
+ 
+     <PreferenceCategory
+-        android:key="software_update_category"
+-        android:title="@string/update_device_category_title"
+-        android:order="-400">
+-
+-        <!-- System updates -->
+-        <Preference
+-            android:key="additional_system_update_settings"
+-            android:title="@string/additional_system_update_settings_list_item_title"
+-            settings:controller="com.android.settings.system.AdditionalSystemUpdatePreferenceController">
+-        </Preference>
+-
+-        <Preference
+-            android:key="system_update_settings"
+-            android:title="@string/system_update_settings_list_item_title"
+-            android:summary="@string/summary_placeholder"
+-            android:icon="@drawable/ic_system_update"
+-            settings:keywords="@string/keywords_system_update_settings"
+-            settings:controller="com.android.settings.system.SystemUpdatePreferenceController">
+-        </Preference>
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="languages_input_category"
+-        android:title="@string/language_settings"
+-        android:order="-390">
+-
+-        <Preference
+-            android:key="language_and_region_settings"
+-            android:title="@string/language_and_region_settings"
+-            android:summary="@string/languages_setting_summary"
+-            android:icon="@drawable/ic_settings_languages"
+-            android:fragment="com.android.settings.language.LanguageAndRegionSettings"
+-            settings:controller="com.android.settings.language.LanguageAndRegionPreferenceController"/>
+-
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+         android:key="interaction_category"
+         android:title="@string/interaction_category_title"
+         android:order="-380">
+@@ -70,58 +33,12 @@
+             settings:controller="com.android.settings.inputmethod.KeyboardPreferenceController"/>
+ 
+         <Preference
+-            android:key="trackpad_settings"
+-            android:title="@string/trackpad_mouse_settings"
+-            android:summary="@string/trackpad_settings_summary"
+-            android:icon="@drawable/ic_settings_touchpad"
+-            android:fragment="com.android.settings.inputmethod.TouchpadAndMouseSettings"
+-            settings:keywords="@string/keywords_touchpad"
+-            settings:controller="com.android.settings.inputmethod.TouchpadAndMouseSettingsController"/>
+-
+-        <Preference
+-            android:key="touchpad_settings"
+-            android:title="@string/trackpad_settings"
+-            android:summary="@string/trackpad_settings_summary"
+-            android:icon="@drawable/ic_settings_touchpad"
+-            android:fragment="com.android.settings.inputmethod.TouchpadSettingFragment"
+-            settings:keywords="@string/keywords_touchpad"
+-            settings:controller="com.android.settings.inputmethod.TouchpadSettingsController"/>
+-
+-        <Preference
+-            android:key="mouse_settings"
+-            android:title="@string/mouse_settings"
+-            android:summary="@string/mouse_settings_summary"
+-            android:icon="@drawable/ic_settings_mouse"
+-            android:fragment="com.android.settings.inputmethod.MouseSettingFragment"
+-            settings:controller="com.android.settings.inputmethod.MouseSettingsController" />
+-
+-        <Preference
+-            android:key="game_controller_settings"
+-            android:title="@string/game_controller_settings_title"
+-            android:icon="@drawable/ic_default_controller"
+-            android:fragment="com.android.settings.input.gamecontroller.GameControllerListFragment"
+-            settings:controller="com.android.settings.input.gamecontroller.GameControllerSettingsController" />
+-
+-        <Preference
+             android:key="gesture_settings"
+             android:title="@string/gesture_preference_title"
+             android:icon="@drawable/ic_settings_gestures"
+             android:fragment="com.android.settings.gestures.GestureSettings"
+             settings:controller="com.android.settings.gestures.GesturesSettingPreferenceController" />
+ 
+-        <Preference
+-            android:key="search_gesture_press_hold"
+-            android:title="@string/search_gesture_feature_title"
+-            android:summary="@string/search_gesture_feature_summary"
+-            android:icon="@drawable/ic_gesture_24px"
+-            settings:controller="com.android.settings.gestures.NavigationSettingsContextualSearchController" />
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="automation_intelligence_category"
+-        android:title="@string/automation_intelligence_category_title"
+-        android:order="-370"
+-        settings:controller="com.android.settings.widget.SystemCategoryController">
+     </PreferenceCategory>
+ 
+     <PreferenceCategory
+@@ -145,32 +62,4 @@
+ 
+     </PreferenceCategory>
+ 
+-    <PreferenceCategory
+-        android:key="advanced_category"
+-        android:title="@string/advanced_apps"
+-        android:order="-350"
+-        settings:controller="com.android.settings.widget.SystemAdvancedCategoryController">
+-
+-
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="manage_data_category"
+-        android:title="@string/manage_data_category_title"
+-        android:order="-340">
+-
+-        <Preference
+-            android:key="device_diagnostics"
+-            android:title="@string/device_diagnostics_title"
+-            android:icon="@drawable/ic_device_diagnostics"
+-            settings:controller="com.android.settings.system.DeviceDiagnosticsPreferenceController"/>
+-
+-        <Preference
+-            android:key="reset_dashboard"
+-            android:title="@string/reset_dashboard_title"
+-            android:icon="@drawable/ic_restore"
+-            android:fragment="com.android.settings.system.ResetDashboardFragment"
+-            settings:controller="com.android.settings.system.ResetPreferenceController"/>
+-
+-    </PreferenceCategory>
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/system_navigation_gesture_settings.xml b/packages/apps/Settings/res/xml/system_navigation_gesture_settings.xml
+--- a/packages/apps/Settings/res/xml/system_navigation_gesture_settings.xml
++++ b/packages/apps/Settings/res/xml/system_navigation_gesture_settings.xml
+@@ -21,4 +21,11 @@
+     android:title="@string/system_navigation_title"
+     settings:keywords="@string/keywords_system_navigation">
+ 
++    <Preference
++        android:key="navigation_mode_info"
++        android:title="@string/system_navigation_title"
++        android:persistent="false"
++        android:selectable="false"
++        android:summary="@string/device_info_not_available" />
++
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/text_reading_suw_screen_items.xml b/packages/apps/Settings/res/xml/text_reading_suw_screen_items.xml
+--- a/packages/apps/Settings/res/xml/text_reading_suw_screen_items.xml
++++ b/packages/apps/Settings/res/xml/text_reading_suw_screen_items.xml
+@@ -15,46 +15,42 @@
+   limitations under the License.
+ -->
+ 
+-<ItemGroup xmlns:android="http://schemas.android.com/apk/res/android"
++<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:settings="http://schemas.android.com/apk/res-auto"
+-    android:id="@+id/text_reading_in_suw">
++    android:title="@string/accessibility_text_reading_options_title">
+ 
+-    <SectionItem
++    <PreferenceCategory
+         android:id="@+id/display_text_size_in_suw"
+         android:title="@string/category_title_display_text_size">
+ 
+-        <com.android.settings.accessibility.setupwizard.items.SliderItem
+-            android:id="@+id/font_size_in_suw"
+-            android:title="@string/title_font_size"
+-            android:summary="@string/short_summary_font_size"
+-            settings:iconStart="@drawable/ic_remove_24dp"
+-            settings:iconStartContentDescription="@string/font_size_make_smaller_desc"
+-            settings:iconEnd="@drawable/ic_add_24dp"
+-            settings:iconEndContentDescription="@string/font_size_make_larger_desc" />
++        <Preference
++            android:key="font_size"
++            android:persistent="false"
++            android:selectable="false"
++            android:title="@string/title_font_size"/>
+ 
+-        <com.android.settings.accessibility.setupwizard.items.SliderItem
+-            android:id="@+id/display_size_in_suw"
+-            android:title="@string/screen_zoom_title"
+-            android:summary="@string/screen_zoom_short_summary"
+-            settings:iconStart="@drawable/ic_remove_24dp"
+-            settings:iconStartContentDescription="@string/screen_zoom_make_smaller_desc"
+-            settings:iconEnd="@drawable/ic_add_24dp"
+-            settings:iconEndContentDescription="@string/screen_zoom_make_larger_desc" />
++        <Preference
++            android:key="display_size"
++            android:persistent="false"
++            android:selectable="false"
++            android:title="@string/screen_zoom_title"/>
+ 
+-    </SectionItem>
++    </PreferenceCategory>
+ 
+-    <SectionItem
++    <PreferenceCategory
+         android:id="@+id/text_style_in_suw"
+         android:title="@string/category_title_text_style">
+ 
+-        <SwitchItem
+-            android:id="@+id/bold_text_in_suw"
++        <SwitchPreferenceCompat
++            android:key="bold_text"
++            android:persistent="false"
+             android:title="@string/force_bold_text" />
+ 
+-        <SwitchItem
+-            android:id="@+id/outline_text_in_suw"
++        <SwitchPreferenceCompat
++            android:key="high_text_contrast"
++            android:persistent="false"
+             android:title="@string/accessibility_toggle_maximize_text_contrast_preference_title"
+             android:summary="@string/accessibility_toggle_maximize_text_contrast_preference_summary"/>
+ 
+-    </SectionItem>
+-</ItemGroup>
++    </PreferenceCategory>
++</PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/top_level_settings.xml b/packages/apps/Settings/res/xml/top_level_settings.xml
+--- a/packages/apps/Settings/res/xml/top_level_settings.xml
++++ b/packages/apps/Settings/res/xml/top_level_settings.xml
+@@ -216,7 +216,8 @@
+             android:order="-10"
+             android:summary="@string/summary_placeholder"
+             settings:highlightableMenuKey="@string/menu_key_accounts"
+-            settings:controller="com.android.settings.accounts.TopLevelAccountEntryPreferenceController"/>
++            settings:controller="com.android.settings.accounts.TopLevelAccountEntryPreferenceController"
++            android:title="@string/account_dashboard_title"/>
+ 
+         <!-- TODO(b/460772532): Set highlightableMenuKey to menu_key_accounts once this screen
+                 is ready to display user's accounts instead of AccountDashboardFragment. -->
+@@ -275,4 +276,4 @@
+             settings:controller="com.android.settings.support.SupportPreferenceController"/>
+     </PreferenceCategory>
+ 
+-</PreferenceScreen>
+\ No newline at end of file
++</PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/user_settings.xml b/packages/apps/Settings/res/xml/user_settings.xml
+--- a/packages/apps/Settings/res/xml/user_settings.xml
++++ b/packages/apps/Settings/res/xml/user_settings.xml
+@@ -20,103 +20,16 @@
+     android:key="user_settings_screen"
+     android:title="@string/user_settings_title">
+ 
+-    <com.android.settingslib.widget.TopIntroPreference
+-        android:key="multiuser_top_intro"
+-        android:title="@string/user_settings_footer_text"
+-        settings:controller="com.android.settings.users.MultiUserTopIntroPreferenceController"/>
+-
+-    <com.android.settings.widget.SettingsMainSwitchPreference
+-        android:key="multiple_users_main_switch"
+-        android:title="@string/multiple_users_main_switch_title"/>
+-
+-    <PreferenceCategory
+-        android:key="guest_category"
+-        android:title="@string/guest_category_title"
+-        android:order="2"
+-        settings:searchable="false"/>
+-
+-    <Preference
+-        android:key="guest_exit"
+-        android:title="@string/guest_exit_button"
+-        android:icon="@drawable/ic_guest_exit"
+-        android:order="3"/>
+-
+-    <Preference
+-        android:key="guest_reset"
+-        android:title="@string/guest_reset_button"
+-        android:icon="@drawable/ic_guest_reset"
+-        android:order="4"/>
+-
+     <PreferenceCategory
+         android:key="user_list"
+         android:title="@string/user_category_title"
+         android:order="10"
+         settings:searchable="false"/>
+ 
+-    <com.android.settingslib.RestrictedPreference
+-        android:key="user_add"
+-        android:title="@string/user_add_user_or_profile_menu"
+-        android:icon="@drawable/ic_add_40dp"
+-        android:order="20"/>
+-
+-    <com.android.settingslib.RestrictedPreference
+-        android:key="supervised_user_add"
+-        android:title="@*android:string/supervised_user_creation_label"
+-        android:icon="@drawable/ic_add_40dp"
+-        android:order="25"/>
+-
+-    <PreferenceCategory
+-        android:key="add_user_settings_category"
+-        android:order="40">
+-        <com.android.settingslib.RestrictedSwitchPreference
+-            android:key="add_users_from_signin"
+-            android:title="@string/user_add_on_signin_screen_menu"/>
+-    </PreferenceCategory>
+-
+-    <PreferenceCategory
+-        android:key="guest_user_category"
+-        android:title="@*android:string/guest_name"
+-        android:order="50"/>
+-
+-    <com.android.settingslib.RestrictedPreference
+-        android:key="guest_add"
+-        android:title="@string/guest_new_guest"
+-        android:icon="@drawable/ic_add_40dp"
+-        android:order="55"/>
+-
+-    <com.android.settingslib.RestrictedSwitchPreference
+-        android:key="add_guests_from_signin"
+-        android:title="@string/add_guests_from_signin"
+-        android:summary="@string/add_guests_from_signin_summary"
+-        android:order="59"
+-        settings:keywords="@string/add_guests_from_signin_keywords"/>
+-
+-    <com.android.settingslib.RestrictedSwitchPreference
+-        android:key="remove_guest_on_exit"
+-        android:title="@string/remove_guest_on_exit"
+-        android:summary="@string/remove_guest_on_exit_summary"
+-        android:order="60"
+-        settings:keywords="@string/remove_guest_on_exit_keywords"/>
+-
+-    <com.android.settingslib.RestrictedSwitchPreference
+-        android:key="enable_guest_calling"
+-        android:title="@string/enable_guest_calling"
+-        android:summary="@string/enable_guest_calling_summary"
+-        android:singleLineTitle="false"
+-        android:order="65"/>
+-
+-    <com.android.settingslib.RestrictedSwitchPreference
+-        android:key="user_settings_add_users_when_locked"
+-        android:title="@string/user_add_on_lockscreen_menu"
+-        android:singleLineTitle="false"
+-        android:order="105"
+-        settings:allowDividerAbove="true"/>
+-
+-    <com.android.settingslib.RestrictedPreference
+-        android:key="timeout_to_dock_user_preference"
+-        android:title="@string/switch_to_dock_user_when_docked"
+-        android:order="106"
+-        android:fragment="com.android.settings.users.TimeoutToDockUserSettings"
+-        settings:controller="com.android.settings.users.TimeoutToDockUserPreferenceController"/>
++    <Preference
++        android:key="user_me"
++        android:title="@string/user_owner"
++        android:persistent="false"
++        android:selectable="false" />
+ 
+ </PreferenceScreen>
+diff --git a/packages/apps/Settings/res/xml/vpn_settings2.xml b/packages/apps/Settings/res/xml/vpn_settings2.xml
+--- a/packages/apps/Settings/res/xml/vpn_settings2.xml
++++ b/packages/apps/Settings/res/xml/vpn_settings2.xml
+@@ -16,9 +16,11 @@
+ 
+ <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+         android:title="@string/vpn_title">
+-    <PreferenceCategory
+-        android:key="advanced_vpn_group"/>
+ 
+-    <PreferenceCategory
+-        android:key="vpn_group"/>
++    <Preference
++        android:key="vpn_empty"
++        android:title="@string/vpn_no_vpns_added"
++        android:persistent="false"
++        android:selectable="false" />
++
+ </PreferenceScreen>

@@ -1,0 +1,2447 @@
+diff --git a/packages/apps/Settings/src/com/android/settings/accessibility/AudioDescriptionPreferenceController.java b/packages/apps/Settings/src/com/android/settings/accessibility/AudioDescriptionPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/accessibility/AudioDescriptionPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/accessibility/AudioDescriptionPreferenceController.java
+@@ -16,42 +16,14 @@
+ 
+ package com.android.settings.accessibility;
+ 
+-import static android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_AUDIO_DESCRIPTION_BY_DEFAULT;
+-
+-import static com.android.settings.accessibility.AccessibilityUtil.State.OFF;
+-import static com.android.settings.accessibility.AccessibilityUtil.State.ON;
+-
+ import android.content.Context;
+ import android.provider.Settings;
+ 
+-import com.android.settings.R;
+ import com.android.settings.core.TogglePreferenceController;
+ 
+-/**
+- * A toggle preference controller for audio description
+- */
+ public class AudioDescriptionPreferenceController extends TogglePreferenceController {
+-
+-    static final String PREF_KEY = "toggle_audio_description";
+-
+     public AudioDescriptionPreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+-    }
+-
+-    @Override
+-    public boolean isChecked() {
+-        return Settings.Secure.getIntForUser(mContext.getContentResolver(),
+-                ENABLED_ACCESSIBILITY_AUDIO_DESCRIPTION_BY_DEFAULT,
+-                OFF /* default */,
+-                mContext.getUserId()) == ON;
+-    }
+-
+-    @Override
+-    public boolean setChecked(boolean isChecked) {
+-        return Settings.Secure.putIntForUser(mContext.getContentResolver(),
+-                ENABLED_ACCESSIBILITY_AUDIO_DESCRIPTION_BY_DEFAULT,
+-                isChecked ? ON : OFF,
+-                mContext.getUserId());
+     }
+ 
+     @Override
+@@ -60,7 +32,12 @@
+     }
+ 
+     @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_accessibility;
++    public boolean isChecked() {
++        return Settings.Secure.getInt(mContext.getContentResolver(), "enabled_accessibility_audio_description_by_default", 0) == 1;
++    }
++
++    @Override
++    public boolean setChecked(boolean enabled) {
++        return Settings.Secure.putInt(mContext.getContentResolver(), "enabled_accessibility_audio_description_by_default", enabled ? 1 : 0);
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/accessibility/PrimaryMonoPreferenceController.java b/packages/apps/Settings/src/com/android/settings/accessibility/PrimaryMonoPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/accessibility/PrimaryMonoPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/accessibility/PrimaryMonoPreferenceController.java
+@@ -17,31 +17,13 @@
+ package com.android.settings.accessibility;
+ 
+ import android.content.Context;
+-import android.os.UserHandle;
+ import android.provider.Settings;
+ 
+-import com.android.settings.R;
+ import com.android.settings.core.TogglePreferenceController;
+ 
+-/**
+- * A toggle preference controller for Primary Mono
+- */
+ public class PrimaryMonoPreferenceController extends TogglePreferenceController {
+-
+     public PrimaryMonoPreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+-    }
+-
+-    @Override
+-    public boolean isChecked() {
+-        return Settings.System.getIntForUser(mContext.getContentResolver(),
+-                Settings.System.MASTER_MONO, 0 /* default */, UserHandle.USER_CURRENT) == 1;
+-    }
+-
+-    @Override
+-    public boolean setChecked(boolean isChecked) {
+-        return Settings.System.putIntForUser(mContext.getContentResolver(),
+-                Settings.System.MASTER_MONO, isChecked ? 1 : 0, UserHandle.USER_CURRENT);
+     }
+ 
+     @Override
+@@ -50,7 +32,12 @@
+     }
+ 
+     @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_accessibility;
++    public boolean isChecked() {
++        return Settings.System.getInt(mContext.getContentResolver(), "master_mono", 0) == 1;
++    }
++
++    @Override
++    public boolean setChecked(boolean enabled) {
++        return Settings.System.putInt(mContext.getContentResolver(), "master_mono", enabled ? 1 : 0);
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/accounts/TopLevelAccountEntryPreferenceController.java b/packages/apps/Settings/src/com/android/settings/accounts/TopLevelAccountEntryPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/accounts/TopLevelAccountEntryPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/accounts/TopLevelAccountEntryPreferenceController.java
+@@ -17,17 +17,13 @@
+ package com.android.settings.accounts;
+ 
+ import android.content.Context;
+-import android.credentials.CredentialManager;
+ 
+ import androidx.preference.Preference;
+ import androidx.preference.PreferenceScreen;
+ 
+ import com.android.settings.R;
++
+ import com.android.settings.core.BasePreferenceController;
+-import com.android.settings.flags.Flags;
+-import com.android.settingslib.core.AbstractPreferenceController;
+-
+-import java.util.List;
+ 
+ public class TopLevelAccountEntryPreferenceController extends BasePreferenceController {
+     public TopLevelAccountEntryPreferenceController(Context context, String preferenceKey) {
+@@ -42,17 +38,10 @@
+     @Override
+     public void displayPreference(PreferenceScreen screen) {
+         super.displayPreference(screen);
+-        Preference preference = screen.findPreference(getPreferenceKey());
++        final Preference preference = screen.findPreference(getPreferenceKey());
+         if (preference != null) {
+-            preference.setTitle(AccountScreen.getAccountScreenTitle(mContext));
+-        }
+-    }
+-
+-    static void maybeAddTopLevelAccountEntryPreferenceController(Context context,
+-            List<AbstractPreferenceController> controllers) {
+-        if (Flags.enableAccountsAndBackupScreen() && CredentialManager.isServiceEnabled(context)) {
+-            controllers.add(new TopLevelAccountEntryPreferenceController(context,
+-                    "user_and_account_settings_screen"));
++            // The Credential Manager variant needs the platform credentials service.
++            preference.setTitle(R.string.account_dashboard_title);
+         }
+     }
+ 
+diff --git a/packages/apps/Settings/src/com/android/settings/core/TogglePreferenceController.java b/packages/apps/Settings/src/com/android/settings/core/TogglePreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/core/TogglePreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/core/TogglePreferenceController.java
+@@ -17,99 +17,31 @@
+ 
+ import androidx.annotation.NonNull;
+ import androidx.preference.Preference;
+-import androidx.preference.PreferenceScreen;
+ import androidx.preference.TwoStatePreference;
+ 
+-import com.android.settings.onboarding.OnboardingFeatureProvider;
+-import com.android.settings.overlay.FeatureFactory;
+-import com.android.settings.slices.SliceData;
+-import com.android.settings.widget.TwoStateButtonPreference;
+-import com.android.settingslib.PrimarySwitchPreference;
+-import com.android.settingslib.core.instrumentation.SettingsJankMonitor;
+-import com.android.settingslib.widget.MainSwitchPreference;
+-
+-/**
+- * Abstract class that consolidates logic for updating toggle controllers.
+- * It automatically handles the getting and setting of the switch UI element.
+- * Children of this class implement methods to get and set the underlying value of the setting.
+- */
+ public abstract class TogglePreferenceController extends BasePreferenceController implements
+         Preference.OnPreferenceChangeListener {
+-
+-    private static final String TAG = "TogglePrefController";
+ 
+     public TogglePreferenceController(@NonNull Context context, @NonNull String preferenceKey) {
+         super(context, preferenceKey);
+     }
+ 
+-    /**
+-     * @return {@code true} if the Setting is enabled.
+-     */
+     public abstract boolean isChecked();
+ 
+-    /**
+-     * Set the Setting to {@param isChecked}
+-     *
+-     * @param isChecked Is {@code true} when the setting should be enabled.
+-     * @return {@code true} if the underlying setting is updated.
+-     */
+     public abstract boolean setChecked(boolean isChecked);
+-
+-    @Override
+-    public void displayPreference(PreferenceScreen screen) {
+-        super.displayPreference(screen);
+-        Preference preference = screen.findPreference(getPreferenceKey());
+-        if (preference instanceof MainSwitchPreference) {
+-            ((MainSwitchPreference) preference).addOnSwitchChangeListener((switchView, isChecked) ->
+-                    SettingsJankMonitor.detectToggleJank(getPreferenceKey(), switchView));
+-        }
+-    }
+ 
+     @Override
+     public void updateState(Preference preference) {
+         if (preference instanceof TwoStatePreference) {
+             ((TwoStatePreference) preference).setChecked(isChecked());
+-        } else if (preference instanceof PrimarySwitchPreference) {
+-            ((PrimarySwitchPreference) preference).setChecked(isChecked());
+-        } else if (preference instanceof TwoStateButtonPreference) {
+-            ((TwoStateButtonPreference) preference).setChecked(isChecked());
+-        } else {
+-            refreshSummary(preference);
+         }
++        refreshSummary(preference);
+     }
+ 
+     @Override
+     public final boolean onPreferenceChange(Preference preference, Object newValue) {
+-        // TwoStatePreference is a regular preference and can be handled by DashboardFragment
+-        if (preference instanceof PrimarySwitchPreference
+-                || preference instanceof TwoStateButtonPreference) {
+-            FeatureFactory.getFeatureFactory().getMetricsFeatureProvider()
+-                    .logClickedPreference(preference, getMetricsCategory());
+-        }
+-        OnboardingFeatureProvider onboardingFeatureProvider =
+-                FeatureFactory.getFeatureFactory().getOnboardingFeatureProvider();
+-        if (onboardingFeatureProvider != null) {
+-            onboardingFeatureProvider.markPreferenceHasChanged(mContext, mPreferenceKey);
+-        }
+-        return setChecked((boolean) newValue);
+-    }
+-
+-    @Override
+-    @SliceData.SliceType
+-    public int getSliceType() {
+-        return SliceData.SliceType.SWITCH;
+-    }
+-
+-    @Override
+-    public boolean isSliceable() {
++        if (!(newValue instanceof Boolean) || !setChecked((Boolean) newValue)) return false;
++        refreshSummary(preference);
+         return true;
+     }
+-
+-    @Override
+-    public boolean isPublicSlice() {
+-        return false;
+-    }
+-
+-    @Override
+-    public abstract int getSliceHighlightMenuRes();
+-}
+\ No newline at end of file
++}
+diff --git a/packages/apps/Settings/src/com/android/settings/datetime/AutoTimePreferenceController.java b/packages/apps/Settings/src/com/android/settings/datetime/AutoTimePreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/datetime/AutoTimePreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/datetime/AutoTimePreferenceController.java
+@@ -16,117 +16,28 @@
+ 
+ package com.android.settings.datetime;
+ 
+-import static android.app.time.Capabilities.CAPABILITY_NOT_ALLOWED;
+-import static android.app.time.Capabilities.CAPABILITY_NOT_APPLICABLE;
+-import static android.app.time.Capabilities.CAPABILITY_NOT_SUPPORTED;
+-import static android.app.time.Capabilities.CAPABILITY_POSSESSED;
++import android.content.Context;
++import android.provider.Settings;
+ 
+-import android.app.admin.flags.Flags;
+-import android.app.time.TimeCapabilities;
+-import android.app.time.TimeCapabilitiesAndConfig;
+-import android.app.time.TimeConfiguration;
+-import android.app.time.TimeManager;
+-import android.content.Context;
+-import android.os.UserManager;
+-import android.util.Log;
+-
+-import androidx.preference.Preference;
+-
+-import com.android.internal.annotations.VisibleForTesting;
+-import com.android.settings.R;
+ import com.android.settings.core.TogglePreferenceController;
+ 
+ public class AutoTimePreferenceController extends TogglePreferenceController {
+-
+-    private static final String TAG = "AutoTimePreferenceController";
+-
+-    private UpdateTimeAndDateCallback mCallback;
+-    private final TimeManager mTimeManager;
+-
+     public AutoTimePreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+-        mTimeManager = context.getSystemService(TimeManager.class);
+-        // This is a no-op implementation of UpdateTimeAndDateCallback to avoid a NPE when
+-        // setTimeAndDateCallback() isn't called, e.g. for slices and other cases where the
+-        // controller is instantiated outside of the context of the real Date & Time settings
+-        // screen.
+-        mCallback  = (c) -> {};
+-    }
+-
+-    public void setDateAndTimeCallback(UpdateTimeAndDateCallback callback) {
+-        mCallback = callback;
+     }
+ 
+     @Override
+     public int getAvailabilityStatus() {
+-        TimeCapabilities timeCapabilities =
+-                getTimeCapabilitiesAndConfig().getCapabilities();
+-        int capability = timeCapabilities.getConfigureAutoDetectionEnabledCapability();
+-
+-        // The preference has three states: visible, not visible, and visible but disabled.
+-        // This method handles the "is visible?" check.
+-        switch (capability) {
+-            case CAPABILITY_NOT_SUPPORTED:
+-                return DISABLED_DEPENDENT_SETTING;
+-            case CAPABILITY_POSSESSED:
+-            case CAPABILITY_NOT_ALLOWED:
+-                // This case is expected for enterprise restrictions, where the toggle should be
+-                // present but disabled. Disabling is handled declaratively via the
+-                // settings:userRestriction attribute in .xml. The client-side logic is expected to
+-                // concur with the capabilities logic in the system server.
+-            case CAPABILITY_NOT_APPLICABLE:
+-                // CAPABILITY_NOT_APPLICABLE is not currently expected, so this is return value is
+-                // arbitrary.
+-                return AVAILABLE;
+-            default:
+-                Log.e(TAG, "Unknown capability=" + capability);
+-                return UNSUPPORTED_ON_DEVICE;
+-        }
+-    }
+-
+-    @Override
+-    public void updateState(Preference preference) {
+-        super.updateState(preference);
+-        refreshSummary(preference);
+-        if (Flags.policyStreamliningAutoTime()) {
+-            DateTimePolicyHelper.checkAutoTimePolicyAndSetDisabled(mContext, preference);
+-        }
+-    }
+-
+-    @Override
+-    public CharSequence getSummary() {
+-        return mContext.getString(R.string.date_time_auto_summary);
++        return AVAILABLE;
+     }
+ 
+     @Override
+     public boolean isChecked() {
+-        return isEnabled();
++        return Settings.Global.getInt(mContext.getContentResolver(), Settings.Global.AUTO_TIME, 1) == 1;
+     }
+ 
+     @Override
+-    public boolean setChecked(boolean isChecked) {
+-        TimeConfiguration configuration = new TimeConfiguration.Builder()
+-                .setAutoDetectionEnabled(isChecked)
+-                .build();
+-        boolean result = mTimeManager.updateTimeConfiguration(configuration);
+-
+-        mCallback.updateTimeAndDateDisplay(mContext);
+-        return result;
+-    }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_system;
+-    }
+-
+-    /** Returns whether the preference should be "checked", i.e. set to the "on" position. */
+-    @VisibleForTesting
+-    public boolean isEnabled() {
+-        TimeConfiguration config = getTimeCapabilitiesAndConfig().getConfiguration();
+-        return config.isAutoDetectionEnabled();
+-    }
+-
+-    private TimeCapabilitiesAndConfig getTimeCapabilitiesAndConfig() {
+-        return mTimeManager.getTimeCapabilitiesAndConfig();
++    public boolean setChecked(boolean enabled) {
++        return Settings.Global.putInt(mContext.getContentResolver(), Settings.Global.AUTO_TIME, enabled ? 1 : 0);
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/datetime/AutoTimeZonePreferenceController.java b/packages/apps/Settings/src/com/android/settings/datetime/AutoTimeZonePreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/datetime/AutoTimeZonePreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/datetime/AutoTimeZonePreferenceController.java
+@@ -16,209 +16,28 @@
+ 
+ package com.android.settings.datetime;
+ 
+-import static android.app.time.Capabilities.CAPABILITY_NOT_ALLOWED;
+-import static android.app.time.Capabilities.CAPABILITY_NOT_APPLICABLE;
+-import static android.app.time.Capabilities.CAPABILITY_NOT_SUPPORTED;
+-import static android.app.time.Capabilities.CAPABILITY_POSSESSED;
++import android.content.Context;
++import android.provider.Settings;
+ 
+-import android.app.admin.DevicePolicyIdentifiers;
+-import android.app.admin.DevicePolicyManager;
+-import android.app.admin.EnforcingAdmin;
+-import android.app.admin.PolicyIdentifier;
+-import android.app.admin.flags.Flags;
+-import android.app.time.TimeManager;
+-import android.app.time.TimeZoneCapabilities;
+-import android.app.time.TimeZoneCapabilitiesAndConfig;
+-import android.app.time.TimeZoneConfiguration;
+-import android.content.Context;
+-import android.annotation.Nullable;
+-import android.os.UserHandle;
+-import android.os.UserManager;
+-import android.util.Log;
+-
+-import androidx.preference.Preference;
+-
+-import com.android.internal.annotations.VisibleForTesting;
+-import com.android.settings.R;
+ import com.android.settings.core.TogglePreferenceController;
+-import com.android.settingslib.RestrictedSwitchPreference;
+ 
+ public class AutoTimeZonePreferenceController extends TogglePreferenceController {
+-
+-    private static final String TAG = "AutoTimeZonePreferenceController";
+-
+-    private boolean mIsFromSUW;
+-    private UpdateTimeAndDateCallback mCallback;
+-    private final TimeManager mTimeManager;
+-    @Nullable private final DevicePolicyManager mDpm;
+-    private final int mUserId;
+-
+     public AutoTimeZonePreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+-        mTimeManager = context.getSystemService(TimeManager.class);
+-        mDpm = context.getSystemService(DevicePolicyManager.class);
+-        mUserId = UserHandle.myUserId();
+-        // This is a no-op implementation of UpdateTimeAndDateCallback to avoid a NPE when
+-        // setTimeAndDateCallback() isn't called, e.g. for slices and other cases where the
+-        // controller is instantiated outside of the context of the real Date & Time settings
+-        // screen.
+-        mCallback = (c) -> {};
+-    }
+-
+-    /**
+-     * Set the Time and Date callback
+-     */
+-    public AutoTimeZonePreferenceController setTimeAndDateCallback(
+-            UpdateTimeAndDateCallback callback) {
+-        mCallback = callback;
+-        return this;
+-    }
+-
+-    /**
+-     * Set if current fragment is launched via SUW
+-     */
+-    public AutoTimeZonePreferenceController setFromSUW(boolean isFromSUW) {
+-        mIsFromSUW = isFromSUW;
+-        return this;
+     }
+ 
+     @Override
+     public int getAvailabilityStatus() {
+-        if (mIsFromSUW) {
+-            return DISABLED_DEPENDENT_SETTING;
+-        }
+-
+-        TimeZoneCapabilities timeZoneCapabilities =
+-                getTimeZoneCapabilitiesAndConfig().getCapabilities();
+-        int capability = timeZoneCapabilities.getConfigureAutoDetectionEnabledCapability();
+-
+-        // The preference has three states: visible, not visible, and visible but disabled.
+-        // This method handles the "is visible?" check.
+-        switch (capability) {
+-            case CAPABILITY_NOT_SUPPORTED:
+-                return DISABLED_DEPENDENT_SETTING;
+-            case CAPABILITY_POSSESSED:
+-            case CAPABILITY_NOT_ALLOWED:
+-                // This case is expected for enterprise restrictions, where the toggle should be
+-                // present but disabled. Disabling is handled declaratively via the
+-                // settings:userRestriction attribute in .xml. The client-side logic is expected to
+-                // concur with the capabilities logic in the system server.
+-            case CAPABILITY_NOT_APPLICABLE:
+-                // CAPABILITY_NOT_APPLICABLE is not currently expected, so this is return value is
+-                // arbitrary.
+-                return AVAILABLE;
+-            default:
+-                Log.e(TAG, "Unknown capability=" + capability);
+-                return UNSUPPORTED_ON_DEVICE;
+-        }
++        return AVAILABLE;
+     }
+ 
+     @Override
+     public boolean isChecked() {
+-        return isEnabled();
++        return Settings.Global.getInt(mContext.getContentResolver(), Settings.Global.AUTO_TIME_ZONE, 1) == 1;
+     }
+ 
+     @Override
+-    public boolean setChecked(boolean isChecked) {
+-        TimeZoneConfiguration.Builder configuration = new TimeZoneConfiguration.Builder()
+-                .setAutoDetectionEnabled(isChecked);
+-
+-        // "Use location for time zone" is only used if "Automatic time zone" is enabled. If
+-        // the user toggles off automatic time zone, set the toggle off and disable the toggle.
+-        int geoDetectionCapability = mTimeManager
+-                .getTimeZoneCapabilitiesAndConfig()
+-                .getCapabilities()
+-                .getConfigureGeoDetectionEnabledCapability();
+-
+-        if (!isChecked
+-                && (geoDetectionCapability == CAPABILITY_NOT_APPLICABLE
+-                || geoDetectionCapability == CAPABILITY_POSSESSED)) {
+-            configuration.setGeoDetectionEnabled(false);
+-        }
+-
+-        boolean result = mTimeManager.updateTimeZoneConfiguration(configuration.build());
+-
+-        mCallback.updateTimeAndDateDisplay(mContext);
+-        return result;
+-    }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_system;
+-    }
+-
+-    @Override
+-    public void updateState(Preference preference) {
+-        super.updateState(preference);
+-        refreshSummary(preference);
+-        if(Flags.policyStreamliningAutoTimeZone()) {
+-            checkAndSetDisabledByPolicyValue(preference);
+-        }
+-    }
+-
+-    @Override
+-    public CharSequence getSummary() {
+-        // If auto time zone cannot enable telephony fallback and is capable of location, then auto
+-        // time zone must use location.
+-        if (LocationProviderStatusPreferenceController.hasLocationTimeZoneNoTelephonyFallback(
+-                mTimeManager.getTimeZoneCapabilitiesAndConfig().getDetectorStatus())) {
+-            return mContext.getString(R.string.auto_zone_requires_location_summary);
+-        }
+-
+-        // If the user has a dedicated toggle to control location use, explain what it does.
+-        return mContext.getString(R.string.zone_auto_title_summary);
+-    }
+-
+-    @VisibleForTesting
+-    boolean isEnabled() {
+-        return mTimeManager
+-                .getTimeZoneCapabilitiesAndConfig()
+-                .getConfiguration()
+-                .isAutoDetectionEnabled();
+-    }
+-
+-    private TimeZoneCapabilitiesAndConfig getTimeZoneCapabilitiesAndConfig() {
+-        return mTimeManager.getTimeZoneCapabilitiesAndConfig();
+-    }
+-
+-    private void checkAndSetDisabledByPolicyValue(Preference preference) {
+-        if (mDpm == null) {
+-            return;
+-        }
+-
+-        if(!(preference instanceof RestrictedSwitchPreference)) {
+-            Log.w(TAG, "Preference is not a RestrictedPreference: " +
+-                    preference.getClass().getName());
+-            return;
+-        }
+-
+-        final RestrictedSwitchPreference restrictedPreference =
+-                (RestrictedSwitchPreference) preference;
+-
+-        Integer autoTimeZonePolicyValue = mDpm.getResolvedDeviceWidePolicy(
+-                PolicyIdentifier.AUTO_TIME_ZONE);
+-        if (autoTimeZonePolicyValue != null) {
+-            switch(autoTimeZonePolicyValue) {
+-                case PolicyIdentifier.AUTO_TIME_ZONE_ENABLED:
+-                case PolicyIdentifier.AUTO_TIME_ZONE_DISABLED:
+-                    EnforcingAdmin enforcingAdmin = mDpm.getEnforcingAdminsForPolicy(
+-                            DevicePolicyIdentifiers.AUTO_TIMEZONE_POLICY, mUserId)
+-                            .getMostImportantEnforcingAdmin();
+-                    restrictedPreference.setDisabledByAdmin(enforcingAdmin);
+-                    return; // Policy enforced, no need to check user restriction.
+-                case PolicyIdentifier.AUTO_TIME_ZONE_USER_CHOICE:
+-                case PolicyIdentifier.AUTO_TIME_ZONE_ENABLED_UNENFORCED:
+-                case PolicyIdentifier.AUTO_TIME_ZONE_DISABLED_UNENFORCED:
+-                default:
+-                    // Policy exists but is not enforcing, fall through to check user restriction.
+-                    break;
+-            }
+-        }
+-
+-        // If no policy or policy is not enforcing, check for user restrictions. Ensure not disabled
+-        // by a previous admin state.
+-        restrictedPreference.setDisabledByAdmin((EnforcingAdmin) null);
+-        restrictedPreference.checkRestrictionAndSetDisabled(
+-                UserManager.DISALLOW_CONFIG_DATE_TIME, mUserId);
++    public boolean setChecked(boolean enabled) {
++        return Settings.Global.putInt(mContext.getContentResolver(), Settings.Global.AUTO_TIME_ZONE, enabled ? 1 : 0);
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/datetime/TimeFormatPreferenceController.java b/packages/apps/Settings/src/com/android/settings/datetime/TimeFormatPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/datetime/TimeFormatPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/datetime/TimeFormatPreferenceController.java
+@@ -17,125 +17,29 @@
+ package com.android.settings.datetime;
+ 
+ import android.content.Context;
+-import android.content.Intent;
+ import android.provider.Settings;
+-import android.text.format.DateFormat;
+ 
+-import androidx.preference.Preference;
+-
+-import com.android.settings.R;
+ import com.android.settings.core.TogglePreferenceController;
+ 
+-import java.util.Calendar;
+-import java.util.Date;
+-
+ public class TimeFormatPreferenceController extends TogglePreferenceController {
+-
+-    static final String HOURS_12 = "12";
+-    static final String HOURS_24 = "24";
+-
+-    // Used for showing the current date format, which looks like "12/31/2010", "2010/12/13", etc.
+-    // The date value is stubs (independent of actual date).
+-    private final Calendar mDummyDate;
+-    private boolean mIsFromSUW;
+-    private UpdateTimeAndDateCallback mUpdateTimeAndDateCallback;
+-
+-    public TimeFormatPreferenceController(Context context, String key) {
+-        super(context, key);
+-        mDummyDate = Calendar.getInstance();
+-        // This is a no-op implementation of UpdateTimeAndDateCallback to avoid a NPE when
+-        // setTimeAndDateCallback() isn't called, e.g. for slices and other cases where the
+-        // controller is instantiated outside of the context of the real Date & Time settings
+-        // screen.
+-        mUpdateTimeAndDateCallback  = (c) -> {};
+-    }
+-
+-    /**
+-     * Set the Time and Date callback
+-     */
+-    public TimeFormatPreferenceController setTimeAndDateCallback(
+-            UpdateTimeAndDateCallback callback) {
+-        mUpdateTimeAndDateCallback = callback;
+-        return this;
+-    }
+-
+-    /**
+-     * Set if current fragment is launched via SUW
+-     */
+-    public TimeFormatPreferenceController setFromSUW(boolean isFromSUW) {
+-        mIsFromSUW = isFromSUW;
+-        return this;
++    public TimeFormatPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+     public int getAvailabilityStatus() {
+-        if (mIsFromSUW) {
+-            return DISABLED_DEPENDENT_SETTING;
+-        }
+         return AVAILABLE;
+     }
+ 
+     @Override
+-    public void updateState(Preference preference) {
+-        super.updateState(preference);
+-        preference.setEnabled(getAvailabilityStatus() == AVAILABLE);
+-        refreshSummary(preference);
++    public boolean isChecked() {
++        return "24".equals(Settings.System.getString(mContext.getContentResolver(),
++                Settings.System.TIME_12_24));
+     }
+ 
+     @Override
+-    public boolean isChecked() {
+-        return is24Hour();
+-    }
+-
+-    @Override
+-    public boolean setChecked(boolean isChecked) {
+-        update24HourFormat(mContext, isChecked);
+-        mUpdateTimeAndDateCallback.updateTimeAndDateDisplay(mContext);
+-        return true;
+-    }
+-
+-    @Override
+-    public CharSequence getSummary() {
+-        final Calendar now = Calendar.getInstance();
+-        mDummyDate.setTimeZone(now.getTimeZone());
+-        // We use December 31st because it's unambiguous when demonstrating the date format.
+-        // We use 13:00 so we can demonstrate the 12/24 hour options.
+-        mDummyDate.set(now.get(Calendar.YEAR), 11, 31, 13, 0, 0);
+-        final Date dummyDate = mDummyDate.getTime();
+-        return DateFormat.getTimeFormat(mContext).format(dummyDate);
+-    }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_system;
+-    }
+-
+-    private boolean is24Hour() {
+-        return DateFormat.is24HourFormat(mContext);
+-    }
+-
+-    private static void update24HourFormat(Context context, Boolean is24Hour) {
+-        set24Hour(context, is24Hour);
+-        timeUpdated(context, is24Hour);
+-    }
+-
+-    private static void timeUpdated(Context context, Boolean is24Hour) {
+-        Intent timeChanged = new Intent(Intent.ACTION_TIME_CHANGED);
+-        timeChanged.addFlags(Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND);
+-        int timeFormatPreference;
+-        if (is24Hour == null) {
+-            timeFormatPreference = Intent.EXTRA_TIME_PREF_VALUE_USE_LOCALE_DEFAULT;
+-        } else {
+-            timeFormatPreference = is24Hour ? Intent.EXTRA_TIME_PREF_VALUE_USE_24_HOUR
+-                    : Intent.EXTRA_TIME_PREF_VALUE_USE_12_HOUR;
+-        }
+-        timeChanged.putExtra(Intent.EXTRA_TIME_PREF_24_HOUR_FORMAT, timeFormatPreference);
+-        context.sendBroadcast(timeChanged);
+-    }
+-
+-    private static void set24Hour(Context context, boolean is24Hour) {
+-        String value = is24Hour ? HOURS_24 : HOURS_12;
+-        Settings.System.putString(context.getContentResolver(),
+-                Settings.System.TIME_12_24, value);
++    public boolean setChecked(boolean enabled) {
++        return Settings.System.putString(mContext.getContentResolver(), Settings.System.TIME_12_24,
++                enabled ? "24" : "12");
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/FirmwareVersionDetailPreferenceController.java b/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/FirmwareVersionDetailPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/FirmwareVersionDetailPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/FirmwareVersionDetailPreferenceController.java
+@@ -17,39 +17,13 @@
+ package com.android.settings.deviceinfo.firmwareversion;
+ 
+ import android.content.Context;
+-import android.content.Intent;
+ import android.os.Build;
+-import android.os.SystemClock;
+-import android.os.UserHandle;
+-import android.os.UserManager;
+-import android.text.TextUtils;
+-import android.util.Log;
+ 
+-import androidx.annotation.VisibleForTesting;
+-import androidx.preference.Preference;
++import com.android.settings.core.BasePreferenceController;
+ 
+-import com.android.settings.Utils;
+-import com.android.settings.core.BasePreferenceController;
+-import com.android.settingslib.RestrictedLockUtils;
+-import com.android.settingslib.RestrictedLockUtilsInternal;
+-
+-// LINT.IfChange
+ public class FirmwareVersionDetailPreferenceController extends BasePreferenceController {
+-
+-    private static final String TAG = "firmwareDialogCtrl";
+-    private static final int DELAY_TIMER_MILLIS = 500;
+-    private static final int ACTIVITY_TRIGGER_COUNT = 3;
+-
+-    private final UserManager mUserManager;
+-    private final long[] mHits = new long[ACTIVITY_TRIGGER_COUNT];
+-
+-    private RestrictedLockUtils.EnforcedAdmin mFunDisallowedAdmin;
+-    private boolean mFunDisallowedBySystem;
+-
+-    public FirmwareVersionDetailPreferenceController(Context context, String key) {
+-        super(context, key);
+-        mUserManager = (UserManager) mContext.getSystemService(Context.USER_SERVICE);
+-        initializeAdminPermissions();
++    public FirmwareVersionDetailPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+@@ -58,72 +32,7 @@
+     }
+ 
+     @Override
+-    public boolean useDynamicSliceSummary() {
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean isSliceable() {
+-        return true;
+-    }
+-
+-    @Override
+-    public boolean isPublicSlice() {
+-        return true;
+-    }
+-
+-    @Override
+     public CharSequence getSummary() {
+-        return Build.VERSION.RELEASE_OR_PREVIEW_DISPLAY;
+-    }
+-
+-    @Override
+-    public boolean handlePreferenceTreeClick(Preference preference) {
+-        if (!TextUtils.equals(preference.getKey(), getPreferenceKey())) {
+-            return false;
+-        }
+-        if (Utils.isMonkeyRunning()) {
+-            return false;
+-        }
+-        arrayCopy();
+-        mHits[mHits.length - 1] = SystemClock.uptimeMillis();
+-        if (mHits[0] >= (SystemClock.uptimeMillis() - DELAY_TIMER_MILLIS)) {
+-            if (mUserManager.hasUserRestriction(UserManager.DISALLOW_FUN)) {
+-                if (mFunDisallowedAdmin != null && !mFunDisallowedBySystem) {
+-                    RestrictedLockUtils.sendShowAdminSupportDetailsIntent(mContext,
+-                            mFunDisallowedAdmin);
+-                }
+-                Log.d(TAG, "Sorry, no fun for you!");
+-                return true;
+-            }
+-
+-            final Intent intent = new Intent(Intent.ACTION_MAIN)
+-                    .setClassName(
+-                            "android", com.android.internal.app.PlatLogoActivity.class.getName())
+-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+-            try {
+-                mContext.startActivity(intent);
+-            } catch (Exception e) {
+-                Log.e(TAG, "Unable to start activity " + intent.toString());
+-            }
+-        }
+-        return true;
+-    }
+-
+-    /**
+-     * Copies the array onto itself to remove the oldest hit.
+-     */
+-    @VisibleForTesting
+-    void arrayCopy() {
+-        System.arraycopy(mHits, 1, mHits, 0, mHits.length - 1);
+-    }
+-
+-    @VisibleForTesting
+-    void initializeAdminPermissions() {
+-        mFunDisallowedAdmin = RestrictedLockUtilsInternal.checkIfRestrictionEnforced(
+-                mContext, UserManager.DISALLOW_FUN, UserHandle.myUserId());
+-        mFunDisallowedBySystem = RestrictedLockUtilsInternal.hasBaseUserRestriction(
+-                mContext, UserManager.DISALLOW_FUN, UserHandle.myUserId());
++        return Build.VERSION.RELEASE;
+     }
+ }
+-// LINT.ThenChange(FirmwareVersionDetailPreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/SecurityPatchLevelPreferenceController.java b/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/SecurityPatchLevelPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/SecurityPatchLevelPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/SecurityPatchLevelPreferenceController.java
+@@ -16,62 +16,23 @@
+ 
+ package com.android.settings.deviceinfo.firmwareversion;
+ 
+-// LINT.IfChange
+ import android.content.Context;
+-import android.content.Intent;
+-import android.content.pm.PackageManager;
+-import android.net.Uri;
+-import android.text.TextUtils;
+-import android.util.Log;
+-
+-import androidx.preference.Preference;
++import android.os.Build;
+ 
+ import com.android.settings.core.BasePreferenceController;
+-import com.android.settingslib.DeviceInfoUtils;
+ 
+ public class SecurityPatchLevelPreferenceController extends BasePreferenceController {
+-
+-    private static final String TAG = "SecurityPatchCtrl";
+-    private static final Uri INTENT_URI_DATA = Uri.parse(
+-            "https://source.android.com/docs/security/bulletin/");
+-
+-    private final PackageManager mPackageManager;
+-    private final String mCurrentPatch;
+-
+-    public SecurityPatchLevelPreferenceController(Context context, String key) {
+-        super(context, key);
+-        mPackageManager = mContext.getPackageManager();
+-        mCurrentPatch = DeviceInfoUtils.getSecurityPatch();
++    public SecurityPatchLevelPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+     public int getAvailabilityStatus() {
+-        return !TextUtils.isEmpty(mCurrentPatch)
+-                ? AVAILABLE : CONDITIONALLY_UNAVAILABLE;
++        return AVAILABLE;
+     }
+ 
+     @Override
+     public CharSequence getSummary() {
+-        return mCurrentPatch;
+-    }
+-
+-    @Override
+-    public boolean handlePreferenceTreeClick(Preference preference) {
+-        if (!TextUtils.equals(preference.getKey(), getPreferenceKey())) {
+-            return false;
+-        }
+-
+-        final Intent intent = new Intent();
+-        intent.setAction(Intent.ACTION_VIEW);
+-        intent.setData(INTENT_URI_DATA);
+-        if (mPackageManager.queryIntentActivities(intent, 0).isEmpty()) {
+-            // Don't send out the intent to stop crash
+-            Log.w(TAG, "queryIntentActivities() returns empty");
+-            return true;
+-        }
+-
+-        mContext.startActivity(intent);
+-        return true;
++        return Build.VERSION.SECURITY_PATCH;
+     }
+ }
+-// LINT.ThenChange(SecurityPatchLevelPreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/SimpleBuildNumberPreferenceController.java b/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/SimpleBuildNumberPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/SimpleBuildNumberPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/deviceinfo/firmwareversion/SimpleBuildNumberPreferenceController.java
+@@ -18,26 +18,21 @@
+ 
+ import android.content.Context;
+ import android.os.Build;
+-import android.text.BidiFormatter;
+ 
+ import com.android.settings.core.BasePreferenceController;
+ 
+-// LINT.IfChange
+ public class SimpleBuildNumberPreferenceController extends BasePreferenceController {
+-
+-    public SimpleBuildNumberPreferenceController(Context context,
+-            String preferenceKey) {
++    public SimpleBuildNumberPreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+     }
+ 
+     @Override
+     public int getAvailabilityStatus() {
+-        return AVAILABLE_UNSEARCHABLE;
++        return AVAILABLE;
+     }
+ 
+     @Override
+     public CharSequence getSummary() {
+-        return BidiFormatter.getInstance().unicodeWrap(Build.DISPLAY);
++        return Build.DISPLAY;
+     }
+ }
+-// LINT.ThenChange(SimpleBuildNumberPreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/display/AutoBrightnessPreferenceController.java b/packages/apps/Settings/src/com/android/settings/display/AutoBrightnessPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/display/AutoBrightnessPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/display/AutoBrightnessPreferenceController.java
+@@ -13,83 +13,36 @@
+  */
+ package com.android.settings.display;
+ 
+-import static android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE;
+-import static android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC;
+-import static android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL;
+-
+ import android.content.Context;
+-import android.os.Process;
+-import android.os.UserManager;
+ import android.provider.Settings;
+ 
+-import androidx.annotation.NonNull;
+-import androidx.preference.Preference;
++import com.android.settings.R;
+ 
+-import com.android.settings.R;
+ import com.android.settings.core.TogglePreferenceController;
+-import com.android.settingslib.PrimarySwitchPreference;
+ 
+-/**
+- * The top-level preference controller that updates the adaptive brightness.
+- */
+-// LINT.IfChange
+ public class AutoBrightnessPreferenceController extends TogglePreferenceController {
++    public AutoBrightnessPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
++    }
+ 
+-    private final String SYSTEM_KEY = SCREEN_BRIGHTNESS_MODE;
+-    private final int DEFAULT_VALUE = SCREEN_BRIGHTNESS_MODE_MANUAL;
+-
+-    public AutoBrightnessPreferenceController(@NonNull Context context, @NonNull String key) {
+-        super(context, key);
++    @Override
++    public int getAvailabilityStatus() {
++        return AVAILABLE;
+     }
+ 
+     @Override
+     public boolean isChecked() {
+-        return Settings.System.getInt(mContext.getContentResolver(),
+-                SYSTEM_KEY, DEFAULT_VALUE) != DEFAULT_VALUE;
++        return Settings.System.getInt(mContext.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE, Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL) == Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC;
+     }
+ 
+     @Override
+-    public boolean setChecked(boolean isChecked) {
+-        Settings.System.putInt(mContext.getContentResolver(), SYSTEM_KEY,
+-                isChecked ? SCREEN_BRIGHTNESS_MODE_AUTOMATIC : DEFAULT_VALUE);
+-        return true;
+-    }
+-
+-    @Override
+-    @AvailabilityStatus
+-    public int getAvailabilityStatus() {
+-        int status = AutoBrightnessExtensionsKt.getAutoBrightnessAvailabilityStatus(mContext);
+-        if (status == AVAILABLE) {
+-            return AVAILABLE_UNSEARCHABLE;
+-        }
+-        return status;
+-    }
+-
+-    @Override
+-    public void updateState(Preference preference) {
+-        super.updateState(preference);
+-        if (!(preference instanceof PrimarySwitchPreference)) {
+-            return;
+-        }
+-
+-        PrimarySwitchPreference pref = (PrimarySwitchPreference) preference;
+-        if (pref.isEnabled() && UserManager.get(mContext).hasBaseUserRestriction(
+-                UserManager.DISALLOW_CONFIG_BRIGHTNESS, Process.myUserHandle())) {
+-            pref.setEnabled(false);
+-            pref.setSwitchEnabled(false);
+-        }
++    public boolean setChecked(boolean enabled) {
++        return Settings.System.putInt(mContext.getContentResolver(), Settings.System.SCREEN_BRIGHTNESS_MODE, enabled ? Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC : Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL);
+     }
+ 
+     @Override
+     public CharSequence getSummary() {
+-        return mContext.getText(isChecked()
+-                ? R.string.auto_brightness_summary_on
++        return mContext.getText(isChecked() ? R.string.auto_brightness_summary_on
+                 : R.string.auto_brightness_summary_off);
+     }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_display;
+-    }
+ }
+-// LINT.ThenChange(AutoBrightnessScreen.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/display/BatteryPercentagePreferenceController.java b/packages/apps/Settings/src/com/android/settings/display/BatteryPercentagePreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/display/BatteryPercentagePreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/display/BatteryPercentagePreferenceController.java
+@@ -15,74 +15,28 @@
+  */
+ package com.android.settings.display;
+ 
+-import static android.provider.Settings.System.SHOW_BATTERY_PERCENT;
+-
+-import android.app.settings.SettingsEnums;
+ import android.content.Context;
+ import android.provider.Settings;
+ 
+-import androidx.preference.Preference;
+-import androidx.preference.PreferenceScreen;
+-import androidx.preference.TwoStatePreference;
++import com.android.settings.core.TogglePreferenceController;
+ 
+-import com.android.internal.R;
+-import com.android.settings.Utils;
+-import com.android.settings.core.BasePreferenceController;
+-import com.android.settings.core.PreferenceControllerMixin;
+-import com.android.settings.overlay.FeatureFactory;
+-
+-/**
+- * A controller to manage the switch for showing battery percentage in the status bar.
+- */
+-
+-// LINT.IfChange
+-public class BatteryPercentagePreferenceController extends BasePreferenceController implements
+-        PreferenceControllerMixin, Preference.OnPreferenceChangeListener {
+-
+-    private Preference mPreference;
+-
++public class BatteryPercentagePreferenceController extends TogglePreferenceController {
+     public BatteryPercentagePreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+     }
+ 
+     @Override
+-    public void displayPreference(PreferenceScreen screen) {
+-        super.displayPreference(screen);
+-        mPreference = screen.findPreference(getPreferenceKey());
+-        if (!Utils.isBatteryPresent(mContext)) {
+-            // Disable battery percentage
+-            onPreferenceChange(mPreference, false /* newValue */);
+-        }
++    public int getAvailabilityStatus() {
++        return AVAILABLE;
+     }
+ 
+     @Override
+-    public int getAvailabilityStatus() {
+-        if (!Utils.isBatteryPresent(mContext)) {
+-            return CONDITIONALLY_UNAVAILABLE;
+-        }
+-        return mContext.getResources().getBoolean(
+-                R.bool.config_battery_percentage_setting_available) ? AVAILABLE
+-                : UNSUPPORTED_ON_DEVICE;
++    public boolean isChecked() {
++        return Settings.System.getInt(mContext.getContentResolver(), "status_bar_show_battery_percent", 0) == 1;
+     }
+ 
+     @Override
+-    public void updateState(Preference preference) {
+-        int setting = Settings.System.getInt(mContext.getContentResolver(),
+-                SHOW_BATTERY_PERCENT,
+-                mContext.getResources().getBoolean(
+-                        R.bool.config_defaultBatteryPercentageSetting) ? 1 : 0);
+-
+-        ((TwoStatePreference) preference).setChecked(setting == 1);
+-    }
+-
+-    @Override
+-    public boolean onPreferenceChange(Preference preference, Object newValue) {
+-        boolean showPercentage = (Boolean) newValue;
+-        Settings.System.putInt(mContext.getContentResolver(), SHOW_BATTERY_PERCENT,
+-                showPercentage ? 1 : 0);
+-        FeatureFactory.getFeatureFactory().getMetricsFeatureProvider()
+-                .action(mContext, SettingsEnums.OPEN_BATTERY_PERCENTAGE, showPercentage);
+-        return true;
++    public boolean setChecked(boolean enabled) {
++        return Settings.System.putInt(mContext.getContentResolver(), "status_bar_show_battery_percent", enabled ? 1 : 0);
+     }
+ }
+-// LINT.ThenChange(BatteryPercentageSwitchPreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/display/DarkUIPreferenceController.java b/packages/apps/Settings/src/com/android/settings/display/DarkUIPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/display/DarkUIPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/display/DarkUIPreferenceController.java
+@@ -16,113 +16,25 @@
+ 
+ package com.android.settings.display;
+ 
+-import android.app.UiModeManager;
+-import android.content.BroadcastReceiver;
+ import android.content.Context;
+-import android.content.Intent;
+-import android.content.IntentFilter;
+-import android.content.res.Configuration;
+-import android.os.PowerManager;
+ 
+-import androidx.annotation.VisibleForTesting;
+-import androidx.preference.Preference;
+-import androidx.preference.PreferenceScreen;
++import com.android.settings.display.darkmode.DarkModeActivationPreferenceController;
+ 
+-import com.android.settings.R;
+-import com.android.settings.core.TogglePreferenceController;
+-import com.android.settingslib.core.lifecycle.LifecycleObserver;
+-import com.android.settingslib.core.lifecycle.events.OnStart;
+-import com.android.settingslib.core.lifecycle.events.OnStop;
++import com.android.settings.core.BasePreferenceController;
+ 
+-// LINT.IfChange
+-public class DarkUIPreferenceController extends TogglePreferenceController implements
+-        LifecycleObserver, OnStart, OnStop {
+-
+-    public static final String PREF_DARK_MODE_DIALOG_SEEN = "dark_mode_dialog_seen";
+-    public static final int DIALOG_SEEN = 1;
+-
+-    @VisibleForTesting
+-    Preference mPreference;
+-
+-    private UiModeManager mUiModeManager;
+-    private PowerManager mPowerManager;
+-
+-    private BroadcastReceiver mReceiver = new BroadcastReceiver() {
+-        @Override
+-        public void onReceive(Context context, Intent intent) {
+-            updateEnabledStateIfNeeded();
+-        }
+-    };
+-
+-    public DarkUIPreferenceController(Context context, String key) {
+-        super(context, key);
+-        mUiModeManager = context.getSystemService(UiModeManager.class);
+-        mPowerManager = context.getSystemService(PowerManager.class);
+-    }
+-
+-    @Override
+-    public boolean isChecked() {
+-         return (mContext.getResources().getConfiguration().uiMode
+-                 & Configuration.UI_MODE_NIGHT_YES) != 0;
+-    }
+-
+-    @Override
+-    public void displayPreference(PreferenceScreen screen) {
+-        super.displayPreference(screen);
+-        mPreference = screen.findPreference(getPreferenceKey());
+-    }
+-
+-    @Override
+-    public void updateState(Preference preference) {
+-        super.updateState(preference);
+-        updateEnabledStateIfNeeded();
+-    }
+-
+-    @Override
+-    public boolean setChecked(boolean isChecked) {
+-        return mUiModeManager.setNightModeActivated(isChecked);
+-    }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_display;
+-    }
+-
+-    @VisibleForTesting
+-    void updateEnabledStateIfNeeded() {
+-        if (mPreference == null) {
+-            return;
+-        }
+-        boolean isBatterySaver = isPowerSaveMode();
+-        mPreference.setEnabled(!isBatterySaver);
+-        if (isBatterySaver) {
+-            int stringId = isChecked()
+-                    ? R.string.dark_ui_mode_disabled_summary_dark_theme_on
+-                    : R.string.dark_ui_mode_disabled_summary_dark_theme_off;
+-            mPreference.setSummary(mContext.getString(stringId));
+-        }
+-    }
+-
+-    @VisibleForTesting
+-    boolean isPowerSaveMode() {
+-        return mPowerManager.isPowerSaveMode();
+-    }
+-
+-    @Override
+-    public void onStart() {
+-        mContext.registerReceiver(mReceiver,
+-                new IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED));
+-    }
+-
+-    @Override
+-    public void onStop() {
+-        mContext.unregisterReceiver(mReceiver);
++public class DarkUIPreferenceController extends BasePreferenceController {
++    public DarkUIPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+     public int getAvailabilityStatus() {
+         return AVAILABLE;
+     }
++
++    @Override
++    public CharSequence getSummary() {
++        return new DarkModeActivationPreferenceController(mContext,
++                getPreferenceKey()).getSummary();
++    }
+ }
+-// LINT.ThenChange(darkmode/DarkModeScreen.kt,
+-//                 darkmode/DarkModeApiFirstScreen.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/display/LockscreenClockPreferenceController.java b/packages/apps/Settings/src/com/android/settings/display/LockscreenClockPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/display/LockscreenClockPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/display/LockscreenClockPreferenceController.java
+@@ -19,37 +19,11 @@
+ import android.content.Context;
+ import android.provider.Settings;
+ 
+-import androidx.preference.Preference;
+-
+-import com.android.settings.R;
+ import com.android.settings.core.TogglePreferenceController;
+ 
+-/**
+- * Preference to enable/disable the large double-line clock on lockscreen
+- */
+ public class LockscreenClockPreferenceController extends TogglePreferenceController {
+-
+-    private static final String SETTING_KEY = Settings.Secure.LOCKSCREEN_USE_DOUBLE_LINE_CLOCK;
+-
+     public LockscreenClockPreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+-    }
+-
+-    @Override
+-    public boolean isChecked() {
+-        return Settings.Secure.getInt(mContext.getContentResolver(), SETTING_KEY,
+-                getDoublelineClockDefault()) != 0;
+-    }
+-
+-    @Override
+-    public boolean setChecked(boolean isChecked) {
+-        return Settings.Secure.putInt(mContext.getContentResolver(), SETTING_KEY,
+-                isChecked ? 1 : 0);
+-    }
+-
+-    @Override
+-    public CharSequence getSummary() {
+-        return mContext.getText(R.string.lockscreen_double_line_clock_summary);
+     }
+ 
+     @Override
+@@ -58,19 +32,12 @@
+     }
+ 
+     @Override
+-    public void updateState(Preference preference) {
+-        super.updateState(preference);
+-        preference.setEnabled(true);
+-        refreshSummary(preference);
++    public boolean isChecked() {
++        return Settings.Secure.getInt(mContext.getContentResolver(), "lockscreen_use_double_line_clock", 1) == 1;
+     }
+ 
+     @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_display;
+-    }
+-
+-    protected int getDoublelineClockDefault() {
+-        return mContext.getResources()
+-            .getInteger(com.android.internal.R.integer.config_doublelineClockDefault);
++    public boolean setChecked(boolean enabled) {
++        return Settings.Secure.putInt(mContext.getContentResolver(), "lockscreen_use_double_line_clock", enabled ? 1 : 0);
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/display/ScreenTimeoutPreferenceController.java b/packages/apps/Settings/src/com/android/settings/display/ScreenTimeoutPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/display/ScreenTimeoutPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/display/ScreenTimeoutPreferenceController.java
+@@ -16,42 +16,16 @@
+ 
+ package com.android.settings.display;
+ 
+-import static android.app.admin.DevicePolicyResources.Strings.Settings.DISABLED_BY_IT_ADMIN_TITLE;
+-import static android.provider.Settings.System.SCREEN_OFF_TIMEOUT;
+-
+-import static com.android.settings.display.ScreenTimeoutSettings.FALLBACK_SCREEN_TIMEOUT_VALUE;
+-
+-import android.app.admin.DevicePolicyIdentifiers;
+-import android.app.admin.DevicePolicyManager;
+-import android.app.admin.PolicyEnforcementInfo;
+ import android.content.Context;
+-import android.os.Process;
+-import android.os.UserHandle;
+-import android.os.UserManager;
+ import android.provider.Settings;
+ 
+-import androidx.annotation.Nullable;
+-import androidx.preference.Preference;
++import com.android.settings.R;
+ 
+-import com.android.settings.R;
+ import com.android.settings.core.BasePreferenceController;
+-import com.android.settingslib.RestrictedLockUtils;
+-import com.android.settingslib.RestrictedLockUtilsInternal;
+-import com.android.settingslib.RestrictedPreference;
+ 
+-/**
+- * The controller of {@link ScreenTimeoutSettings}.
+- */
+ public class ScreenTimeoutPreferenceController extends BasePreferenceController {
+-    public static String PREF_NAME = "screen_timeout";
+-
+-    private final CharSequence[] mTimeoutEntries;
+-    private final CharSequence[] mTimeoutValues;
+-
+-    public ScreenTimeoutPreferenceController(Context context, String key) {
+-        super(context, key);
+-        mTimeoutEntries = context.getResources().getStringArray(R.array.screen_timeout_entries);
+-        mTimeoutValues = context.getResources().getStringArray(R.array.screen_timeout_values);
++    public ScreenTimeoutPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+@@ -60,128 +34,17 @@
+     }
+ 
+     @Override
+-    public void updateState(Preference preference) {
+-        final long maxTimeout = getMaxScreenTimeout();
+-        preference.setSummary(getTimeoutSummary(maxTimeout));
+-        if (android.app.admin.flags.Flags.policyTransparencyRefactorEnabled()) {
+-            final DevicePolicyManager dpm = mContext.getSystemService(DevicePolicyManager.class);
+-            if (dpm == null) {
+-                return;
+-            }
+-            PolicyEnforcementInfo userRestrictionEnforcement = dpm.getEnforcingAdminsForPolicy(
+-                    DevicePolicyIdentifiers.getIdentifierForUserRestriction(
+-                            UserManager.DISALLOW_CONFIG_SCREEN_TIMEOUT), UserHandle.myUserId());
+-            if (!userRestrictionEnforcement.getAllAdmins().isEmpty()) {
+-                if (userRestrictionEnforcement.isOnlyEnforcedBySystem()) {
+-                    preference.setEnabled(false);
+-                } else {
+-                    // setDisabledByAdmin handles the summary text display.
+-                    ((RestrictedPreference) preference).setDisabledByAdmin(
+-                            userRestrictionEnforcement.getMostImportantEnforcingAdmin());
+-                }
+-                return;
+-            }
+-            PolicyEnforcementInfo maximumTimeToLockEnforcement = dpm.getEnforcingAdminsForPolicy(
+-                    DevicePolicyIdentifiers.MAX_TIME_TO_LOCK_POLICY, UserHandle.myUserId());
+-            // MAX_TIME_TO_LOCK policy is not set by the system so we don't need to check for that.
+-            ((RestrictedPreference) preference).setDisabledByAdmin(
+-                    maximumTimeToLockEnforcement.getMostImportantEnforcingAdmin());
+-        } else {
+-            final RestrictedLockUtils.EnforcedAdmin admin = getPreferenceDisablingAdmin(maxTimeout);
+-            if (admin != null) {
+-                preference.setEnabled(false);
+-                preference.setSummary(mContext.getSystemService(DevicePolicyManager.class)
+-                        .getResources()
+-                        .getString(DISABLED_BY_IT_ADMIN_TITLE,
+-                                () -> mContext.getString(R.string.disabled_by_policy_title)));
+-                ((RestrictedPreference) preference).setDisabledByAdmin(admin);
+-                return;
+-            }
+-            if (UserManager.get(mContext).hasBaseUserRestriction(
+-                    UserManager.DISALLOW_CONFIG_SCREEN_TIMEOUT, Process.myUserHandle())) {
+-                preference.setEnabled(false);
++    public CharSequence getSummary() {
++        final int timeout = Settings.System.getInt(mContext.getContentResolver(),
++                Settings.System.SCREEN_OFF_TIMEOUT, ScreenTimeoutSettings.FALLBACK_SCREEN_TIMEOUT_VALUE);
++        final CharSequence[] entries = mContext.getResources().getTextArray(R.array.screen_timeout_entries);
++        final String[] values = mContext.getResources().getStringArray(R.array.screen_timeout_values);
++        final String current = Integer.toString(timeout);
++        for (int i = 0; i < values.length; i++) {
++            if (current.equals(values[i])) {
++                return mContext.getString(R.string.screen_timeout_summary, entries[i]);
+             }
+         }
+-    }
+-
+-    private CharSequence getTimeoutSummary(long maxTimeout) {
+-        final long currentTimeout = getCurrentScreenTimeout();
+-        final CharSequence description = getTimeoutDescription(currentTimeout, maxTimeout);
+-        return description == null ? mContext.getString(
+-                R.string.screen_timeout_summary_not_set) : mContext.getString(
+-                R.string.screen_timeout_summary, description);
+-    }
+-
+-    private Long getMaxScreenTimeout() {
+-        if (RestrictedLockUtilsInternal.checkIfMaximumTimeToLockIsSet(mContext) != null) {
+-            final DevicePolicyManager dpm = mContext.getSystemService(DevicePolicyManager.class);
+-            if (dpm != null) {
+-                return dpm.getMaximumTimeToLock(null /* admin */, UserHandle.myUserId());
+-            }
+-        }
+-        return Long.MAX_VALUE;
+-    }
+-
+-    /**
+-     * Returns the admin that causes the preference to be disabled completely. This could be due to
+-     * either an admin that has set the {@link UserManager.DISALLOW_CONFIG_SCREEN_TIMEOUT}
+-     * restriction, or an admin that has set a very small MaximumTimeToLock timeout resulting in
+-     * no possible options for the user.
+-     */
+-    private RestrictedLockUtils.EnforcedAdmin getPreferenceDisablingAdmin(long maxTimeout) {
+-        final DevicePolicyManager dpm = mContext.getSystemService(DevicePolicyManager.class);
+-        RestrictedLockUtils.EnforcedAdmin admin = null;
+-        if (dpm != null) {
+-            admin = RestrictedLockUtilsInternal.checkIfRestrictionEnforced(
+-                    mContext, UserManager.DISALLOW_CONFIG_SCREEN_TIMEOUT,
+-                    UserHandle.myUserId());
+-            if (admin == null && getLargestTimeout(maxTimeout) == null) {
+-                admin = RestrictedLockUtilsInternal.checkIfMaximumTimeToLockIsSet(mContext);
+-            }
+-        }
+-        return admin;
+-    }
+-
+-    private long getCurrentScreenTimeout() {
+-        return Settings.System.getLong(mContext.getContentResolver(),
+-                SCREEN_OFF_TIMEOUT, FALLBACK_SCREEN_TIMEOUT_VALUE);
+-    }
+-
+-    @Nullable
+-    private CharSequence getTimeoutDescription(long currentTimeout, long maxTimeout) {
+-        if (currentTimeout < 0 || mTimeoutEntries == null || mTimeoutValues == null
+-                || mTimeoutValues.length != mTimeoutEntries.length) {
+-            return null;
+-        }
+-
+-        if (currentTimeout > maxTimeout) {
+-            // The selected time out value is longer than the max timeout allowed by the admin.
+-            // Select the largest value from the list by default.
+-            return getLargestTimeout(maxTimeout);
+-        } else {
+-            return getCurrentTimeout(currentTimeout);
+-        }
+-    }
+-
+-    @Nullable
+-    private CharSequence getCurrentTimeout(long currentTimeout) {
+-        for (int i = 0; i < mTimeoutValues.length; i++) {
+-            if (currentTimeout == Long.parseLong(mTimeoutValues[i].toString())) {
+-                return mTimeoutEntries[i];
+-            }
+-        }
+-        return null;
+-    }
+-
+-    @Nullable
+-    private CharSequence getLargestTimeout(long maxTimeout) {
+-        CharSequence largestTimeout = null;
+-        // The list of timeouts is sorted
+-        for (int i = 0; i < mTimeoutValues.length; ++i) {
+-            if (Long.parseLong(mTimeoutValues[i].toString()) <= maxTimeout) {
+-                largestTimeout = mTimeoutEntries[i];
+-            }
+-        }
+-        return largestTimeout;
++        return mContext.getText(R.string.screen_timeout_summary_not_set);
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/display/darkmode/DarkModeActivationPreferenceController.java b/packages/apps/Settings/src/com/android/settings/display/darkmode/DarkModeActivationPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/display/darkmode/DarkModeActivationPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/display/darkmode/DarkModeActivationPreferenceController.java
+@@ -15,60 +15,36 @@
+ 
+ package com.android.settings.display.darkmode;
+ 
+-import android.app.UiModeManager;
+ import android.content.Context;
+-import android.content.res.Configuration;
++import android.provider.Settings;
+ 
+-import androidx.annotation.NonNull;
+-import androidx.preference.Preference;
++import com.android.settings.R;
+ 
+-import com.android.settings.core.BasePreferenceController;
+-import com.android.settings.overlay.FeatureFactory;
+-import com.android.settingslib.core.instrumentation.MetricsFeatureProvider;
+-import com.android.settingslib.widget.MainSwitchPreference;
++import com.android.settings.core.TogglePreferenceController;
+ 
+-/**
+- * Controller for activate/deactivate night mode button
+- */
+-// LINT.IfChange
+-public class DarkModeActivationPreferenceController extends BasePreferenceController
+-        implements Preference.OnPreferenceChangeListener {
+-
+-    private final UiModeManager mUiModeManager;
+-    private final MetricsFeatureProvider mMetricsFeatureProvider;
+-
++public class DarkModeActivationPreferenceController extends TogglePreferenceController {
+     public DarkModeActivationPreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+-        mUiModeManager = context.getSystemService(UiModeManager.class);
+-        mMetricsFeatureProvider = FeatureFactory.getFeatureFactory().getMetricsFeatureProvider();
+     }
+ 
+     @Override
+-    public final void updateState(Preference preference) {
+-        final boolean active = (mContext.getResources().getConfiguration().uiMode
+-                & Configuration.UI_MODE_NIGHT_YES) != 0;
+-        ((MainSwitchPreference) preference).setChecked(active);
++    public int getAvailabilityStatus() {
++        return AVAILABLE;
++    }
++
++    @Override
++    public boolean isChecked() {
++        return Settings.Secure.getInt(mContext.getContentResolver(), "ui_night_mode", 1) == 2;
++    }
++
++    @Override
++    public boolean setChecked(boolean enabled) {
++        return Settings.Secure.putInt(mContext.getContentResolver(), "ui_night_mode", enabled ? 2 : 1);
+     }
+ 
+     @Override
+     public CharSequence getSummary() {
+-        final boolean isActivated = (mContext.getResources().getConfiguration().uiMode
+-                & Configuration.UI_MODE_NIGHT_YES) != 0;
+-        return AutoDarkTheme.getStatus(mContext, isActivated);
+-    }
+-
+-    @Override
+-    public boolean onPreferenceChange(@NonNull Preference preference, @NonNull Object newValue) {
+-        mMetricsFeatureProvider.logClickedPreference(preference, getMetricsCategory());
+-        final boolean active = (mContext.getResources().getConfiguration().uiMode
+-                & Configuration.UI_MODE_NIGHT_YES) != 0;
+-        mUiModeManager.setNightModeActivated(!active);
+-        return true;
+-    }
+-
+-    @Override
+-    public int getAvailabilityStatus() {
+-        return AVAILABLE_UNSEARCHABLE;
++        return mContext.getText(isChecked() ? R.string.dark_ui_summary_on_auto_mode_never
++                : R.string.dark_ui_summary_off_auto_mode_never);
+     }
+ }
+-// LINT.ThenChange(DarkModeMainSwitchPreference.java)
+diff --git a/packages/apps/Settings/src/com/android/settings/fuelgauge/batterysaver/BatterySaverButtonPreferenceController.java b/packages/apps/Settings/src/com/android/settings/fuelgauge/batterysaver/BatterySaverButtonPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/fuelgauge/batterysaver/BatterySaverButtonPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/fuelgauge/batterysaver/BatterySaverButtonPreferenceController.java
+@@ -16,46 +16,14 @@
+ 
+ package com.android.settings.fuelgauge.batterysaver;
+ 
+-import static com.android.settingslib.fuelgauge.BatterySaverLogging.SAVER_ENABLED_SETTINGS;
++import android.content.Context;
++import android.provider.Settings;
+ 
+-import android.content.ContentResolver;
+-import android.content.Context;
+-import android.net.Uri;
+-import android.os.Handler;
+-import android.os.Looper;
+-import android.os.PowerManager;
+-import android.provider.SettingsSlicesContract;
++import com.android.settings.core.TogglePreferenceController;
+ 
+-import androidx.preference.PreferenceScreen;
+-
+-import com.android.settings.R;
+-import com.android.settings.contract.SettingsContractKt;
+-import com.android.settings.core.TogglePreferenceController;
+-import com.android.settings.fuelgauge.BatterySaverReceiver;
+-import com.android.settingslib.core.lifecycle.LifecycleObserver;
+-import com.android.settingslib.core.lifecycle.events.OnStart;
+-import com.android.settingslib.core.lifecycle.events.OnStop;
+-import com.android.settingslib.fuelgauge.BatterySaverUtils;
+-import com.android.settingslib.widget.MainSwitchPreference;
+-
+-/** Controller to update the battery saver button */
+-// LINT.IfChange
+-public class BatterySaverButtonPreferenceController extends TogglePreferenceController
+-        implements LifecycleObserver, OnStart, OnStop, BatterySaverReceiver.BatterySaverListener {
+-    private static final long SWITCH_ANIMATION_DURATION = 350L;
+-
+-    private final BatterySaverReceiver mBatterySaverReceiver;
+-    private final PowerManager mPowerManager;
+-
+-    private Handler mHandler;
+-    private MainSwitchPreference mPreference;
+-
+-    public BatterySaverButtonPreferenceController(Context context, String key) {
+-        super(context, key);
+-        mPowerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+-        mBatterySaverReceiver = new BatterySaverReceiver(context);
+-        mBatterySaverReceiver.setBatterySaverListener(this);
+-        mHandler = new Handler(Looper.getMainLooper());
++public class BatterySaverButtonPreferenceController extends TogglePreferenceController {
++    public BatterySaverButtonPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+@@ -64,71 +32,12 @@
+     }
+ 
+     @Override
+-    public boolean isPublicSlice() {
+-        return true;
++    public boolean isChecked() {
++        return Settings.Global.getInt(mContext.getContentResolver(), "low_power", 0) == 1;
+     }
+ 
+     @Override
+-    public Uri getSliceUri() {
+-        return new Uri.Builder()
+-                .scheme(ContentResolver.SCHEME_CONTENT)
+-                .authority(SettingsSlicesContract.AUTHORITY)
+-                .appendPath(SettingsSlicesContract.PATH_SETTING_ACTION)
+-                .appendPath(SettingsContractKt.KEY_BATTERY_SAVER)
+-                .build();
+-    }
+-
+-    @Override
+-    public void onStart() {
+-        mBatterySaverReceiver.setListening(true);
+-    }
+-
+-    @Override
+-    public void onStop() {
+-        mBatterySaverReceiver.setListening(false);
+-        mHandler.removeCallbacksAndMessages(null /* token */);
+-    }
+-
+-    @Override
+-    public void displayPreference(PreferenceScreen screen) {
+-        super.displayPreference(screen);
+-        mPreference = screen.findPreference(getPreferenceKey());
+-        mPreference.setChecked(isChecked());
+-    }
+-
+-    @Override
+-    public boolean isChecked() {
+-        return mPowerManager.isPowerSaveMode();
+-    }
+-
+-    @Override
+-    public boolean setChecked(boolean stateOn) {
+-        return BatterySaverUtils.setPowerSaveMode(
+-                mContext, stateOn, false /* needFirstTimeWarning */, SAVER_ENABLED_SETTINGS);
+-    }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_battery;
+-    }
+-
+-    @Override
+-    public void onPowerSaveModeChanged() {
+-        mHandler.postDelayed(() -> onPowerSaveModeChangedInternal(), SWITCH_ANIMATION_DURATION);
+-    }
+-
+-    private void onPowerSaveModeChangedInternal() {
+-        final boolean isChecked = isChecked();
+-        if (mPreference != null && mPreference.isChecked() != isChecked) {
+-            mPreference.setChecked(isChecked);
+-        }
+-    }
+-
+-    @Override
+-    public void onBatteryChanged(boolean pluggedIn) {
+-        if (mPreference != null) {
+-            mPreference.setEnabled(!pluggedIn);
+-        }
++    public boolean setChecked(boolean enabled) {
++        return Settings.Global.putInt(mContext.getContentResolver(), "low_power", enabled ? 1 : 0);
+     }
+ }
+-// LINT.ThenChange(BatterySaverPreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/network/AirplaneModePreferenceController.java b/packages/apps/Settings/src/com/android/settings/network/AirplaneModePreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/network/AirplaneModePreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/network/AirplaneModePreferenceController.java
+@@ -15,207 +15,28 @@
+  */
+ package com.android.settings.network;
+ 
+-import static com.android.settings.network.AirplaneModeUtilKt.hasPairedWatchForAirplaneModeSync;
+-import static com.android.settings.network.AirplaneModeUtilKt.isAirplaneModeEligible;
+-import static com.android.settings.network.SatelliteWarningDialogActivity.EXTRA_TYPE_OF_SATELLITE_WARNING_DIALOG;
+-import static com.android.settings.network.SatelliteWarningDialogActivity.TYPE_IS_AIRPLANE_MODE;
++import android.content.Context;
++import android.provider.Settings;
+ 
+-import android.app.Activity;
+-import android.content.ContentResolver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.net.Uri;
+-import android.provider.SettingsSlicesContract;
+-import android.telephony.TelephonyManager;
+-import android.util.Log;
++import com.android.settings.core.TogglePreferenceController;
+ 
+-import androidx.annotation.VisibleForTesting;
+-import androidx.fragment.app.Fragment;
+-import androidx.preference.Preference;
+-import androidx.preference.PreferenceScreen;
+-import androidx.preference.TwoStatePreference;
+-
+-import com.android.settings.AirplaneModeEnabler;
+-import com.android.settings.R;
+-import com.android.settings.Utils;
+-import com.android.settings.contract.SettingsContractKt;
+-import com.android.settings.core.TogglePreferenceController;
+-import com.android.settingslib.core.lifecycle.LifecycleObserver;
+-import com.android.settingslib.core.lifecycle.events.OnDestroy;
+-import com.android.settingslib.core.lifecycle.events.OnResume;
+-import com.android.settingslib.core.lifecycle.events.OnStart;
+-import com.android.settingslib.core.lifecycle.events.OnStop;
+-
+-import java.util.concurrent.ExecutionException;
+-import java.util.concurrent.Executors;
+-import java.util.concurrent.TimeUnit;
+-import java.util.concurrent.TimeoutException;
+-import java.util.concurrent.atomic.AtomicBoolean;
+-
+-// LINT.IfChange
+-public class AirplaneModePreferenceController extends TogglePreferenceController
+-        implements LifecycleObserver, OnStart, OnResume, OnStop, OnDestroy,
+-        AirplaneModeEnabler.OnAirplaneModeChangedListener {
+-    private static final String TAG = AirplaneModePreferenceController.class.getSimpleName();
+-    public static final int REQUEST_CODE_EXIT_ECM = 1;
+-
+-    /**
+-     * Uri for Airplane mode Slice.
+-     */
+-    public static final Uri SLICE_URI = new Uri.Builder()
+-            .scheme(ContentResolver.SCHEME_CONTENT)
+-            .authority(SettingsSlicesContract.AUTHORITY)
+-            .appendPath(SettingsSlicesContract.PATH_SETTING_ACTION)
+-            .appendPath(SettingsContractKt.KEY_AIRPLANE_MODE)
+-            .build();
+-
+-    private Fragment mFragment;
+-    private AirplaneModeEnabler mAirplaneModeEnabler;
+-    private TwoStatePreference mAirplaneModePreference;
+-    private SatelliteRepository mSatelliteRepository;
+-    @VisibleForTesting
+-    AtomicBoolean mIsSatelliteOn = new AtomicBoolean(false);
+-
+-    public AirplaneModePreferenceController(Context context, String key) {
+-        super(context, key);
+-        if (isAvailable(mContext)) {
+-            mAirplaneModeEnabler = new AirplaneModeEnabler(mContext, this);
+-            mSatelliteRepository = new SatelliteRepository(mContext);
+-        }
+-    }
+-
+-    public void setFragment(Fragment hostFragment) {
+-        mFragment = hostFragment;
+-    }
+-
+-    @VisibleForTesting
+-    void setAirplaneModeEnabler(AirplaneModeEnabler airplaneModeEnabler) {
+-        mAirplaneModeEnabler = airplaneModeEnabler;
++public class AirplaneModePreferenceController extends TogglePreferenceController {
++    public AirplaneModePreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+-    public boolean handlePreferenceTreeClick(Preference preference) {
+-        if (AirplaneModePreference.KEY.equals(preference.getKey()) && isAvailable()) {
+-            // In ECM mode launch ECM app dialog
+-            if (mAirplaneModeEnabler.isInEcmMode()) {
+-                if (mFragment != null) {
+-                    mFragment.startActivityForResult(
+-                            new Intent(TelephonyManager.ACTION_SHOW_NOTICE_ECM_BLOCK_OTHERS, null)
+-                                    .setPackage(Utils.PHONE_PACKAGE_NAME),
+-                            REQUEST_CODE_EXIT_ECM);
+-                }
+-                return true;
+-            }
+-
+-            if (mIsSatelliteOn.get()) {
+-                mContext.startActivity(
+-                        new Intent(mContext, SatelliteWarningDialogActivity.class)
+-                                .putExtra(
+-                                        EXTRA_TYPE_OF_SATELLITE_WARNING_DIALOG,
+-                                        TYPE_IS_AIRPLANE_MODE)
+-                );
+-                return true;
+-            }
+-        }
+-        return false;
+-    }
+-
+-    @Override
+-    public Uri getSliceUri() {
+-        return SLICE_URI;
+-    }
+-
+-    @Override
+-    public void displayPreference(PreferenceScreen screen) {
+-        super.displayPreference(screen);
+-        mAirplaneModePreference = screen.findPreference(getPreferenceKey());
+-    }
+-
+-    private static boolean isAvailable(Context context) {
+-        return isAirplaneModeEligible(context) && !hasPairedWatchForAirplaneModeSync(context);
+-    }
+-
+-    @Override
+-    public boolean isPublicSlice() {
+-        return true;
+-    }
+-
+-    @Override
+-    @AvailabilityStatus
+     public int getAvailabilityStatus() {
+-        return isAvailable(mContext) ? AVAILABLE : UNSUPPORTED_ON_DEVICE;
+-    }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_network;
+-    }
+-
+-    @Override
+-    public void onStart() {
+-        if (isAvailable()) {
+-            mAirplaneModeEnabler.start();
+-        }
+-    }
+-
+-    @Override
+-    public void onResume() {
+-        if (isAvailable()) {
+-            try {
+-                mIsSatelliteOn.set(
+-                        mSatelliteRepository
+-                                .requestIsSessionStarted(Executors.newSingleThreadExecutor())
+-                                .get(2000, TimeUnit.MILLISECONDS));
+-            } catch (ExecutionException | TimeoutException | InterruptedException e) {
+-                Log.e(TAG, "Error to get satellite status : " + e);
+-            }
+-        }
+-    }
+-
+-    @Override
+-    public void onStop() {
+-        if (isAvailable()) {
+-            mAirplaneModeEnabler.stop();
+-        }
+-    }
+-
+-    @Override
+-    public void onDestroy() {
+-        if (isAvailable()) {
+-            mAirplaneModeEnabler.close();
+-        }
+-    }
+-
+-    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+-        if (requestCode == REQUEST_CODE_EXIT_ECM && isAvailable()) {
+-            final boolean isChoiceYes = (resultCode == Activity.RESULT_OK);
+-            // Set Airplane mode based on the return value and checkbox state
+-            mAirplaneModeEnabler.setAirplaneModeInECM(isChoiceYes,
+-                    mAirplaneModePreference.isChecked());
+-        }
++        return AVAILABLE;
+     }
+ 
+     @Override
+     public boolean isChecked() {
+-        return isAvailable() && mAirplaneModeEnabler.isAirplaneModeOn();
++        return Settings.Global.getInt(mContext.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, 0) == 1;
+     }
+ 
+     @Override
+-    public boolean setChecked(boolean isChecked) {
+-        if (isChecked() == isChecked || mIsSatelliteOn.get()) {
+-            return false;
+-        }
+-        if (isAvailable()) {
+-            mAirplaneModeEnabler.setAirplaneMode(isChecked);
+-        }
+-        return true;
+-    }
+-
+-    @Override
+-    public void onAirplaneModeChanged(boolean isAirplaneModeOn) {
+-        if (mAirplaneModePreference != null) {
+-            mAirplaneModePreference.setChecked(isAirplaneModeOn);
+-        }
++    public boolean setChecked(boolean enabled) {
++        return Settings.Global.putInt(mContext.getContentResolver(), Settings.Global.AIRPLANE_MODE_ON, enabled ? 1 : 0);
+     }
+ }
+-// LINT.ThenChange(AirplaneModePreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/notification/BadgingNotificationPreferenceController.java b/packages/apps/Settings/src/com/android/settings/notification/BadgingNotificationPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/notification/BadgingNotificationPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/notification/BadgingNotificationPreferenceController.java
+@@ -16,121 +16,28 @@
+ 
+ package com.android.settings.notification;
+ 
+-import static android.provider.Settings.Secure.NOTIFICATION_BADGING;
++import android.content.Context;
++import android.provider.Settings;
+ 
+-import android.content.ContentResolver;
+-import android.content.Context;
+-import android.database.ContentObserver;
+-import android.net.Uri;
+-import android.os.Handler;
+-import android.provider.Settings;
+-import android.text.TextUtils;
++import com.android.settings.core.TogglePreferenceController;
+ 
+-import androidx.annotation.VisibleForTesting;
+-import androidx.preference.Preference;
+-import androidx.preference.PreferenceScreen;
+-
+-import com.android.settings.R;
+-import com.android.settings.core.PreferenceControllerMixin;
+-import com.android.settings.core.TogglePreferenceController;
+-import com.android.settingslib.core.lifecycle.LifecycleObserver;
+-import com.android.settingslib.core.lifecycle.events.OnPause;
+-import com.android.settingslib.core.lifecycle.events.OnResume;
+-
+-public class BadgingNotificationPreferenceController extends TogglePreferenceController
+-        implements PreferenceControllerMixin, Preference.OnPreferenceChangeListener,
+-        LifecycleObserver, OnResume, OnPause {
+-
+-    private static final String TAG = "BadgeNotifPrefContr";
+-    @VisibleForTesting
+-    static final int ON = 1;
+-    @VisibleForTesting
+-    static final int OFF = 0;
+-
+-    private SettingObserver mSettingObserver;
+-
++public class BadgingNotificationPreferenceController extends TogglePreferenceController {
+     public BadgingNotificationPreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+     }
+ 
+     @Override
+-    public void displayPreference(PreferenceScreen screen) {
+-        super.displayPreference(screen);
+-        Preference preference = screen.findPreference(NOTIFICATION_BADGING);
+-        if (preference != null) {
+-            mSettingObserver = new SettingObserver(preference);
+-        }
+-    }
+-
+-    @Override
+-    public void onResume() {
+-        if (mSettingObserver != null) {
+-            mSettingObserver.register(mContext.getContentResolver(), true /* register */);
+-        }
+-    }
+-
+-    @Override
+-    public void onPause() {
+-        if (mSettingObserver != null) {
+-            mSettingObserver.register(mContext.getContentResolver(), false /* register */);
+-        }
+-    }
+-
+-    @Override
+     public int getAvailabilityStatus() {
+-        return mContext.getResources()
+-                .getBoolean(com.android.internal.R.bool.config_notificationBadging)
+-                ? AVAILABLE : UNSUPPORTED_ON_DEVICE;
+-    }
+-
+-    @Override
+-    public boolean isSliceable() {
+-        return TextUtils.equals(getPreferenceKey(), "notification_badging");
+-    }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_notifications;
++        return AVAILABLE;
+     }
+ 
+     @Override
+     public boolean isChecked() {
+-        return Settings.Secure.getInt(mContext.getContentResolver(),
+-                NOTIFICATION_BADGING, ON) == ON;
++        return Settings.Secure.getInt(mContext.getContentResolver(), "notification_badging", 1) == 1;
+     }
+ 
+     @Override
+-    public boolean setChecked(boolean isChecked) {
+-        return Settings.Secure.putInt(mContext.getContentResolver(),
+-                NOTIFICATION_BADGING, isChecked ? ON : OFF);
+-    }
+-
+-    class SettingObserver extends ContentObserver {
+-
+-        private final Uri NOTIFICATION_BADGING_URI =
+-                Settings.Secure.getUriFor(NOTIFICATION_BADGING);
+-
+-        private final Preference mPreference;
+-
+-        public SettingObserver(Preference preference) {
+-            super(new Handler());
+-            mPreference = preference;
+-        }
+-
+-        public void register(ContentResolver cr, boolean register) {
+-            if (register) {
+-                cr.registerContentObserver(NOTIFICATION_BADGING_URI, false, this);
+-            } else {
+-                cr.unregisterContentObserver(this);
+-            }
+-        }
+-
+-        @Override
+-        public void onChange(boolean selfChange, Uri uri) {
+-            super.onChange(selfChange, uri);
+-            if (NOTIFICATION_BADGING_URI.equals(uri)) {
+-                updateState(mPreference);
+-            }
+-        }
++    public boolean setChecked(boolean enabled) {
++        return Settings.Secure.putInt(mContext.getContentResolver(), "notification_badging", enabled ? 1 : 0);
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/notification/ChargingSoundPreferenceController.java b/packages/apps/Settings/src/com/android/settings/notification/ChargingSoundPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/notification/ChargingSoundPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/notification/ChargingSoundPreferenceController.java
+@@ -16,29 +16,28 @@
+ 
+ package com.android.settings.notification;
+ 
+-import static android.provider.Settings.Secure.CHARGING_SOUNDS_ENABLED;
++import android.content.Context;
++import android.provider.Settings;
+ 
+-import static com.android.settings.notification.SettingPref.TYPE_SECURE;
++import com.android.settings.core.TogglePreferenceController;
+ 
+-import android.content.Context;
+-
+-import com.android.settings.R;
+-import com.android.settings.SettingsPreferenceFragment;
+-import com.android.settingslib.core.lifecycle.Lifecycle;
+-
+-// LINT.IfChange
+-public class ChargingSoundPreferenceController extends SettingPrefController {
+-
+-    public ChargingSoundPreferenceController(Context context, SettingsPreferenceFragment parent,
+-            Lifecycle lifecycle) {
+-        super(context, parent, lifecycle);
+-        mPreference = new SettingPref(
+-                TYPE_SECURE, CHARGING_SOUNDS_ENABLED, CHARGING_SOUNDS_ENABLED, DEFAULT_ON);
++public class ChargingSoundPreferenceController extends TogglePreferenceController {
++    public ChargingSoundPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+-    public boolean isAvailable() {
+-        return mContext.getResources().getBoolean(R.bool.config_show_charging_sounds);
++    public int getAvailabilityStatus() {
++        return AVAILABLE;
++    }
++
++    @Override
++    public boolean isChecked() {
++        return Settings.Secure.getInt(mContext.getContentResolver(), "charging_sounds_enabled", 1) == 1;
++    }
++
++    @Override
++    public boolean setChecked(boolean enabled) {
++        return Settings.Secure.putInt(mContext.getContentResolver(), "charging_sounds_enabled", enabled ? 1 : 0);
+     }
+ }
+-// LINT.ThenChange(ChargingSoundPreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/notification/DialPadTonePreferenceController.java b/packages/apps/Settings/src/com/android/settings/notification/DialPadTonePreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/notification/DialPadTonePreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/notification/DialPadTonePreferenceController.java
+@@ -16,30 +16,28 @@
+ 
+ package com.android.settings.notification;
+ 
+-import static android.provider.Settings.System.DTMF_TONE_WHEN_DIALING;
++import android.content.Context;
++import android.provider.Settings;
+ 
+-import static com.android.settings.notification.SettingPref.TYPE_SYSTEM;
++import com.android.settings.core.TogglePreferenceController;
+ 
+-import android.content.Context;
+-
+-import com.android.settings.SettingsPreferenceFragment;
+-import com.android.settings.Utils;
+-import com.android.settingslib.core.lifecycle.Lifecycle;
+-
+-// LINT.IfChange
+-public class DialPadTonePreferenceController extends SettingPrefController {
+-
+-    public DialPadTonePreferenceController(Context context, SettingsPreferenceFragment parent,
+-            Lifecycle lifecycle) {
+-        super(context, parent, lifecycle);
+-        mPreference = new SettingPref(TYPE_SYSTEM, DTMF_TONE_WHEN_DIALING, DTMF_TONE_WHEN_DIALING,
+-                DEFAULT_ON) {
+-            @Override
+-            public boolean isApplicable(Context context) {
+-                return Utils.isVoiceCapable(context);
+-            }
+-        };
++public class DialPadTonePreferenceController extends TogglePreferenceController {
++    public DialPadTonePreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
++    @Override
++    public int getAvailabilityStatus() {
++        return AVAILABLE;
++    }
++
++    @Override
++    public boolean isChecked() {
++        return Settings.System.getInt(mContext.getContentResolver(), Settings.System.DTMF_TONE_WHEN_DIALING, 1) == 1;
++    }
++
++    @Override
++    public boolean setChecked(boolean enabled) {
++        return Settings.System.putInt(mContext.getContentResolver(), Settings.System.DTMF_TONE_WHEN_DIALING, enabled ? 1 : 0);
++    }
+ }
+-// LINT.ThenChange(DialPadTonePreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/notification/ScreenLockSoundPreferenceController.java b/packages/apps/Settings/src/com/android/settings/notification/ScreenLockSoundPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/notification/ScreenLockSoundPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/notification/ScreenLockSoundPreferenceController.java
+@@ -16,29 +16,28 @@
+ 
+ package com.android.settings.notification;
+ 
+-import static android.provider.Settings.System.LOCKSCREEN_SOUNDS_ENABLED;
++import android.content.Context;
++import android.provider.Settings;
+ 
+-import static com.android.settings.notification.SettingPref.TYPE_SYSTEM;
++import com.android.settings.core.TogglePreferenceController;
+ 
+-import android.content.Context;
+-
+-import com.android.settings.R;
+-import com.android.settings.SettingsPreferenceFragment;
+-import com.android.settingslib.core.lifecycle.Lifecycle;
+-
+-// LINT.IfChange
+-public class ScreenLockSoundPreferenceController extends SettingPrefController {
+-
+-    public ScreenLockSoundPreferenceController(Context context, SettingsPreferenceFragment parent,
+-            Lifecycle lifecycle) {
+-        super(context, parent, lifecycle);
+-        mPreference = new SettingPref(
+-                TYPE_SYSTEM, LOCKSCREEN_SOUNDS_ENABLED, LOCKSCREEN_SOUNDS_ENABLED, DEFAULT_ON);
++public class ScreenLockSoundPreferenceController extends TogglePreferenceController {
++    public ScreenLockSoundPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+-    public boolean isAvailable() {
+-        return mContext.getResources().getBoolean(R.bool.config_show_screen_locking_sounds);
++    public int getAvailabilityStatus() {
++        return AVAILABLE;
++    }
++
++    @Override
++    public boolean isChecked() {
++        return Settings.System.getInt(mContext.getContentResolver(), "lockscreen_sounds_enabled", 1) == 1;
++    }
++
++    @Override
++    public boolean setChecked(boolean enabled) {
++        return Settings.System.putInt(mContext.getContentResolver(), "lockscreen_sounds_enabled", enabled ? 1 : 0);
+     }
+ }
+-// LINT.ThenChange(ScreenLockSoundPreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/notification/SnoozeNotificationPreferenceController.java b/packages/apps/Settings/src/com/android/settings/notification/SnoozeNotificationPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/notification/SnoozeNotificationPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/notification/SnoozeNotificationPreferenceController.java
+@@ -16,24 +16,12 @@
+ 
+ package com.android.settings.notification;
+ 
+-import static android.provider.Settings.Secure.SHOW_NOTIFICATION_SNOOZE;
+-
+ import android.content.Context;
+ import android.provider.Settings;
+ 
+-import androidx.annotation.VisibleForTesting;
+-
+-import com.android.settings.R;
+ import com.android.settings.core.TogglePreferenceController;
+ 
+ public class SnoozeNotificationPreferenceController extends TogglePreferenceController {
+-
+-    private static final String TAG = "SnoozeNotifPrefContr";
+-    @VisibleForTesting
+-    static final int ON = 1;
+-    @VisibleForTesting
+-    static final int OFF = 0;
+-
+     public SnoozeNotificationPreferenceController(Context context, String preferenceKey) {
+         super(context, preferenceKey);
+     }
+@@ -45,18 +33,11 @@
+ 
+     @Override
+     public boolean isChecked() {
+-        return Settings.Secure.getInt(mContext.getContentResolver(),
+-                SHOW_NOTIFICATION_SNOOZE, OFF) == ON;
++        return Settings.Secure.getInt(mContext.getContentResolver(), "show_notification_snooze", 0) == 1;
+     }
+ 
+     @Override
+-    public boolean setChecked(boolean isChecked) {
+-        return Settings.Secure.putInt(mContext.getContentResolver(),
+-                SHOW_NOTIFICATION_SNOOZE, isChecked ? ON : OFF);
+-    }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_notifications;
++    public boolean setChecked(boolean enabled) {
++        return Settings.Secure.putInt(mContext.getContentResolver(), "show_notification_snooze", enabled ? 1 : 0);
+     }
+ }
+diff --git a/packages/apps/Settings/src/com/android/settings/notification/TouchSoundPreferenceController.java b/packages/apps/Settings/src/com/android/settings/notification/TouchSoundPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/notification/TouchSoundPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/notification/TouchSoundPreferenceController.java
+@@ -16,48 +16,28 @@
+ 
+ package com.android.settings.notification;
+ 
+-import static android.provider.Settings.System.SOUND_EFFECTS_ENABLED;
++import android.content.Context;
++import android.provider.Settings;
+ 
+-import static com.android.settings.notification.SettingPref.TYPE_SYSTEM;
++import com.android.settings.core.TogglePreferenceController;
+ 
+-import android.content.Context;
+-import android.media.AudioManager;
+-import android.os.AsyncTask;
+-
+-import com.android.settings.R;
+-import com.android.settings.SettingsPreferenceFragment;
+-import com.android.settingslib.core.lifecycle.Lifecycle;
+-
+-// LINT.IfChange
+-public class TouchSoundPreferenceController extends SettingPrefController {
+-
+-    public TouchSoundPreferenceController(Context context, SettingsPreferenceFragment parent,
+-            Lifecycle lifecycle) {
+-        super(context, parent, lifecycle);
+-        mPreference = new SettingPref(
+-            TYPE_SYSTEM, SOUND_EFFECTS_ENABLED, SOUND_EFFECTS_ENABLED, DEFAULT_ON) {
+-            @Override
+-            protected boolean setSetting(final Context context, final int value) {
+-                AsyncTask.execute(new Runnable() {
+-                    @Override
+-                    public void run() {
+-                        final AudioManager am =
+-                            (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
+-                        if (value != 0) {
+-                            am.loadSoundEffects();
+-                        } else {
+-                            am.unloadSoundEffects();
+-                        }
+-                    }
+-                });
+-                return super.setSetting(context, value);
+-            }
+-        };
++public class TouchSoundPreferenceController extends TogglePreferenceController {
++    public TouchSoundPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
+     }
+ 
+     @Override
+-    public boolean isAvailable() {
+-        return mContext.getResources().getBoolean(R.bool.config_show_touch_sounds);
++    public int getAvailabilityStatus() {
++        return AVAILABLE;
++    }
++
++    @Override
++    public boolean isChecked() {
++        return Settings.System.getInt(mContext.getContentResolver(), Settings.System.SOUND_EFFECTS_ENABLED, 1) == 1;
++    }
++
++    @Override
++    public boolean setChecked(boolean enabled) {
++        return Settings.System.putInt(mContext.getContentResolver(), Settings.System.SOUND_EFFECTS_ENABLED, enabled ? 1 : 0);
+     }
+ }
+-// LINT.ThenChange(TouchSoundPreference.kt)
+diff --git a/packages/apps/Settings/src/com/android/settings/security/ShowPasswordPreferenceController.java b/packages/apps/Settings/src/com/android/settings/security/ShowPasswordPreferenceController.java
+--- a/packages/apps/Settings/src/com/android/settings/security/ShowPasswordPreferenceController.java
++++ b/packages/apps/Settings/src/com/android/settings/security/ShowPasswordPreferenceController.java
+@@ -16,56 +16,28 @@
+ 
+ package com.android.settings.security;
+ 
+-import android.app.compat.CompatChanges;
+ import android.content.Context;
+ import android.provider.Settings;
+-import android.text.ShowSecretsSetting;
+ 
+-import androidx.annotation.VisibleForTesting;
+-
+-import com.android.settings.R;
+ import com.android.settings.core.TogglePreferenceController;
+-import com.android.text.flags.Flags;
+ 
+ public class ShowPasswordPreferenceController extends TogglePreferenceController {
++    public ShowPasswordPreferenceController(Context context, String preferenceKey) {
++        super(context, preferenceKey);
++    }
+ 
+-    private static final String KEY_SHOW_PASSWORD = "show_password";
+-
+-    public ShowPasswordPreferenceController(Context context) {
+-        super(context, KEY_SHOW_PASSWORD);
++    @Override
++    public int getAvailabilityStatus() {
++        return AVAILABLE;
+     }
+ 
+     @Override
+     public boolean isChecked() {
+-        return Settings.System.getInt(mContext.getContentResolver(),
+-                Settings.System.TEXT_SHOW_PASSWORD, 1) != 0;
++        return Settings.System.getInt(mContext.getContentResolver(), Settings.System.TEXT_SHOW_PASSWORD, 1) == 1;
+     }
+ 
+     @Override
+-    public boolean setChecked(boolean isChecked) {
+-        Settings.System.putInt(mContext.getContentResolver(), Settings.System.TEXT_SHOW_PASSWORD,
+-                isChecked ? 1 : 0);
+-        return true;
+-    }
+-
+-    @Override
+-    public int getAvailabilityStatus() {
+-        if (areSplitSettingsEnabled()) {
+-            return UNSUPPORTED_ON_DEVICE;
+-        }
+-        return mContext.getResources().getBoolean(R.bool.config_show_show_password)
+-                ? AVAILABLE : UNSUPPORTED_ON_DEVICE;
+-    }
+-
+-    @VisibleForTesting
+-    boolean areSplitSettingsEnabled() {
+-        return Flags.splitShowPasswordsToTouchAndPhysical()
+-                && CompatChanges.isChangeEnabled(
+-                        ShowSecretsSetting.SPLIT_SHOW_PASSWORDS_TO_TOUCH_AND_PHYSICAL);
+-    }
+-
+-    @Override
+-    public int getSliceHighlightMenuRes() {
+-        return R.string.menu_key_security;
++    public boolean setChecked(boolean enabled) {
++        return Settings.System.putInt(mContext.getContentResolver(), Settings.System.TEXT_SHOW_PASSWORD, enabled ? 1 : 0);
+     }
+ }

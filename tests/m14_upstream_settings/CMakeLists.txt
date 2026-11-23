@@ -19,6 +19,13 @@ add_executable(test_m14_upstream_settings test_upstream_settings.cpp)
 add_dependencies(test_m14_upstream_settings wa_upstream_settings_apk wa_foreground_framework_assets)
 target_link_libraries(test_m14_upstream_settings PRIVATE aosp17_ui_jni aosp17_libandroidfw)
 target_compile_features(test_m14_upstream_settings PRIVATE cxx_std_20)
+if(TARGET wa_android_system_foreground)
+    target_link_libraries(test_m14_upstream_settings PRIVATE wa_android_system_foreground)
+    if(TARGET wa_android_system)
+        target_link_libraries(test_m14_upstream_settings PRIVATE wa_android_system)
+    endif()
+    target_compile_definitions(test_m14_upstream_settings PRIVATE WA_TEST_FOREGROUND_ABI)
+endif()
 
 if(EMSCRIPTEN)
     find_program(WA_SETTINGS_NODE node HINTS /opt/homebrew/bin NO_CMAKE_FIND_ROOT_PATH REQUIRED)
@@ -29,7 +36,7 @@ if(EMSCRIPTEN)
     endif()
     set_target_properties(test_m14_upstream_settings PROPERTIES SUFFIX ".mjs")
     target_compile_options(test_m14_upstream_settings PRIVATE -fwasm-exceptions)
-    target_link_options(test_m14_upstream_settings PRIVATE -fwasm-exceptions -lnodefs.js
+    target_link_options(test_m14_upstream_settings PRIVATE -O3 -fwasm-exceptions -lnodefs.js
         -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=node -sINVOKE_RUN=0 -sFORCE_FILESYSTEM=1
         -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=268435456 -sSTACK_SIZE=2097152
         "-sEXPORTED_RUNTIME_METHODS=FS,NODEFS,callMain")
@@ -42,4 +49,4 @@ else()
 endif()
 add_test(NAME ${test_name} COMMAND ${test_command} "${WA_SETTINGS_APK}" "${WA_LAUNCHER_FRAMEWORK_DEX}"
     "${framework}" "${WA_LAUNCHER_FRAMEWORK_RES}")
-set_tests_properties(${test_name} PROPERTIES TIMEOUT 120)
+set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)

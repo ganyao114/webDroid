@@ -95,7 +95,9 @@ class ForegroundActivityAbi {
 
   tick(timestamp) {
     const status = this.#call('tick', frameTimeNs(timestamp));
-    if (status !== busy) this.#check('tick', status);
+    if (status === busy) return false;
+    this.#check('tick', status);
+    return true;
   }
 
   sendBack() { return this.#check('send_back', this.#call('send_back')) === 1; }
@@ -125,6 +127,8 @@ export class ForegroundJavaApk {
   #creating;
   #size;
   #state;
+  #frameTime = 0;
+  #framePending = false;
   #tap;
   #shutdown;
   #closed = false;
@@ -188,13 +192,18 @@ export class ForegroundJavaApk {
   }
 
   #tick() {
-    const { viewport, onFinish, onReady } = this.options;
-    const size = viewport();
+    const { onFinish, onReady } = this.options;
+    const { width, height, dpi: densityDpi } = this.#compositor;
+    const size = { width, height, densityDpi };
     if (size.width !== this.#size.width || size.height !== this.#size.height || size.densityDpi !== this.#size.densityDpi) {
       this.#abi.resize(size);
     }
     this.#size = size;
-    this.#abi.tick(performance.now());
+    const now = performance.now();
+    if (Number.isFinite(now)) this.#frameTime = Math.max(this.#frameTime, now);
+    const retryingFrame = this.#framePending;
+    this.#framePending = !this.#abi.tick(this.#frameTime);
+    if (this.#framePending) return;
     this.#state = this.#abi.state();
     if (this.#state.finishing) {
       if (!this.#finishPending) {
@@ -203,9 +212,12 @@ export class ForegroundJavaApk {
       }
       return;
     }
-    if (this.#tap && this.#state.imeFocused) this.#input.focusIME(this.#tap.x, this.#tap.y);
-    else if (!this.#state.imeFocused) this.#input.blurIME();
-    this.#tap = undefined;
+    // Publishing a pending frame skips input dispatch. The next tick consumes queued taps.
+    if (!retryingFrame) {
+      if (this.#tap && this.#state.imeFocused) this.#input.focusIME(this.#tap.x, this.#tap.y);
+      else if (!this.#state.imeFocused) this.#input.blurIME();
+      this.#tap = undefined;
+    }
     if (!this.#ready) {
       this.#ready = true;
       onReady();
