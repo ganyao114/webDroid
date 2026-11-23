@@ -20,7 +20,6 @@ libcore/ojluni/src/main/java/java/util/function/IntPredicate.java
 libcore/ojluni/src/main/java/java/util/function/IntUnaryOperator.java
 frameworks/base/core/java/android/content/ComponentCallbacks.java
 frameworks/base/core/java/android/content/ComponentCallbacks2.java
-frameworks/base/core/java/android/content/SharedPreferences.java
 frameworks/base/core/java/android/os/HandlerThread.java
 frameworks/base/core/java/android/os/Trace.java
 frameworks/base/core/java/android/content/BroadcastReceiver.java

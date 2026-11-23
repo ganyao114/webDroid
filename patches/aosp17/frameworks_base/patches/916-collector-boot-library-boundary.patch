@@ -1,0 +1,214 @@
+--- a/libcore/ojluni/src/main/java/java/util/stream/Collector.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/Collector.java
+@@ -25,7 +25,7 @@
+ package java.util.stream;
+ 
+ import java.util.Collections;
+-import java.util.EnumSet;
++import java.util.HashSet;
+ import java.util.Objects;
+ import java.util.Set;
+ import java.util.function.BiConsumer;
+@@ -269,10 +269,14 @@
+         Objects.requireNonNull(accumulator);
+         Objects.requireNonNull(combiner);
+         Objects.requireNonNull(characteristics);
+-        Set<Characteristics> cs = (characteristics.length == 0)
+-                                  ? Collectors.CH_ID
+-                                  : Collections.unmodifiableSet(EnumSet.of(Collector.Characteristics.IDENTITY_FINISH,
+-                                                                           characteristics));
++        Set<Characteristics> cs = Collectors.CH_ID;
++        if (characteristics.length != 0) {
++            Set<Characteristics> values = new HashSet<>(Collectors.CH_ID);
++            for (Characteristics characteristic : characteristics) {
++                values.add(Objects.requireNonNull(characteristic));
++            }
++            cs = Collections.unmodifiableSet(values);
++        }
+         return new Collectors.CollectorImpl<>(supplier, accumulator, combiner, cs);
+     }
+ 
+@@ -304,9 +308,7 @@
+         Objects.requireNonNull(characteristics);
+         Set<Characteristics> cs = Collectors.CH_NOID;
+         if (characteristics.length > 0) {
+-            cs = EnumSet.noneOf(Characteristics.class);
+-            Collections.addAll(cs, characteristics);
+-            cs = Collections.unmodifiableSet(cs);
++            cs = Collectors.characteristics(characteristics);
+         }
+         return new Collectors.CollectorImpl<>(supplier, accumulator, combiner, finisher, cs);
+     }
+--- a/libcore/ojluni/src/main/java/java/util/stream/Collectors.java
++++ b/libcore/ojluni/src/main/java/java/util/stream/Collectors.java
+@@ -31,7 +31,6 @@
+ import java.util.Collections;
+ import java.util.Comparator;
+ import java.util.DoubleSummaryStatistics;
+-import java.util.EnumSet;
+ import java.util.HashMap;
+ import java.util.HashSet;
+ import java.util.IntSummaryStatistics;
+@@ -55,8 +54,6 @@
+ import java.util.function.ToDoubleFunction;
+ import java.util.function.ToIntFunction;
+ import java.util.function.ToLongFunction;
+-
+-import jdk.internal.access.SharedSecrets;
+ 
+ /**
+  * Implementations of {@link Collector} that implement various useful reduction
+@@ -106,22 +103,30 @@
+ public final class Collectors {
+ 
+     static final Set<Collector.Characteristics> CH_CONCURRENT_ID
+-            = Collections.unmodifiableSet(EnumSet.of(Collector.Characteristics.CONCURRENT,
+-                                                     Collector.Characteristics.UNORDERED,
+-                                                     Collector.Characteristics.IDENTITY_FINISH));
++            = characteristics(Collector.Characteristics.CONCURRENT,
++                    Collector.Characteristics.UNORDERED,
++                    Collector.Characteristics.IDENTITY_FINISH);
+     static final Set<Collector.Characteristics> CH_CONCURRENT_NOID
+-            = Collections.unmodifiableSet(EnumSet.of(Collector.Characteristics.CONCURRENT,
+-                                                     Collector.Characteristics.UNORDERED));
++            = characteristics(Collector.Characteristics.CONCURRENT,
++                    Collector.Characteristics.UNORDERED);
+     static final Set<Collector.Characteristics> CH_ID
+-            = Collections.unmodifiableSet(EnumSet.of(Collector.Characteristics.IDENTITY_FINISH));
++            = characteristics(Collector.Characteristics.IDENTITY_FINISH);
+     static final Set<Collector.Characteristics> CH_UNORDERED_ID
+-            = Collections.unmodifiableSet(EnumSet.of(Collector.Characteristics.UNORDERED,
+-                                                     Collector.Characteristics.IDENTITY_FINISH));
++            = characteristics(Collector.Characteristics.UNORDERED,
++                    Collector.Characteristics.IDENTITY_FINISH);
+     static final Set<Collector.Characteristics> CH_NOID = Collections.emptySet();
+     static final Set<Collector.Characteristics> CH_UNORDERED_NOID
+-            = Collections.unmodifiableSet(EnumSet.of(Collector.Characteristics.UNORDERED));
++            = characteristics(Collector.Characteristics.UNORDERED);
+ 
+     private Collectors() { }
++
++    static Set<Collector.Characteristics> characteristics(Collector.Characteristics... values) {
++        Set<Collector.Characteristics> result = new HashSet<>();
++        for (Collector.Characteristics value : values) {
++            result.add(Objects.requireNonNull(value));
++        }
++        return Collections.unmodifiableSet(result);
++    }
+ 
+     /**
+      * Construct an {@code IllegalStateException} with appropriate message.
+@@ -316,16 +321,9 @@
+     @SuppressWarnings("unchecked")
+     public static <T>
+     Collector<T, ?, List<T>> toUnmodifiableList() {
+-        return new CollectorImpl<>(ArrayList::new, List::add,
++        return new CollectorImpl<T, ArrayList<T>, List<T>>(ArrayList::new, List::add,
+                                    (left, right) -> { left.addAll(right); return left; },
+-                                   list -> {
+-                                       if (list.getClass() == ArrayList.class) { // ensure it's trusted
+-                                           return SharedSecrets.getJavaUtilCollectionAccess()
+-                                                               .listFromTrustedArray(list.toArray());
+-                                       } else {
+-                                           throw new IllegalArgumentException();
+-                                       }
+-                                   },
++                                   List::copyOf,
+                                    CH_NOID);
+     }
+ 
+@@ -437,6 +435,18 @@
+                 StringJoiner::toString, CH_NOID);
+     }
+ 
++    // The boot Map supplies get/put/remove but has no merge default method.
++    private static <K, V> void merge(Map<K, V> map, K key, V value, BinaryOperator<V> combine) {
++        Objects.requireNonNull(value);
++        V previous = map.get(key);
++        V merged = previous == null ? value : combine.apply(previous, value);
++        if (merged == null) {
++            map.remove(key);
++        } else {
++            map.put(key, merged);
++        }
++    }
++
+     /**
+      * {@code BinaryOperator<Map>} that merges the contents of its right
+      * argument into its left argument, using the provided merge function to
+@@ -453,7 +463,7 @@
+     BinaryOperator<M> mapMerger(BinaryOperator<V> mergeFunction) {
+         return (m1, m2) -> {
+             for (Map.Entry<K,V> e : m2.entrySet())
+-                m1.merge(e.getKey(), e.getValue(), mergeFunction);
++                merge(m1, e.getKey(), e.getValue(), mergeFunction);
+             return m1;
+         };
+     }
+@@ -620,7 +630,7 @@
+             if (characteristics.size() == 1)
+                 characteristics = Collectors.CH_NOID;
+             else {
+-                characteristics = EnumSet.copyOf(characteristics);
++                characteristics = new HashSet<>(characteristics);
+                 characteristics.remove(Collector.Characteristics.IDENTITY_FINISH);
+                 characteristics = Collections.unmodifiableSet(characteristics);
+             }
+@@ -628,7 +638,7 @@
+         return new CollectorImpl<>(downstream.supplier(),
+                                    downstream.accumulator(),
+                                    downstream.combiner(),
+-                                   downstream.finisher().andThen(finisher),
++                                   values -> finisher.apply(downstream.finisher().apply(values)),
+                                    characteristics);
+     }
+ 
+@@ -1181,7 +1191,9 @@
+             @SuppressWarnings("unchecked")
+             Function<A, A> downstreamFinisher = (Function<A, A>) downstream.finisher();
+             Function<Map<K, A>, M> finisher = intermediate -> {
+-                intermediate.replaceAll((k, v) -> downstreamFinisher.apply(v));
++                for (Map.Entry<K, A> entry : intermediate.entrySet()) {
++                    entry.setValue(downstreamFinisher.apply(entry.getValue()));
++                }
+                 @SuppressWarnings("unchecked")
+                 M castResult = (M) intermediate;
+                 return castResult;
+@@ -1351,7 +1363,9 @@
+             @SuppressWarnings("unchecked")
+             Function<A, A> downstreamFinisher = (Function<A, A>) downstream.finisher();
+             Function<ConcurrentMap<K, A>, M> finisher = intermediate -> {
+-                intermediate.replaceAll((k, v) -> downstreamFinisher.apply(v));
++                for (Map.Entry<K, A> entry : intermediate.entrySet()) {
++                    entry.setValue(downstreamFinisher.apply(entry.getValue()));
++                }
+                 @SuppressWarnings("unchecked")
+                 M castResult = (M) intermediate;
+                 return castResult;
+@@ -1697,7 +1711,7 @@
+                              BinaryOperator<U> mergeFunction,
+                              Supplier<M> mapFactory) {
+         BiConsumer<M, T> accumulator
+-                = (map, element) -> map.merge(keyMapper.apply(element),
++                = (map, element) -> merge(map, keyMapper.apply(element),
+                                               valueMapper.apply(element), mergeFunction);
+         return new CollectorImpl<>(mapFactory, accumulator, mapMerger(mergeFunction), CH_ID);
+     }
+@@ -1861,7 +1875,7 @@
+                                        BinaryOperator<U> mergeFunction,
+                                        Supplier<M> mapFactory) {
+         BiConsumer<M, T> accumulator
+-                = (map, element) -> map.merge(keyMapper.apply(element),
++                = (map, element) -> merge(map, keyMapper.apply(element),
+                                               valueMapper.apply(element), mergeFunction);
+         return new CollectorImpl<>(mapFactory, accumulator, mapMerger(mergeFunction), CH_CONCURRENT_ID);
+     }
+@@ -1999,7 +2013,7 @@
+         if (CH_ID.containsAll(c1Characteristics) || CH_ID.containsAll(c2Characteristics)) {
+             characteristics = CH_NOID;
+         } else {
+-            EnumSet<Collector.Characteristics> c = EnumSet.noneOf(Collector.Characteristics.class);
++            Set<Collector.Characteristics> c = new HashSet<>();
+             c.addAll(c1Characteristics);
+             c.retainAll(c2Characteristics);
+             c.remove(Collector.Characteristics.IDENTITY_FINISH);

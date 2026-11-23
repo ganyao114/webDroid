@@ -1,0 +1,80 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/CopyOnWriteArrayList.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/CopyOnWriteArrayList.java
+@@ -56,8 +56,6 @@
+ import java.util.stream.Stream;
+ import java.util.stream.StreamSupport;
+ import jdk.internal.access.SharedSecrets;
+-import jdk.internal.misc.Unsafe;
+-import jdk.internal.util.ArraysSupport;
+ 
+ // Android-changed: Removed javadoc link to collections framework docs
+ /**
+@@ -107,7 +105,7 @@
+      * The lock protecting all mutators.  (We have a mild preference
+      * for builtin monitors over ReentrantLock when either will do.)
+      */
+-    final transient Object lock = new Object();
++    transient Object lock = new Object();
+ 
+     /** The array, accessed only via getArray/setArray. */
+     private transient volatile Object[] array;
+@@ -1853,7 +1851,7 @@
+             @SuppressWarnings("unchecked")
+             E[] es = (E[]) c.toArray();
+             if (es.length > 0) {
+-                ArraysSupport.reverse(es);
++                reverse(es);
+                 base.addAll(0, Arrays.asList(es));
+                 return true;
+             } else {
+@@ -1934,7 +1932,7 @@
+         }
+ 
+         public Object[] toArray() {
+-            return ArraysSupport.reverse(base.toArray());
++            return reverse(base.toArray());
+         }
+ 
+         @SuppressWarnings("unchecked")
+@@ -1944,7 +1942,7 @@
+         }
+ 
+         public <T> T[] toArray(IntFunction<T[]> generator) {
+-            return ArraysSupport.reverse(base.toArray(generator));
++            return reverse(base.toArray(generator));
+         }
+ 
+         // copied from AbstractCollection
+@@ -1984,7 +1982,7 @@
+             @SuppressWarnings("unchecked")
+             E[] es = (E[]) c.toArray();
+             if (es.length > 0) {
+-                ArraysSupport.reverse(es);
++                reverse(es);
+                 synchronized (lock) {
+                     base.addAll(base.size() - index, Arrays.asList(es));
+                 }
+@@ -2097,13 +2095,17 @@
+         }
+     }
+ 
++    private static <T> T[] reverse(T[] array) {
++        for (int low = 0, high = array.length - 1; low < high; low++, high--) {
++            T value = array[low];
++            array[low] = array[high];
++            array[high] = value;
++        }
++        return array;
++    }
++
+     /** Initializes the lock; for use when deserializing or cloning. */
+     private void resetLock() {
+-        final Unsafe U = Unsafe.getUnsafe();
+-        U.putReference(
+-            this,
+-            U.objectFieldOffset(CopyOnWriteArrayList.class, "lock"),
+-            new Object()
+-        );
++        lock = new Object();
+     }
+ }

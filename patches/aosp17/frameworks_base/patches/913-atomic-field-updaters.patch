@@ -1,0 +1,596 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicBoolean.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicBoolean.java
+@@ -35,9 +35,6 @@
+ 
+ package java.util.concurrent.atomic;
+ 
+-import jdk.internal.invoke.MhUtil;
+-
+-import java.lang.invoke.MethodHandles;
+ import java.lang.invoke.VarHandle;
+ 
+ /**
+@@ -52,8 +49,9 @@
+  */
+ public class AtomicBoolean implements java.io.Serializable {
+     private static final long serialVersionUID = 4654671469794556979L;
+-    private static final VarHandle VALUE = MhUtil.findVarHandle(
+-            MethodHandles.lookup(), "value", int.class);
++    // The interpreter provides field updaters. Use volatile access for weaker modes.
++    private static final AtomicIntegerFieldUpdater<AtomicBoolean> VALUE =
++            AtomicIntegerFieldUpdater.newUpdater(AtomicBoolean.class, "value");
+ 
+     /** @serial */
+     private volatile int value;
+@@ -118,7 +116,7 @@
+      */
+     @Deprecated(since="9")
+     public boolean weakCompareAndSet(boolean expectedValue, boolean newValue) {
+-        return VALUE.weakCompareAndSetPlain(this,
++        return VALUE.weakCompareAndSet(this,
+                                             (expectedValue ? 1 : 0),
+                                             (newValue ? 1 : 0));
+     }
+@@ -134,7 +132,7 @@
+      * @since 9
+      */
+     public boolean weakCompareAndSetPlain(boolean expectedValue, boolean newValue) {
+-        return VALUE.weakCompareAndSetPlain(this,
++        return VALUE.weakCompareAndSet(this,
+                                             (expectedValue ? 1 : 0),
+                                             (newValue ? 1 : 0));
+     }
+@@ -157,7 +155,7 @@
+      * @since 1.6
+      */
+     public final void lazySet(boolean newValue) {
+-        VALUE.setRelease(this, (newValue ? 1 : 0));
++        VALUE.lazySet(this, (newValue ? 1 : 0));
+     }
+ 
+     /**
+@@ -168,7 +166,7 @@
+      * @return the previous value
+      */
+     public final boolean getAndSet(boolean newValue) {
+-        return (int)VALUE.getAndSet(this, (newValue ? 1 : 0)) != 0;
++        return VALUE.getAndSet(this, (newValue ? 1 : 0)) != 0;
+     }
+ 
+     /**
+@@ -188,7 +186,7 @@
+      * @since 9
+      */
+     public final boolean getPlain() {
+-        return (int)VALUE.get(this) != 0;
++        return VALUE.get(this) != 0;
+     }
+ 
+     /**
+@@ -211,7 +209,7 @@
+      * @since 9
+      */
+     public final boolean getOpaque() {
+-        return (int)VALUE.getOpaque(this) != 0;
++        return VALUE.get(this) != 0;
+     }
+ 
+     /**
+@@ -222,7 +220,7 @@
+      * @since 9
+      */
+     public final void setOpaque(boolean newValue) {
+-        VALUE.setOpaque(this, newValue ? 1 : 0);
++        VALUE.set(this, newValue ? 1 : 0);
+     }
+ 
+     /**
+@@ -233,7 +231,7 @@
+      * @since 9
+      */
+     public final boolean getAcquire() {
+-        return (int)VALUE.getAcquire(this) != 0;
++        return VALUE.get(this) != 0;
+     }
+ 
+     /**
+@@ -244,7 +242,7 @@
+      * @since 9
+      */
+     public final void setRelease(boolean newValue) {
+-        VALUE.setRelease(this, newValue ? 1 : 0);
++        VALUE.lazySet(this, newValue ? 1 : 0);
+     }
+ 
+     /**
+@@ -260,9 +258,12 @@
+      * @since 9
+      */
+     public final boolean compareAndExchange(boolean expectedValue, boolean newValue) {
+-        return (int)VALUE.compareAndExchange(this,
+-                                             (expectedValue ? 1 : 0),
+-                                             (newValue ? 1 : 0)) != 0;
++        int expected = expectedValue ? 1 : 0;
++        int observed;
++        do {
++            observed = value;
++        } while (observed == expected && !VALUE.compareAndSet(this, expected, newValue ? 1 : 0));
++        return observed != 0;
+     }
+ 
+     /**
+@@ -278,9 +279,7 @@
+      * @since 9
+      */
+     public final boolean compareAndExchangeAcquire(boolean expectedValue, boolean newValue) {
+-        return (int)VALUE.compareAndExchangeAcquire(this,
+-                                                    (expectedValue ? 1 : 0),
+-                                                    (newValue ? 1 : 0)) != 0;
++        return compareAndExchange(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -296,9 +295,7 @@
+      * @since 9
+      */
+     public final boolean compareAndExchangeRelease(boolean expectedValue, boolean newValue) {
+-        return (int)VALUE.compareAndExchangeRelease(this,
+-                                                    (expectedValue ? 1 : 0),
+-                                                    (newValue ? 1 : 0)) != 0;
++        return compareAndExchange(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -330,7 +327,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetAcquire(boolean expectedValue, boolean newValue) {
+-        return VALUE.weakCompareAndSetAcquire(this,
++        return VALUE.weakCompareAndSet(this,
+                                               (expectedValue ? 1 : 0),
+                                               (newValue ? 1 : 0));
+     }
+@@ -347,7 +344,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetRelease(boolean expectedValue, boolean newValue) {
+-        return VALUE.weakCompareAndSetRelease(this,
++        return VALUE.weakCompareAndSet(this,
+                                               (expectedValue ? 1 : 0),
+                                               (newValue ? 1 : 0));
+     }
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicInteger.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicInteger.java
+@@ -35,7 +35,6 @@
+ 
+ package java.util.concurrent.atomic;
+ 
+-import java.lang.invoke.MethodHandles;
+ import java.lang.invoke.VarHandle;
+ import java.util.function.IntBinaryOperator;
+ import java.util.function.IntUnaryOperator;
+@@ -55,24 +54,9 @@
+ public class AtomicInteger extends Number implements java.io.Serializable {
+     private static final long serialVersionUID = 6214790243416807050L;
+ 
+-    /*
+-     * This class intended to be implemented using VarHandles, but there
+-     * are unresolved cyclic startup dependencies.
+-     */
+-    // BEGIN Android-changed: Using VarHandle instead of Unsafe
+-    // private static final Unsafe U = Unsafe.getUnsafe();
+-    // private static final long VALUE
+-    //     = U.objectFieldOffset(AtomicInteger.class, "value");
+-    private static final VarHandle VALUE;
+-    static {
+-        try {
+-            MethodHandles.Lookup l = MethodHandles.lookup();
+-            VALUE = l.findVarHandle(AtomicInteger.class, "value", int.class);
+-        } catch (ReflectiveOperationException e) {
+-            throw new ExceptionInInitializerError(e);
+-        }
+-    }
+-    // END Android-changed: Using VarHandle instead of Unsafe
++    // The interpreter provides field updaters. Use volatile access for weaker modes.
++    private static final AtomicIntegerFieldUpdater<AtomicInteger> VALUE =
++            AtomicIntegerFieldUpdater.newUpdater(AtomicInteger.class, "value");
+ 
+     /** @serial */
+     private volatile int value;
+@@ -120,9 +104,7 @@
+      * @since 1.6
+      */
+     public final void lazySet(int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // U.putIntRelease(this, VALUE, newValue);
+-        VALUE.setRelease(this, newValue);
++        VALUE.lazySet(this, newValue);
+     }
+ 
+     /**
+@@ -133,9 +115,7 @@
+      * @return the previous value
+      */
+     public final int getAndSet(int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndSetInt(this, VALUE, newValue);
+-        return (int)VALUE.getAndSet(this, newValue);
++        return VALUE.getAndSet(this, newValue);
+     }
+ 
+     /**
+@@ -149,8 +129,6 @@
+      * the actual value was not equal to the expected value.
+      */
+     public final boolean compareAndSet(int expectedValue, int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.compareAndSetInt(this, VALUE, expectedValue, newValue);
+         return VALUE.compareAndSet(this, expectedValue, newValue);
+     }
+ 
+@@ -172,9 +150,7 @@
+      */
+     @Deprecated(since="9")
+     public final boolean weakCompareAndSet(int expectedValue, int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.weakCompareAndSetIntPlain(this, VALUE, expectedValue, newValue);
+-        return VALUE.weakCompareAndSetPlain(this, expectedValue, newValue);
++        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -188,9 +164,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetPlain(int expectedValue, int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.weakCompareAndSetIntPlain(this, VALUE, expectedValue, newValue);
+-        return VALUE.weakCompareAndSetPlain(this, expectedValue, newValue);
++        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -202,9 +176,7 @@
+      * @return the previous value
+      */
+     public final int getAndIncrement() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddInt(this, VALUE, 1);
+-        return (int)VALUE.getAndAdd(this, 1);
++        return VALUE.getAndAdd(this, 1);
+     }
+ 
+     /**
+@@ -216,9 +188,7 @@
+      * @return the previous value
+      */
+     public final int getAndDecrement() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddInt(this, VALUE, -1);
+-        return (int)VALUE.getAndAdd(this, -1);
++        return VALUE.getAndAdd(this, -1);
+     }
+ 
+     /**
+@@ -229,9 +199,7 @@
+      * @return the previous value
+      */
+     public final int getAndAdd(int delta) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddInt(this, VALUE, delta);
+-        return (int)VALUE.getAndAdd(this, delta);
++        return VALUE.getAndAdd(this, delta);
+     }
+ 
+     /**
+@@ -243,9 +211,7 @@
+      * @return the updated value
+      */
+     public final int incrementAndGet() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddInt(this, VALUE, 1) + 1;
+-        return (int)VALUE.getAndAdd(this, 1) + 1;
++        return VALUE.getAndAdd(this, 1) + 1;
+     }
+ 
+     /**
+@@ -257,9 +223,7 @@
+      * @return the updated value
+      */
+     public final int decrementAndGet() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddInt(this, VALUE, -1) - 1;
+-        return (int)VALUE.getAndAdd(this, -1) - 1;
++        return VALUE.getAndAdd(this, -1) - 1;
+     }
+ 
+     /**
+@@ -270,9 +234,7 @@
+      * @return the updated value
+      */
+     public final int addAndGet(int delta) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddInt(this, VALUE, delta) + delta;
+-        return (int)VALUE.getAndAdd(this, delta) + delta;
++        return VALUE.getAndAdd(this, delta) + delta;
+     }
+ 
+     /**
+@@ -431,9 +393,7 @@
+      * @since 9
+      */
+     public final int getPlain() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getInt(this, VALUE);
+-        return (int)VALUE.get(this);
++        return VALUE.get(this);
+     }
+ 
+     /**
+@@ -445,8 +405,6 @@
+      * @since 9
+      */
+     public final void setPlain(int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // U.putInt(this, VALUE, newValue);
+         VALUE.set(this, newValue);
+     }
+ 
+@@ -458,9 +416,7 @@
+      * @since 9
+      */
+     public final int getOpaque() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getIntOpaque(this, VALUE);
+-        return (int)VALUE.getOpaque(this);
++        return VALUE.get(this);
+     }
+ 
+     /**
+@@ -471,9 +427,7 @@
+      * @since 9
+      */
+     public final void setOpaque(int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // U.putIntOpaque(this, VALUE, newValue);
+-        VALUE.setOpaque(this, newValue);
++        VALUE.set(this, newValue);
+     }
+ 
+     /**
+@@ -484,9 +438,7 @@
+      * @since 9
+      */
+     public final int getAcquire() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getIntAcquire(this, VALUE);
+-        return (int)VALUE.getAcquire(this);
++        return VALUE.get(this);
+     }
+ 
+     /**
+@@ -497,9 +449,7 @@
+      * @since 9
+      */
+     public final void setRelease(int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // U.putIntRelease(this, VALUE, newValue);
+-        VALUE.setRelease(this, newValue);
++        VALUE.lazySet(this, newValue);
+     }
+ 
+     /**
+@@ -515,9 +465,11 @@
+      * @since 9
+      */
+     public final int compareAndExchange(int expectedValue, int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.compareAndExchangeInt(this, VALUE, expectedValue, newValue);
+-        return (int)VALUE.compareAndExchange(this, expectedValue, newValue);
++        int observed;
++        do {
++            observed = value;
++        } while (observed == expectedValue && !compareAndSet(expectedValue, newValue));
++        return observed;
+     }
+ 
+     /**
+@@ -533,9 +485,7 @@
+      * @since 9
+      */
+     public final int compareAndExchangeAcquire(int expectedValue, int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.compareAndExchangeIntAcquire(this, VALUE, expectedValue, newValue);
+-        return (int)VALUE.compareAndExchangeAcquire(this, expectedValue, newValue);
++        return compareAndExchange(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -551,9 +501,7 @@
+      * @since 9
+      */
+     public final int compareAndExchangeRelease(int expectedValue, int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.compareAndExchangeIntRelease(this, VALUE, expectedValue, newValue);
+-        return (int)VALUE.compareAndExchangeRelease(this, expectedValue, newValue);
++        return compareAndExchange(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -585,9 +533,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetAcquire(int expectedValue, int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.weakCompareAndSetIntAcquire(this, VALUE, expectedValue, newValue);
+-        return VALUE.weakCompareAndSetAcquire(this, expectedValue, newValue);
++        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -602,9 +548,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetRelease(int expectedValue, int newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.weakCompareAndSetIntRelease(this, VALUE, expectedValue, newValue);
+-        return VALUE.weakCompareAndSetRelease(this, expectedValue, newValue);
++        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
+     }
+ 
+ }
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicReference.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicReference.java
+@@ -35,9 +35,6 @@
+ 
+ package java.util.concurrent.atomic;
+ 
+-import jdk.internal.invoke.MhUtil;
+-
+-import java.lang.invoke.MethodHandles;
+ import java.lang.invoke.VarHandle;
+ import java.util.function.BinaryOperator;
+ import java.util.function.UnaryOperator;
+@@ -52,8 +49,10 @@
+  */
+ public class AtomicReference<V> implements java.io.Serializable {
+     private static final long serialVersionUID = -1848883965231344442L;
+-    private static final VarHandle VALUE = MhUtil.findVarHandle(
+-            MethodHandles.lookup(), "value", Object.class);
++    // The interpreter provides field updaters. Use volatile access for weaker modes.
++    private static final AtomicReferenceFieldUpdater<AtomicReference, Object> VALUE =
++            AtomicReferenceFieldUpdater.newUpdater(AtomicReference.class,
++                    Object.class, "value");
+ 
+     /** @serial */
+     @SuppressWarnings("serial") // Conditionally serializable
+@@ -102,7 +101,7 @@
+      * @since 1.6
+      */
+     public final void lazySet(V newValue) {
+-        VALUE.setRelease(this, newValue);
++        VALUE.lazySet(this, newValue);
+     }
+ 
+     /**
+@@ -137,7 +136,7 @@
+      */
+     @Deprecated(since="9")
+     public final boolean weakCompareAndSet(V expectedValue, V newValue) {
+-        return VALUE.weakCompareAndSetPlain(this, expectedValue, newValue);
++        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -151,7 +150,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetPlain(V expectedValue, V newValue) {
+-        return VALUE.weakCompareAndSetPlain(this, expectedValue, newValue);
++        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -163,7 +162,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final V getAndSet(V newValue) {
+-        return (V)VALUE.getAndSet(this, newValue);
++        return (V) VALUE.getAndSet(this, newValue);
+     }
+ 
+     /**
+@@ -282,7 +281,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final V getPlain() {
+-        return (V)VALUE.get(this);
++        return (V) VALUE.get(this);
+     }
+ 
+     /**
+@@ -306,7 +305,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final V getOpaque() {
+-        return (V)VALUE.getOpaque(this);
++        return (V) VALUE.get(this);
+     }
+ 
+     /**
+@@ -317,7 +316,7 @@
+      * @since 9
+      */
+     public final void setOpaque(V newValue) {
+-        VALUE.setOpaque(this, newValue);
++        VALUE.set(this, newValue);
+     }
+ 
+     /**
+@@ -329,7 +328,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final V getAcquire() {
+-        return (V)VALUE.getAcquire(this);
++        return (V) VALUE.get(this);
+     }
+ 
+     /**
+@@ -340,7 +339,7 @@
+      * @since 9
+      */
+     public final void setRelease(V newValue) {
+-        VALUE.setRelease(this, newValue);
++        VALUE.lazySet(this, newValue);
+     }
+ 
+     /**
+@@ -357,7 +356,11 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final V compareAndExchange(V expectedValue, V newValue) {
+-        return (V)VALUE.compareAndExchange(this, expectedValue, newValue);
++        V observed;
++        do {
++            observed = value;
++        } while (observed == expectedValue && !compareAndSet(expectedValue, newValue));
++        return observed;
+     }
+ 
+     /**
+@@ -374,7 +377,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final V compareAndExchangeAcquire(V expectedValue, V newValue) {
+-        return (V)VALUE.compareAndExchangeAcquire(this, expectedValue, newValue);
++        return compareAndExchange(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -391,7 +394,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final V compareAndExchangeRelease(V expectedValue, V newValue) {
+-        return (V)VALUE.compareAndExchangeRelease(this, expectedValue, newValue);
++        return compareAndExchange(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -421,7 +424,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetAcquire(V expectedValue, V newValue) {
+-        return VALUE.weakCompareAndSetAcquire(this, expectedValue, newValue);
++        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -436,7 +439,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetRelease(V expectedValue, V newValue) {
+-        return VALUE.weakCompareAndSetRelease(this, expectedValue, newValue);
++        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
+     }
+ 
+ }

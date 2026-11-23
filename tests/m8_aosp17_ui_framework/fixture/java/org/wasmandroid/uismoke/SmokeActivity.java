@@ -3,6 +3,7 @@ package org.wasmandroid.uismoke;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.LauncherActivityInfo;
 import android.content.pm.LauncherApps;
@@ -31,7 +32,18 @@ import android.window.BackEvent;
 import android.window.BackMotionEvent;
 import com.android.launcher3.fixture.TileView;
 import java.io.IOException;
+import java.net.URISyntaxException;
+import java.util.HashSet;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -74,6 +86,8 @@ public final class SmokeActivity extends Activity {
         resourceCheck = inspectResources();
         packageCheck = inspectPackages();
         inspectInputAndWindow();
+        inspectPreferences();
+        inspectCoreLibrary();
     }
     @Override protected void onStart() { record(2); }
     @Override protected void onResume() { record(3); }
@@ -124,6 +138,62 @@ public final class SmokeActivity extends Activity {
 
     private static void verify(boolean success, String description) {
         if (!success) throw new IllegalStateException(description);
+    }
+
+    private void inspectPreferences() {
+        SharedPreferences preferences = getSharedPreferences("ui-smoke", MODE_PRIVATE);
+        AtomicInteger notifications = new AtomicInteger();
+        SharedPreferences.OnSharedPreferenceChangeListener listener =
+                (source, key) -> notifications.incrementAndGet();
+        preferences.registerOnSharedPreferenceChangeListener(listener);
+        try {
+            HashSet<String> values = new HashSet<>();
+            values.add("stored");
+            verify(preferences.edit().putStringSet("test", values).commit(), "Preferences commit");
+            values.clear();
+            preferences.getStringSet("test", null).clear();
+            verify(preferences.getStringSet("test", null).contains("stored")
+                    && notifications.get() == 1, "Preferences copy sets and notify listeners");
+            preferences.edit().clear().apply();
+            verify(preferences.getAll().isEmpty() && notifications.get() == 2,
+                    "Preferences clear and notify listeners");
+        } finally {
+            preferences.unregisterOnSharedPreferenceChangeListener(listener);
+        }
+    }
+
+    private static void inspectCoreLibrary() {
+        AtomicBoolean ready = new AtomicBoolean();
+        AtomicReference<String> value = new AtomicReference<>("pending");
+        verify(!ready.compareAndExchange(false, true) && ready.get()
+                && value.compareAndSet("pending", "ready") && "ready".equals(value.getAcquire()),
+                "Libcore atomics use the interpreter's field updaters");
+
+        CopyOnWriteArrayList<String> entries = new CopyOnWriteArrayList<>();
+        entries.add("first");
+        var snapshot = entries.iterator();
+        entries.add("second");
+        verify("first".equals(snapshot.next()) && !snapshot.hasNext(), "Copy-on-write snapshot");
+
+        CompletableFuture<Integer> pending = new CompletableFuture<>();
+        var result = pending.thenApplyAsync(number -> number + 1, Runnable::run);
+        verify(pending.complete(41) && result.join() == 42, "CompletableFuture continuation");
+        CountDownLatch latch = new CountDownLatch(1);
+        latch.countDown();
+        verify(TimeUnit.NANOSECONDS.convert(3, TimeUnit.MILLISECONDS) == 3_000_000,
+                "TimeUnit conversion avoids loading optional java.time classes");
+        try {
+            verify(latch.await(0, TimeUnit.MILLISECONDS), "CountDownLatch reached zero");
+        } catch (InterruptedException error) {
+            throw new IllegalStateException(error);
+        }
+
+        var buckets = List.of("a", "b", "cc").stream()
+                .collect(Collectors.groupingBy(String::length, Collectors.joining(",")));
+        verify("a,b".equals(buckets.get(1)) && "cc".equals(buckets.get(2)), "Libcore collectors");
+        verify(IntStream.range(0, 10).skip(3).limit(2).sum() == 7, "Libcore primitive stream");
+        verify("test at index 0: %".equals(new URISyntaxException("%", "test", 0).getMessage()),
+                "Libcore URI parse diagnostics");
     }
 
     private void inspectInputAndWindow() {
