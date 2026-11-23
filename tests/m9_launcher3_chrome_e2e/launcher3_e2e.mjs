@@ -296,6 +296,9 @@ export async function runLauncher3E2E(options = {}) {
     await tapSystemUi('back', 4, () => host.phase === 'app' && appLabel('Search Settings'));
     await openSettingsPage('Display', 'Brightness');
     result.settings_display_opened = true;
+    await openSettingsPage('Dark theme', 'Use dark theme');
+    await tapSystemUi('back', 4, () => host.phase === 'app' && appLabel('Display'));
+    result.settings_nested_back = true;
     await tapSystemUi('back', 4, () => host.phase === 'app' && appLabel('Search Settings'));
     result.settings_back_to_homepage = true;
     await collectSettingsLabels(settingsCategories, homepageLabels);

@@ -6,15 +6,21 @@
 #include "art_interp.h"
 #include "ui_bridge.h"
 
+#ifdef WA_TEST_FOREGROUND_ABI
+#include "wasmandroid/foreground_activity.h"
+#endif
+
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <iomanip>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -172,13 +178,13 @@ struct Frame {
     }
 };
 
-Frame ReadFrame(wa_sf_t* sf) {
+Frame ReadFrame(wa_sf_t* sf, uint32_t expected_layer = kLayer) {
     auto release = [sf](const wa_sf_frame_packet_t* packet) { wa_sf_frame_release(sf, packet); };
     std::unique_ptr<const wa_sf_frame_packet_t, decltype(release)> packet(wa_sf_frame_acquire(sf), release);
     Require(packet && packet->magic == WA_SF_FRAME_MAGIC && packet->layer_count == 1,
             "Settings produced a SurfaceFlinger layer");
     const auto& layer = wa_sf_frame_layers(packet.get())[0];
-    Require(layer.desc.layer_id == kLayer && layer.desc.surface_kind == WA_SF_SURFACE_DISPLAY_LIST,
+    Require(layer.desc.layer_id == expected_layer && layer.desc.surface_kind == WA_SF_SURFACE_DISPLAY_LIST,
             "Settings layer contains display-list commands");
     const auto* bytes = wa_sf_frame_list(packet.get(), &layer);
     Require(bytes != nullptr, "Read Settings display list");
@@ -315,10 +321,29 @@ Object* FindText(Vm& vm, Object* node, std::string_view title, Object* text_clas
 }
 
 void CheckRuntime(const char* apk, const char* framework, const char* fallback, const char* resources,
-                  uint32_t width, uint32_t height) {
+                  uint32_t width, uint32_t height, const char* locale) {
     Vm vm({.gc_interval = 4'096, .verify_dex = false, .capture_exception_stack = true});
     std::unique_ptr<wa_sf_t, decltype(&wa_sf_destroy)> sf(wa_sf_create(), wa_sf_destroy);
     Require(sf != nullptr, "Create SurfaceFlinger");
+    const auto package_assets = android::ApkAssets::Load(apk);
+    android::AssetManager2 localized_assets;
+    Require(package_assets && localized_assets.SetApkAssets({package_assets}), "Read Settings translations");
+    android::ResTable_config config{};
+    config.size = sizeof(config);
+    config.setBcp47Locale(locale);
+    localized_assets.SetConfigurations({config});
+    const auto label = [&](std::string_view resource) {
+        const auto id = localized_assets.GetResourceId(
+            "string/" + std::string(resource), {}, std::string(kPackage));
+        Require(id.has_value(), resource);
+        return ResourceString(localized_assets, *id);
+    };
+    const bool chinese = std::string_view(locale) == "zh-CN";
+    const auto search = label("homepage_search");
+    const auto title_id = localized_assets.GetResourceId("id/search_bar_title", {}, std::string(kPackage));
+    Require(search == (chinese ? "搜索设置" : "Search Settings"), "Upstream localized search hint");
+    Require(title_id.has_value(), "Upstream Settings header ID");
+
     wa::ui_jni::UiBridge bridge;
     bridge.BindSurfaceFlinger(sf.get(), kLayer);
     bridge.SetPackageCallbacks({
@@ -353,7 +378,7 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
         }
         Require(classes > 0 && bytes > 0, "Settings DEX is indexed");
         start = Clock::now();
-        bridge.LaunchActivity(vm, {.apk_path = apk, .density_dpi = 160,
+        bridge.LaunchActivity(vm, {.apk_path = apk, .locale = locale, .density_dpi = 160,
                                    .width = int32_t(width), .height = int32_t(height),
                                    .framework_resource_apk = resources});
         const double launch_ms = Milliseconds(start);
@@ -390,11 +415,11 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
         const double first_frame_ms = Milliseconds(start);
         for (int i = 0; i < 3; ++i) draw();
         const auto home = ReadFrame(sf.get());
-        home.RequireText("Search Settings");
+        home.RequireText(search);
         Require(home.material_page && home.search_fill && home.search_outline,
                 "Settings draws a white Search card and hairline on its Material page");
-        home.RequireText("Network & internet");
-        home.RequireText("Apps");
+        home.RequireText(label("network_dashboard_title"));
+        home.RequireText(label("apps_dashboard_title"));
         Require(home.paths >= 4, "Upstream homepage vector paths rendered");
         Require(home.dark_paths >= 3, "Settings homepage draws high-contrast path colors");
 
@@ -422,7 +447,7 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
         }
         const double redraw_ms = Milliseconds(start) / redraws;
         Require(draw_count() - draws_before == redraws, "Every invalidated frame ran ViewRootImpl.performDraw");
-        std::cout << std::fixed << std::setprecision(6) << width << "x" << height
+        std::cout << std::fixed << std::setprecision(6) << locale << " " << width << "x" << height
                   << " indexed " << classes << " Settings DEX classes, " << bytes << " bytes"
                   << ", load " << load_ms << " ms, onCreate " << launch_ms << " ms, first frame "
                   << first_frame_ms << " ms, " << frame_ms << " ms/steady frame over " << frames
@@ -456,9 +481,13 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
         };
         auto* text_class = ClassForName(vm, roots, "android.widget.TextView");
         auto* group_class = ClassForName(vm, roots, "android.view.ViewGroup");
-        const auto visible_row = [&](std::string_view title) -> std::optional<std::array<float, 2>> {
+        const auto visible_row = [&](std::string_view title, bool include_header = false)
+                -> std::optional<std::array<float, 2>> {
             ScopedHandleScope local(vm);
-            auto* node = local.Hold(FindText(vm, decor, title, text_class, group_class));
+            auto* list = include_header ? decor : local.Hold(vm.CallVirtual(activity,
+                "findViewById", "(I)Landroid/view/View;", std::array{Value::Int(0x0102000a)}).ref());
+            if (!list) return std::nullopt;
+            auto* node = local.Hold(FindText(vm, list, title, text_class, group_class));
             if (!node) return std::nullopt;
             auto* rect = local.Hold(vm.NewObject("Landroid/graphics/Rect;"));
             if (!vm.CallVirtual(node, "getGlobalVisibleRect", "(Landroid/graphics/Rect;)Z",
@@ -466,59 +495,276 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
             return std::array{float(vm.CallVirtual(rect, "centerX", "()I").i()),
                               float(vm.CallVirtual(rect, "centerY", "()I").i())};
         };
-        const auto scroll_to = [&](std::string_view title) {
+        const auto scroll_to = [&](std::string_view title, bool include_header) {
             for (int i = 0; i <= 12; ++i) {
-                if (auto row = visible_row(title)) return *row;
+                if (auto row = visible_row(title, include_header)) return *row;
                 scroll(-1.5f);
             }
             throw std::runtime_error("Could not scroll to " + std::string(title));
         };
-        const auto scroll_to_content = [&](std::string_view title) {
-            auto frame = ReadFrame(sf.get());
-            for (int i = 0; i < 12 && !frame.Has(title); ++i) {
-                scroll(-1.0f);
-                frame = ReadFrame(sf.get());
-            }
-            frame.RequireText(title);
-            return frame;
-        };
-        const auto tap = [&](std::string_view title) {
-            const auto [x, y] = scroll_to(title);
+        const auto tap = [&](std::string_view title, bool include_header = false) {
+            const auto [x, y] = scroll_to(title, include_header);
             ReadFrame(sf.get()).RequireText(title);
             dispatch({.kind = WA_INPUT_MOTION, .action = WA_ACTION_DOWN, .x = x, .y = y});
             dispatch({.kind = WA_INPUT_MOTION, .action = WA_ACTION_UP, .x = x, .y = y});
             draw();
             draw();
         };
-        const auto network_at_top = visible_row("Network & internet");
+        const auto header = [&](std::string_view title) {
+            ScopedHandleScope local(vm);
+            auto* view = local.Hold(vm.CallVirtual(activity, "findViewById", "(I)Landroid/view/View;",
+                                                    std::array{Value::Int(*title_id)}).ref());
+            auto* text = local.Hold(vm.CallVirtual(view, "getText", "()Ljava/lang/CharSequence;").ref());
+            const auto actual = vm.StringUtf8(vm.CallVirtual(text, "toString", "()Ljava/lang/String;").ref());
+            Require(actual == title, "Expected Settings header " + std::string(title) + ", got " + actual);
+            ReadFrame(sf.get()).RequireText(title);
+            Require(vm.CallStatic(kUiRuntime, "getActivity", "()Landroid/app/Activity;").ref() == activity,
+                    "Settings Activity remains in the foreground");
+        };
+        const auto open = [&](std::string_view title, const char* descriptor) {
+            tap(title);
+            header(title);
+            Require(vm.InterpretedMethodCount(descriptor) > 0, descriptor);
+        };
+        const auto commit_text = [&](std::string_view query) {
+            wa_input_event_t text{.kind = WA_INPUT_IME, .action = WA_IME_COMMIT,
+                                  .text_len = static_cast<uint32_t>(query.size())};
+            Require(query.size() < sizeof(text.text), "IME payload fits input ring");
+            std::memcpy(text.text, query.data(), query.size());
+            dispatch(text);
+            draw();
+        };
+
+        const auto display = label("display_settings");
+        const auto network = label("network_dashboard_title");
+        Require(display == (chinese ? "显示" : "Display"), "Upstream localized Display label");
+        const auto network_at_top = visible_row(network);
         Require(network_at_top.has_value(), "Homepage starts at the first category");
         scroll(-2.0f);
-        Require(visible_row("Network & internet") != network_at_top, "Homepage scroll changes a category's position");
+        Require(visible_row(network) != network_at_top, "Homepage scroll changes a category's position");
         scroll(2.0f);
-        struct Page {
-            std::string_view label, content, descriptor;
-        };
-        constexpr Page pages[] = {
-            {"Network & internet", "Internet", "Lcom/android/settings/network/NetworkDashboardFragment;"},
-            {"Apps", "Package registry fixture", "Lcom/android/settings/applications/AppDashboardFragment;"},
-            {"Display", "Brightness", "Lcom/android/settings/DisplaySettings;"},
-            {"Battery", "100%", "Lcom/android/settings/fuelgauge/batteryusage/PowerUsageSummary;"},
-            {"System", "Keyboard", "Lcom/android/settings/system/SystemDashboardFragment;"},
-            {"About phone", "Android version", "Lcom/android/settings/deviceinfo/aboutphone/MyDeviceInfoFragment;"},
-        };
-        for (const auto& page : pages) {
-            tap(page.label);
-            const auto subpage = scroll_to_content(page.content);
-            subpage.RequireText(page.label);
-            if (page.label == "About phone") subpage.RequireText("17");
-            if (page.label == "Display") {
-                scroll_to_content("Display size & text");
-                scroll_to_content("Device theme");
-            }
-            Require(vm.InterpretedMethodCount(page.descriptor) > 0, "Upstream subpage class interpreted");
-            back();
-            ReadFrame(sf.get()).RequireText("Search Settings");
+        tap(search, true);
+        auto* edit_class = ClassForName(vm, roots, "android.widget.EditText");
+        auto* focus = roots.Hold(vm.CallVirtual(activity, "getCurrentFocus", "()Landroid/view/View;").ref());
+        Require(focus && IsInstance(vm, focus, edit_class), "Tapping Settings search focuses an editable field");
+        commit_text(chinese ? "显" : "display");
+        const auto filtered = ReadFrame(sf.get());
+        filtered.RequireText(display);
+        Require(!filtered.Has(network), "Search removes non-matching categories");
+        open(display, "Lcom/android/settings/DisplaySettings;");
+        back();
+        Require(!ReadFrame(sf.get()).Has(network), "Back restores the active search filter");
+        back();
+        header(search);
+
+        if (!chinese && width == 960) {
+            ScopedHandleScope fault_roots(vm);
+            auto* main = fault_roots.Hold(vm.CallVirtual(activity, "getMainFragment",
+                "()Lcom/android/settings/homepage/TopLevelSettings;").ref());
+            auto* entry = fault_roots.Hold(vm.CallVirtual(main, "findPreference",
+                "(Ljava/lang/CharSequence;)Landroidx/preference/Preference;",
+                std::array{Value::Ref(fault_roots.Hold(vm.NewString("top_level_network")))}).ref());
+            Require(entry != nullptr, "Network row is available for the failed-navigation check");
+            const auto set_destination = [&](Object* name) {
+                vm.CallVirtual(entry, "setFragment", "(Ljava/lang/String;)V", std::array{Value::Ref(name)});
+            };
+            auto* destination = fault_roots.Hold(
+                vm.CallVirtual(entry, "getFragment", "()Ljava/lang/String;").ref());
+            set_destination(fault_roots.Hold(vm.NewString("com.android.settings.MissingFragment")));
+            tap(network);
+            header(search);
+            set_destination(destination);
         }
+
+        auto* list = roots.Hold(vm.CallVirtual(activity, "findViewById", "(I)Landroid/view/View;",
+                                              std::array{Value::Int(0x0102000a)}).ref());
+        Require(list != nullptr, "Homepage contains its upstream preference list");
+        auto* adapter = roots.Hold(vm.CallVirtual(list, "getAdapter", "()Landroid/widget/ListAdapter;").ref());
+        Require(adapter != nullptr, "Homepage has a preference adapter");
+        const auto count = vm.CallVirtual(adapter, "getCount", "()I").i();
+        const std::set<std::string> expected = {
+            "top_level_network", "top_level_connected_devices", "top_level_apps", "top_level_notifications",
+            "top_level_sound", "top_level_priority_modes", "top_level_communal", "top_level_display",
+            "top_level_storage", "top_level_battery", "top_level_system", "top_level_about_device",
+            "top_level_security", "top_level_privacy", "top_level_location", "top_level_accounts",
+            "top_level_accounts_and_backup", "top_level_emergency", "top_level_accessibility",
+        };
+        Require(count == static_cast<int>(expected.size()), "Nineteen available top-level Settings rows");
+        std::set<std::string> visited;
+        for (int i = 0; i < count; ++i) {
+            ScopedHandleScope row_roots(vm);
+            auto* item = row_roots.Hold(vm.CallVirtual(adapter, "getItem", "(I)Ljava/lang/Object;",
+                                                       std::array{Value::Int(i)}).ref());
+            Require(item != nullptr && vm.CallVirtual(item, "isSelectable", "()Z").i() &&
+                        vm.CallVirtual(item, "isEnabled", "()Z").i(), "Every homepage row is enabled");
+            const auto key = vm.StringUtf8(vm.CallVirtual(item, "getKey", "()Ljava/lang/String;").ref());
+            Require(expected.contains(key) && visited.insert(key).second, key);
+            auto* title = row_roots.Hold(vm.CallVirtual(item, "getTitle", "()Ljava/lang/CharSequence;").ref());
+            Require(title != nullptr, key + " has a title");
+            const auto text = vm.StringUtf8(vm.CallVirtual(title, "toString", "()Ljava/lang/String;").ref());
+            Require(!text.empty(), key + " has a nonempty title");
+            if (key == "top_level_accounts") {
+                Require(text == label("account_dashboard_title"), key);
+                Require(vm.InterpretedMethodCount(
+                            "Lcom/android/settings/accounts/TopLevelAccountEntryPreferenceController;") > 0,
+                        "The upstream account controller supplied the homepage title");
+            }
+            const auto destination = vm.StringUtf8(
+                vm.CallVirtual(item, "getFragment", "()Ljava/lang/String;").ref());
+            Require(destination.starts_with("com.android.settings."), key + " targets an upstream fragment");
+            std::string descriptor = "L" + destination + ";";
+            std::ranges::replace(descriptor, '.', '/');
+            open(text, descriptor.c_str());
+            Require(!ReadFrame(sf.get()).Has(search), key + " left the homepage");
+            std::cout << key << " [" << text << "] " << descriptor << " interpreted methods "
+                      << vm.InterpretedMethodCount(descriptor) << '\n';
+            back();
+            header(search);
+        }
+        Require(visited == expected, "All visible top-level categories were opened through the input queue");
+
+        // The remaining checks enter a second or third page through its visible upstream row.
+        // Wheel input is used in both directions so the test also exercises recycled rows.
+        const auto rewind = [&] {
+            for (int i = 0; i < 6; ++i) scroll(5.0f);
+        };
+        const auto settings_resolver = roots.Hold(vm.CallVirtual(activity, "getContentResolver",
+                                                     "()Landroid/content/ContentResolver;").ref());
+        const auto int_setting = [&](const char* provider, const char* key, int fallback_value) {
+            ScopedHandleScope local(vm);
+            const std::array args{Value::Ref(settings_resolver), Value::Ref(local.Hold(vm.NewString(key))),
+                                  Value::Int(fallback_value)};
+            return vm.CallStatic(provider, "getInt",
+                                 "(Landroid/content/ContentResolver;Ljava/lang/String;I)I", args).i();
+        };
+        constexpr auto system = "Landroid/provider/Settings$System;";
+        constexpr auto global = "Landroid/provider/Settings$Global;";
+        constexpr auto secure = "Landroid/provider/Settings$Secure;";
+        const auto toggle = [&](std::string_view title, const char* provider, const char* key,
+                                int off, int on, bool default_on = false) {
+            const int fallback_value = default_on ? on : off;
+            const auto before = int_setting(provider, key, fallback_value);
+            tap(title);
+            Require(int_setting(provider, key, fallback_value) == (before == on ? off : on),
+                    std::string(key) + " changes on touch");
+            tap(title);
+            Require(int_setting(provider, key, fallback_value) == before,
+                    std::string(key) + " restores its previous value");
+        };
+        const auto subpage = [&](const char* name, const char* descriptor) {
+            rewind();
+            open(label(name), descriptor);
+        };
+
+        rewind();
+        open(network, "Lcom/android/settings/network/NetworkDashboardFragment;");
+        toggle(label("airplane_mode"), global, "airplane_mode_on", 0, 1);
+        subpage("provider_internet_settings", "Lcom/android/settings/network/NetworkProviderSettings;");
+        back();
+        header(network);
+        subpage("data_saver_title", "Lcom/android/settings/datausage/DataSaverSummary;");
+        back();
+        subpage("vpn_settings_title", "Lcom/android/settings/vpn2/VpnSettings;");
+        back();
+        header(network);
+        back();
+        header(search);
+
+        rewind();
+        open(display, "Lcom/android/settings/DisplaySettings;");
+        toggle(label("auto_brightness_title"), system, "screen_brightness_mode", 0, 1);
+        subpage("screen_timeout", "Lcom/android/settings/display/ScreenTimeoutSettings;");
+        tap(chinese ? "1 分钟" : "1 minute");
+        Require(int_setting(system, "screen_off_timeout", 30'000) == 60'000, "Screen timeout choice persists");
+        tap(chinese ? "30 秒" : "30 seconds");
+        back();
+        header(display);
+        subpage("lockscreen_settings_title", "Lcom/android/settings/security/LockscreenDashboardFragment;");
+        toggle(label("lockscreen_double_line_clock_setting_toggle"), secure, "lockscreen_use_double_line_clock",
+               0, 1, true);
+        back();
+        header(display);
+
+        subpage("dark_ui_mode", "Lcom/android/settings/display/darkmode/DarkModeSettingsFragment;");
+        const auto dark = label("dark_ui_mode");
+        const auto dark_switch = label("dark_theme_main_switch_title");
+        const auto dark_before = int_setting(secure, "ui_night_mode", 1);
+        tap(dark_switch);
+        const int dark_mode = dark_before == 2 ? 1 : 2;
+        Require(int_setting(secure, "ui_night_mode", 1) == dark_mode, "Dark theme writes the local settings provider");
+        std::swap(width, height);
+        draw();
+        header(dark);
+        back();
+        header(display);
+        std::swap(width, height);
+        draw();
+        subpage("dark_ui_mode", "Lcom/android/settings/display/darkmode/DarkModeSettingsFragment;");
+        Require(int_setting(secure, "ui_night_mode", 1) == dark_mode, "Dark theme survives returning to the page");
+        tap(dark_switch);
+        back();
+        subpage("accessibility_text_reading_options_title",
+                "Lcom/android/settings/accessibility/TextReadingPreferenceFragment;");
+        toggle(label("force_bold_text"), secure, "font_weight_adjustment", 0, 300);
+        back();
+        header(display);
+        back();
+        header(search);
+
+        rewind();
+        open(label("header_category_system"), "Lcom/android/settings/system/SystemDashboardFragment;");
+        subpage("keyboard_settings", "Lcom/android/settings/inputmethod/KeyboardSettings;");
+        subpage("spellcheckers_settings_title", "Lcom/android/settings/inputmethod/SpellCheckersSettings;");
+        toggle(label("spellcheckers_settings_title"), secure, "spell_checker_enabled", 0, 1, true);
+        back();
+        header(label("keyboard_settings"));
+        back();
+        header(label("header_category_system"));
+        subpage("gesture_preference_title", "Lcom/android/settings/gestures/GestureSettings;");
+        subpage("system_navigation_title", "Lcom/android/settings/gestures/SystemNavigationGestureSettings;");
+        back();
+        header(label("gesture_preference_title"));
+        back();
+        subpage("date_and_time", "Lcom/android/settings/datetime/DateTimeSettings;");
+        toggle(label("date_time_auto"), global, "auto_time", 0, 1, true);
+        back();
+        subpage("user_settings_title", "Lcom/android/settings/users/UserSettings;");
+        back();
+        back();
+        header(search);
+
+        rewind();
+        open(label("apps_dashboard_title"), "Lcom/android/settings/applications/AppDashboardFragment;");
+        subpage("default_see_all_apps_title",
+                "Lcom/android/settings/applications/manageapplications/ManageApplications;");
+        open("Package registry fixture", "Lcom/android/settings/applications/appinfo/AppInfoDashboardFragment;");
+        back();
+        header(label("default_see_all_apps_title"));
+        ReadFrame(sf.get()).RequireText("Package registry fixture");
+        back();
+        header(label("apps_dashboard_title"));
+        back();
+
+        rewind();
+        open(label("power_usage_summary_title"), "Lcom/android/settings/fuelgauge/batteryusage/PowerUsageSummary;");
+        toggle(label("battery_percentage"), system, "status_bar_show_battery_percent", 0, 1);
+        subpage("battery_saver", "Lcom/android/settings/fuelgauge/batterysaver/BatterySaverSettings;");
+        toggle(label("battery_saver_master_switch_title"), global, "low_power", 0, 1);
+        back();
+        subpage("advanced_battery_preference_title", "Lcom/android/settings/fuelgauge/batteryusage/PowerUsageAdvanced;");
+        back();
+        back();
+
+        rewind();
+        open(label("about_settings"), "Lcom/android/settings/deviceinfo/aboutphone/MyDeviceInfoFragment;");
+        subpage("firmware_version", "Lcom/android/settings/deviceinfo/firmwareversion/FirmwareVersionSettings;");
+        ReadFrame(sf.get()).RequireText("17");
+        back();
+        subpage("legal_information", "Lcom/android/settings/LegalSettings;");
+        back();
+        header(label("about_settings"));
+        back();
+        header(search);
         back();
         Require(!vm.CallStatic(kUiRuntime, "getActivity", "()Landroid/app/Activity;").ref() &&
                     vm.CallVirtual(activity, "isFinishing", "()Z").i(), "Back from the homepage finishes the Activity");
@@ -530,18 +776,85 @@ void CheckRuntime(const char* apk, const char* framework, const char* fallback, 
             Require(methods > 0, "Upstream Settings class interpreted");
             std::cout << descriptor << " interpreted methods " << methods << '\n';
         }
-        for (const auto& page : pages) {
-            std::cout << page.descriptor << " interpreted methods "
-                      << vm.InterpretedMethodCount(page.descriptor) << '\n';
-        }
-        std::cout << "ART opcode types executed " << vm.ExecutedOpcodeCount() << '\n';
+        std::cout << locale << ' ' << width << 'x' << height << ", " << count
+                  << " homepage categories, zero uncaught ART exceptions, "
+                  << vm.ExecutedOpcodeCount() << " ART opcode types executed\n";
     } catch (const wa::interp::ManagedException&) {
-        std::cerr << width << 'x' << height << " ART exception " << vm.ExceptionSummary() << '\n';
+        std::cerr << locale << ' ' << width << 'x' << height << " ART exception " << vm.ExceptionSummary() << '\n';
         for (const auto& frame : vm.ExceptionStackTrace()) std::cerr << "  " << frame << '\n';
         vm.ClearException();
         throw std::runtime_error("Settings threw in ART");
     }
 }
+
+#ifdef WA_TEST_FOREGROUND_ABI
+std::vector<uint8_t> ReadBytes(const char* path) {
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    Require(file.good() && file.tellg() > 0, path);
+    std::vector<uint8_t> bytes(static_cast<size_t>(file.tellg()));
+    file.seekg(0);
+    file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    Require(file.good(), path);
+    return bytes;
+}
+
+void CheckForegroundClock(const char* apk, const char* framework, const char* fallback, const char* resources) {
+    const auto check = [](int32_t status) {
+        if (status == WA_OK) return;
+        char error[8192]{};
+        wa_system_app_last_error(error, sizeof(error));
+        throw std::runtime_error("Foreground Activity ABI " + std::to_string(status) + " " + error);
+    };
+    check(wa_system_app_create(960, 660, 160, "en-US"));
+    const std::unique_ptr<wa_sf_t, void(*)(wa_sf_t*)> app(wa_system_app_sf_ctx(), [](wa_sf_t*) {
+        wa_system_app_destroy();
+    });
+    const auto load = [&](auto operation, const char* path) {
+        const auto bytes = ReadBytes(path);
+        check(operation(bytes.data(), bytes.size()));
+    };
+    load(wa_system_app_load_framework_dex, framework);
+    load(wa_system_app_load_framework_fallback_dex, fallback);
+    load(wa_system_app_set_framework_res_apk, resources);
+    {
+        const auto bytes = ReadBytes(apk);
+        check(wa_system_app_boot_apk("Settings-upstream.apk", bytes.data(), bytes.size(), nullptr));
+    }
+    constexpr uint32_t foreground_layer = 1;
+    ReadFrame(app.get(), foreground_layer).RequireText("Search Settings");
+    check(wa_system_app_tick(50'000'000));
+    check(wa_system_app_tick(50'000'000));
+    check(wa_system_app_tick(37'000'000));
+    const auto release = [&](const wa_sf_frame_packet_t* frame) { wa_sf_frame_release(app.get(), frame); };
+    std::unique_ptr<const wa_sf_frame_packet_t, decltype(release)> desktop(wa_sf_frame_acquire(app.get()), release);
+    Require(desktop != nullptr, "Acquire the desktop frame before resizing");
+    check(wa_system_app_resize(448, 896, 160));
+    check(wa_system_app_tick(-1));
+    {
+        const auto* frame = wa_sf_frame_acquire(app.get());
+        const bool resized = frame && frame->viewport_w == 448 && frame->viewport_h == 896;
+        if (frame) wa_sf_frame_release(app.get(), frame);
+        Require(resized, "Foreground scene resizes with a regressing clock");
+    }
+    ReadFrame(app.get(), foreground_layer).RequireText("Search Settings");
+    for (uint32_t action : {WA_ACTION_DOWN, WA_ACTION_UP}) {
+        const wa_input_event_t tap{.kind = WA_INPUT_MOTION, .action = action,
+            .event_time_ms = 51, .x = 96, .y = 48};
+        Require(wa_input_push(wa_sf_input(app.get()), &tap) == WA_SF_OK, "Tap the Settings search bar");
+    }
+    Require(wa_system_app_tick(51'000'000) == WA_ERR_BUSY, "The held desktop frame delays publishing search");
+    desktop.reset();
+    check(wa_system_app_tick(40'000'000));
+    char state[4096]{};
+    Require(wa_system_app_state_json(state, sizeof(state)) > 0
+            && std::string_view(state).find("\"imeFocused\":true") != std::string_view::npos,
+            "Search retains IME focus after a busy frame");
+    Require(wa_system_app_send_back() == 1, "Foreground Back clears the active search");
+    Require(wa_system_app_send_back() == 0, "Foreground Back finishes Settings from the homepage");
+    std::cout << "Foreground ABI accepted duplicate, regressing and negative timestamps through resize"
+                 " and preserved IME focus across a busy frame\n";
+}
+#endif
 
 }  // namespace
 
@@ -549,8 +862,13 @@ int main(int argc, char** argv) {
     try {
         Require(argc == 5, "Usage: test_m14_upstream_settings APK upstream.dex core.dex framework-resources.apk");
         CheckResources(argv[1]);
-        CheckRuntime(argv[1], argv[2], argv[3], argv[4], 960, 660);
-        CheckRuntime(argv[1], argv[2], argv[3], argv[4], 448, 896);
+        for (const char* locale : {"en-US", "zh-CN"}) {
+            CheckRuntime(argv[1], argv[2], argv[3], argv[4], 960, 660, locale);
+            CheckRuntime(argv[1], argv[2], argv[3], argv[4], 448, 896, locale);
+        }
+#ifdef WA_TEST_FOREGROUND_ABI
+        CheckForegroundClock(argv[1], argv[2], argv[3], argv[4]);
+#endif
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "Settings verification failed: " << error.what() << '\n';

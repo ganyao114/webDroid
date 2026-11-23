@@ -17,8 +17,12 @@ import jdk.internal.org.objectweb.asm.Opcodes;
 /** Adapts the pinned AndroidX AAR's calls to Java APIs missing in the embedded runtime. */
 public class PreferenceLink {
     private static final String API = "org/wasmandroid/ui/PreferenceRuntime";
+    private static final String INFLATER = "androidx/preference/PreferenceInflater";
+    private static final String INFLATE_EXCEPTION = "android/view/InflateException";
+    private static final String RETHROW =
+            "(Ljava/lang/Throwable;Ljava/lang/Throwable;)Ljava/lang/Throwable;";
     private static final Map<String, Integer> REWRITES = Map.of(
-            "androidx/preference/PreferenceInflater.class", 2,
+            INFLATER + ".class", 9,
             "androidx/preference/PreferenceGroup.class", 1,
             "androidx/preference/Preference.class", 4,
             "androidx/preference/PreferenceCategory.class", 1);
@@ -67,6 +71,13 @@ public class PreferenceLink {
                             // The embedded view has no context menus or heading node attribute.
                             super.visitInsn(Opcodes.POP2);
                             count[0]++;
+                        } else if (name.equals(INFLATER + ".class") && method.equals("initCause")
+                                && desc.equals("(Ljava/lang/Throwable;)Ljava/lang/Throwable;")
+                                && (owner.equals(INFLATE_EXCEPTION)
+                                        || owner.equals("org/xmlpull/v1/XmlPullParserException"))) {
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, INFLATER,
+                                    "throwInflationException", RETHROW, false);
+                            count[0]++;
                         } else {
                             super.visitMethodInsn(opcode, owner, method, desc, isInterface);
                         }
@@ -78,6 +89,28 @@ public class PreferenceLink {
                         super.visitEnd();
                     }
                 };
+            }
+
+            @Override
+            public void visitEnd() {
+                if (name.equals(INFLATER + ".class")) {
+                    // The runtime supports exception constructors with a cause.
+                    MethodVisitor code = super.visitMethod(Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC,
+                            "throwInflationException", RETHROW, null, null);
+                    code.visitCode();
+                    code.visitTypeInsn(Opcodes.NEW, INFLATE_EXCEPTION);
+                    code.visitInsn(Opcodes.DUP);
+                    code.visitVarInsn(Opcodes.ALOAD, 0);
+                    code.visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/Throwable",
+                            "getMessage", "()Ljava/lang/String;", false);
+                    code.visitVarInsn(Opcodes.ALOAD, 1);
+                    code.visitMethodInsn(Opcodes.INVOKESPECIAL, INFLATE_EXCEPTION, "<init>",
+                            "(Ljava/lang/String;Ljava/lang/Throwable;)V", false);
+                    code.visitInsn(Opcodes.ATHROW);
+                    code.visitMaxs(4, 2);
+                    code.visitEnd();
+                }
+                super.visitEnd();
             }
         }, 0);
         if (count[0] != expected) {

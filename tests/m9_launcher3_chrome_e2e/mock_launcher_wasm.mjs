@@ -73,6 +73,10 @@ export function mockLauncherWasm() {
       } else if (settingsPage === 'Display') {
         label('Display', 24, 48);
         label('Brightness', 24, 100);
+        label('Dark theme', 24, 166);
+      } else if (settingsPage === 'Dark theme') {
+        label('Dark theme', 24, 48);
+        label('Use dark theme', 24, 100);
       } else {
         label('Search Settings', 24, 48);
         categories.forEach((value, index) => {
@@ -150,11 +154,14 @@ export function mockLauncherWasm() {
     if (action !== 1 || !touch) return;
     if (state.package === 'com.android.settings' && !settingsPage) {
       if (touch.y - y > 50) settingsScroll += 150;
+      else if (y < 70) state.imeFocused = true;
       else {
         const index = Math.round((y + settingsScroll - 120) / 94);
         const category = categories[index];
         if (category === 'Apps' || category === 'Display') settingsPage = category;
       }
+    } else if (settingsPage === 'Display' && Math.abs(y - 166) < 25) {
+      settingsPage = 'Dark theme';
     }
     touch = undefined;
   }
@@ -448,7 +455,7 @@ export function mockLauncherWasm() {
       return 0;
     },
     _wa_system_app_tick(ns) {
-      assert(!acquired && state.booted && typeof ns === 'bigint' && ns > timeNs);
+      assert(!acquired && state.booted && typeof ns === 'bigint' && ns >= timeNs);
       timeNs = ns;
       drainInput();
       ++state.frames;
@@ -459,7 +466,11 @@ export function mockLauncherWasm() {
     _wa_system_app_send_back() {
       calls.push(['app-back', settingsPage]);
       if (settingsPage) {
-        settingsPage = undefined;
+        settingsPage = settingsPage === 'Dark theme' ? 'Display' : undefined;
+        return 1;
+      }
+      if (state.imeFocused) {
+        state.imeFocused = false;
         return 1;
       }
       state.finishing = true;

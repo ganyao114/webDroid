@@ -41,6 +41,7 @@ PACKAGE = "com.android.settings"
 APK = "Settings-upstream.apk"
 REPORT = "upstream_provenance.json"
 MANIFEST = SETTINGS / "AndroidManifest.xml"
+HOMEPAGE = SETTINGS / "res/xml/top_level_settings.xml"
 MIN_SDK = "30"
 TARGET_SDK = "36"
 
@@ -65,6 +66,29 @@ RESOURCE_DIRS = (
 JAVA_RESOURCE = re.compile(r"(?<![\w.])(?:com\.android\.(?:settings|settingslib)\.)?R\.(\w+)\.(\w+)")
 LOCALE_VALUES = re.compile(r"values-(?:[a-z]{2,3}(?:-|$)|b\+)")
 ANDROID = "http://schemas.android.com/apk/res/android"
+
+# Settings names controllers and destinations in XML. AndroidX also inflates preference and
+# layout classes by name. Retain those entry points while discarding unused dependency code.
+SETTINGS_KEEP_RULES = """
+-dontoptimize
+-dontobfuscate
+-keepattributes SourceFile,LineNumberTable
+-dontwarn
+-keep class com.android.settings.** { *; }
+-keep class com.android.settingslib.** { *; }
+-keep class androidx.preference.Preference {
+    public <init>(android.content.Context, android.util.AttributeSet);
+}
+-keep class androidx.preference.** extends androidx.preference.Preference {
+    public <init>(android.content.Context, android.util.AttributeSet);
+}
+-keep class androidx.preference.UnPressableLinearLayout {
+    public <init>(android.content.Context, android.util.AttributeSet);
+}
+-keep class androidx.preference.internal.PreferenceImageView {
+    public <init>(android.content.Context, android.util.AttributeSet);
+}
+"""
 
 
 def select_manifest(original, output):
@@ -148,6 +172,20 @@ def stage_sources(upstream, work, sources, inputs):
         patches.append({"name": patch.name, "sha256": file_digest(patch), "files": changes})
         inputs.add(patch)
     return originals, patches
+
+
+def validate_homepage(upstream, sources, inputs):
+    """Keep every upstream homepage fragment linked by the source profile."""
+    inputs.add(upstream / HOMEPAGE)
+    graph = ET.parse(upstream / HOMEPAGE)
+    available = {path.with_suffix("") for path in sources}
+    missing = set()
+    for row in graph.iter():
+        fragment = row.get(f"{{{ANDROID}}}fragment")
+        if fragment and (SETTINGS / "src" / fragment.replace(".", "/")) not in available:
+            missing.add(fragment)
+    if missing:
+        raise ValueError("Homepage fragments missing from sources.txt:\n  " + "\n  ".join(sorted(missing)))
 
 
 def dependencies(args, stage, inputs):
@@ -373,11 +411,16 @@ def compile_sources(args, stage, work, sources, generated, jars, inputs):
                         for path in sorted(classes.rglob("*.class"))})
     dex_dir = stage / "dex"
     dex_dir.mkdir()
-    run(args.d8, "--release", "--min-api", MIN_SDK, "--thread-count", "4", "--lib", args.android_jar,
-        "--output", dex_dir, program, *jars)
+    keep = stage / "settings-keep.pro"
+    keep.write_text(SETTINGS_KEEP_RULES, encoding="utf-8")
+    compiler = args.d8.parent / "lib/d8.jar"
+    inputs.add(compiler)
+    run(args.java, "-Xmx2G", "-XX:ActiveProcessorCount=4", "-cp", compiler,
+        "com.android.tools.r8.R8", "--release", "--min-api", MIN_SDK, "--thread-count", "4",
+        "--lib", args.android_jar, "--pg-conf", keep, "--output", dex_dir, program, *jars)
     dex = sorted(dex_dir.glob("classes*.dex"))
     if not dex or dex[0].name != "classes.dex":
-        raise ValueError("D8 emitted no primary DEX file")
+        raise ValueError("R8 emitted no primary DEX file")
     return dex
 
 
@@ -428,6 +471,7 @@ def build(args, stage):
         for path in sources
     ):
         raise ValueError("sources.txt must list unique Settings or SettingsLib Java/Kotlin sources")
+    validate_homepage(args.aosp_root, sources, inputs)
     work = stage / "upstream"
     originals, patches = stage_sources(args.aosp_root, work, sources, inputs)
     print("Linking resources from the Settings profile and offline AARs", flush=True)
@@ -456,6 +500,7 @@ def build(args, stage):
         "adapted_dependency_archives": adapted,
         "compatibility_inputs": {name: file_digest(path) for name, path in compatibility_inputs.items()},
         "apk": count_report(apk), "dex": {path.name: dex_report(path) for path in dex},
+        "dex_compiler": count_report(args.d8.parent / "lib/d8.jar"),
         "toolchain": {name: count_report(getattr(args, name)) for name in tools},
         "dependency_archives": {
             str(path.relative_to(args.deps_dir)): count_report(path)

@@ -267,11 +267,13 @@ struct Session {
         }
         vm.SetGcPaused(false);
         frame_pending = status == WA_SF_BUSY;
-        if (status != WA_SF_OK) return SurfaceStatus(status);
-        CountCommands();
+        if (status != WA_SF_OK && !frame_pending) return SurfaceStatus(status);
+        if (!frame_pending) CountCommands();
+        // Input is consumed before publishing the frame. Preserve its focus and finish state
+        // when the compositor temporarily holds the frame slot we need.
         if (events || !booted) ObserveActivity();
-        else finishing = Activity() == nullptr;
-        return WA_OK;
+        else finishing = finishing || Activity() == nullptr;
+        return SurfaceStatus(status);
     }
 
     int32_t DrawWebViews() {
@@ -621,14 +623,14 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
 
 int32_t wa_system_app_tick(int64_t nanos) {
     return Running("Tick foreground activity", [&](Session& s) -> int32_t {
-        if (nanos < 0 || static_cast<uint64_t>(nanos) < s.last_time) return WA_ERR_INVALID;
         const auto start = Clock::now();
-        s.last_time = nanos;
+        // Keep drawing (and draining input) when a host clock repeats or moves backwards.
+        if (nanos >= 0) s.last_time = std::max(s.last_time, static_cast<uint64_t>(nanos));
         wa_webview_event_t event{};
         while (wa_webview_poll(s.scene.get(), &event) == 1) {
             // The iframe may load independently of the bridge's optional message handshake.
         }
-        const int32_t status = s.Draw(nanos);
+        const int32_t status = s.Draw(s.last_time);
         if (status == WA_OK) {
             s.frame_ms[s.frames % s.frame_ms.size()] = MillisecondsSince(start);
             ++s.frames;

@@ -307,20 +307,22 @@ export class LauncherHost {
 
   navigate(action) {
     if (!this.#session?.ready) return;
+    const active = this.#active;
     try {
       if (action === 'recents') {
         if (this.#active) this.#returnHome();
         this.#session.input.blurIME();
         this.onRecents?.(this);
-      } else if (this.#active) {
-        if (action !== 'back' || !this.#active.foreground.sendBack()) this.#returnHome();
+      } else if (active) {
+        if (action !== 'back' || !active.foreground.sendBack()) this.#returnHome();
       } else if (this.#phase === 'launcher') {
         this.#session.input.blurIME();
         if (action === 'back') this.#session.abi.back();
         else this.#session.abi.home();
       }
     } catch (error) {
-      this.#fail(error);
+      if (active === this.#active && active) this.#launchFailed(active, error);
+      else this.#fail(error);
     }
   }
 
@@ -366,7 +368,10 @@ export class LauncherHost {
   }
 
   #launchFailed(active, error) {
-    if (active && active === this.#active) this.navigate('home');
+    if (active) {
+      if (active !== this.#active) return;
+      this.navigate('home');
+    }
     this.onError?.(error);
   }
 

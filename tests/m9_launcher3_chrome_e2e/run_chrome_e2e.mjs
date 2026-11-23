@@ -102,6 +102,7 @@ async function run() {
     assert.equal(record.settings?.activity, 'com.android.settings.homepage.SettingsHomepageActivity');
     assert.equal(record.settings_installed_apps, 6);
     assert.equal(record.settings_display_opened, true);
+    assert.equal(record.settings_nested_back, true);
     assert.equal(record.settings_back_to_homepage, true);
     assert.equal(record.settings_returned_home, true);
     assert.equal(record.allapps_opened, true);
@@ -145,9 +146,8 @@ async function run() {
 
   async function tap(point) {
     await mouse('mouseMoved', point);
-    await mouse('mousePressed', point, true);
-    await delay(34);
-    await mouse('mouseReleased', point);
+    // Send the ordered CDP events together so scheduler delays cannot turn a tap into a long press.
+    await Promise.all([mouse('mousePressed', point, true), mouse('mouseReleased', point)]);
   }
 
   async function perform(step, { from, to, point, text }) {
