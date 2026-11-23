@@ -1,0 +1,296 @@
+--- a/frameworks/base/core/java/android/view/AccessibilityIterators.java
++++ b/frameworks/base/core/java/android/view/AccessibilityIterators.java
+@@ -17,7 +17,6 @@
+ package android.view;
+ 
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.res.Configuration;
+ import android.os.Build;
+ 
+ import java.text.BreakIterator;
+@@ -70,16 +69,15 @@
+         }
+     }
+ 
+-    static class CharacterTextSegmentIterator extends AbstractTextSegmentIterator
+-            implements ViewRootImpl.ConfigChangedCallback {
++    static class CharacterTextSegmentIterator extends AbstractTextSegmentIterator {
+         private static CharacterTextSegmentIterator sInstance;
+ 
+-        private Locale mLocale;
++        final Locale mLocale;
+ 
+         protected BreakIterator mImpl;
+ 
+         public static CharacterTextSegmentIterator getInstance(Locale locale) {
+-            if (sInstance == null) {
++            if (sInstance == null || !sInstance.mLocale.equals(locale)) {
+                 sInstance = new CharacterTextSegmentIterator(locale);
+             }
+             return sInstance;
+@@ -88,7 +86,6 @@
+         private CharacterTextSegmentIterator(Locale locale) {
+             mLocale = locale;
+             onLocaleChanged(locale);
+-            ViewRootImpl.addConfigCallback(this);
+         }
+ 
+         @Override
+@@ -149,18 +146,6 @@
+             return getRange(start, end);
+         }
+ 
+-        @Override
+-        public void onConfigurationChanged(Configuration globalConfig) {
+-            final Locale locale = globalConfig.getLocales().get(0);
+-            if (locale == null) {
+-                return;
+-            }
+-            if (!mLocale.equals(locale)) {
+-                mLocale = locale;
+-                onLocaleChanged(locale);
+-            }
+-        }
+-
+         protected void onLocaleChanged(Locale locale) {
+             mImpl = BreakIterator.getCharacterInstance(locale);
+         }
+@@ -170,7 +155,7 @@
+         private static WordTextSegmentIterator sInstance;
+ 
+         public static WordTextSegmentIterator getInstance(Locale locale) {
+-            if (sInstance == null) {
++            if (sInstance == null || !sInstance.mLocale.equals(locale)) {
+                 sInstance = new WordTextSegmentIterator(locale);
+             }
+             return sInstance;
+--- a/frameworks/base/core/java/android/view/DragEvent.java
++++ b/frameworks/base/core/java/android/view/DragEvent.java
+@@ -22,8 +22,6 @@
+ import android.os.Build;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-
+-import com.android.internal.view.IDragAndDropPermissions;
+ 
+ //TODO: Improve Javadoc
+ /**
+@@ -135,7 +133,6 @@
+     ClipDescription mClipDescription;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     ClipData mClipData;
+-    IDragAndDropPermissions mDragAndDropPermissions;
+ 
+     Object mLocalState;
+     boolean mDragResult;
+@@ -304,7 +301,7 @@
+ 
+     private void init(int action, float x, float y, float offsetX, float offsetY, int displayId,
+             int flags, ClipDescription description, ClipData data, SurfaceControl dragSurface,
+-            IDragAndDropPermissions dragAndDropPermissions, Object localState, boolean result) {
++            Object localState, boolean result) {
+         mAction = action;
+         mX = x;
+         mY = y;
+@@ -315,26 +312,24 @@
+         mClipDescription = description;
+         mClipData = data;
+         mDragSurface = dragSurface;
+-        mDragAndDropPermissions = dragAndDropPermissions;
+         mLocalState = localState;
+         mDragResult = result;
+     }
+ 
+     static DragEvent obtain() {
+-        return DragEvent.obtain(0, 0f, 0f, 0f, 0f, 0, 0, null, null, null, null, null, false);
++        return DragEvent.obtain(0, 0f, 0f, 0f, 0f, 0, 0, null, null, null, null, false);
+     }
+ 
+     /** @hide */
+     public static DragEvent obtain(int action, float x, float y, float offsetX, float offsetY,
+             int displayId, int flags, Object localState, ClipDescription description, ClipData data,
+-            SurfaceControl dragSurface, IDragAndDropPermissions dragAndDropPermissions,
+-            boolean result) {
++            SurfaceControl dragSurface, boolean result) {
+         final DragEvent ev;
+         synchronized (gRecyclerLock) {
+             if (gRecyclerTop == null) {
+                 ev = new DragEvent();
+                 ev.init(action, x, y, offsetX, offsetY, displayId, flags, description, data,
+-                        dragSurface, dragAndDropPermissions, localState, result);
++                        dragSurface, localState, result);
+                 return ev;
+             }
+             ev = gRecyclerTop;
+@@ -346,7 +341,7 @@
+         ev.mNext = null;
+ 
+         ev.init(action, x, y, offsetX, offsetY, displayId, flags, description, data, dragSurface,
+-                dragAndDropPermissions, localState, result);
++                localState, result);
+ 
+         return ev;
+     }
+@@ -356,8 +351,7 @@
+     public static DragEvent obtain(DragEvent source) {
+         return obtain(source.mAction, source.mX, source.mY, source.mOffsetX, source.mOffsetY,
+                 source.mDisplayId, source.mFlags, source.mLocalState, source.mClipDescription,
+-                source.mClipData, source.mDragSurface, source.mDragAndDropPermissions,
+-                source.mDragResult);
++                source.mClipData, source.mDragSurface, source.mDragResult);
+     }
+ 
+     /**
+@@ -446,11 +440,6 @@
+     /** @hide */
+     public int getDragFlags() {
+         return mFlags;
+-    }
+-
+-    /** @hide */
+-    public IDragAndDropPermissions getDragAndDropPermissions() {
+-        return mDragAndDropPermissions;
+     }
+ 
+     /**
+@@ -617,12 +606,7 @@
+             dest.writeInt(1);
+             mDragSurface.writeToParcel(dest, flags);
+         }
+-        if (mDragAndDropPermissions == null) {
+-            dest.writeInt(0);
+-        } else {
+-            dest.writeInt(1);
+-            dest.writeStrongBinder(mDragAndDropPermissions.asBinder());
+-        }
++        dest.writeInt(0); // No drag permission binder in an embedded window.
+     }
+ 
+     /**
+@@ -648,11 +632,9 @@
+             }
+             if (in.readInt() != 0) {
+                 event.mDragSurface = SurfaceControl.CREATOR.createFromParcel(in);
+-                event.mDragSurface.setUnreleasedWarningCallSite("DragEvent");
+             }
+             if (in.readInt() != 0) {
+-                event.mDragAndDropPermissions =
+-                        IDragAndDropPermissions.Stub.asInterface(in.readStrongBinder());
++                in.readStrongBinder();
+             }
+             return event;
+         }
+--- a/frameworks/base/core/java/android/view/RoundScrollbarRenderer.java
++++ b/frameworks/base/core/java/android/view/RoundScrollbarRenderer.java
+@@ -26,7 +26,6 @@
+ import android.graphics.Paint;
+ import android.graphics.Rect;
+ import android.graphics.RectF;
+-import android.os.SystemProperties;
+ import android.util.DisplayMetrics;
+ import android.view.flags.Flags;
+ 
+@@ -99,8 +98,7 @@
+         mInset = thumbWidth / 2 + maskThickness;
+ 
+         mUseRefactoredRoundScrollbar =
+-                Flags.useRefactoredRoundScrollbar()
+-                        && SystemProperties.getBoolean(BLUECHIP_ENABLED_SYSPROP, false);
++                Flags.useRefactoredRoundScrollbar();
+     }
+ 
+     private float computeScrollExtent(float scrollExtent, float maxScroll) {
+--- a/frameworks/base/core/java/android/view/ViewOverlay.java
++++ b/frameworks/base/core/java/android/view/ViewOverlay.java
+@@ -147,7 +147,6 @@
+             mRight = hostView.getWidth();
+             mBottom = hostView.getHeight();
+             // pass right+bottom directly to RenderNode, since not going through setters
+-            mRenderNode.setLeftTopRightBottom(0, 0, mRight, mBottom);
+         }
+ 
+         public void add(@NonNull Drawable drawable) {
+--- a/frameworks/base/core/java/android/view/ViewPropertyAnimator.java
++++ b/frameworks/base/core/java/android/view/ViewPropertyAnimator.java
+@@ -22,7 +22,6 @@
+ import android.annotation.FloatRange;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.graphics.RenderNode;
+ 
+ import java.util.ArrayList;
+ import java.util.HashMap;
+@@ -976,7 +975,7 @@
+      * @param value The value to set the property to
+      */
+     private void setValue(int propertyConstant, float value) {
+-        final RenderNode renderNode = mView.mRenderNode;
++        final View.ViewTransform renderNode = mView.mTransform;
+         switch (propertyConstant) {
+             case TRANSLATION_X:
+                 renderNode.setTranslationX(value);
+@@ -1013,7 +1012,6 @@
+                 break;
+             case ALPHA:
+                 mView.setAlphaInternal(value);
+-                renderNode.setAlpha(value);
+                 break;
+         }
+     }
+@@ -1025,7 +1023,7 @@
+      * @return float The value of the named property
+      */
+     private float getValue(int propertyConstant) {
+-        final RenderNode node = mView.mRenderNode;
++        final View.ViewTransform node = mView.mTransform;
+         switch (propertyConstant) {
+             case TRANSLATION_X:
+                 return node.getTranslationX();
+--- a/frameworks/base/core/java/android/view/autofill/AutofillId.java
++++ b/frameworks/base/core/java/android/view/autofill/AutofillId.java
+@@ -15,7 +15,6 @@
+  */
+ package android.view.autofill;
+ 
+-import static android.service.autofill.Flags.FLAG_AUTOFILL_W_METRICS;
+ 
+ import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+@@ -120,7 +119,6 @@
+      * See @link{android.view.View#getAutofillId()} for more information on
+      * how this is generated for native Views.
+      */
+-    @FlaggedApi(FLAG_AUTOFILL_W_METRICS)
+     public int getViewId() {
+         return mViewId;
+     }
+@@ -129,13 +127,11 @@
+      * Gets the virtual id. This is set if the view is a virtual view, most commonly set if the View
+      * is of {@link android.webkit.WebView}.
+      */
+-    @FlaggedApi(FLAG_AUTOFILL_W_METRICS)
+     public int getAutofillVirtualId() {
+         return mVirtualIntId;
+     }
+ 
+     /** Checks whether this AutofillId represents a virtual view. */
+-    @FlaggedApi(FLAG_AUTOFILL_W_METRICS)
+     public boolean isVirtual() {
+         return !isNonVirtual();
+     }
+@@ -145,7 +141,6 @@
+      * will usually return true if it should be used by an autofill service provider, and false
+      * otherwise.
+      */
+-    @FlaggedApi(FLAG_AUTOFILL_W_METRICS)
+     public boolean isInAutofillSession() {
+         return hasSession();
+     }
+@@ -220,7 +215,6 @@
+      *
+      * @return a non-zero integer if {@link #isInAutofillSession()} returns true
+      */
+-    @FlaggedApi(FLAG_AUTOFILL_W_METRICS)
+     public int getSessionId() {
+         return mSessionId;
+     }

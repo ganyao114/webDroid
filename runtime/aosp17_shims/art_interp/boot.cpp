@@ -152,6 +152,40 @@ std::string SimpleClassName(const Class& cls) {
                                        descriptor.size() - std::max<size_t>(1, first) - 1));
 }
 
+bool HasRuntimeAnnotation(const art::DexFile& dex, const art::dex::AnnotationSetItem* set,
+                          std::string_view descriptor) {
+  if (!set) return false;
+  for (uint32_t i = 0; i < set->size_; ++i) {
+    const auto* item = dex.GetAnnotationItem(set, i);
+    if (item->visibility_ != static_cast<uint8_t>(art::DexFile::DexVisibility::kRuntime)) continue;
+    const uint8_t* data = item->annotation_;
+    if (dex.GetTypeDescriptorView(art::dex::TypeIndex(art::DecodeUnsignedLeb128(&data))) ==
+        descriptor) return true;
+  }
+  return false;
+}
+
+bool HasClassAnnotation(const Class& type, std::string_view descriptor) {
+  if (!type.dex) return false;
+  const auto& dex = *type.dex;
+  const auto* directory = dex.GetAnnotationsDirectory(dex.GetClassDef(type.definition));
+  return directory && HasRuntimeAnnotation(dex, dex.GetClassAnnotationSet(directory), descriptor);
+}
+
+bool HasMethodAnnotation(const Method& method, std::string_view descriptor) {
+  if (!method.owner->dex) return false;
+  const auto& dex = *method.owner->dex;
+  const auto* directory = dex.GetAnnotationsDirectory(dex.GetClassDef(method.owner->definition));
+  if (!directory) return false;
+  const auto* annotations = dex.GetMethodAnnotations(directory);
+  for (uint32_t i = 0; i < directory->methods_size_; ++i) {
+    if (annotations[i].method_idx_ == method.index) {
+      return HasRuntimeAnnotation(dex, dex.GetMethodAnnotationSetItem(annotations[i]), descriptor);
+    }
+  }
+  return false;
+}
+
 Class& ClassForName(Runtime& vm, Object* object, bool initialize) {
   const std::string name = EncodeUtf8(vm.NonNull(object).text);
   std::string descriptor = name.starts_with('[') ? name : "L" + name + ";";
@@ -246,6 +280,7 @@ Value EnumConstants(Runtime& vm, Class& type) {
 
 void InstallReflection(Runtime& vm, Class& cls) {
   auto& cl = vm.linker;
+  cl.Define("Ljava/lang/annotation/Annotation;", kObject, art::kAccInterface | art::kAccAbstract);
   auto& loader = cl.Define("Ljava/lang/ClassLoader;", kObject, art::kAccAbstract);
   auto& class_loader = cl.AddField(cls, "appLoader", loader.descriptor, true);
   cl.AddMethod(loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", 0,
@@ -281,6 +316,18 @@ void InstallReflection(Runtime& vm, Class& cls) {
     const Class& type = *self->represented_class;
     return Value::Ref(type.super && !type.IsInterface() ? vm.ClassObject(*type.super) : nullptr);
   });
+  cl.AddMethod(cls, "isAnnotationPresent", "(Ljava/lang/Class;)Z", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        const Class& annotation = *vm.NonNull(a[0].ref()).represented_class;
+        const Class* type = self->represented_class;
+        if (HasClassAnnotation(*type, annotation.descriptor)) return Value::Int(true);
+        if (HasClassAnnotation(annotation, "Ljava/lang/annotation/Inherited;")) {
+          for (type = type->super; type; type = type->super) {
+            if (HasClassAnnotation(*type, annotation.descriptor)) return Value::Int(true);
+          }
+        }
+        return Value::Int(false);
+      });
   cl.AddMethod(cls, "getInterfaces", "()[Ljava/lang/Class;", 0, [](Runtime& vm, Object* self, Values) {
     const auto& interfaces = self->represented_class->interfaces;
     RootScope roots(vm);
@@ -366,6 +413,14 @@ void InstallReflection(Runtime& vm, Class& cls) {
   });
 
   auto& method_type = cl.Define("Ljava/lang/reflect/Method;", accessible.descriptor, art::kAccFinal);
+  cl.AddMethod(method_type, "isAnnotationPresent", "(Ljava/lang/Class;)Z", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        const Class& annotation = *vm.NonNull(a[0].ref()).represented_class;
+        return Value::Int(HasMethodAnnotation(*self->reflected_method, annotation.descriptor));
+      });
+  cl.AddMethod(method_type, "getModifiers", "()I", 0, [](Runtime&, Object* self, Values) {
+    return Value::Int(self->reflected_method->flags & art::kAccJavaFlagsMask);
+  });
   cl.AddMethod(cls, "getDeclaredMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;", 0,
       [&method_type](Runtime& vm, Object* self, Values a) {
         Class& type = *self->represented_class;
@@ -1801,6 +1856,9 @@ void InstallNumbers(Runtime& vm) {
   });
   cl.AddMethod(integer, "numberOfTrailingZeros", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
     return Value::Int(std::countr_zero(static_cast<uint32_t>(a[0].i())));
+  });
+  cl.AddMethod(*classes['J'], "numberOfTrailingZeros", "(J)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    return Value::Int(std::countr_zero(static_cast<uint64_t>(a[0].j())));
   });
   cl.AddMethod(integer, "rotateLeft", "(II)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
     return Value::Int(std::bit_cast<int32_t>(std::rotl(static_cast<uint32_t>(a[0].i()), a[1].i())));

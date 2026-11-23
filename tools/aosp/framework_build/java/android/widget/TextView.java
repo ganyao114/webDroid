@@ -25,6 +25,7 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.inputmethod.InputMethodManager;
+import android.view.RemotableViewMethod;
 import java.util.ArrayList;
 
 // Keep the Paint-returning bridge for embedded clients compiled against the older framework DEX.
@@ -32,6 +33,7 @@ interface TextViewPaintAccess {
     Paint getPaint();
 }
 
+@RemoteViews.RemoteView
 public class TextView extends View implements TextViewPaintAccess {
     public enum BufferType { NORMAL, SPANNABLE, EDITABLE }
     public interface OnEditorActionListener { boolean onEditorAction(TextView view, int actionId, KeyEvent event); }
@@ -98,6 +100,7 @@ public class TextView extends View implements TextViewPaintAccess {
     public void setTextAppearance(Context context, int id) { setTextAppearance(id); }
     public CharSequence getText() { return text; }
     public Editable getEditableText() { return text instanceof Editable ? (Editable) text : null; }
+    @RemotableViewMethod
     public void setText(CharSequence value) { setText(value, bufferType); }
     public void setText(CharSequence value, BufferType type) {
         bufferType = type;
@@ -152,6 +155,8 @@ public class TextView extends View implements TextViewPaintAccess {
         Selection.selectAll((Spannable) text);
         return true;
     }
+
+    @Override public boolean onCheckIsTextEditor() { return getEditableText() != null; }
 
     @Override public boolean onImeText(CharSequence value, boolean composing) {
         Editable editable = getEditableText();
@@ -236,7 +241,9 @@ public class TextView extends View implements TextViewPaintAccess {
         invalidate();
     }
     public float getTextSize() { return paint.getTextSize(); }
+    @RemotableViewMethod
     public void setTextColor(int color) { applyTextColor(ColorStateList.valueOf(color)); }
+    @RemotableViewMethod
     public void setTextColor(ColorStateList colors) { applyTextColor(colors); }
     private void applyTextColor(ColorStateList colors) {
         if (colors == null) throw new NullPointerException("colors");
@@ -317,6 +324,31 @@ public class TextView extends View implements TextViewPaintAccess {
     public void setCompoundDrawables(Drawable left, Drawable top, Drawable right, Drawable bottom) {
         relativeDrawables = false;
         applyCompoundDrawables(left, top, right, bottom);
+    }
+    public void setCompoundDrawablesWithIntrinsicBounds(Drawable left, Drawable top, Drawable right,
+            Drawable bottom) {
+        setCompoundDrawables(withIntrinsicBounds(left), withIntrinsicBounds(top),
+                withIntrinsicBounds(right), withIntrinsicBounds(bottom));
+    }
+    public void setCompoundDrawablesWithIntrinsicBounds(int left, int top, int right, int bottom) {
+        setCompoundDrawablesWithIntrinsicBounds(compoundDrawable(left), compoundDrawable(top),
+                compoundDrawable(right), compoundDrawable(bottom));
+    }
+    public void setCompoundDrawablesRelativeWithIntrinsicBounds(Drawable start, Drawable top,
+            Drawable end, Drawable bottom) {
+        setCompoundDrawablesRelative(withIntrinsicBounds(start), withIntrinsicBounds(top),
+                withIntrinsicBounds(end), withIntrinsicBounds(bottom));
+    }
+    public void setCompoundDrawablesRelativeWithIntrinsicBounds(int start, int top, int end, int bottom) {
+        setCompoundDrawablesRelativeWithIntrinsicBounds(compoundDrawable(start), compoundDrawable(top),
+                compoundDrawable(end), compoundDrawable(bottom));
+    }
+    private Drawable compoundDrawable(int id) { return id == 0 ? null : getContext().getDrawable(id); }
+    private static Drawable withIntrinsicBounds(Drawable drawable) {
+        if (drawable != null) {
+            drawable.setBounds(0, 0, drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight());
+        }
+        return drawable;
     }
     private void applyCompoundDrawables(Drawable start, Drawable top, Drawable end, Drawable bottom) {
         if (this.start != null) this.start.setCallback(null);

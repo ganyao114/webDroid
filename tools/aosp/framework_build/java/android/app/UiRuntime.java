@@ -215,7 +215,10 @@ public final class UiRuntime {
                 return launcher;
             }
             if (INPUT_METHOD_SERVICE.equals(name)) {
-                if (inputMethod == null) inputMethod = new android.view.inputmethod.InputMethodManager();
+                if (inputMethod == null) {
+                    inputMethod = new android.view.inputmethod.InputMethodManager(
+                            getDisplay().getDisplayId());
+                }
                 return inputMethod;
             }
             if (WALLPAPER_SERVICE.equals(name)) {

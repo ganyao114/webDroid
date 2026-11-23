@@ -1,0 +1,568 @@
+--- a/frameworks/base/core/java/android/view/ViewGroup.java
++++ b/frameworks/base/core/java/android/view/ViewGroup.java
+@@ -71,11 +71,9 @@
+ import android.view.animation.Transformation;
+ import android.view.autofill.AutofillId;
+ import android.view.autofill.AutofillManager;
+-import android.view.autofill.Helper;
+ import android.view.inspector.InspectableProperty;
+ import android.view.inspector.InspectableProperty.EnumEntry;
+ import android.view.translation.TranslationCapability;
+-import android.view.translation.TranslationSpec.DataFormat;
+ import android.view.translation.ViewTranslationRequest;
+ import android.webkit.WebView;
+ import android.window.OnBackInvokedDispatcher;
+@@ -656,53 +654,55 @@
+      * @see #startActionModeForChild(View, android.view.ActionMode.Callback)
+      * @see #startActionModeForChild(View, android.view.ActionMode.Callback, int)
+      */
+-    private static final ActionMode SENTINEL_ACTION_MODE = new ActionMode() {
+-        @Override
+-        public void setTitle(CharSequence title) {}
+-
+-        @Override
+-        public void setTitle(int resId) {}
+-
+-        @Override
+-        public void setSubtitle(CharSequence subtitle) {}
+-
+-        @Override
+-        public void setSubtitle(int resId) {}
+-
+-        @Override
+-        public void setCustomView(View view) {}
+-
+-        @Override
+-        public void invalidate() {}
+-
+-        @Override
+-        public void finish() {}
+-
+-        @Override
+-        public Menu getMenu() {
+-            return null;
+-        }
+-
+-        @Override
+-        public CharSequence getTitle() {
+-            return null;
+-        }
+-
+-        @Override
+-        public CharSequence getSubtitle() {
+-            return null;
+-        }
+-
+-        @Override
+-        public View getCustomView() {
+-            return null;
+-        }
+-
+-        @Override
+-        public MenuInflater getMenuInflater() {
+-            return null;
+-        }
+-    };
++    private static final class ActionModeHolder {
++        private static final ActionMode SENTINEL_ACTION_MODE = new ActionMode() {
++            @Override
++            public void setTitle(CharSequence title) {}
++
++            @Override
++            public void setTitle(int resId) {}
++
++            @Override
++            public void setSubtitle(CharSequence subtitle) {}
++
++            @Override
++            public void setSubtitle(int resId) {}
++
++            @Override
++            public void setCustomView(View view) {}
++
++            @Override
++            public void invalidate() {}
++
++            @Override
++            public void finish() {}
++
++            @Override
++            public Menu getMenu() {
++                return null;
++            }
++
++            @Override
++            public CharSequence getTitle() {
++                return null;
++            }
++
++            @Override
++            public CharSequence getSubtitle() {
++                return null;
++            }
++
++            @Override
++            public View getCustomView() {
++                return null;
++            }
++
++            @Override
++            public MenuInflater getMenuInflater() {
++                return null;
++            }
++        };
++    }
+ 
+     public ViewGroup(Context context) {
+         this(context, null);
+@@ -1025,7 +1025,7 @@
+             }
+         } else {
+             // We are being called from the new method with type.
+-            return SENTINEL_ACTION_MODE;
++            return ActionModeHolder.SENTINEL_ACTION_MODE;
+         }
+     }
+ 
+@@ -1041,7 +1041,7 @@
+             } finally {
+                 mGroupFlags &= ~FLAG_START_ACTION_MODE_FOR_CHILD_IS_TYPED;
+             }
+-            if (mode != SENTINEL_ACTION_MODE) {
++            if (mode != ActionModeHolder.SENTINEL_ACTION_MODE) {
+                 return mode;
+             }
+         }
+@@ -1895,9 +1895,6 @@
+     boolean notifyChildOfDragStart(View child) {
+         // The caller guarantees that the child is not in mChildrenInterestedInDrag yet.
+ 
+-        if (ViewDebug.DEBUG_DRAG) {
+-            Log.d(View.VIEW_LOG_TAG, "Sending drag-started to view: " + child);
+-        }
+ 
+         final float tx = mCurrentDragStartEvent.mX;
+         final float ty = mCurrentDragStartEvent.mY;
+@@ -1976,9 +1973,6 @@
+ 
+     @Override
+     public boolean dispatchKeyEvent(KeyEvent event) {
+-        if (mInputEventConsistencyVerifier != null) {
+-            mInputEventConsistencyVerifier.onKeyEvent(event, 1);
+-        }
+ 
+         if ((mPrivateFlags & (PFLAG_FOCUSED | PFLAG_HAS_BOUNDS))
+                 == (PFLAG_FOCUSED | PFLAG_HAS_BOUNDS)) {
+@@ -1992,9 +1986,6 @@
+             }
+         }
+ 
+-        if (mInputEventConsistencyVerifier != null) {
+-            mInputEventConsistencyVerifier.onUnhandledEvent(event, 1);
+-        }
+         return false;
+     }
+ 
+@@ -2118,9 +2109,6 @@
+ 
+     @Override
+     public boolean dispatchTrackballEvent(MotionEvent event) {
+-        if (mInputEventConsistencyVerifier != null) {
+-            mInputEventConsistencyVerifier.onTrackballEvent(event, 1);
+-        }
+ 
+         if ((mPrivateFlags & (PFLAG_FOCUSED | PFLAG_HAS_BOUNDS))
+                 == (PFLAG_FOCUSED | PFLAG_HAS_BOUNDS)) {
+@@ -2134,9 +2122,6 @@
+             }
+         }
+ 
+-        if (mInputEventConsistencyVerifier != null) {
+-            mInputEventConsistencyVerifier.onUnhandledEvent(event, 1);
+-        }
+         return false;
+     }
+ 
+@@ -2754,9 +2739,6 @@
+ 
+     @Override
+     public boolean dispatchTouchEvent(MotionEvent ev) {
+-        if (mInputEventConsistencyVerifier != null) {
+-            mInputEventConsistencyVerifier.onTouchEvent(ev, 1);
+-        }
+ 
+         // If the event targets the accessibility focused view and this is it, start
+         // normal event dispatch. Maybe a descendant is what will handle the click.
+@@ -2967,9 +2949,6 @@
+             }
+         }
+ 
+-        if (!handled && mInputEventConsistencyVerifier != null) {
+-            mInputEventConsistencyVerifier.onUnhandledEvent(ev, 1);
+-        }
+         return handled;
+     }
+ 
+@@ -3727,10 +3706,6 @@
+         }
+ 
+         if (!isLaidOut()) {
+-            if (Helper.sVerbose) {
+-                Log.v(VIEW_LOG_TAG, "dispatchProvideStructure(): not laid out, ignoring "
+-                        + childrenCount + " children of " + getAccessibilityViewId());
+-            }
+             return;
+         }
+ 
+@@ -3774,10 +3749,6 @@
+         }
+ 
+         if (!isLaidOut()) {
+-            if (Helper.sVerbose) {
+-                Log.v(VIEW_LOG_TAG, "dispatchProvideAutofillStructure(): not laid out, ignoring "
+-                        + mChildrenCount + " children of " + getAutofillId());
+-            }
+             return;
+         }
+ 
+@@ -3826,23 +3797,19 @@
+     }
+ 
+     private boolean shouldIncludeAllChildrenViewWithAutofillTypeNotNone(AutofillManager afm) {
+-        if (afm == null) return false;
+-        return afm.shouldIncludeAllChildrenViewsWithAutofillTypeNotNoneInAssistStructure();
++        return false;
+     }
+ 
+     private boolean shouldIncludeAllChildrenViews(AutofillManager afm) {
+-        if (afm == null) return false;
+-        return afm.shouldIncludeAllChildrenViewInAssistStructure();
++        return false;
+     }
+ 
+     private boolean shouldAlwaysIncludeWebview(AutofillManager afm) {
+-        if (afm == null) return false;
+-        return afm.shouldAlwaysIncludeWebviewInAssistStructure();
++        return false;
+     }
+ 
+     private boolean shouldIncludeInvisibleView(AutofillManager afm) {
+-        if (afm == null) return false;
+-        return afm.shouldIncludeInvisibleViewInAssistStructure();
++        return false;
+     }
+ 
+     /** @hide */
+@@ -4221,39 +4188,6 @@
+         }
+     }
+ 
+-    /**
+-     * @hide
+-     */
+-    @Override
+-    public Bitmap createSnapshot(ViewDebug.CanvasProvider canvasProvider, boolean skipChildren) {
+-        int count = mChildrenCount;
+-        int[] visibilities = null;
+-
+-        if (skipChildren) {
+-            visibilities = new int[count];
+-            for (int i = 0; i < count; i++) {
+-                View child = getChildAt(i);
+-                visibilities[i] = child.getVisibility();
+-                if (visibilities[i] == View.VISIBLE) {
+-                    child.mViewFlags = (child.mViewFlags & ~View.VISIBILITY_MASK)
+-                            | (View.INVISIBLE & View.VISIBILITY_MASK);
+-                }
+-            }
+-        }
+-
+-        try {
+-            return super.createSnapshot(canvasProvider, skipChildren);
+-        } finally {
+-            if (skipChildren) {
+-                for (int i = 0; i < count; i++) {
+-                    View child = getChildAt(i);
+-                    child.mViewFlags = (child.mViewFlags & ~View.VISIBILITY_MASK)
+-                            | (visibilities[i] & View.VISIBILITY_MASK);
+-                }
+-            }
+-        }
+-    }
+-
+     /** Return true if this ViewGroup is laying out using optical bounds. */
+     boolean isLayoutModeOptical() {
+         return mLayoutMode == LAYOUT_MODE_OPTICAL_BOUNDS;
+@@ -4638,51 +4572,6 @@
+         invalidate(true);
+     }
+ 
+-    /**
+-     * This method is used to cause children of this ViewGroup to restore or recreate their
+-     * display lists. It is called by getDisplayList() when the parent ViewGroup does not need
+-     * to recreate its own display list, which would happen if it went through the normal
+-     * draw/dispatchDraw mechanisms.
+-     *
+-     * @hide
+-     */
+-    @Override
+-    @UnsupportedAppUsage
+-    protected void dispatchGetDisplayList() {
+-        final int count = mChildrenCount;
+-        final View[] children = mChildren;
+-        for (int i = 0; i < count; i++) {
+-            final View child = children[i];
+-            if (child == null) {
+-                throw new IllegalStateException(getClass().getSimpleName() + " contains null " +
+-                        "child at index " + i + " when traversal in dispatchGetDisplayList," +
+-                        " the view may have been removed.");
+-            }
+-            if (((child.mViewFlags & VISIBILITY_MASK) == VISIBLE || child.getAnimation() != null)) {
+-                recreateChildDisplayList(child);
+-            }
+-        }
+-        final int transientCount = mTransientViews == null ? 0 : mTransientIndices.size();
+-        for (int i = 0; i < transientCount; ++i) {
+-            View child = mTransientViews.get(i);
+-            if (((child.mViewFlags & VISIBILITY_MASK) == VISIBLE || child.getAnimation() != null)) {
+-                recreateChildDisplayList(child);
+-            }
+-        }
+-        if (mOverlay != null) {
+-            View overlayView = mOverlay.getOverlayView();
+-            recreateChildDisplayList(overlayView);
+-        }
+-        if (mDisappearingChildren != null) {
+-            final ArrayList<View> disappearingChildren = mDisappearingChildren;
+-            final int disappearingCount = disappearingChildren.size();
+-            for (int i = 0; i < disappearingCount; ++i) {
+-                final View child = disappearingChildren.get(i);
+-                recreateChildDisplayList(child);
+-            }
+-        }
+-    }
+-
+     private void recreateChildDisplayList(View child) {
+         child.mRecreateDisplayList = (child.mPrivateFlags & PFLAG_INVALIDATED) != 0;
+         child.mPrivateFlags &= ~PFLAG_INVALIDATED;
+@@ -4746,12 +4635,6 @@
+         boolean previousValue = (mGroupFlags & FLAG_CLIP_CHILDREN) == FLAG_CLIP_CHILDREN;
+         if (clipChildren != previousValue) {
+             setBooleanFlag(FLAG_CLIP_CHILDREN, clipChildren);
+-            for (int i = 0; i < mChildrenCount; ++i) {
+-                View child = getChildAt(i);
+-                if (child.mRenderNode != null) {
+-                    child.mRenderNode.setClipToBounds(clipChildren);
+-                }
+-            }
+             invalidate(true);
+         }
+     }
+@@ -5509,24 +5392,10 @@
+             setDefaultFocus(child);
+         }
+ 
+-        touchAccessibilityNodeProviderIfNeeded(child);
+-
+         // If a propagated value exists, pass it to the child.
+         if (sToolkitViewGroupFrameRateApiFlagValue && !Float.isNaN(getRequestedFrameRate())
+                 && (mGroupFlags & FLAG_PROPAGATED_FRAME_RATE) != 0) {
+             child.overrideFrameRate(getRequestedFrameRate(), getForcedOverrideFrameRateFlag());
+-        }
+-    }
+-
+-    /**
+-     * We may need to touch the provider to bring up the a11y layer. In a11y mode
+-     * clients inspect the screen or the user touches it which triggers bringing up
+-     * of the a11y infrastructure while in autofill mode we want the infra up and
+-     * running from the beginning since we watch for a11y events to drive autofill.
+-     */
+-    private void touchAccessibilityNodeProviderIfNeeded(View child) {
+-        if (mContext.isAutofillCompatibilityEnabled()) {
+-            child.getAccessibilityNodeProvider();
+         }
+     }
+ 
+@@ -6231,7 +6100,6 @@
+         }
+     }
+ 
+-
+     /**
+      * Don't call or override this method. It is used for the implementation of
+      * the view hierarchy.
+@@ -6242,100 +6110,8 @@
+     @Deprecated
+     @Override
+     public final void invalidateChild(View child, final Rect dirty) {
+-        final AttachInfo attachInfo = mAttachInfo;
+-        if (attachInfo != null && attachInfo.mHardwareAccelerated) {
+-            // HW accelerated fast path
+-            onDescendantInvalidated(child, child);
+-            return;
+-        }
+-
+-        ViewParent parent = this;
+-        if (attachInfo != null) {
+-            // If the child is drawing an animation, we want to copy this flag onto
+-            // ourselves and the parent to make sure the invalidate request goes
+-            // through
+-            final boolean drawAnimation = (child.mPrivateFlags & PFLAG_DRAW_ANIMATION) != 0;
+-
+-            // Check whether the child that requests the invalidate is fully opaque
+-            // Views being animated or transformed are not considered opaque because we may
+-            // be invalidating their old position and need the parent to paint behind them.
+-            Matrix childMatrix = child.getMatrix();
+-            // Mark the child as dirty, using the appropriate flag
+-            // Make sure we do not set both flags at the same time
+-
+-            if (child.mLayerType != LAYER_TYPE_NONE) {
+-                mPrivateFlags |= PFLAG_INVALIDATED;
+-                mPrivateFlags &= ~PFLAG_DRAWING_CACHE_VALID;
+-            }
+-
+-            final int[] location = attachInfo.mInvalidateChildLocation;
+-            location[CHILD_LEFT_INDEX] = child.mLeft;
+-            location[CHILD_TOP_INDEX] = child.mTop;
+-            if (!childMatrix.isIdentity() ||
+-                    (mGroupFlags & ViewGroup.FLAG_SUPPORT_STATIC_TRANSFORMATIONS) != 0) {
+-                RectF boundingRect = attachInfo.mTmpTransformRect;
+-                boundingRect.set(dirty);
+-                Matrix transformMatrix;
+-                if ((mGroupFlags & ViewGroup.FLAG_SUPPORT_STATIC_TRANSFORMATIONS) != 0) {
+-                    Transformation t = attachInfo.mTmpTransformation;
+-                    boolean transformed = getChildStaticTransformation(child, t);
+-                    if (transformed) {
+-                        transformMatrix = attachInfo.mTmpMatrix;
+-                        transformMatrix.set(t.getMatrix());
+-                        if (!childMatrix.isIdentity()) {
+-                            transformMatrix.preConcat(childMatrix);
+-                        }
+-                    } else {
+-                        transformMatrix = childMatrix;
+-                    }
+-                } else {
+-                    transformMatrix = childMatrix;
+-                }
+-                transformMatrix.mapRect(boundingRect);
+-                dirty.set((int) Math.floor(boundingRect.left),
+-                        (int) Math.floor(boundingRect.top),
+-                        (int) Math.ceil(boundingRect.right),
+-                        (int) Math.ceil(boundingRect.bottom));
+-            }
+-
+-            do {
+-                View view = null;
+-                if (parent instanceof View) {
+-                    view = (View) parent;
+-                }
+-
+-                if (drawAnimation) {
+-                    if (view != null) {
+-                        view.mPrivateFlags |= PFLAG_DRAW_ANIMATION;
+-                    } else if (parent instanceof ViewRootImpl) {
+-                        ((ViewRootImpl) parent).mIsAnimating = true;
+-                    }
+-                }
+-
+-                // If the parent is dirty opaque or not dirty, mark it dirty with the opaque
+-                // flag coming from the child that initiated the invalidate
+-                if (view != null) {
+-                    if ((view.mPrivateFlags & PFLAG_DIRTY_MASK) != PFLAG_DIRTY) {
+-                        view.mPrivateFlags = (view.mPrivateFlags & ~PFLAG_DIRTY_MASK) | PFLAG_DIRTY;
+-                    }
+-                }
+-
+-                parent = parent.invalidateChildInParent(location, dirty);
+-                if (view != null) {
+-                    // Account for transform on current parent
+-                    Matrix m = view.getMatrix();
+-                    if (!m.isIdentity()) {
+-                        RectF boundingRect = attachInfo.mTmpTransformRect;
+-                        boundingRect.set(dirty);
+-                        m.mapRect(boundingRect);
+-                        dirty.set((int) Math.floor(boundingRect.left),
+-                                (int) Math.floor(boundingRect.top),
+-                                (int) Math.ceil(boundingRect.right),
+-                                (int) Math.ceil(boundingRect.bottom));
+-                    }
+-                }
+-            } while (parent != null);
+-        }
++        // The host records an entire window, so damage always schedules a new frame.
++        if (mAttachInfo != null) onDescendantInvalidated(child, child);
+     }
+ 
+     /**
+@@ -6490,21 +6266,15 @@
+     public void offsetChildrenTopAndBottom(int offset) {
+         final int count = mChildrenCount;
+         final View[] children = mChildren;
+-        boolean invalidate = false;
++        if (offset == 0 || count == 0) return;
+ 
+         for (int i = 0; i < count; i++) {
+             final View v = children[i];
+             v.mTop += offset;
+             v.mBottom += offset;
+-            if (v.mRenderNode != null) {
+-                invalidate = true;
+-                v.mRenderNode.offsetTopAndBottom(offset);
+-            }
+-        }
+-
+-        if (invalidate) {
+-            invalidateViewProperty(false, false);
+-        }
++        }
++
++        invalidateViewProperty(false, true);
+         notifySubtreeAccessibilityStateChangedIfNeeded();
+     }
+ 
+@@ -7256,7 +7026,6 @@
+         //noinspection ResourceType
+         return MeasureSpec.makeMeasureSpec(resultSize, resultMode);
+     }
+-
+ 
+     /**
+      * Removes any pending animations for views that have been removed. Call
+@@ -8004,10 +7773,7 @@
+      * @hide
+      */
+     public void requestTransitionStart(LayoutTransition transition) {
+-        ViewRootImpl viewAncestor = getViewRootImpl();
+-        if (viewAncestor != null) {
+-            viewAncestor.requestTransitionStart(transition);
+-        }
++        transition.startChangingAnimations();
+     }
+ 
+     /**
+@@ -8331,7 +8097,7 @@
+     /** @hide */
+     @Override
+     public void findNamedViews(Map<String, View> namedElements) {
+-        if (getVisibility() != VISIBLE && mGhostView == null) {
++        if (getVisibility() != VISIBLE) {
+             return;
+         }
+         super.findNamedViews(namedElements);
+@@ -9491,7 +9257,6 @@
+                 return !tempRect.equals(view2Bounds);
+             }, null);
+ 
+-
+             // Compare the children recursively
+             if ((child1 != null) && (child2 != null)) {
+                 final ViewLocationHolder childHolder1 =
+@@ -9614,7 +9379,7 @@
+      */
+     @Override
+     public void dispatchCreateViewTranslationRequest(@NonNull Map<AutofillId, long[]> viewIds,
+-            @NonNull @DataFormat int[] supportedFormats,
++            @NonNull int[] supportedFormats,
+             @Nullable TranslationCapability capability,
+             @NonNull List<ViewTranslationRequest> requests) {
+         super.dispatchCreateViewTranslationRequest(viewIds, supportedFormats, capability, requests);

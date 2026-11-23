@@ -24,7 +24,8 @@ using wa::ui_jni::IntentRequest;
 using wa::ui_jni::PackageActivity;
 
 constexpr char kActivity[] = "Lorg/wasmandroid/uismoke/SmokeActivity;";
-constexpr uint32_t kLayer = 42, kWidth = 400, kHeight = 320, kDpi = 240;
+// The fixture's footer must fit below the card after the window applies its system insets.
+constexpr uint32_t kLayer = 42, kWidth = 400, kHeight = 432, kDpi = 240;
 
 void Require(bool condition, std::string_view message) {
     if (!condition)

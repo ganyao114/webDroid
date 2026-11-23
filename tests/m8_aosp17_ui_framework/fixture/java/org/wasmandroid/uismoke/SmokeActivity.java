@@ -24,9 +24,11 @@ import android.view.View;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.RemoteViews;
 import android.widget.TextView;
 import android.window.BackEvent;
 import android.window.BackMotionEvent;
@@ -86,6 +88,7 @@ public final class SmokeActivity extends Activity {
         resourceCheck = inspectResources();
         packageCheck = inspectPackages();
         inspectInputAndWindow();
+        inspectRemoteViews();
         inspectPreferences();
         inspectCoreLibrary();
     }
@@ -203,6 +206,16 @@ public final class SmokeActivity extends Activity {
         verify(editor.onImeText("n", true) && editor.onImeText("ni", true)
                 && editor.onImeText("你", false) && "a你b".contentEquals(editor.getText()),
                 "IME replaces the composing range");
+        InputMethodManager ime = getSystemService(InputMethodManager.class);
+        verify(!ime.showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT), "Detached editor has no IME");
+        LinearLayout root = findViewById(R.id.root);
+        root.addView(editor);
+        verify(editor.requestFocus() && ime.showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
+                && ime.isActive(editor), "Focused embedded editor accepts soft input");
+        verify(ime.hideSoftInputFromWindow(editor.getWindowToken(), 0) && !ime.isActive(editor),
+                "Embedded window token hides soft input");
+        root.removeView(editor);
+        verify(tile.requestFocus(), "Tile regains focus after editor removal");
 
         BackEvent back = BackEvent.fromBackMotionEvent(
                 new BackMotionEvent(12f, 40f, 120L, .5f, true, BackEvent.EDGE_LEFT));
@@ -225,6 +238,24 @@ public final class SmokeActivity extends Activity {
         event.setSealed(true);
         AccessibilityNodeInfo source = event.getSource();
         verify(source != null && source.isClickable(), "Accessibility event resolves its local node");
+    }
+
+    private void inspectRemoteViews() {
+        RemoteViews views = new RemoteViews(getPackageName(), R.layout.header);
+        views.setTextViewText(R.id.original_headline, "Remote widget");
+        Parcel parcel = Parcel.obtain();
+        try {
+            views.writeToParcel(parcel, 0);
+            parcel.setDataPosition(0);
+            RemoteViews restored = RemoteViews.CREATOR.createFromParcel(parcel);
+            TextView label = (TextView) restored.apply(this, null);
+            verify("Remote widget".contentEquals(label.getText()), "RemoteViews inflates and applies text");
+            restored.setTextViewText(R.id.original_headline, "Updated widget");
+            restored.reapply(this, label);
+            verify("Updated widget".contentEquals(label.getText()), "RemoteViews reapplies text");
+        } finally {
+            parcel.recycle();
+        }
     }
 
     private static Intent launcherIntent() {
