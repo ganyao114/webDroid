@@ -58,7 +58,20 @@ Runtime::Runtime(Options opts)
   InstallBootClasses();
 }
 
-Runtime::~Runtime() = default;
+Runtime::~Runtime() { ReleaseGuestNativeSource(); }
+
+void Runtime::ReleaseGuestNativeSource() noexcept {
+  if (guest_native) guest_native->Shutdown();
+  direct_arrays.reset();
+  guest_native.reset();
+  guest_native_factory = nullptr;
+  guest_native_source = nullptr;
+}
+
+GuestNativeLibraries* Runtime::NativeLibraries() {
+  if (!guest_native && guest_native_factory) guest_native = guest_native_factory(jni->Env(), guest_native_source);
+  return guest_native.get();
+}
 
 Value Runtime::InvokeSlow(Method& method, Object* receiver, std::span<const Value> args) {
   const bool initializing = method.IsStatic() && method.owner->init_state != InitState::Initialized;
@@ -205,21 +218,97 @@ Object* Runtime::ClassObject(Class& cls) {
   return cls.mirror;
 }
 
-Value& Runtime::ArrayElement(Object& array, int32_t index) {
-  if (!array.type->IsArray()) Fail("Ljava/lang/VerifyError;", "Expected an array");
-  if (index < 0 || static_cast<size_t>(index) >= array.elements.size()) {
-    Fail("Ljava/lang/ArrayIndexOutOfBoundsException;", std::to_string(index));
+DirectBufferMemory* Runtime::DirectArray(const Object& array) const {
+  if (!direct_arrays || array.type->descriptor != "[B") return nullptr;
+  const auto found = direct_arrays->find(&array);
+  return found == direct_arrays->end() ? nullptr : found->second.get();
+}
+
+size_t Runtime::ArrayLength(const Object& array) const {
+  if (const auto* direct = DirectArray(array)) return direct->size;
+  return array.elements.size();
+}
+
+namespace {
+
+void CheckArrayIndex(Runtime& vm, const Object& array, int32_t index, size_t length) {
+  if (!array.type->IsArray()) vm.Fail("Ljava/lang/VerifyError;", "Expected an array");
+  if (index < 0 || static_cast<size_t>(index) >= length)
+    vm.Fail("Ljava/lang/ArrayIndexOutOfBoundsException;", std::to_string(index));
+}
+
+class OwnedDirectMemory final : public DirectBufferMemory {
+ public:
+  explicit OwnedDirectMemory(size_t size) : DirectBufferMemory(size), bytes_(size) {}
+
+  bool Read(size_t offset, std::span<uint8_t> bytes) const override {
+    std::copy_n(bytes_.begin() + offset, bytes.size(), bytes.begin());
+    return true;
   }
+
+  bool Write(size_t offset, std::span<const uint8_t> bytes) override {
+    std::ranges::copy(bytes, bytes_.begin() + offset);
+    return true;
+  }
+
+ private:
+  std::vector<uint8_t> bytes_;
+};
+
+}  // namespace
+
+Value Runtime::ArrayElement(const Object& array, int32_t index) {
+  if (const auto* direct = DirectArray(array)) {
+    CheckArrayIndex(*this, array, index, direct->size);
+    uint8_t byte;
+    if (!direct->Read(index, {&byte, 1})) Fail("Ljava/lang/IllegalStateException;", "Direct buffer memory");
+    return Value::Int(static_cast<int8_t>(byte));
+  }
+  CheckArrayIndex(*this, array, index, array.elements.size());
   return array.elements[index];
 }
 
 void Runtime::StoreArrayElement(Object& array, int32_t index, Value value) {
-  Value& slot = ArrayElement(array, index);
+  if (auto* direct = DirectArray(array)) {
+    CheckArrayIndex(*this, array, index, direct->size);
+    const auto byte = static_cast<uint8_t>(value.i());
+    if (!direct->Write(index, {&byte, 1})) Fail("Ljava/lang/IllegalStateException;", "Direct buffer memory");
+    return;
+  }
+  CheckArrayIndex(*this, array, index, array.elements.size());
   Class& component = *array.type->component;
   if (!component.IsPrimitive() && value.ref() && !linker.IsAssignable(component, *value.ref()->type)) {
     Fail("Ljava/lang/ArrayStoreException;", value.ref()->type->descriptor);
   }
-  slot = Normalize(value, component.descriptor.front());
+  array.elements[index] = Normalize(value, component.descriptor.front());
+}
+
+Object* Runtime::NewDirectBuffer(int32_t capacity, std::unique_ptr<DirectBufferMemory> memory) {
+  if (capacity < 0) Fail("Ljava/lang/IllegalArgumentException;", "Negative direct buffer capacity");
+  if (!linker.HasClass("Ljava/nio/HeapByteBuffer;")) Fail("Ljava/lang/UnsupportedOperationException;", "Direct buffer");
+  if (!memory) memory = std::make_unique<OwnedDirectMemory>(capacity);
+  if (!direct_arrays) direct_arrays = std::make_unique<DirectArrays>();
+  RootScope roots(*this);
+  auto* array = roots.Hold(heap.Allocate(*this, linker.Resolve("[B")));
+  direct_arrays->emplace(array, std::move(memory));
+  auto& cls = linker.Resolve("Ljava/nio/HeapByteBuffer;");
+  auto& ctor = linker.FindMethod(cls, "<init>", "([BI)V", false);
+  const Value args[]{Value::Ref(array), Value::Int(capacity)};
+  return NewObject(cls, ctor, args);
+}
+
+std::optional<DirectBufferView> Runtime::DirectBuffer(Object* buffer) {
+  if (!direct_arrays || !buffer || buffer->type->descriptor != "Ljava/nio/HeapByteBuffer;")
+    return std::nullopt;
+  const auto field = [&](std::string_view name, std::string_view descriptor) {
+    return buffer->fields[linker.FindField(*buffer->type, name, descriptor, false).slot];
+  };
+  const auto backing = direct_arrays->find(field("hb", "[B").ref());
+  if (backing == direct_arrays->end()) return std::nullopt;
+  const int32_t offset = field("offset", "I").i(), capacity = field("capacity", "I").i();
+  if (offset < 0 || capacity < 0 || uint64_t{uint32_t(offset)} + uint32_t(capacity) > backing->second->size)
+    Fail("Ljava/lang/IllegalArgumentException;", "Invalid direct buffer view");
+  return DirectBufferView{&backing->second, static_cast<size_t>(offset), capacity};
 }
 
 Object* Runtime::MakeException(std::string_view type, std::string_view message) {
@@ -326,6 +415,18 @@ void Vm::AddNativeAdapter(void* function, NativeThunk adapter) {
   runtime_->jni->RegisterAdapter(function, adapter);
 }
 JNIEnv* Vm::JniEnv() { return runtime_->jni->Env(); }
+
+void Vm::SetGuestNativeSource(GuestNativeFactory factory, const void* source) {
+  if (runtime_->guest_native_factory) throw std::logic_error("Native APK source is already set");
+  runtime_->guest_native_factory = factory;
+  runtime_->guest_native_source = source;
+}
+
+GuestNativeStats Vm::GetGuestNativeStats() const {
+  return runtime_->guest_native ? runtime_->guest_native->Stats() : GuestNativeStats{};
+}
+
+void Vm::ReleaseGuestNativeSource() noexcept { runtime_->ReleaseGuestNativeSource(); }
 
 Value Vm::CallStatic(std::string_view owner, std::string_view name, std::string_view signature,
                      std::span<const Value> args) {

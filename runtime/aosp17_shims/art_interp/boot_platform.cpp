@@ -15,6 +15,10 @@
 
 #include <android-base/properties.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
+
 #include "interpreter/safe_math.h"
 #include "software_raster.h"
 
@@ -29,12 +33,18 @@ Value ArrayCopy(Runtime& vm, Object*, Values args) {
     vm.Fail("Ljava/lang/ArrayStoreException;");
   }
   const auto src = args[1].i(), dst = args[3].i(), len = args[4].i();
-  if (src < 0 || dst < 0 || len < 0 || static_cast<uint64_t>(src) + len > from.elements.size() ||
-      static_cast<uint64_t>(dst) + len > to.elements.size()) {
+  if (src < 0 || dst < 0 || len < 0 || static_cast<uint64_t>(src) + len > vm.ArrayLength(from) ||
+      static_cast<uint64_t>(dst) + len > vm.ArrayLength(to)) {
     vm.Fail("Ljava/lang/ArrayIndexOutOfBoundsException;");
   }
   if (len == 0) return {};
-  if (vm.linker.IsAssignable(*to.type, *from.type)) {
+  if (vm.DirectArray(from) || vm.DirectArray(to)) {
+    const bool backwards = &from == &to && dst > src;
+    for (int32_t i = 0; i < len; ++i) {
+      const int32_t offset = backwards ? len - i - 1 : i;
+      vm.StoreArrayElement(to, dst + offset, vm.ArrayElement(from, src + offset));
+    }
+  } else if (vm.linker.IsAssignable(*to.type, *from.type)) {
     static_assert(std::is_trivially_copyable_v<Value>);
     std::memmove(to.elements.data() + dst, from.elements.data() + src, len * sizeof(Value));
   } else {
@@ -144,6 +154,45 @@ void InstallMath(ClassLinker& cl, std::string_view descriptor) {
       [](Runtime& vm, Object*, Values a) { return Value::Double(Clamp(vm, a[0].d(), a[1].d(), a[2].d())); });
 }
 
+std::string NativePathError(Runtime& vm, Object* path_object) {
+  const auto path = EncodeUtf8(vm.NonNull(path_object).text, false);
+  if (path.empty() || path.front() != '/' || path.find('\0') != path.npos)
+    return "Expected an absolute native library path: " + path;
+  auto* libraries = vm.NativeLibraries();
+  return libraries ? libraries->Load(path) : "No APK native library source for " + path;
+}
+
+Value LoadNativePath(Runtime& vm, Object* path) {
+  const auto error = NativePathError(vm, path);
+  if (!error.empty()) vm.Fail("Ljava/lang/UnsatisfiedLinkError;", error);
+  return {};
+}
+
+Value LoadNativeName(Runtime& vm, Object* loader, Object* name_object) {
+  const auto name = EncodeUtf8(vm.NonNull(name_object).text, false);
+  if (name.empty() || name.find_first_of("/\\") != name.npos || name.find('\0') != name.npos)
+    vm.Fail("Ljava/lang/UnsatisfiedLinkError;", "Invalid native library name: " + name);
+  if (loader) {
+    const Value arg = Value::Ref(name_object);
+    RootScope roots(vm);
+    auto* path = roots.Hold(CallVirtual(vm, loader, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;", {&arg, 1}).ref());
+    if (path) return LoadNativePath(vm, path);
+    vm.Fail("Ljava/lang/UnsatisfiedLinkError;", "ClassLoader could not find lib" + name + ".so");
+  }
+  auto* libraries = vm.NativeLibraries();
+  const auto path = libraries ? libraries->FindLibrary(name) : std::string{};
+  if (path.empty()) vm.Fail("Ljava/lang/UnsatisfiedLinkError;", "APK does not contain lib" + name + ".so");
+  const auto error = libraries->Load(path);
+  if (!error.empty()) vm.Fail("Ljava/lang/UnsatisfiedLinkError;", error);
+  return {};
+}
+
+Value LoadNativeForClass(Runtime& vm, Object* cls, Object* name) {
+  RootScope roots(vm);
+  auto* loader = cls ? roots.Hold(CallVirtual(vm, cls, "getClassLoader", "()Ljava/lang/ClassLoader;").ref()) : nullptr;
+  return LoadNativeName(vm, loader, name);
+}
+
 void InstallSystem(Runtime& vm) {
   auto& cl = vm.linker;
   Class& sys = cl.Define("Ljava/lang/System;", kObject, art::kAccFinal);
@@ -171,6 +220,14 @@ void InstallSystem(Runtime& vm) {
         }
         return Value{};
       });
+  const Builtin load_path = [](Runtime& vm, Object*, Values args) { return LoadNativePath(vm, args[0].ref()); };
+  const Builtin load_name = [](Runtime& vm, Object*, Values args) { return LoadNativeName(vm, nullptr, args[0].ref()); };
+  cl.AddMethod(sys, "load", "(Ljava/lang/String;)V", art::kAccStatic, load_path);
+  cl.AddMethod(sys, "loadLibrary", "(Ljava/lang/String;)V", art::kAccStatic, load_name);
+  cl.AddMethod(sys, "mapLibraryName", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values args) {
+        return Value::Ref(vm.NewString(u"lib" + vm.NonNull(args[0].ref()).text + u".so"));
+      });
   cl.AddMethod(sys, "setOut", "(Ljava/io/PrintStream;)V", art::kAccStatic,
       [&out](Runtime&, Object*, Values a) { out.value = a[0]; return Value{}; });
   cl.AddMethod(sys, "setErr", "(Ljava/io/PrintStream;)V", art::kAccStatic,
@@ -195,6 +252,8 @@ void InstallSystem(Runtime& vm) {
     if (key.empty()) vm.Fail("Ljava/lang/IllegalArgumentException;", "Empty property name");
     const auto entry = vm.options.system_properties.find(key);
     if (entry != vm.options.system_properties.end()) return StringValue(vm, entry->second);
+    // The class linker indexes secondary DEX files before Application.attach.
+    if (key == "java.vm.version") return StringValue(vm, "2.1.0");
     if (key == "line.separator") return StringValue(vm, "\n");
     if (key == "file.separator") return StringValue(vm, "/");
     if (key == "path.separator") return StringValue(vm, ":");
@@ -225,6 +284,35 @@ void InstallSystem(Runtime& vm) {
   });
   cl.AddMethod(runtime, "getRuntime", "()Ljava/lang/Runtime;", art::kAccStatic,
       [&singleton](Runtime&, Object*, Values) { return singleton.value; });
+  cl.AddMethod(runtime, "load", "(Ljava/lang/String;)V", 0, load_path);
+  cl.AddMethod(runtime, "load", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", 0, load_path);
+  cl.AddMethod(runtime, "load0", "(Ljava/lang/Class;Ljava/lang/String;)V", 0,
+      [](Runtime& vm, Object*, Values args) { return LoadNativePath(vm, args[1].ref()); });
+  cl.AddMethod(runtime, "loadLibrary", "(Ljava/lang/String;)V", 0, load_name);
+  cl.AddMethod(runtime, "loadLibrary", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V", 0,
+      [](Runtime& vm, Object*, Values args) { return LoadNativeName(vm, args[1].ref(), args[0].ref()); });
+  cl.AddMethod(runtime, "loadLibrary0", "(Ljava/lang/Class;Ljava/lang/String;)V", 0,
+      [](Runtime& vm, Object*, Values args) { return LoadNativeForClass(vm, args[0].ref(), args[1].ref()); });
+  cl.AddMethod(runtime, "loadLibrary0", "(Ljava/lang/ClassLoader;Ljava/lang/String;)V", 0,
+      [](Runtime& vm, Object*, Values args) { return LoadNativeName(vm, args[0].ref(), args[1].ref()); });
+  cl.AddMethod(runtime, "loadLibrary0", "(Ljava/lang/ClassLoader;Ljava/lang/Class;Ljava/lang/String;)V", 0,
+      [](Runtime& vm, Object*, Values args) { return LoadNativeName(vm, args[0].ref(), args[2].ref()); });
+  const Builtin native_load = [](Runtime& vm, Object*, Values args) {
+    const auto error = NativePathError(vm, args[0].ref());
+    return error.empty() ? Value{} : StringValue(vm, error);
+  };
+  cl.AddMethod(runtime, "nativeLoad", "(Ljava/lang/String;Ljava/lang/ClassLoader;Ljava/lang/Class;)Ljava/lang/String;",
+      art::kAccStatic | art::kAccNative, native_load);
+  cl.AddMethod(runtime, "nativeLoad", "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/String;",
+      art::kAccStatic, native_load);
+  cl.AddBootNative("Ljava/nio/ByteBuffer;", "allocateDirect", "(I)Ljava/nio/ByteBuffer;",
+      [](Runtime& vm, Object*, Values args) {
+        try {
+          return Value::Ref(vm.NewDirectBuffer(args[0].i()));
+        } catch (const std::bad_alloc&) {
+          vm.Fail("Ljava/lang/OutOfMemoryError;", "Direct buffer");
+        }
+      });
   cl.AddMethod(runtime, "availableProcessors", "()I", 0,
       [](Runtime&, Object*, Values) { return Value::Int(1); });
   const Builtin check_shutdown_hook = [&shutting_down](Runtime& vm, Object* self, Values a) {
@@ -824,14 +912,24 @@ void InstallAtomicUpdaters(ClassLinker& cl) {
 
 void InstallAndroid(Runtime& vm) {
   auto& cl = vm.linker;
-  const Builtin print = [](Runtime& vm, Object*, Values a) {
+  const auto print = [](Runtime& vm, Values a, int priority) {
     const auto tag = EncodeUtf8(JavaText(vm, a[0].ref()), false);
     const auto msg = EncodeUtf8(JavaText(vm, a[1].ref()), false);
-    std::fprintf(stderr, "%s: %s\n", tag.c_str(), msg.c_str());
-    if (a.size() == 3 && a[2].ref()) {
-      const auto err = EncodeUtf8(JavaText(vm, a[2].ref()), false);
-      std::fprintf(stderr, "%s\n", err.c_str());
-    }
+    const auto detail = a.size() == 3 && a[2].ref()
+        ? EncodeUtf8(JavaText(vm, a[2].ref()), false) : std::string{};
+#ifdef __EMSCRIPTEN__
+    // Keep the Android logcat priority visible alongside browser diagnostics.
+    constexpr std::string_view levels = "VDIWEA";
+    const char level = levels[std::clamp(priority, 2, 7) - 2];
+    const int flags = EM_LOG_CONSOLE | (priority >= 7 ? EM_LOG_ERROR :
+        priority >= 5 ? EM_LOG_WARN : EM_LOG_INFO);
+    emscripten_log(flags, "[Android/%c] %s: %s%s%s", level, tag.c_str(), msg.c_str(),
+                   detail.empty() ? "" : "\n", detail.c_str());
+#else
+    auto* stream = priority >= 6 ? stderr : stdout;
+    std::fprintf(stream, "%s: %s\n", tag.c_str(), msg.c_str());
+    if (!detail.empty()) std::fprintf(stream, "%s\n", detail.c_str());
+#endif
     return Value::Int(msg.size());
   };
   for (const auto name : {"Landroid/util/Log;", "Landroid/util/Slog;"}) {
@@ -865,10 +963,14 @@ void InstallAndroid(Runtime& vm) {
           return Value::Int(threshold < 8 && a[1].i() >= threshold);
         });
     cl.AddMethod(log, "println", "(ILjava/lang/String;Ljava/lang/String;)I", art::kAccStatic,
-        [print](Runtime& vm, Object*, Values a) { return print(vm, nullptr, a.subspan(1)); });
-    for (const auto level : {"v", "d", "i", "w", "e", "wtf"}) {
-      cl.AddMethod(log, level, "(Ljava/lang/String;Ljava/lang/String;)I", art::kAccStatic, print);
-      cl.AddMethod(log, level, "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I", art::kAccStatic, print);
+        [print](Runtime& vm, Object*, Values a) { return print(vm, a.subspan(1), a.front().i()); });
+    constexpr std::array levels{"v", "d", "i", "w", "e", "wtf"};
+    for (size_t i = 0; i < levels.size(); ++i) {
+      const Builtin writer = [print, priority = static_cast<int>(i) + 2](Runtime& vm, Object*, Values a) {
+        return print(vm, a, priority);
+      };
+      cl.AddMethod(log, levels[i], "(Ljava/lang/String;Ljava/lang/String;)I", art::kAccStatic, writer);
+      cl.AddMethod(log, levels[i], "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I", art::kAccStatic, writer);
     }
   }
   auto& props = cl.Define("Landroid/os/SystemProperties;", kObject, art::kAccFinal);

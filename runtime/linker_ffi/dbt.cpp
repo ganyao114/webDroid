@@ -117,7 +117,7 @@ struct ExecutionMemory {
 int32_t InvokeHost(wa_dbt& dbt, uint64_t pc, uint64_t sp, wa_host_call_ctx_t& context) {
     const auto offset = pc - WA_HOST_STUB_BASE;
     const auto index = offset / WA_HOST_STUB_STRIDE;
-    if (offset % WA_HOST_STUB_STRIDE || index >= dbt.hosts.size())
+    if (offset % WA_HOST_STUB_STRIDE || index >= dbt.hosts.size() || !dbt.hosts[index].function)
         return WA_ERR_FAULT;
 
     // Registration and guest execution can recur inside a callback.
@@ -130,12 +130,8 @@ int32_t InvokeHost(wa_dbt& dbt, uint64_t pc, uint64_t sp, wa_host_call_ctx_t& co
     } restore{dbt, dbt.active_sp};
     dbt.active_sp = sp;
     ++dbt.stats.host_calls;
-    context.ret1 = sp;
-    const auto status = function(&context, user);
-    // Keep the existing default for handlers that only return ret0 or fret0.
-    if (context.ret1 == sp)
-        context.ret1 = 0;
-    return status;
+    context.sp = sp;
+    return function(&context, user);
 }
 
 int32_t RunHost(wa_dbt& dbt, uint64_t pc, Arm32State& state) {
@@ -169,6 +165,7 @@ int32_t RunHost(wa_dbt& dbt, uint64_t pc, Arm64State& state) {
     for (size_t i = 0; i < 8; ++i) {
         float scalar;
         std::memcpy(&scalar, state.q[i], sizeof(scalar));
+        std::memcpy(&context.fp_bits[i], state.q[i], sizeof(context.fp_bits[i]));
         context.args[i] = state.gprs[i];
         context.fargs[i] = scalar;
     }
@@ -177,7 +174,10 @@ int32_t RunHost(wa_dbt& dbt, uint64_t pc, Arm64State& state) {
         return status;
     state.gprs[0] = context.ret0;
     state.gprs[1] = context.ret1;
-    if (context.has_float_ret) {
+    if (context.has_fp_ret_bits) {
+        std::memset(state.q[0], 0, sizeof(state.q[0]));
+        std::memcpy(state.q[0], &context.fp_ret_bits, sizeof(context.fp_ret_bits));
+    } else if (context.has_float_ret) {
         const auto scalar = static_cast<float>(context.fret0);
         std::memset(state.q[0], 0, sizeof(state.q[0]));
         std::memcpy(state.q[0], &scalar, sizeof(scalar));
@@ -203,6 +203,7 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state) {
         const auto pc = GuestAddress<State>(state.pc);
         if (pc == WA_EXIT_SENTINEL_PC)
             return WA_OK;
+        dbt.last_pc = pc;
         if (dbt.steps_left == 0)
             return WA_ERR_TIMEDOUT;
         if (pc >= WA_HOST_STUB_BASE) {
@@ -244,8 +245,8 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state) {
     }
 }
 
-int32_t Call(wa_dbt& dbt, uint64_t entry, std::span<const uint64_t> args,
-             std::span<const float> fp_args, uint64_t& result) {
+int32_t Call(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& args,
+             wa_guest_call_result_t& result) {
     if (dbt.call_depth == kMaxCallDepth)
         return WA_ERR_OVERFLOW;
     auto status = EnsureStack(dbt);
@@ -253,9 +254,18 @@ int32_t Call(wa_dbt& dbt, uint64_t entry, std::span<const uint64_t> args,
         return status;
     const bool nested = dbt.call_depth != 0;
     const auto top = dbt.stack_base + kStackSpan;
-    auto sp = AlignDown(nested ? dbt.active_sp : top, 16);
-    if (sp > top || sp < dbt.stack_base + WA_PAGE_SIZE)
+    const auto caller_sp = nested ? dbt.active_sp : top;
+    const auto low = dbt.stack_base + WA_PAGE_SIZE;
+    if (caller_sp > top || caller_sp < low || args.stack_size > caller_sp - low)
         return WA_ERR_FAULT;
+    const auto sp = AlignDown(caller_sp - args.stack_size, 16);
+    if (sp < low)
+        return WA_ERR_FAULT;
+    if (args.stack_size) {
+        status = wa_softmmu_write(dbt.mmu, sp, args.stack, args.stack_size);
+        if (status != WA_OK)
+            return status;
+    }
     if (nested)
         ++dbt.stats.reverse_callbacks;
     else
@@ -263,36 +273,26 @@ int32_t Call(wa_dbt& dbt, uint64_t entry, std::span<const uint64_t> args,
     const CallDepth frame{dbt.call_depth};
 
     if (dbt.arch == WA_ARCH_ARM32) {
-        Arm32State state;
-        std::array<uint32_t, 8> words;
-        std::copy(args.begin(), args.end(), words.begin());
-        std::transform(fp_args.begin(), fp_args.end(), words.begin() + args.size(),
-                       [](float value) { return std::bit_cast<uint32_t>(value); });
-        const auto count = args.size() + fp_args.size();
-        const auto register_args = std::min<size_t>(count, 4);
-        std::copy_n(words.begin(), register_args, state.r);
-        if (count > register_args) {
-            sp -= 16;
-            status = wa_softmmu_write(dbt.mmu, sp, words.data() + register_args,
-                                      (count - register_args) * sizeof(uint32_t));
-            if (status != WA_OK)
-                return status;
-        }
+        Arm32State state{};
+        std::copy_n(args.gpr, 4, state.r);
         state.r[13] = sp;
         state.r[14] = WA_EXIT_SENTINEL_PC;
         state.pc = Arm32PC(entry);
         status = Run(dbt, state);
-        result = static_cast<uint32_t>(state.r[0]);
+        result.gpr[0] = state.r[0];
+        result.gpr[1] = state.r[1];
     } else {
-        Arm64State state;
-        std::copy(args.begin(), args.end(), state.gprs);
-        for (size_t i = 0; i < fp_args.size(); ++i)
-            std::memcpy(state.q[i], &fp_args[i], sizeof(float));
+        Arm64State state{};
+        std::copy_n(args.gpr, 8, state.gprs);
+        for (size_t i = 0; i < 8; ++i)
+            std::memcpy(state.q[i], &args.fp_bits[i], sizeof(args.fp_bits[i]));
         state.gprs[31] = sp;
         state.gprs[30] = WA_EXIT_SENTINEL_PC;
         state.pc = entry;
         status = Run(dbt, state);
-        result = state.gprs[0];
+        result.gpr[0] = state.gprs[0];
+        result.gpr[1] = state.gprs[1];
+        std::memcpy(&result.fp_bits, state.q[0], sizeof(result.fp_bits));
     }
     return status;
 }
@@ -383,6 +383,12 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_
 
 } // namespace
 
+bool wa::dbt::IsExecutable(const wa_dbt& dbt, uint64_t entry) {
+    if (!entry || entry >= WA_HOST_STUB_BASE || !ValidEntry(dbt.arch, entry)) return false;
+    uint8_t byte;
+    return softmmu::Read(dbt.mmu, entry & ~uint64_t{1}, {&byte, 1}, WA_PROT_EXEC).status == WA_OK;
+}
+
 int32_t wa::dbt::PrepareJitStack(wa_dbt& dbt, uint64_t& sp) {
     std::lock_guard lock(dbt.mutex);
     if (dbt.call_depth)
@@ -428,7 +434,7 @@ void wa_dbt_destroy(wa_dbt_t* dbt) {
     if (!dbt)
         return;
     for (const auto& [address, length] : dbt->allocations)
-        wa::softmmu::Unmap(dbt->mmu, address, length);
+        wa::softmmu::Unmap(dbt->mmu, address, length.mapped_size);
     if (dbt->stack_base)
         wa::softmmu::Unmap(dbt->mmu, dbt->stack_base, kStackSpan);
     delete dbt;
@@ -476,13 +482,38 @@ int32_t wa_dbt_call_f32(wa_dbt_t* dbt, uint64_t entry_vaddr, const uint64_t* int
         (dbt->arch == WA_ARCH_ARM32 && int_count + fp_count > 8) ||
         !ValidEntry(dbt->arch, entry_vaddr))
         return WA_ERR_INVALID;
+    wa_guest_call_frame_t frame{};
+    std::array<uint32_t, 8> words{};
+    if (dbt->arch == WA_ARCH_ARM32) {
+        if (int_count) std::copy_n(int_args, int_count, words.begin());
+        for (uint32_t i = 0; i < fp_count; ++i)
+            words[int_count + i] = std::bit_cast<uint32_t>(fp_args[i]);
+        std::copy_n(words.begin(), 4, frame.gpr);
+        if (int_count + fp_count > 4) {
+            frame.stack = words.data() + 4;
+            frame.stack_size = (int_count + fp_count - 4) * sizeof(uint32_t);
+        }
+    } else {
+        if (int_count) std::copy_n(int_args, int_count, frame.gpr);
+        for (uint32_t i = 0; i < fp_count; ++i)
+            frame.fp_bits[i] = std::bit_cast<uint32_t>(fp_args[i]);
+    }
+    wa_guest_call_result_t result{};
+    const auto status = wa_dbt_call_abi(dbt, entry_vaddr, &frame, &result);
+    if (status == WA_OK) *out_ret = result.gpr[0];
+    return status;
+}
+
+int32_t wa_dbt_call_abi(wa_dbt_t* dbt, uint64_t entry_vaddr, const wa_guest_call_frame_t* frame,
+                       wa_guest_call_result_t* out) {
+    if (!dbt || !frame || !out || (frame->stack_size && !frame->stack) ||
+        !ValidEntry(dbt->arch, entry_vaddr))
+        return WA_ERR_INVALID;
     try {
         std::lock_guard lock(dbt->mutex);
-        uint64_t result = 0;
-        const auto status = Call(*dbt, entry_vaddr, {int_args, int_count}, {fp_args, fp_count},
-                                 result);
-        if (status == WA_OK)
-            *out_ret = result;
+        wa_guest_call_result_t result{};
+        const auto status = Call(*dbt, entry_vaddr, *frame, result);
+        if (status == WA_OK) *out = result;
         return status;
     } catch (const std::bad_alloc&) {
         return WA_ERR_NOMEM;

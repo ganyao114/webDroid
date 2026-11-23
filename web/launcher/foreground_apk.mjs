@@ -1,5 +1,5 @@
 import { WorkerClient } from '../workers/worker_rpc.mjs';
-import { apkHasNativeCode, ForegroundJavaApk } from './foreground_java_apk.mjs';
+import { isLegacyCubeApk, ForegroundJavaApk } from './foreground_java_apk.mjs';
 
 const workerUrl = new URL('../../tests/m6_apk_chrome_e2e/m6_apk_worker.mjs', import.meta.url);
 const workletUrl = new URL('../gfx/audio_worklet.js', import.meta.url);
@@ -75,7 +75,7 @@ export class ForegroundApk {
   async start(bytes) {
     const { surface, launch } = this;
     const signal = this.#abort.signal;
-    if (!apkHasNativeCode(this.javaOptions.launcherModule, bytes, launch.package)) {
+    if (!isLegacyCubeApk(this.javaOptions.launcherModule, bytes, launch.package)) {
       this.#java = new ForegroundJavaApk(this.javaOptions);
       await this.#java.start(bytes);
       return;

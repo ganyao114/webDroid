@@ -87,6 +87,8 @@ GcStats GcHeap::Collect(Runtime& runtime) {
     }
   }
   runtime.jni->SweepNativePeers();
+  if (runtime.direct_arrays)
+    std::erase_if(*runtime.direct_arrays, [](const auto& entry) { return !entry.first->marked; });
   std::erase_if(runtime.file_handles, [](const auto& entry) { return !entry.first->marked; });
   std::erase_if(runtime.regex_programs, [](const auto& entry) { return !entry.first->marked; });
   std::erase_if(runtime.interned, [](const auto& entry) { return !entry.second->marked; });

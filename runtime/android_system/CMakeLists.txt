@@ -11,7 +11,8 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
     option(WA_VERIFY_LAUNCHER_DEX "Verify the system APK DEX files during Launcher boot" ON)
     # Compile AOSP translation units independently of SwiftVM's fmt.
     add_library(wa_android_system_apk OBJECT apk_loader.cpp apk_dex.cpp)
-    target_include_directories(wa_android_system_apk PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
+    target_include_directories(wa_android_system_apk PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../include" ../linker_ffi)
     target_link_libraries(wa_android_system_apk PRIVATE aosp17_libandroidfw aosp17_art_hgraph)
     add_library(wa_android_system_binder OBJECT binder_service_entry.cpp)
     target_link_libraries(wa_android_system_binder PRIVATE
@@ -42,10 +43,12 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
         COMMENT "Compiling the window adapter for the upstream SystemUI APK"
         VERBATIM)
     set(wa_launcher_runtime_sources art_sf_entry.cpp launcher_session_entry.cpp "${wa_systemui_host_dex}")
-    add_library(wa_android_system_foreground STATIC foreground_activity_entry.cpp)
-    target_include_directories(wa_android_system_foreground PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include")
+    add_library(wa_android_system_foreground STATIC foreground_activity_entry.cpp
+        hybrid_native_runtime.cpp hybrid_jni_bridge.cpp)
+    target_include_directories(wa_android_system_foreground PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include"
+        PRIVATE ../linker_ffi ../../tools/ffi_gen/generated)
     target_link_libraries(wa_android_system_foreground PUBLIC wa_hal_surfaceflinger
-        PRIVATE wa_android_system_apk aosp17_ui_jni aosp17_libandroidfw)
+        PRIVATE wa_android_system_apk aosp17_ui_jni aosp17_libandroidfw wa_linker_ffi)
 endif()
 
 if(EMSCRIPTEN)
@@ -92,7 +95,7 @@ if(EMSCRIPTEN)
         target_compile_definitions(wa_hal_browser PRIVATE
             __android_log_write=wa_hal_log_write __android_log_print=wa_hal_log_print)
         list(APPEND exports
-            _wa_system_open_apk _wa_system_close_apk _wa_system_apk_info
+            _wa_system_open_apk _wa_system_close_apk _wa_system_apk_info _wa_system_apk_is_legacy_cube
             _wa_system_apk_compile_dex _wa_system_apk_dex_stats
             _wa_system_apk_load_native _wa_system_apk_set_backing_file)
         list(APPEND exports
@@ -177,4 +180,5 @@ if(BUILD_TESTING AND TARGET wa_android_system_apk)
     add_subdirectory(../../tests/m14_upstream_settings "${CMAKE_BINARY_DIR}/tests/m14_upstream_settings")
     add_subdirectory(../../tests/m14_upstream_apps "${CMAKE_BINARY_DIR}/tests/m14_upstream_apps")
     add_subdirectory(../../tests/m16_commercial_apk_compat "${CMAKE_BINARY_DIR}/tests/m16_commercial_apk_compat")
+    add_subdirectory(../../tests/m17_hybrid_art_ndk "${CMAKE_BINARY_DIR}/tests/m17_hybrid_art_ndk")
 endif()

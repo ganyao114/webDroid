@@ -324,13 +324,20 @@ export async function runLauncher3E2E(options = {}) {
     result.search_query = filtered.searchQuery;
     result.allapps_filtered = filtered.searchResults;
     requireMatch(opened.searchResults > filtered.searchResults, 'All Apps did not remove nonmatching results');
-    await waitFrames(2);
-    labelPoint(cubeLabel);
+    // The search model updates before RecyclerView finishes moving the result into its new row.
+    await waitFrames(18);
+    const cubeResult = () => {
+      const bounds = host.state().searchBounds;
+      return bounds && host.labels().findLast(({ text, x, y }) => matchesDrawnLabel(text, cubeLabel) &&
+        x >= bounds.left && x < bounds.right && y > bounds.bottom);
+    };
+    await waitFor('the drawn Cube search result', cubeResult);
     result.allapps_pixels = await host.pixels();
     requireMatch(result.allapps_pixels.nontransparent_samples > 0, 'The filtered drawer did not render');
     await checkpoint('screenshot-allapps');
 
-    await checkpoint('launch-cube', { point: labelPoint(cubeLabel) });
+    const cube = await waitFor('the Cube search target', cubeResult);
+    await checkpoint('launch-cube', { point: canvasPoint(cube.x, cube.y) });
     await waitFor('ten rendered native APK frames', () => host.phase === 'app' && host.app.frames >= 10);
     await host.holdAppFrame();
     const launched = host.activeLaunch;

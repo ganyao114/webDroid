@@ -700,6 +700,16 @@ jobject JniBridge::Global(Object* object) {
   return reinterpret_cast<jobject>(address);
 }
 
+jweak JniBridge::Weak(Object* object) {
+  if (!object) return nullptr;
+  auto ref = std::make_unique<JniReference>(JniReference{object, JNIWeakGlobalRefType});
+  auto* address = ref.get();
+  weak_globals_.emplace(address, std::move(ref));
+  return reinterpret_cast<jweak>(address);
+}
+
+void JniBridge::DeleteWeak(jweak ref) { weak_globals_.erase(reinterpret_cast<JniReference*>(ref)); }
+
 void JniBridge::DeleteLocal(jobject ref) {
   if (!ref) return;
   for (size_t depth = frame_depth_; depth > 0; --depth) {
@@ -720,6 +730,9 @@ void JniBridge::RetainNativePeer(jobject peer, std::shared_ptr<void> allocation)
 
 void JniBridge::SweepNativePeers() {
   std::erase_if(native_peers_, [](const auto& entry) { return !entry.first->marked; });
+  for (const auto& [address, reference] : weak_globals_) {
+    if (reference->object && !reference->object->marked) reference->object = nullptr;
+  }
 }
 
 void JniBridge::PushFrame(size_t capacity) {
@@ -786,8 +799,17 @@ void JniBridge::RegisterResources() {
 }
 
 Value JniBridge::Invoke(Method& method, Object* receiver, std::span<const Value> args) {
-  if (!method.native) runtime_.Fail("Ljava/lang/UnsatisfiedLinkError;", method.QualifiedName());
   ActiveBridge active(*this);
+  if (!method.native) {
+    if (runtime_.guest_native) {
+      if (auto result = runtime_.guest_native->Invoke(method, receiver, args)) {
+        ++method.owner->native_calls;
+        if (runtime_.exception) throw ManagedException{};
+        return *result;
+      }
+    }
+    runtime_.Fail("Ljava/lang/UnsatisfiedLinkError;", method.QualifiedName());
+  }
   LocalFrame locals(*this);
   jobject native_receiver = Local(method.IsStatic() ? runtime_.ClassObject(*method.owner) : receiver);
   std::array<jvalue, 16> local;

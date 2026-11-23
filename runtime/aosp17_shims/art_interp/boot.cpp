@@ -588,6 +588,8 @@ void InstallReflection(Runtime& vm, Class& cls) {
   auto& cl = vm.linker;
   cl.Define("Ljava/lang/annotation/Annotation;", kObject, art::kAccInterface | art::kAccAbstract);
   auto& loader = cl.Define("Ljava/lang/ClassLoader;", kObject, art::kAccAbstract);
+  cl.AddMethod(loader, "<init>", "()V", art::kAccProtected, Void);
+  cl.AddMethod(loader, "<init>", "(Ljava/lang/ClassLoader;)V", art::kAccProtected, Void);
   auto& class_loader = cl.AddField(cls, "appLoader", loader.descriptor, true);
   const Builtin system_loader = [&loader, &class_loader](Runtime& vm, Object*, Values) {
     if (!class_loader.value.ref()) {
@@ -599,6 +601,13 @@ void InstallReflection(Runtime& vm, Class& cls) {
   cl.AddMethod(loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", 0,
       [](Runtime& vm, Object*, Values a) { return Value::Ref(vm.ClassObject(ClassForName(vm, a[0].ref(), false))); });
   cl.AddMethod(loader, "getParent", "()Ljava/lang/ClassLoader;", 0, Void);
+  cl.AddMethod(loader, "findLibrary", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccProtected,
+      [](Runtime& vm, Object*, Values args) {
+        const auto name = EncodeUtf8(vm.NonNull(args[0].ref()).text, false);
+        auto* libraries = vm.NativeLibraries();
+        const auto path = libraries ? libraries->FindLibrary(name) : std::string{};
+        return path.empty() ? Value{} : StringValue(vm, path);
+      });
   cl.AddMethod(cls, "getClassLoader", "()Ljava/lang/ClassLoader;", 0,
       [system_loader](Runtime& vm, Object* self, Values) {
         const Class* type = self->represented_class;

@@ -185,6 +185,24 @@ struct Object {
   std::unique_ptr<std::vector<TraceFrame>> exception_stack;
 };
 
+class DirectBufferMemory {
+ public:
+  explicit DirectBufferMemory(size_t size) : size(size) {}
+  virtual ~DirectBufferMemory() = default;
+  virtual bool Read(size_t offset, std::span<uint8_t> bytes) const = 0;
+  virtual bool Write(size_t offset, std::span<const uint8_t> bytes) = 0;
+  virtual uint64_t GuestAddress() const { return 0; }
+  const size_t size;
+};
+
+using DirectArrays = std::unordered_map<const Object*, std::unique_ptr<DirectBufferMemory>>;
+
+struct DirectBufferView {
+  std::unique_ptr<DirectBufferMemory>* backing;
+  size_t offset;
+  int32_t capacity;
+};
+
 class ClassLinker {
  public:
   explicit ClassLinker(Runtime& runtime) : runtime_(runtime) {}
@@ -321,8 +339,14 @@ struct Runtime {
     if (!object) Fail("Ljava/lang/NullPointerException;");
     return *object;
   }
-  Value& ArrayElement(Object& array, int32_t index);
+  size_t ArrayLength(const Object& array) const;
+  Value ArrayElement(const Object& array, int32_t index);
   void StoreArrayElement(Object& array, int32_t index, Value value);
+  DirectBufferMemory* DirectArray(const Object& array) const;
+  Object* NewDirectBuffer(int32_t capacity, std::unique_ptr<DirectBufferMemory> memory = {});
+  std::optional<DirectBufferView> DirectBuffer(Object* buffer);
+  GuestNativeLibraries* NativeLibraries();
+  void ReleaseGuestNativeSource() noexcept;
   Object* MakeException(std::string_view type, std::string_view message);
   void CaptureThrowableStack(Object& throwable);
   void AppendExceptionFrame(const Method& method, uint32_t pc);
@@ -335,6 +359,10 @@ struct Runtime {
   ClassLinker linker;
   GcHeap heap;
   std::unique_ptr<JniBridge> jni;
+  GuestNativeFactory guest_native_factory = nullptr;
+  const void* guest_native_source = nullptr;
+  std::unique_ptr<GuestNativeLibraries> guest_native;
+  std::unique_ptr<DirectArrays> direct_arrays;
   struct GuestFile {
     std::vector<uint8_t> bytes;
     int64_t last_modified;

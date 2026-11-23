@@ -1,0 +1,55 @@
+--- a/libcore/ojluni/src/main/java/java/nio/ByteBuffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/ByteBuffer.java
+@@ -339,3 +339 @@
+-    public static ByteBuffer allocateDirect(int capacity) {
+-        throw new UnsupportedOperationException("Direct buffer memory is unavailable");
+-    }
++    public static native ByteBuffer allocateDirect(int capacity);
+@@ -1560 +1558 @@
+-        return (hb != null) && !isReadOnly;
++        return (hb != null) && !isReadOnly && !isDirect();
+@@ -1583 +1581 @@
+-        if (hb == null)
++        if (hb == null || isDirect())
+@@ -1611 +1609 @@
+-        if (hb == null)
++        if (hb == null || isDirect())
+--- a/libcore/ojluni/src/main/java/java/nio/HeapByteBuffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/HeapByteBuffer.java
+@@ -47,0 +48,2 @@
++    private final boolean direct;
++
+@@ -85,0 +88 @@
++        direct = false;
+@@ -112,2 +115,8 @@
+-    }
+-
++        direct = false;
++    }
++
++
++    // The VM owns this byte array's storage. All views share the same array.
++    private HeapByteBuffer(byte[] buf, int capacity) {
++        this(buf, -1, 0, capacity, capacity, 0, false, true);
++    }
+@@ -120 +129 @@
+-                                   int off, boolean isReadOnly)
++                                   int off, boolean isReadOnly, boolean direct)
+@@ -123,0 +133,2 @@
++        this.direct = direct;
++        if (direct) this.address = off;
+@@ -150 +161 @@
+-                isReadOnly);
++                isReadOnly, direct);
+@@ -164 +175 @@
+-                isReadOnly);
++                isReadOnly, direct);
+@@ -176 +187 @@
+-                isReadOnly);
++                isReadOnly, direct);
+@@ -197 +208 @@
+-                true /* isReadOnly */);
++                true /* isReadOnly */, direct);
+@@ -255 +266 @@
+-        return false;
++        return direct;

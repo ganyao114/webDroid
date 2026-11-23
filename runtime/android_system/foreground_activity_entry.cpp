@@ -2,6 +2,7 @@
 
 #include "apk_manifest.h"
 #include "art_interp.h"
+#include "hybrid_native_runtime.h"
 #include "mounted_apk.h"
 #include "native_methods.h"
 #include "ui_bridge.h"
@@ -366,6 +367,13 @@ struct Session {
             ",\"application\":" + Quote(application_class) +
             ",\"iconName\":" + Quote(icon_name) + ",\"iconLoaded\":" + (icon_loaded ? "true" : "false") +
             numbers;
+        const auto native = vm.GetGuestNativeStats();
+        if (!native.abi.empty()) {
+            state += ",\"nativeAbi\":" + Quote(native.abi) +
+                ",\"nativeLibraries\":" + std::to_string(native.libraries) +
+                ",\"nativeHostCalls\":" + std::to_string(native.calls) +
+                ",\"nativeCallbacks\":" + std::to_string(native.callbacks);
+        }
 #ifdef __EMSCRIPTEN__
         state += ",\"wasmLinearBytes\":" + std::to_string(emscripten_get_heap_size()) +
             ",\"wasmHeapEndBytes\":" + std::to_string(reinterpret_cast<uintptr_t>(sbrk(0)));
@@ -539,6 +547,7 @@ void wa_system_app_destroy() {
             return WA_OK;
         });
     }
+    if (session) session->vm.ReleaseGuestNativeSource();
     session.reset();
     last_error.clear();
 }
@@ -606,6 +615,9 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
         s.activity_class = chosen->name;
         s.activity_descriptor = Descriptor(chosen->name);
         s.package_name = pkg;
+        s.application_class = package.manifest.application.empty() ? "android.app.Application" :
+            package.manifest.application;
+        s.application_descriptor = Descriptor(s.application_class);
         s.icon_resource = chosen->icon ? chosen->icon : package.manifest.icon;
         package.mount = std::make_unique<MountedApk>(std::span(bytes, size));
         const std::string apk_path = package.mount->path();
@@ -614,6 +626,7 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
 
         s.vm.MountReadOnlyFile(apk_path, {bytes, size});
         s.vm.LoadApkDexFiles(apk_path);
+        s.vm.SetGuestNativeSource(wa::system::OpenGuestNativeApk, s.catalog.at(s.package_name).mount.get());
         const auto prefix = apk_path + '!';
         if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))
             throw std::invalid_argument("Launcher activity is absent from the APK DEX files");

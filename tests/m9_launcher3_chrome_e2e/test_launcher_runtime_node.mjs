@@ -424,7 +424,7 @@ test('returns from all six foreground apps and releases isolated sessions and in
       }
     }
     assert.equal(new Set(fake.foregrounds.map(({ module }) => module)).size, 5);
-    assert(browser.workers.every(worker => worker.didShutdown && worker.terminated));
+    assert(browser.workers.length > 0 && browser.workers.every(worker => worker.didShutdown && worker.terminated));
     assert.deepEqual(errors, []);
   } finally {
     await host.close();
@@ -463,7 +463,7 @@ test('uses WebGPU first, paces a 120 Hz display at 60 FPS, and rebinds input aft
   assert.equal(fake.allocations.size, 0);
 });
 
-test('shell controls install, compose CJK, switch locale and recover from a foreground worker failure', async () => {
+test('shell installs a hybrid APK, composes CJK, switches locale and recovers from a cube worker failure', async () => {
   const document = documentFrom(shellHtml), browser = installBrowser(document);
   const fake = mockLauncherWasm();
   const root = document.querySelector('#launcher-playground');
@@ -530,7 +530,8 @@ test('shell controls install, compose CJK, switch locale and recover from a fore
     for (let index = 0; index < 12; ++index) await browser.step();
     assert.equal(device.dataset.phase, 'app');
     assert.equal(host.activeLaunch.package, 'org.test.extra');
-    assert.equal(browser.workers[0].app.package, 'org.test.extra');
+    assert.equal(host.app.package, 'org.test.extra');
+    assert.equal(browser.workers.length, 0);
     root.querySelector('[data-nav="back"]').click();
     assert.equal(host.phase, 'launcher');
     assert.deepEqual(fake.calls.slice(-3), [['pause'], ['resume'], ['home']]);
@@ -543,13 +544,16 @@ test('shell controls install, compose CJK, switch locale and recover from a fore
     assert.equal(root.querySelector('#launcher-recent-app').textContent, 'Extra');
     root.querySelector('[data-nav="recents"]').click();
     assert.equal(root.querySelector('.wa-recents').hidden, true);
-    root.querySelector('[data-nav="recents"]').click();
-    browser.failNextOpen = true;
-    root.querySelector('#launcher-recent-app').click();
+    allApps.click();
     await browser.step();
+    const cube = host.labels().find(({ text }) => text === launchers.get(3).label);
+    assert(cube, 'Missing legacy cube label');
+    browser.failNextOpen = true;
+    tap(cube.x, cube.y);
+    for (let index = 0; index < 12; ++index) await browser.step();
     assert.equal(host.phase, 'launcher');
     assert.match(root.querySelector('.wa-status').textContent, /Cannot load fixture APK/);
-    assert(browser.workers.every(worker => worker.didShutdown && worker.terminated));
+    assert(browser.workers.length > 0 && browser.workers.every(worker => worker.didShutdown && worker.terminated));
 
     root.querySelector('#launcher-locale').click();
     await browser.flush();

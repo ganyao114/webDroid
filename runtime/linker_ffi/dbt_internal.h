@@ -17,11 +17,23 @@ struct HostSymbol {
     wa_host_symbol_fn function;
     void* user;
     bool builtin;
+    uint64_t address;
 };
 
 struct LoadedImage {
+    uint64_t base = 0;
     std::string soname;
+    std::vector<std::string> needed;
     std::map<std::string, uint64_t, std::less<>> exports;
+};
+
+struct GuestAllocation {
+    size_t mapped_size;
+    size_t size;
+};
+
+struct GuestThreadKey {
+    uint64_t destructor, value = 0;
 };
 
 struct ExitHandler {
@@ -45,20 +57,28 @@ struct wa_dbt {
     std::vector<wa::dbt::HostSymbol> hosts;
     std::vector<wa::dbt::LoadedImage> images;
     std::vector<wa::dbt::ExitHandler> exit_handlers;
-    std::map<uint64_t, size_t> allocations;
+    std::map<uint32_t, wa::dbt::GuestThreadKey> thread_keys;
+    std::map<uint64_t, unsigned> mutex_depths;
+    std::map<uint64_t, wa::dbt::GuestAllocation> allocations;
     uint64_t heap_hint = wa::dbt::kHeapBase;
     uint64_t stack_base = 0;
     uint64_t active_sp = 0;
     uint64_t steps_left = 0;
+    uint64_t last_pc = 0;
     unsigned call_depth = 0;
-    bool loading = false;
 };
 
 namespace wa::dbt {
 
 void RegisterBuiltins(wa_dbt& dbt);
 int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name,
-                     wa_host_symbol_fn function, void* user, bool builtin = false);
+                     wa_host_symbol_fn function, void* user, bool builtin = false,
+                     uint64_t* address = nullptr);
+void RunThreadDestructors(wa_dbt& dbt);
+void RegisterSupplementalBuiltins(wa_dbt& dbt);
+uint64_t AllocateGuest(wa_dbt& dbt, uint64_t size);
+void FreeGuest(wa_dbt& dbt, uint64_t address);
+bool IsExecutable(const wa_dbt& dbt, uint64_t entry);
 bool ResolveImport(const wa_dbt& dbt, std::span<const std::string_view> needed,
                    std::string_view symbol, uint64_t& address);
 

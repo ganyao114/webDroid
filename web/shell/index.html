@@ -295,6 +295,7 @@
           backend: params.get('backend') ?? 'auto',
           gesturalNavigation: params.get('navigation') === 'gestural',
         });
+        if (params.has('debug')) globalThis.waLauncher = playground.host;
         addEventListener('pagehide', () => { void playground.close(); }, { once: true });
       } catch (error) {
         root.querySelector('.wa-status').textContent = error.message;

@@ -14,7 +14,9 @@ namespace wa {
 
 class GuestCall {
   public:
-    explicit GuestCall(wa_host_call_ctx_t& context) : context_(context), stack_(context.ret1) {}
+    explicit GuestCall(wa_host_call_ctx_t& context) : context_(context), stack_(context.sp) {}
+
+    const wa_host_call_ctx_t& context() const { return context_; }
 
     bool arm32() const { return context_.arch == WA_ARCH_ARM32; }
     bool ok() const { return status_ == WA_OK; }

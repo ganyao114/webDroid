@@ -1104,6 +1104,7 @@ patches/969-cooperative-read-write-locks.patch
 patches/970-dex-package-metadata.patch
 patches/971-hosted-main-looper.patch
 patches/972-embedded-character-buffers.patch
+patches/1018-embedded-direct-byte-buffers.patch
 patches/973-embedded-regex-backend.patch
 patches/974-embedded-content-provider-metadata.patch
 patches/975-embedded-reflection-fields.patch

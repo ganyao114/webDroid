@@ -1,4 +1,5 @@
 #include "dbt_internal.h"
+#include "elf_image.h"
 
 #include "softmmu_internal.h"
 
@@ -189,9 +190,31 @@ template <typename Word> class Loader {
     using Symbol = std::conditional_t<Is32, Symbol32, Symbol64>;
 
   public:
-    Loader(wa_dbt& dbt, Bytes file, uint64_t bias) : dbt(dbt), file(file), bias(bias) {}
+    Loader(wa_dbt* dbt, Bytes file, uint64_t bias) : dbt(dbt), file(file), bias(bias) {}
 
-    int32_t Load(uint32_t file_id, uint64_t& base) {
+    int32_t Inspect(ElfInfo& info, bool include_symbols) {
+        auto status = ParseProgramHeaders();
+        if (status == WA_OK) status = ParseDynamic();
+        if (status == WA_OK && include_symbols) status = ParseSymbols();
+        if (status != WA_OK) return status;
+        info = {};
+        info.soname = image.soname;
+        info.needed.assign(needed.begin(), needed.end());
+        info.alignment = alignment;
+        info.end = (segments.back().vaddr + segments.back().memsz + kPageMask) & ~kPageMask;
+        for (const auto& [name, address] : image.exports) info.exports.push_back(name);
+        for (size_t i = 1; i < symbols.size() / sizeof(Symbol); ++i) {
+            const auto symbol = Read<Symbol>(symbols, i * sizeof(Symbol));
+            if (symbol.section != SHN_UNDEF) continue;
+            const auto name = StringAt(symbol.name);
+            if (!name) return WA_ERR_INVALID;
+            if (!name->empty()) info.imports.push_back({std::string(*name), (symbol.info >> 4) == STB_WEAK});
+        }
+        return WA_OK;
+    }
+
+    int32_t Load(uint32_t file_id, std::string_view name, uint64_t& base, std::string* error) {
+        this->error = error;
         auto status = ParseProgramHeaders();
         if (status != WA_OK)
             return status;
@@ -202,22 +225,38 @@ template <typename Word> class Loader {
         if (status != WA_OK)
             return status;
 
-        LoadMappings mappings{.mmu = dbt.mmu, .ranges = {}};
+        if (bias % alignment) return WA_ERR_INVALID;
+        if (image.soname.empty()) image.soname = name;
+        image.needed.assign(needed.begin(), needed.end());
+        image.base = bias + (segments.front().vaddr & ~kPageMask);
+        LoadMappings mappings{.mmu = dbt->mmu, .ranges = {}};
         status = PlanMappings(mappings);
         if (status != WA_OK)
             return status;
-        dbt.images.reserve(dbt.images.size() + 1);
+        const auto mapped_base = image.base;
+        dbt->images.reserve(dbt->images.size() + 1);
         status = mappings.Map(file_id);
-        if (status == WA_OK)
-            status = Relocate();
-        if (status == WA_OK)
-            status = RunInitializers();
-        if (status != WA_OK)
-            return status;
-
-        dbt.images.push_back(std::move(image));
+        if (status == WA_OK) status = Relocate();
+        if (status != WA_OK) return status;
+        dbt->images.push_back(std::move(image));
+        struct Rollback {
+            wa_dbt& dbt;
+            uint64_t base, before, end;
+            bool committed = false;
+            ~Rollback() {
+                if (committed) return;
+                HideElf(dbt, base);
+                std::erase_if(dbt.exit_handlers, [&](const auto& handler) {
+                    return (handler.function >= before && handler.function < end) ||
+                        (handler.dso >= before && handler.dso < end);
+                });
+            }
+        } rollback{*dbt, mapped_base, bias, bias + segments.back().vaddr + segments.back().memsz};
+        status = RunInitializers();
+        if (status != WA_OK) return status;
+        rollback.committed = true;
         mappings.Publish();
-        base = bias + (segments.front().vaddr & ~kPageMask);
+        base = mapped_base;
         return WA_OK;
     }
 
@@ -257,6 +296,7 @@ template <typename Word> class Loader {
                 (ph.align > 1 &&
                  (!std::has_single_bit(ph.align) || ((ph.vaddr ^ ph.offset) & (ph.align - 1)))))
                 return WA_ERR_INVALID;
+            alignment = std::max<uint64_t>(alignment, ph.align);
             segments.push_back({ph.vaddr, ph.offset, ph.filesz, ph.memsz, ph.flags});
         }
         if (segments.empty() || !dynamic)
@@ -327,9 +367,6 @@ template <typename Word> class Loader {
         }
         if (!terminated)
             return WA_ERR_INVALID;
-        if (Tag(DT_ANDROID_RELSZ) || Tag(DT_ANDROID_RELASZ) || Tag(DT_RELRSZ) ||
-            Tag(DT_ANDROID_RELRSZ))
-            return WA_ERR_NOTSUP;
 
         const auto max_strings = FileAt(Tag(DT_STRTAB));
         if (Tag(DT_STRSZ) > max_strings.size() || (Tag(DT_STRSZ) && !tags.contains(DT_STRTAB)))
@@ -491,8 +528,9 @@ template <typename Word> class Loader {
         const auto name = StringAt(symbol.name);
         if (!name)
             return WA_ERR_INVALID;
-        if (ResolveImport(dbt, needed, *name, address) || (symbol.info >> 4) == STB_WEAK)
+        if (ResolveImport(*dbt, needed, *name, address) || (symbol.info >> 4) == STB_WEAK)
             return WA_OK;
+        if (error) *error = "unresolved import " + std::string(*name);
         return WA_ERR_NOENT;
     }
 
@@ -528,12 +566,12 @@ template <typename Word> class Loader {
                 addend = static_cast<Word>(reloc.addend);
             } else if (relative || absolute) {
                 // Android's REL GOT and PLT relocations have no implicit addend.
-                status = wa_softmmu_read(dbt.mmu, target, &addend, sizeof(addend));
+                status = wa_softmmu_read(dbt->mmu, target, &addend, sizeof(addend));
                 if (status != WA_OK)
                     return status;
             }
             const auto value = static_cast<Word>(address + addend);
-            status = wa_softmmu_write(dbt.mmu, target, &value, sizeof(value));
+            status = wa_softmmu_write(dbt->mmu, target, &value, sizeof(value));
             if (status != WA_OK)
                 return status;
         }
@@ -541,6 +579,11 @@ template <typename Word> class Loader {
     }
 
     int32_t Relocate() const {
+        if (Tag(DT_ANDROID_RELSZ) || Tag(DT_ANDROID_RELASZ) || Tag(DT_RELRSZ) ||
+            Tag(DT_ANDROID_RELRSZ)) {
+            if (error) *error = "packed Android relocations";
+            return WA_ERR_NOTSUP;
+        }
         if ((Tag(DT_RELSZ) && (!tags.contains(DT_REL) || Tag(DT_RELENT) != sizeof(Rel<Word>))) ||
             (Tag(DT_RELASZ) && (!tags.contains(DT_RELA) || Tag(DT_RELAENT) != sizeof(Rela<Word>))))
             return WA_ERR_INVALID;
@@ -572,28 +615,34 @@ template <typename Word> class Loader {
 
         uint64_t result;
         if (init) {
-            const auto status = wa_dbt_call(&dbt, bias + init, nullptr, 0, &result);
-            if (status != WA_OK)
+            const auto status = wa_dbt_call(dbt, bias + init, nullptr, 0, &result);
+            if (status != WA_OK) {
+                if (error) *error = "DT_INIT stopped at guest PC " + std::to_string(dbt->last_pc);
                 return status;
+            }
         }
         for (uint64_t offset = 0; offset < length; offset += sizeof(Word)) {
             Word address;
             auto status =
-                wa_softmmu_read(dbt.mmu, bias + array + offset, &address, sizeof(address));
+                wa_softmmu_read(dbt->mmu, bias + array + offset, &address, sizeof(address));
             if (status != WA_OK)
                 return status;
             if (!address || address == static_cast<Word>(-1))
                 continue;
-            status = wa_dbt_call(&dbt, address, nullptr, 0, &result);
-            if (status != WA_OK)
+            status = wa_dbt_call(dbt, address, nullptr, 0, &result);
+            if (status != WA_OK) {
+                if (error) *error = ".init_array stopped at guest PC " + std::to_string(dbt->last_pc);
                 return status;
+            }
         }
         return WA_OK;
     }
 
-    wa_dbt& dbt;
+    wa_dbt* dbt;
     Bytes file;
     uint64_t bias;
+    uint64_t alignment = WA_PAGE_SIZE;
+    std::string* error = nullptr;
     std::vector<Segment> segments;
     std::optional<Segment> dynamic;
     std::map<uint64_t, uint64_t> tags;
@@ -605,24 +654,39 @@ template <typename Word> class Loader {
 } // namespace
 } // namespace wa::dbt
 
+int32_t wa::dbt::InspectElf(wa_guest_arch_t arch, std::span<const uint8_t> bytes, ElfInfo& info,
+                            bool include_symbols) {
+    if (arch == WA_ARCH_ARM32) return Loader<uint32_t>{nullptr, bytes, 0}.Inspect(info, include_symbols);
+    if (arch == WA_ARCH_ARM64) return Loader<uint64_t>{nullptr, bytes, 0}.Inspect(info, include_symbols);
+    return WA_ERR_INVALID;
+}
+
+int32_t wa::dbt::LoadElf(wa_dbt& dbt, uint32_t file_id, std::span<const uint8_t> bytes, uint64_t bias,
+                         std::string_view name, uint64_t& base, std::string* error) {
+    if (bytes.empty() || bias >= WA_HOST_STUB_BASE || (bias & kPageMask)) return WA_ERR_INVALID;
+    std::lock_guard lock(dbt.mutex);
+    if (dbt.arch == WA_ARCH_ARM32)
+        return Loader<uint32_t>{&dbt, bytes, bias}.Load(file_id, name, base, error);
+    return Loader<uint64_t>{&dbt, bytes, bias}.Load(file_id, name, base, error);
+}
+
+void wa::dbt::HideElf(wa_dbt& dbt, uint64_t base) {
+    std::erase_if(dbt.images, [base](const auto& image) { return image.base == base; });
+}
+
+uint64_t wa::dbt::FindElfSymbol(const wa_dbt& dbt, uint64_t base, std::string_view name) {
+    for (const auto& image : dbt.images) {
+        if (base && image.base != base) continue;
+        if (const auto it = image.exports.find(name); it != image.exports.end()) return it->second;
+    }
+    return 0;
+}
+
 int32_t wa_dbt_load_elf(wa_dbt_t* dbt, uint32_t file_id, const uint8_t* elf_bytes, size_t elf_len,
                         uint64_t load_bias, uint64_t* out_base_vaddr) {
-    if (!dbt || !elf_bytes || !elf_len || !out_base_vaddr || load_bias >= WA_HOST_STUB_BASE ||
-        (load_bias & (WA_PAGE_SIZE - 1)))
-        return WA_ERR_INVALID;
+    if (!dbt || !elf_bytes || !out_base_vaddr) return WA_ERR_INVALID;
     try {
-        std::lock_guard lock(dbt->mutex);
-        if (dbt->loading || dbt->call_depth)
-            return WA_ERR_BUSY;
-        struct Loading {
-            bool& active;
-            ~Loading() { active = false; }
-        } loading{dbt->loading};
-        dbt->loading = true;
-        const wa::dbt::Bytes file{elf_bytes, elf_len};
-        if (dbt->arch == WA_ARCH_ARM32)
-            return wa::dbt::Loader<uint32_t>{*dbt, file, load_bias}.Load(file_id, *out_base_vaddr);
-        return wa::dbt::Loader<uint64_t>{*dbt, file, load_bias}.Load(file_id, *out_base_vaddr);
+        return wa::dbt::LoadElf(*dbt, file_id, {elf_bytes, elf_len}, load_bias, {}, *out_base_vaddr);
     } catch (const std::bad_alloc&) {
         return WA_ERR_NOMEM;
     } catch (...) {

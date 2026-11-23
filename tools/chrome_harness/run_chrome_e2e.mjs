@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -6,12 +7,23 @@ import { DEFAULT_BUILD_DIR, WORKTREE, startServer } from './serve.mjs';
 
 const { values } = parseArgs({
   options: {
+    root: { type: 'string' },
     chrome: { type: 'string' },
     headed: { type: 'boolean' },
     'build-dir': { type: 'string' },
     timeout: { type: 'string' },
   },
 });
+if (values.root) {
+  const runner = resolve(WORKTREE, 'tests/m9_launcher3_chrome_e2e/run_chrome_e2e.mjs');
+  const args = [runner, '--root', values.root];
+  if (values.chrome) args.push('--chrome', values.chrome);
+  if (values.headed) args.push('--headed');
+  if (values.timeout) args.push('--timeout', values.timeout);
+  const result = spawnSync(process.execPath, args, { stdio: 'inherit' });
+  if (result.error) throw result.error;
+  process.exit(result.status ?? 1);
+}
 const buildDir = resolve(values['build-dir'] ?? DEFAULT_BUILD_DIR);
 const timeout = Number(values.timeout ?? 45_000);
 const expected = ['futex', 'epoll_pipe_eventfd', 'opfs_reload', 'binder_rpc', 'jit_idb_reload'];

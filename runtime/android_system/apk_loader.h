@@ -34,6 +34,8 @@ typedef struct wa_system_apk_dex_stats {
 wa_system_apk_t* wa_system_open_apk(const uint8_t* apk_bytes, size_t apk_len);
 void wa_system_close_apk(wa_system_apk_t* apk);
 const wa_system_apk_info_t* wa_system_apk_info(const wa_system_apk_t* apk);
+// Detect the legacy demo ABI and select its per-architecture ELF entries.
+int32_t wa_system_apk_is_legacy_cube(wa_system_apk_t* apk);
 
 // Compiles the launcher's primitive static methods, using its nested Wasm class
 // when present. The result and metadata pointers are owned by the APK handle.

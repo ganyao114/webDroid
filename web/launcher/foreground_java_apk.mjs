@@ -24,9 +24,8 @@ function withString(module, text, call) {
   return withBytes(module, encoder.encode(`${text}\0`), call);
 }
 
-// wa_system_apk_info_t has six pointers, one version code, and two sizes on wasm32.
-// Inspect in the browsing process before assigning the canvas to the NDK worker.
-export function apkHasNativeCode(module, bytes, packageName) {
+// Inspect the APK before handing its canvas to the legacy cube worker.
+export function isLegacyCubeApk(module, bytes, packageName) {
   const apk = withBytes(module, bytes, (pointer, length) => module._wa_system_open_apk(pointer, length));
   if (!apk) throw new Error('AOSP could not read the APK manifest');
   try {
@@ -37,7 +36,9 @@ export function apkHasNativeCode(module, bytes, packageName) {
     if (!name || end < 0) throw new Error('APK has no package name');
     const pkg = memory.utf8(name, end - name);
     if (pkg !== packageName) throw new Error(`APK package ${pkg} does not match ${packageName}`);
-    return Boolean(memory.view.getUint32(info + 28, true) || memory.view.getUint32(info + 32, true));
+    const legacy = module._wa_system_apk_is_legacy_cube(apk);
+    if (legacy < 0) throw new Error(`Could not inspect APK native libraries (${legacy})`);
+    return legacy === 1;
   } finally {
     module._wa_system_close_apk(apk);
   }

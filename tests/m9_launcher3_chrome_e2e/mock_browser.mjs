@@ -44,7 +44,7 @@ class MockOffscreenCanvas {
   getContext(kind) { return kind === '2d' ? mock2d() : mockGl(); }
 }
 
-class Matrix {
+export class Matrix {
   constructor(a = 1, b = 0, c = 0, d = 1, e = 0, f = 0) { Object.assign(this, { a, b, c, d, e, f }); }
   multiply(a, b, c, d, e, f) {
     return new Matrix(this.a * a + this.c * b, this.b * a + this.d * b, this.a * c + this.c * d,

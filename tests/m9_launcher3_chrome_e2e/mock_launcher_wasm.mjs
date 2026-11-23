@@ -267,6 +267,7 @@ export function mockLauncherWasm() {
       return info;
     },
     _wa_system_apk_info: apk => apk,
+    _wa_system_apk_is_legacy_cube: apk => Number(string(apk + 36) === 'org.wasmandroid.cube'),
     _wa_system_close_apk: apk => module._free(apk),
     _wa_system_launcher_create(width, height, density, lang) {
       reset(width, height, density, lang);

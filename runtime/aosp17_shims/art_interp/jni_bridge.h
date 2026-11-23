@@ -32,8 +32,10 @@ class JniBridge {
   static Object* Read(jobject object);
   jobject Local(Object* object);
   jobject Global(Object* object);
+  jweak Weak(Object* object);
   void DeleteLocal(jobject reference);
   void DeleteGlobal(jobject reference);
+  void DeleteWeak(jweak reference);
   void PushFrame(size_t capacity);
   jobject PopFrame(jobject keep);
   size_t FrameDepth() const { return frame_depth_; }
@@ -53,7 +55,7 @@ class JniBridge {
   VirtualMachine vm_;
   std::vector<std::vector<std::unique_ptr<JniReference>>> frames_;
   size_t frame_depth_ = 0;
-  std::unordered_map<JniReference*, std::unique_ptr<JniReference>> globals_;
+  std::unordered_map<JniReference*, std::unique_ptr<JniReference>> globals_, weak_globals_;
   std::unordered_multimap<Object*, std::shared_ptr<void>> native_peers_;
   std::unordered_map<void*, NativeThunk> adapters_;
   size_t frame_floor_ = 1;

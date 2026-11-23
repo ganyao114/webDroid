@@ -62,7 +62,11 @@ typedef struct wa_host_call_ctx {
     uint64_t ret0;       // Return R0/X0
     uint64_t ret1;       // Return R1/X1
     double fret0;        // Return S0/D0
-    int32_t has_float_ret;
+    int32_t has_float_ret;  // Legacy float conversion when nonzero.
+    uint64_t sp;          // Stack arguments start here.
+    uint64_t fp_bits[8];  // Raw low 64 bits of V0..V7 (ARM64).
+    uint64_t fp_ret_bits;
+    int32_t has_fp_ret_bits;
 } wa_host_call_ctx_t;
 
 typedef int32_t (*wa_host_symbol_fn)(wa_host_call_ctx_t* ctx, void* user);
@@ -99,6 +103,23 @@ int32_t wa_dbt_call(wa_dbt_t* dbt, uint64_t entry_vaddr, const uint64_t* args, u
 int32_t wa_dbt_call_f32(wa_dbt_t* dbt, uint64_t entry_vaddr, const uint64_t* int_args,
                         uint32_t int_count, const float* fp_args, uint32_t fp_count,
                         uint64_t* out_ret);
+
+// An already classified AAPCS call. The stack image starts at the callee's SP.
+// ARM32 uses the low 32 bits of gpr[0..3] and returns softfp values in gpr[0..1].
+typedef struct wa_guest_call_frame {
+    uint64_t gpr[8];
+    uint64_t fp_bits[8];
+    const void* stack;
+    size_t stack_size;
+} wa_guest_call_frame_t;
+
+typedef struct wa_guest_call_result {
+    uint64_t gpr[2];
+    uint64_t fp_bits;
+} wa_guest_call_result_t;
+
+int32_t wa_dbt_call_abi(wa_dbt_t* dbt, uint64_t entry_vaddr, const wa_guest_call_frame_t* frame,
+                       wa_guest_call_result_t* out);
 
 // Compile a guest function/region into a standalone Wasm module using SwiftVM svm_wasm.
 int32_t wa_dbt_compile_wasm_unit(wa_dbt_t* dbt, uint64_t entry_vaddr, uint8_t** out_wasm_bytes,

@@ -289,12 +289,12 @@ void FillArray(Runtime& runtime, Object& array, const I& table) {
   if (type == 'S' || type == 'C') width = 2;
   if (IsWide(type)) width = 8;
   if (width != payload.element_width) runtime.Fail("Ljava/lang/VerifyError;", "Array payload width");
-  if (payload.element_count > array.elements.size()) runtime.Fail("Ljava/lang/ArrayIndexOutOfBoundsException;");
+  if (payload.element_count > runtime.ArrayLength(array)) runtime.Fail("Ljava/lang/ArrayIndexOutOfBoundsException;");
   static_assert(std::endian::native == std::endian::little);
   for (size_t i = 0; i < payload.element_count; ++i) {
     uint64_t bits = 0;
     std::memcpy(&bits, payload.data + i * width, width);
-    array.elements[i] = Normalize(Value::Bits(bits), type);
+    runtime.StoreArrayElement(array, i, Value::Bits(bits));
   }
 }
 
@@ -650,7 +650,8 @@ Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value
           case I::ARRAY_LENGTH: {
             Object& array = NonNull(f.Reg(insn.VRegB_12x()).ref());
             if (!array.type->IsArray()) Fail("Ljava/lang/VerifyError;", "Expected an array");
-            f.Reg(insn.VRegA_12x()) = Value::Int(array.elements.size());
+            const auto length = direct_arrays ? ArrayLength(array) : array.elements.size();
+            f.Reg(insn.VRegA_12x()) = Value::Int(length);
             break;
           }
           case I::NEW_INSTANCE: {
@@ -713,10 +714,16 @@ Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value
           case I::AGET ... I::APUT_SHORT: {
             Object& array = NonNull(f.Reg(insn.VRegB_23x()).ref());
             const auto index = f.Reg(insn.VRegC_23x()).i();
-            Value& slot = ArrayElement(array, index);
+            if (!array.type->IsArray()) Fail("Ljava/lang/VerifyError;", "Expected an array");
             const char component = array.type->component->kind;
-            if (op >= I::APUT) StoreArrayElement(array, index, f.Read(insn.VRegA_23x(), component));
-            else f.Write(insn.VRegA_23x(), slot, component);
+            if (op >= I::APUT) {
+              StoreArrayElement(array, index, f.Read(insn.VRegA_23x(), component));
+            } else {
+              // Direct byte buffers keep their bytes outside the ordinary array slots.
+              const Value value = static_cast<size_t>(index) < array.elements.size()
+                  ? array.elements[index] : ArrayElement(array, index);
+              f.Write(insn.VRegA_23x(), value, component);
+            }
             break;
           }
           case I::IGET ... I::IPUT_SHORT: FieldInstruction<false>(*this, f, dex, insn, op, member()); break;

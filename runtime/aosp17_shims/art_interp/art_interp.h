@@ -17,6 +17,7 @@
 namespace wa::interp {
 
 struct Object;
+struct Method;
 struct Runtime;
 struct RootScope;
 
@@ -51,6 +52,27 @@ using InstallWasm = std::function<CompiledMethod(std::span<const uint8_t> module
                                                  std::string_view export_name,
                                                  std::string_view shorty)>;
 using NativeThunk = jvalue (*)(JNIEnv*, jobject, const jvalue*);
+
+struct GuestNativeStats {
+  std::string_view abi;
+  size_t libraries = 0;
+  uint64_t calls = 0;
+  uint64_t callbacks = 0;
+};
+
+// The embedder supplies the APK namespace. ART continues to use its existing
+// JNI adapters for platform natives.
+class GuestNativeLibraries {
+ public:
+  virtual ~GuestNativeLibraries() = default;
+  virtual std::string FindLibrary(std::string_view name) = 0;
+  virtual std::string Load(std::string_view path) = 0;
+  virtual std::optional<Value> Invoke(Method& method, Object* receiver, std::span<const Value> args) = 0;
+  virtual GuestNativeStats Stats() const = 0;
+  virtual void Shutdown() noexcept = 0;
+};
+
+using GuestNativeFactory = std::unique_ptr<GuestNativeLibraries> (*)(JNIEnv*, const void*);
 
 struct Options {
   size_t gc_interval = 1024;  // In allocations. Zero enables explicit collection only.
@@ -120,6 +142,10 @@ class Vm {
   // Supply a typed adapter before RegisterNatives for additional JNI libraries.
   void AddNativeAdapter(void* function, NativeThunk adapter);
   JNIEnv* JniEnv();
+  // The source must live until this VM is destroyed. It is opened on the first library lookup.
+  void SetGuestNativeSource(GuestNativeFactory factory, const void* source);
+  GuestNativeStats GetGuestNativeStats() const;
+  void ReleaseGuestNativeSource() noexcept;
 
   Value CallStatic(std::string_view owner, std::string_view name, std::string_view signature,
                    std::span<const Value> args = {});

@@ -22,3 +22,6 @@ if(EMSCRIPTEN)
         -sDISABLE_DEPRECATED_FIND_EVENT_TARGET_BEHAVIOR=0
     )
 endif()
+
+target_include_directories(wa_hal_browser PRIVATE ../linker_ffi)
+target_link_libraries(wa_hal_browser PRIVATE wa_linker_ffi)

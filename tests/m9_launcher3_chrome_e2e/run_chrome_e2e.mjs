@@ -11,7 +11,7 @@ import { defaultWasmBuild, page, stageM9Browser } from './stage_browser.mjs';
 
 const { values } = parseArgs({ options: {
   help: { type: 'boolean', short: 'h' }, 'wasm-build': { type: 'string' }, 'host-build': { type: 'string' },
-  chrome: { type: 'string' }, headed: { type: 'boolean' }, backend: { type: 'string' },
+  root: { type: 'string' }, chrome: { type: 'string' }, headed: { type: 'boolean' }, backend: { type: 'string' },
   'screenshot-home': { type: 'string' }, 'screenshot-allapps': { type: 'string' },
   'screenshot-app': { type: 'string' }, 'screenshot-settings': { type: 'string' }, timeout: { type: 'string' },
 } });
@@ -42,8 +42,8 @@ async function run() {
     assert(['auto', 'webgpu', 'webgl2'].includes(backend), 'Invalid --backend');
     assert(Number.isInteger(timeout) && timeout > 0 && timeout <= 2 ** 31 - 1, 'Invalid --timeout');
     temporary = await mkdtemp(join(tmpdir(), 'm9-launcher3-chrome-'));
-    const staged = join(temporary, 'http');
-    await stageM9Browser(staged, { wasmBuild, hostBuild: values['host-build'] });
+    const staged = values.root ? resolve(values.root) : join(temporary, 'http');
+    if (!values.root) await stageM9Browser(staged, { wasmBuild, hostBuild: values['host-build'] });
     server = await startServer({ root: staged });
     browser = await launchChrome({ buildDir: temporary, chromePath: values.chrome ?? process.env.CHROME_BIN ??
       (process.platform === 'linux' ? 'google-chrome' : undefined), headless: !values.headed });

@@ -79,6 +79,9 @@ export class ApkRuntime {
       wasm.HEAPU8.set(bytes, input);
       this.#apk = wasm._wa_system_open_apk(input, bytes.byteLength);
       if (!this.#apk) throw new Error('AOSP 17 could not open the APK and read its binary manifest');
+      if (wasm._wa_system_apk_is_legacy_cube) {
+        checkStatus(wasm._wa_system_apk_is_legacy_cube(this.#apk), 'Inspect demo APK');
+      }
       if (prepareBacking) {
         this.#backing = await prepareBacking(this, input, bytes.byteLength);
         checkStatus(wasm._wa_system_apk_set_backing_file(this.#apk, this.#backing.fd), 'Set APK backing file');

@@ -1,18 +1,23 @@
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { resolve, sep } from 'node:path';
+import { join, resolve, sep } from 'node:path';
+import { parseArgs } from 'node:util';
 import { launchChrome } from '../../tools/chrome_harness/cdp_client.mjs';
 
+const { values, positionals } = parseArgs({ allowPositionals: true, options: {
+  root: { type: 'string' }, apk: { type: 'string' }, screenshot: { type: 'string' },
+} });
+const staged = values.root ? resolve(values.root, 'build') : null;
 const assets = 'build-wasm/runtime/android_system';
 const paths = new Map([
-  ['/android_system.mjs', ['build-wasm/android_system.mjs', 'text/javascript']],
-  ['/android_system.wasm', ['build-wasm/android_system.wasm', 'application/wasm']],
-  ['/framework.dex', [assets + '/upstream-framework/aosp17_upstream_framework.dex']],
-  ['/fallback.dex', [assets + '/aosp17-ui/aosp17_framework_core.dex']],
-  ['/resources.apk', [assets + '/upstream-framework/framework-res-upstream.apk']],
-  ['/via.apk', ['third_party/commercial_apks/via-release-cn.apk']],
-  ['/build/fonts/Roboto-Regular.ttf', ['third_party/aosp17/external/roboto-fonts/RobotoStatic-Regular.ttf']],
+  ['/android_system.mjs', [staged ? join(staged, 'android_system.mjs') : 'build-wasm/android_system.mjs', 'text/javascript']],
+  ['/android_system.wasm', [staged ? join(staged, 'android_system.wasm') : 'build-wasm/android_system.wasm', 'application/wasm']],
+  ['/framework.dex', [staged ? join(staged, 'aosp17_upstream_framework.dex') : assets + '/upstream-framework/aosp17_upstream_framework.dex']],
+  ['/fallback.dex', [staged ? join(staged, 'aosp17_framework_core.dex') : assets + '/aosp17-ui/aosp17_framework_core.dex']],
+  ['/resources.apk', [staged ? join(staged, 'framework-res.apk') : assets + '/upstream-framework/framework-res-upstream.apk']],
+  ['/via.apk', [values.apk ?? 'third_party/commercial_apks/via-release-cn.apk']],
+  ['/build/fonts/Roboto-Regular.ttf', [staged ? join(staged, 'fonts/Roboto-Regular.ttf') : 'third_party/aosp17/external/roboto-fonts/RobotoStatic-Regular.ttf']],
 ]);
 const page = `<!doctype html><meta charset="utf-8"><title>Via Browser</title>
 <style>html, body { margin: 0; height: 100%; } main { position: relative; width: 480px; height: 800px; }</style>
@@ -70,7 +75,7 @@ const server = createServer(async (request, response) => {
 });
 await new Promise(ok => server.listen(0, '127.0.0.1', ok));
 const origin = 'http://127.0.0.1:' + server.address().port;
-const screenshot = process.argv[2];
+const screenshot = values.screenshot ?? positionals[0];
 let browser;
 try {
   browser = await launchChrome({ buildDir: resolve('build-wasm') });
