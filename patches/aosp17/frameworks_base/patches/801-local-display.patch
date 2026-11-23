@@ -288,11 +288,11 @@
 +        updateDisplayInfoLocked();
 +    }
 +
-+    int getNavigationBarInset() {
++    public int getNavigationBarInset() {
 +        return mNavigationBarInset;
 +    }
 +
-+    void setNavigationBarInset(int pixels) {
++    public void setNavigationBarInset(int pixels) {
 +        mNavigationBarInset = pixels;
      }
  

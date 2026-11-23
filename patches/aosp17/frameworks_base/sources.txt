@@ -14,6 +14,7 @@ frameworks/base/core/java/android/view/InsetsFrameProvider.java
 frameworks/base/core/java/android/view/InsetsSource.java
 frameworks/base/core/java/android/view/ViewParent.java
 frameworks/base/core/java/android/view/Window.java
+frameworks/base/core/java/com/android/internal/policy/PhoneWindow.java
 frameworks/base/core/java/android/view/WindowInsetsAnimation.java
 frameworks/base/core/java/android/view/WindowInsetsAnimationControlListener.java
 frameworks/base/core/java/android/view/WindowInsetsAnimationController.java
@@ -81,6 +82,7 @@ frameworks/base/core/java/android/view/RoundScrollbarRenderer.java
 frameworks/base/core/java/android/view/TouchDelegate.java
 frameworks/base/core/java/android/view/View.java
 frameworks/base/core/java/android/view/ViewGroup.java
+frameworks/base/core/java/android/view/ViewRootImpl.java
 frameworks/base/core/java/android/view/ViewGroupOverlay.java
 frameworks/base/core/java/android/view/ViewOverlay.java
 frameworks/base/core/java/android/view/ViewPropertyAnimator.java
@@ -318,6 +320,7 @@ frameworks/base/graphics/java/android/graphics/FrameInfo.java
 @dir frameworks/base/graphics/java/android/graphics/text
 frameworks/base/core/java/android/widget/Button.java
 frameworks/base/core/java/android/widget/EditText.java
+frameworks/base/core/java/android/widget/TextView.java
 
 frameworks/base/core/java/android/util/Patterns.java
 frameworks/base/core/java/android/util/TimeFormatException.java
@@ -758,3 +761,6 @@ patches/924-embedded-view-group.patch
 patches/925-embedded-view-dependencies.patch
 patches/926-list-view-hierarchy-bridges.patch
 patches/927-adapter-view-focus-bridge.patch
+patches/928-embedded-text-view.patch
+patches/929-embedded-view-root.patch
+patches/930-embedded-phone-window.patch

@@ -164,17 +164,20 @@ function inspectFrame() {
         if (op === Op.CLIP_RECT || op === Op.CLIP_ROUND)
           clip = intersect(clip, mapRect(arg(0), arg(1), arg(2), arg(3)));
         if (op === Op.TEXT) {
-          const text = memory.utf8(at + memory.u32(at + 4), memory.u32(at + 8));
+          const address = at + memory.u32(at + 4), length = memory.u32(at + 8);
+          const text = memory.utf8(address, length).replace(/\uFEFF+$/u, '');
           const [,,,, x, y] = translate(arg(2), arg(3));
           if (x >= 0 && x < frame.width && y >= 0 && y < frame.height && memory.u32(at + 36) >>> 24) {
             const size = arg(5), weight = memory.u32(at + 28), face = memory.u32(at + 40);
-            const [ascent, descent] = fontExtents(size, weight, face);
-            const advance = calibratedAdvance(text, size, weight, face);
+            module._wa_canvas_measure_text(scratch, scene, address, length, size, weight, face);
+            const ascent = memory.f32(scratch + 4), descent = memory.f32(scratch + 8);
+            const advance = calibratedAdvance(text, size, weight, face) || memory.f32(scratch);
             const limit = arg(4);
             const lineWidth = limit > 0 ? Math.min(advance, limit) : advance;
             const left = arg(2) - lineWidth * memory.u32(at + 32) / 2;
             const line = mapRect(left, arg(3) - ascent, left + lineWidth, arg(3) + descent);
-            info.texts.push({ text, x, y, top: line[1], bottom: line[3], right: line[2], clip });
+            info.texts.push({ text, x: centerX(line), y,
+              top: line[1], bottom: line[3], right: line[2], clip });
           }
         }
         if (op === Op.BITMAP && arg(11) > 0) {
@@ -219,14 +222,6 @@ function inspectFrame() {
 function fontRow(weight, face) {
   const bucket = Math.max(1, Math.min(9, Math.round((weight || 400) / 100)));
   return face * 9 + bucket - 1;
-}
-
-function fontExtents(size, weight, face) {
-  const font = module._wa_sf_font_metrics(scene) + fontRow(weight, face) * 20;
-  const sequence = memory.u32(font);
-  if (!sequence || sequence & 1)
-    return face === 2 ? [size * 0.8, size * 0.2] : [size * 1900 / 2048, size * 500 / 2048];
-  return [size * memory.u32(font + 12) / 65536, size * memory.u32(font + 16) / 65536];
 }
 
 function calibratedAdvance(text, size, weight, face) {

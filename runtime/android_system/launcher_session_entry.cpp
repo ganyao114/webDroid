@@ -277,6 +277,8 @@ class SystemUi {
 
     void SetGestural(bool enabled) {
         if (enabled == gestural_) return;
+        // Reclaim transient layout peers before replacing the navigation views.
+        vm_.Collect();
         const std::array args{Value::Int(enabled ? 2 : 0), Value::Int(0)};
         vm_.CallVirtual(navigation_, "setNavBarMode", "(IZ)V", args);
         LayoutNavigation();
@@ -585,7 +587,7 @@ struct Session {
     LauncherDecor decor;
     std::map<std::string, InstalledApp, std::less<>> apps;
     std::unique_ptr<MountedApk> framework_resource, launcher_apk, systemui_apk;
-    std::vector<uint8_t> framework_dex, fallback_dex;
+    std::unique_ptr<MountedApk> framework_dex, fallback_dex;
     std::unique_ptr<LauncherRuntime> runtime;
     bool booted = false, paused = false, frame_pending = false;
     uint64_t last_frame_time = 0, pending_time = 0;
@@ -671,9 +673,10 @@ int32_t wa_system_launcher_load_framework_dex(const uint8_t* bytes, size_t lengt
     return Active("Load framework DEX", [&](Session& s) -> int32_t {
         if (!bytes || !length) return WA_ERR_INVALID;
         if (s.booted || s.runtime) return WA_ERR_BUSY;
-        std::vector<uint8_t> dex(bytes, bytes + length);
+        // Keep the retry image in the backing filesystem. The VM owns the loaded DEX.
+        auto dex = std::make_unique<MountedApk>(std::span(bytes, length));
         auto next = std::make_unique<LauncherRuntime>();
-        next->vm.LoadDexFile("aosp17_upstream_framework.dex", dex);
+        next->vm.LoadDexFile(dex->path());
         s.framework_dex = std::move(dex);
         s.runtime = std::move(next);
         return WA_OK;
@@ -683,9 +686,9 @@ int32_t wa_system_launcher_load_framework_dex(const uint8_t* bytes, size_t lengt
 int32_t wa_system_launcher_load_framework_fallback_dex(const uint8_t* bytes, size_t length) {
     return Active("Load framework compatibility DEX", [&](Session& s) -> int32_t {
         if (!bytes || !length || !s.runtime) return WA_ERR_INVALID;
-        if (s.booted || !s.fallback_dex.empty()) return WA_ERR_BUSY;
-        std::vector<uint8_t> dex(bytes, bytes + length);
-        s.runtime->vm.LoadFallbackDexFile("aosp17_framework_core.dex", dex);
+        if (s.booted || s.fallback_dex) return WA_ERR_BUSY;
+        auto dex = std::make_unique<MountedApk>(std::span(bytes, length));
+        s.runtime->vm.LoadFallbackDexFile(dex->path());
         s.fallback_dex = std::move(dex);
         return WA_OK;
     });
@@ -742,7 +745,7 @@ namespace {
 int32_t StageLauncherApk(Session& s, const char* name, const uint8_t* bytes, size_t length) {
     if (s.booted) return WA_ERR_BUSY;
     if (!name || !*name || !bytes || !length) return WA_ERR_INVALID;
-    if (s.framework_dex.empty() || s.fallback_dex.empty())
+    if (!s.framework_dex || !s.fallback_dex)
         throw std::invalid_argument("Load the upstream and compatibility framework DEX files first");
     if (!s.framework_resource || !s.systemui_apk)
         throw std::invalid_argument("Load framework resources and SystemUI-upstream.apk first");
@@ -767,8 +770,8 @@ int32_t BootLauncher(Session& s) {
     auto apk = std::move(s.launcher_apk);
     if (!s.runtime) {
         auto next = std::make_unique<LauncherRuntime>();
-        next->vm.LoadDexFile("aosp17_upstream_framework.dex", s.framework_dex);
-        next->vm.LoadFallbackDexFile("aosp17_framework_core.dex", s.fallback_dex);
+        next->vm.LoadDexFile(s.framework_dex->path());
+        next->vm.LoadFallbackDexFile(s.fallback_dex->path());
         s.runtime = std::move(next);
     }
     auto& [vm, ui, system_ui] = *s.runtime;
@@ -850,8 +853,8 @@ int32_t BootLauncher(Session& s) {
     s.launcher_dex_load_ms = dex_load_ms;
     s.boot_ms = ElapsedMs(start);
     s.booted = true;
-    std::vector<uint8_t>().swap(s.framework_dex);
-    std::vector<uint8_t>().swap(s.fallback_dex);
+    s.framework_dex.reset();
+    s.fallback_dex.reset();
     return WA_OK;
 }
 
@@ -890,6 +893,12 @@ int32_t wa_system_launcher_tick(int64_t nanos) {
 int32_t wa_system_launcher_resize(int32_t width, int32_t height, int32_t density) {
     return Active("Resize Launcher3", [&](Session& s) -> int32_t {
         if (!ValidDisplay(width, height, density)) return WA_ERR_INVALID;
+        if (s.booted && (s.display.viewport_w != static_cast<uint32_t>(width) ||
+                         s.display.viewport_h != static_cast<uint32_t>(height) ||
+                         s.display.density_dpi != static_cast<uint32_t>(density))) {
+            // The next frame replaces layouts while collection is paused.
+            s.runtime->vm.Collect();
+        }
         s.display.viewport_w = width;
         s.display.viewport_h = height;
         s.display.density_dpi = density;

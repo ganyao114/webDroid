@@ -9,7 +9,3 @@
 -                    CompatChanges.isChangeEnabled(LINE_HEIGHT_FOR_LOCALE);
 +                    context.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.VANILLA_ICE_CREAM;
          }
-@@ -239,3 +238,2 @@
-     /** @hide */
--    @Override
-     protected boolean supportsAutoSizeText() {

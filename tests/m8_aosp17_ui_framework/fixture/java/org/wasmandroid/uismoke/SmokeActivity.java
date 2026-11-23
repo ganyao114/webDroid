@@ -20,10 +20,17 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcel;
 import android.os.UserHandle;
+import android.text.Editable;
+import android.text.Layout;
+import android.text.TextUtils;
+import android.text.TextWatcher;
+import android.view.KeyEvent;
 import android.view.View;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.ImageView;
@@ -87,6 +94,7 @@ public final class SmokeActivity extends Activity {
         handler.sendEmptyMessageDelayed(7, 5);
         resourceCheck = inspectResources();
         packageCheck = inspectPackages();
+        inspectTextLayout();
         inspectInputAndWindow();
         inspectRemoteViews();
         inspectPreferences();
@@ -199,6 +207,25 @@ public final class SmokeActivity extends Activity {
                 "Libcore URI parse diagnostics");
     }
 
+    private void inspectTextLayout() {
+        TextView label = new TextView(this);
+        label.setSingleLine();
+        label.setHorizontallyScrolling(false);
+        label.setEllipsize(TextUtils.TruncateAt.END);
+        for (String text : new String[] {"Apps", "Modes", "Communal", "Search"}) {
+            label.setText(text);
+            int width = (int) Math.ceil(label.getPaint().measureText(text))
+                    + label.getCompoundPaddingLeft() + label.getCompoundPaddingRight();
+            label.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+            Layout layout = label.getLayout();
+            verify(layout.getLineCount() == 1 && layout.getEllipsisCount(0) == 0
+                    && layout.getLineWidth(0) <= width - label.getCompoundPaddingLeft()
+                            - label.getCompoundPaddingRight(),
+                    "Calibrated TextView fits the full label " + text);
+        }
+    }
+
     private void inspectInputAndWindow() {
         EditText editor = new EditText(this);
         editor.setText("ab");
@@ -206,15 +233,48 @@ public final class SmokeActivity extends Activity {
         verify(editor.onImeText("n", true) && editor.onImeText("ni", true)
                 && editor.onImeText("你", false) && "a你b".contentEquals(editor.getText()),
                 "IME replaces the composing range");
+        editor.setSelection(1, 2);
+        verify(editor.onKeyDown(KeyEvent.KEYCODE_DEL, new KeyEvent(KeyEvent.ACTION_DOWN,
+                KeyEvent.KEYCODE_DEL)) && "ab".contentEquals(editor.getText())
+                && editor.getSelectionStart() == 1, "Backspace removes the selection");
+        editor.setSingleLine(false);
+        editor.onKeyDown(KeyEvent.KEYCODE_ENTER, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER));
+        editor.onKeyUp(KeyEvent.KEYCODE_ENTER, new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER));
+        verify("a\nb".contentEquals(editor.getText()), "Enter inserts a newline in multiline text");
+
+        editor.setSingleLine(true);
+        editor.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        int[] action = {EditorInfo.IME_NULL};
+        editor.setOnEditorActionListener((view, actionId, event) -> {
+            if (event.getAction() == KeyEvent.ACTION_UP) action[0] = actionId;
+            return true;
+        });
+        editor.onKeyDown(KeyEvent.KEYCODE_ENTER, new KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER));
+        editor.onKeyUp(KeyEvent.KEYCODE_ENTER, new KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER));
+        verify(action[0] == EditorInfo.IME_ACTION_DONE && "a\nb".contentEquals(editor.getText()),
+                "Single-line Enter dispatches the configured IME action");
+
         InputMethodManager ime = getSystemService(InputMethodManager.class);
         verify(!ime.showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT), "Detached editor has no IME");
         LinearLayout root = findViewById(R.id.root);
         root.addView(editor);
         verify(editor.requestFocus() && ime.showSoftInput(editor, InputMethodManager.SHOW_IMPLICIT)
                 && ime.isActive(editor), "Focused embedded editor accepts soft input");
+        verify(editor.getRootWindowInsets().isVisible(WindowInsets.Type.ime()), "Root reports IME visibility");
         verify(ime.hideSoftInputFromWindow(editor.getWindowToken(), 0) && !ime.isActive(editor),
                 "Embedded window token hides soft input");
         root.removeView(editor);
+
+        editor.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence text, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence text, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable text) {
+                if (text.length() > 0) text.clear();
+            }
+        });
+        editor.setSelection(1);
+        verify(editor.onImeText("x", false) && editor.length() == 0 && editor.getSelectionStart() == 0,
+                "IME keeps selection valid when a TextWatcher clears the buffer");
         verify(tile.requestFocus(), "Tile regains focus after editor removal");
 
         BackEvent back = BackEvent.fromBackMotionEvent(

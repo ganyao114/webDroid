@@ -9,7 +9,7 @@ import { AndroidInputWriter } from '../../web/surfaceflinger/input_ime.mjs';
 const apps = {
   Settings: ['com.android.settings', 'homepage.SettingsHomepageActivity', 'drawable/themed_icon_settings',
     'Search Settings'],
-  DeskClock: ['com.android.deskclock', 'DeskClock', 'mipmap/ic_launcher_alarmclock', 'Clock',
+  DeskClock: ['com.android.deskclock', 'DeskClock', 'mipmap/ic_launcher_alarmclock', 'CLOCK',
     'com.android.deskclock.DeskClockApplication'],
   Browser2: ['org.chromium.webview_shell', 'WebViewBrowserActivity', 'drawable/ic_launcher', 'about:blank'],
   Music: ['com.android.music', 'MusicBrowserActivity', 'drawable/app_music', 'No songs'],
@@ -122,7 +122,7 @@ async function verify(name, path, catalog, createSystem, wasmBinary, framework, 
     assert(first.draws > 0);
     assert(first.text.includes(initialText), JSON.stringify(first.text));
     if (name === 'DeskClock') {
-      for (const label of ['Alarm', 'Clock', 'Timer', 'Stopwatch']) {
+      for (const label of ['ALARM', 'CLOCK', 'TIMER', 'STOPWATCH']) {
         assert(first.text.includes(label), JSON.stringify(first.text));
       }
       assert(hasClockTime(first), JSON.stringify(first.text));

@@ -151,6 +151,8 @@ struct Rounded {
 };
 
 bool MatchesLabel(std::string_view drawn, std::string_view label) {
+    constexpr std::string_view ellipsis_padding = "\xef\xbb\xbf";
+    while (drawn.ends_with(ellipsis_padding)) drawn.remove_suffix(ellipsis_padding.size());
     if (drawn == label) return true;
     constexpr std::string_view ellipsis = "…";
     const auto end = drawn.find_last_not_of(' ');
@@ -305,9 +307,13 @@ std::array<Layer, 2> Inspect(wa_sf_t* scene, uint32_t width = 960, uint32_t heig
                     const auto* utf8 = reinterpret_cast<const char*>(record + text.utf8_offset);
                     const auto metrics = wa_canvas_measure_text(scene, utf8, text.utf8_len,
                         text.font_size, text.weight, text.font_face);
-                    const auto line = transform.Bounds({text.x, text.y - metrics.ascent,
-                        text.x, text.y + metrics.descent});
-                    details.labels.push_back({std::string(utf8, text.utf8_len), point, line, clip});
+                    const float width = text.max_width > 0 ? std::min(metrics.advance, text.max_width)
+                                                           : metrics.advance;
+                    const float left = text.x - width * text.align / 2.f;
+                    const auto line = transform.Bounds({left, text.y - metrics.ascent,
+                        left + width, text.y + metrics.descent});
+                    details.labels.push_back({std::string(utf8, text.utf8_len),
+                        transform.At(left + width / 2, text.y), line, clip});
                 }
                 break;
             }

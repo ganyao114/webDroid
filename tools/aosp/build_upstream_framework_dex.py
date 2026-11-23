@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -44,11 +45,13 @@ METHODS_TO_AUDIT = (
     "android.view.MotionEvent",
     "android.view.View",
     "android.view.ViewGroup",
+    "android.view.ViewRootImpl",
     "android.view.inputmethod.InputMethodManager",
     "android.widget.FrameLayout",
     "android.widget.LinearLayout",
     "android.widget.RemoteViews",
     "android.widget.TextView",
+    "com.android.internal.policy.PhoneWindow",
     "com.android.server.IntentResolver",
 )
 
@@ -315,6 +318,23 @@ def stage_java(destination, relative, data):
     return file
 
 
+def pack_framework_resources(linked, destination):
+    """Reduce the contiguous staging buffer needed to mount the framework APK."""
+    with zipfile.ZipFile(linked) as source, zipfile.ZipFile(destination, "w") as output:
+        for entry in source.infolist():
+            data = source.read(entry)
+            if entry.filename == "resources.arsc":
+                output.writestr(entry, data, zipfile.ZIP_DEFLATED, compresslevel=9)
+            else:
+                if entry.compress_type == zipfile.ZIP_STORED:
+                    offset = output.fp.tell() + 30 + len(entry.filename.encode("utf-8")) + len(entry.extra)
+                    if offset % 4:
+                        # Preserve four-byte alignment for mmap of stored assets.
+                        padding = -(offset + 6) % 4
+                        entry.extra += struct.pack("<HHH", 0xd935, 2 + padding, 4) + bytes(padding)
+                output.writestr(entry, data)
+
+
 def build_resources(args, stage, inputs):
     """Follow core/res/Android.bp for the offline framework resource package."""
     root = args.aosp_root / "frameworks/base/core/res"
@@ -362,11 +382,13 @@ def build_resources(args, stage, inputs):
     run(args.aapt2, "compile", "--no-crunch", *flag_args, "--dir", root / "res", "-o", compiled)
     classes = stage / "resource-symbols"
     classes.mkdir()
+    linked = stage / "framework-res-linked.apk"
     run(args.aapt2, "link", "-x", "--manifest", manifest, "-A", root / "assets", *flag_args,
         "--min-sdk-version", "26", "--target-sdk-version", "36",
         "--private-symbols", "com.android.internal", "--no-auto-version", "--auto-add-overlay",
-        "--enable-sparse-encoding", "--java", classes, "-o", stage / FRAMEWORK_RES,
+        "--enable-sparse-encoding", "--java", classes, "-o", linked,
         compiled, remote_extra)
+    pack_framework_resources(linked, stage / FRAMEWORK_RES)
     return sorted(classes.rglob("*.java")), records, sorted(flags)
 
 
@@ -451,10 +473,6 @@ def compatibility_source_path(args, stage, inputs, primary_sources):
         name = f"frameworks/base/core/java/{relative}"
         if name not in primary_sources:
             stage_java(stage, relative, sources[name])
-    for relative in ("android/view/ViewRootImpl.java", "android/view/EmbeddedWindow.java"):
-        source = COMPATIBILITY / "java" / relative
-        inputs.add(source)
-        stage_java(stage, relative, source.read_bytes())
     return (stage,)
 
 
