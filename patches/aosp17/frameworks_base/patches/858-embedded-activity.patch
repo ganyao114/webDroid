@@ -66,7 +66,7 @@
 -import android.view.ViewRootImpl.ActivityConfigCallback;
  import android.view.Window;
  import android.view.Window.WindowControllerCallback;
-@@ -152,36 +137,21 @@
+@@ -152,36 +137,22 @@
  import android.view.WindowInsetsController;
  import android.view.WindowManager;
 -import android.view.WindowManagerGlobal;
@@ -99,11 +99,11 @@
 -import com.android.internal.app.ToolbarActionBar;
 -import com.android.internal.app.WindowDecorActionBar;
 -import com.android.internal.policy.DecorView;
--import com.android.internal.policy.PhoneWindow;
+ import com.android.internal.policy.PhoneWindow;
 -import com.android.internal.util.dump.DumpableContainerImpl;
  
  import dalvik.system.VMRuntime;
-@@ -772,7 +742,6 @@
+@@ -772,7 +743,6 @@
          implements LayoutInflater.Factory2,
          Window.Callback, KeyEvent.Callback,
 -        OnCreateContextMenuListener, ComponentCallbacks2,
@@ -113,27 +113,27 @@
 +        Window.OnWindowDismissedCallback {
      private static final String TAG = "Activity";
      private static final boolean DEBUG_LIFECYCLE = false;
-@@ -824,5 +793,4 @@
+@@ -824,5 +794,4 @@
      private static final int LOG_AM_ON_TOP_RESUMED_LOST_CALLED = 30065;
      private OnBackInvokedCallback mDefaultBackCallback;
 -    private ObserverOnBackAnimationCallback mObserverBackCallback;
  
      /**
-@@ -896,6 +864,4 @@
+@@ -896,6 +865,4 @@
      @UnsupportedAppUsage
      /*package*/ ActivityInfo mActivityInfo;
 -    @UnsupportedAppUsage
 -    /*package*/ ActivityThread mMainThread;
      @UnsupportedAppUsage(trackingBug = 137825207, maxTargetSdk = Build.VERSION_CODES.Q,
              publicAlternatives = "Use {@code androidx.fragment.app.Fragment} and "
-@@ -972,6 +938,4 @@
+@@ -972,6 +939,4 @@
      final FragmentController mFragments = FragmentController.createController(new HostCallbacks());
  
 -    /** The scene transition info. */
 -    SceneTransitionInfo mSceneTransitionInfo;
  
      /** Whether this activity was launched from a bubble. **/
-@@ -1021,17 +985,10 @@
+@@ -1021,17 +986,10 @@
  
      @SuppressWarnings("unused")
 -    private final Object mInstanceTracker = StrictMode.trackActivity(this);
@@ -151,7 +151,7 @@
 -    private AutofillClientController mAutofillClientController;
  
      private boolean mIsInMultiWindowMode;
-@@ -1078,81 +1035,12 @@
+@@ -1078,81 +1036,12 @@
      private boolean mShouldDockBigOverlays;
  
 -    private UiTranslationController mUiTranslationController;
@@ -235,19 +235,19 @@
 +
  
      private static native String getDlWarning();
-@@ -1205,5 +1093,4 @@
+@@ -1205,5 +1094,4 @@
       * @see #setIntent(Intent, ComponentCaller)
       */
 -    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
      @SuppressLint("OnNameExpected")
      public @Nullable ComponentCaller getCaller() {
-@@ -1226,5 +1113,4 @@
+@@ -1226,5 +1114,4 @@
       * @see #getCaller
       */
 -    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
      @SuppressLint("OnNameExpected")
      public void setIntent(@Nullable Intent newIntent, @Nullable ComponentCaller newCaller) {
-@@ -1263,13 +1149,5 @@
+@@ -1263,13 +1150,5 @@
       */
      public void setLocusContext(@Nullable LocusId locusId, @Nullable Bundle bundle) {
 -        try {
@@ -262,7 +262,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -1303,12 +1181,6 @@
+@@ -1303,12 +1182,6 @@
       * @see android.app.assist.AssistContent#setSessionTransferUri
       */
 -    @FlaggedApi(com.android.window.flags.Flags.FLAG_ENABLE_DESKTOP_WINDOWING_APP_TO_WEB_EDUCATION)
@@ -276,7 +276,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -1425,51 +1297,9 @@
+@@ -1425,51 +1298,9 @@
  
      private void notifyContentCaptureManagerIfNeeded(@ContentCaptureNotificationType int type) {
 -        if (Trace.isTagEnabled(Trace.TRACE_TAG_ACTIVITY_MANAGER)) {
@@ -330,7 +330,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -1477,28 +1307,8 @@
+@@ -1477,28 +1308,8 @@
      protected void attachBaseContext(Context newBase) {
          super.attachBaseContext(newBase);
 -        if (newBase != null) {
@@ -363,7 +363,7 @@
 +
  
      /**
-@@ -1556,13 +1366,6 @@
+@@ -1556,13 +1367,6 @@
      @Override
      public void registerComponentCallbacks(ComponentCallbacks callback) {
 -        if (CompatChanges.isChangeEnabled(OVERRIDABLE_COMPONENT_CALLBACKS)
@@ -379,7 +379,7 @@
 +        mCallbacksController.registerCallbacks(callback);
      }
  
-@@ -1823,12 +1626,10 @@
+@@ -1823,12 +1627,10 @@
  
      private void dispatchActivityRestarted() {
 -        if (android.app.Flags.onRestartActivityLifecycleCallback()) {
@@ -398,7 +398,7 @@
 +                        .onActivityRestarted(this);
              }
          }
-@@ -1846,19 +1647,6 @@
+@@ -1846,19 +1648,6 @@
  
      private void notifyVoiceInteractionManagerServiceActivityEvent(
 -            @VoiceInteractionSession.VoiceInteractionActivityEventType int type) {
@@ -420,7 +420,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -1889,61 +1677,13 @@
+@@ -1889,61 +1678,13 @@
       * @see #onPostCreate
       */
 -    @MainThread
@@ -484,7 +484,7 @@
 -                mObserverBackCallback);
      }
  
-@@ -1957,10 +1697,5 @@
+@@ -1957,10 +1698,5 @@
  
      private SplashScreen getOrCreateSplashScreen() {
 -        synchronized (this) {
@@ -496,7 +496,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2119,10 +1854,5 @@
+@@ -2119,10 +1855,5 @@
  
      private Dialog createDialog(Integer dialogId, Bundle state, Bundle args) {
 -        final Dialog dialog = onCreateDialog(dialogId, args);
@@ -508,7 +508,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2152,15 +1882,7 @@
+@@ -2152,15 +1883,7 @@
      @CallSuper
      protected void onPostCreate(@Nullable Bundle savedInstanceState) {
 -        if (!isChild()) {
@@ -526,7 +526,7 @@
 -                VoiceInteractionSession.VOICE_INTERACTION_ACTIVITY_EVENT_START);
      }
  
-@@ -2201,12 +1923,7 @@
+@@ -2201,12 +1924,7 @@
      @CallSuper
      protected void onStart() {
 -        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onStart " + this);
@@ -539,7 +539,7 @@
 -        getAutofillClientController().onActivityStarted();
      }
  
-@@ -2281,11 +1998,5 @@
+@@ -2281,11 +1999,5 @@
      @CallSuper
      protected void onResume() {
 -        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onResume " + this);
@@ -551,7 +551,7 @@
 -
          mCalled = true;
      }
-@@ -2305,20 +2016,6 @@
+@@ -2305,20 +2017,6 @@
      @CallSuper
      protected void onPostResume() {
 -        final Window win = getWindow();
@@ -574,7 +574,7 @@
 +        onTitleChanged(getTitle(), getTitleColor());
          mCalled = true;
      }
-@@ -2348,32 +2045,7 @@
+@@ -2348,32 +2046,7 @@
  
      final void performTopResumedActivityChanged(boolean isTopResumedActivity, String reason) {
 -        onTopResumedActivityChanged(isTopResumedActivity);
@@ -610,14 +610,14 @@
 +
  
      /**
-@@ -2387,5 +2059,5 @@
+@@ -2387,5 +2060,5 @@
      @Override
      public int getNextAutofillId() {
 -        return getAutofillClientController().getNextAutofillId();
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2411,6 +2083,5 @@
+@@ -2411,6 +2084,5 @@
       */
      public boolean isVoiceInteractionRoot() {
 -        return mVoiceInteractor != null
@@ -625,7 +625,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2431,9 +2102,5 @@
+@@ -2431,9 +2103,5 @@
       */
      public boolean isLocalVoiceInteractionSupported() {
 -        try {
@@ -636,33 +636,33 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2445,5 +2112,5 @@
+@@ -2445,5 +2113,5 @@
       */
      public void startLocalVoiceInteraction(Bundle privateOptions) {
 -        ActivityClient.getInstance().startLocalVoiceInteraction(mToken, privateOptions);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2471,5 +2138,5 @@
+@@ -2471,5 +2139,5 @@
       */
      public void stopLocalVoiceInteraction() {
 -        ActivityClient.getInstance().stopLocalVoiceInteraction(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2500,4 +2167,5 @@
+@@ -2500,4 +2168,5 @@
       */
      protected void onNewIntent(Intent intent) {
 +
      }
  
-@@ -2521,5 +2189,4 @@
+@@ -2521,5 +2190,4 @@
       * @see #getCaller
       */
 -    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
      public void onNewIntent(@NonNull Intent intent, @NonNull ComponentCaller caller) {
          onNewIntent(intent);
-@@ -2535,11 +2202,5 @@
+@@ -2535,11 +2203,5 @@
       */
      final void performSaveInstanceState(@NonNull Bundle outState) {
 -        dispatchActivityPreSaveInstanceState(outState);
@@ -675,7 +675,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2555,11 +2216,5 @@
+@@ -2555,11 +2217,5 @@
      final void performSaveInstanceState(@NonNull Bundle outState,
              @NonNull PersistableBundle outPersistentState) {
 -        dispatchActivityPreSaveInstanceState(outState);
@@ -688,7 +688,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2614,9 +2269,8 @@
+@@ -2614,9 +2270,8 @@
          outState.putBundle(WINDOW_HIERARCHY_TAG, mWindow.saveHierarchyState());
  
 -        Parcelable p = mFragments.saveAllState();
@@ -702,7 +702,7 @@
 +        }
          dispatchActivitySaveInstanceState(outState);
      }
-@@ -2718,13 +2372,5 @@
+@@ -2718,13 +2373,5 @@
      @CallSuper
      protected void onPause() {
 -        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onPause " + this);
@@ -716,7 +716,7 @@
 -
          mCalled = true;
      }
-@@ -2869,10 +2515,5 @@
+@@ -2869,10 +2516,5 @@
       */
      public final void requestShowKeyboardShortcuts() {
 -        final ComponentName sysuiComponent = ComponentName.unflattenFromString(
@@ -728,7 +728,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2881,10 +2522,5 @@
+@@ -2881,10 +2523,5 @@
       */
      public final void dismissKeyboardShortcutsHelper() {
 -        final ComponentName sysuiComponent = ComponentName.unflattenFromString(
@@ -740,14 +740,14 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2927,5 +2563,5 @@
+@@ -2927,5 +2564,5 @@
       */
      public boolean showAssist(Bundle args) {
 -        return ActivityClient.getInstance().showAssistFromActivity(mToken, args);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -2947,15 +2583,6 @@
+@@ -2947,15 +2584,6 @@
      @CallSuper
      protected void onStop() {
 -        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onStop " + this);
@@ -763,7 +763,7 @@
 -                VoiceInteractionSession.VOICE_INTERACTION_ACTIVITY_EVENT_STOP);
      }
  
-@@ -2990,8 +2617,5 @@
+@@ -2990,8 +2618,5 @@
      @CallSuper
      protected void onDestroy() {
 -        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onDestroy " + this);
@@ -772,7 +772,7 @@
 -        getAutofillClientController().onActivityDestroyed();
  
          // dismiss any dialogs we are managing.
-@@ -3019,27 +2643,9 @@
+@@ -3019,27 +2644,9 @@
          }
  
 -        // Close any open search dialog
@@ -800,7 +800,7 @@
 -            mObserverBackCallback = null;
          }
  
-@@ -3069,18 +2675,5 @@
+@@ -3069,18 +2676,5 @@
       */
      public void reportFullyDrawn() {
 -        if (mDoReportFullyDrawn) {
@@ -820,7 +820,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -3236,30 +2829,5 @@
+@@ -3236,30 +2830,5 @@
       */
      public boolean enterPictureInPictureMode(@NonNull PictureInPictureParams params) {
 -        if (!deviceSupportsPictureInPictureMode()) {
@@ -852,7 +852,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -3271,11 +2839,5 @@
+@@ -3271,11 +2840,5 @@
       */
      public void setPictureInPictureParams(@NonNull PictureInPictureParams params) {
 -        if (!deviceSupportsPictureInPictureMode()) {
@@ -865,7 +865,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -3287,15 +2849,9 @@
+@@ -3287,15 +2850,9 @@
       */
      public int getMaxNumPictureInPictureActions() {
 -        return ActivityTaskManager.getMaxNumPictureInPictureActions(this);
@@ -883,7 +883,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -3351,6 +2907,5 @@
+@@ -3351,6 +2908,5 @@
      public void requestFullscreenMode(@FullscreenModeRequest int request,
              @Nullable OutcomeReceiver<Void, Throwable> approvalCallback) {
 -        FullscreenRequestHandler.getInstance().requestFullscreenMode(
@@ -891,7 +891,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -3374,6 +2929,5 @@
+@@ -3374,6 +2930,5 @@
       */
      public void setShouldDockBigOverlays(boolean shouldDockBigOverlays) {
 -        ActivityClient.getInstance().setShouldDockBigOverlays(mToken, shouldDockBigOverlays);
@@ -899,7 +899,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -3443,24 +2997,11 @@
+@@ -3443,24 +2998,11 @@
       */
      public void onConfigurationChanged(@NonNull Configuration newConfig) {
 -        if (DEBUG_LIFECYCLE) Slog.v(TAG, "onConfigurationChanged " + this + ": " + newConfig);
@@ -927,7 +927,7 @@
 +        mCalled = true;
      }
  
-@@ -3601,49 +3142,17 @@
+@@ -3601,49 +3143,17 @@
  
      NonConfigurationInstances retainNonConfigurationInstances() {
 -        Object activity = onRetainNonConfigurationInstance();
@@ -980,13 +980,13 @@
 +        if (mCallbacksController != null) mCallbacksController.dispatchTrimMemory(level);
      }
  
-@@ -3879,5 +3388,4 @@
+@@ -3879,5 +3389,4 @@
      @Nullable
      public ActionBar getActionBar() {
 -        initWindowDecorActionBar();
          return mActionBar;
      }
-@@ -3899,31 +3407,5 @@
+@@ -3899,31 +3408,5 @@
       */
      public void setActionBar(@Nullable Toolbar toolbar) {
 -        final ActionBar ab = getActionBar();
@@ -1019,7 +1019,7 @@
 +        if (toolbar != null) throw new UnsupportedOperationException("The embedded window has no action bar");
      }
  
-@@ -3933,19 +3415,5 @@
+@@ -3933,19 +3416,5 @@
       */
      private void initWindowDecorActionBar() {
 -        Window window = getWindow();
@@ -1040,21 +1040,19 @@
 +        // The host window has no platform action bar.
      }
  
-@@ -3961,5 +3429,5 @@
+@@ -3961,5 +3430,4 @@
      public void setContentView(@LayoutRes int layoutResID) {
          getWindow().setContentView(layoutResID);
 -        initWindowDecorActionBar();
-+        onContentChanged();
      }
  
-@@ -3981,5 +3449,5 @@
+@@ -3981,5 +3449,4 @@
      public void setContentView(View view) {
          getWindow().setContentView(view);
 -        initWindowDecorActionBar();
-+        onContentChanged();
      }
  
-@@ -4180,72 +3648,8 @@
+@@ -4180,72 +3647,8 @@
       */
      public boolean onKeyDown(int keyCode, KeyEvent event)  {
 -        if (keyCode == KeyEvent.KEYCODE_BACK) {
@@ -1131,7 +1129,7 @@
 +                && onSearchRequested();
      }
  
-@@ -4280,22 +3684,7 @@
+@@ -4280,22 +3683,7 @@
       */
      public boolean onKeyUp(int keyCode, KeyEvent event) {
 -        int sdkVersion = getApplicationInfo().targetSdkVersion;
@@ -1157,7 +1155,7 @@
 +        return true;
      }
  
-@@ -4309,19 +3698,4 @@
+@@ -4309,19 +3697,4 @@
      }
  
 -    private static final class RequestFinishCallback extends IRequestFinishCallback.Stub {
@@ -1177,7 +1175,7 @@
 -    }
  
      /**
-@@ -4369,26 +3743,12 @@
+@@ -4369,26 +3742,12 @@
      @Deprecated
      public void onBackPressed() {
 -        if (mActionBar != null && mActionBar.collapseActionView()) {
@@ -1209,7 +1207,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -4404,7 +3764,5 @@
+@@ -4404,7 +3763,5 @@
       */
      public boolean onKeyShortcut(int keyCode, KeyEvent event) {
 -        // Let the Action Bar have a chance at handling the shortcut.
@@ -1218,7 +1216,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -4497,16 +3855,5 @@
+@@ -4497,16 +3854,5 @@
  
      public void onWindowAttributesChanged(WindowManager.LayoutParams params) {
 -        // Update window manager if: we have a view, that view is
@@ -1236,7 +1234,7 @@
 +
      }
  
-@@ -4620,21 +3967,5 @@
+@@ -4620,21 +3966,5 @@
      public boolean dispatchKeyEvent(KeyEvent event) {
          onUserInteraction();
 -
@@ -1259,7 +1257,7 @@
 +        return getWindow().superDispatchKeyEvent(event) || event.dispatch(this);
      }
  
-@@ -4789,13 +4120,5 @@
+@@ -4789,13 +4119,5 @@
      @Override
      public boolean onMenuOpened(int featureId, @NonNull Menu menu) {
 -        if (featureId == Window.FEATURE_ACTION_BAR) {
@@ -1274,7 +1272,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -4860,19 +4183,5 @@
+@@ -4860,19 +4182,5 @@
       */
      public void onPanelClosed(int featureId, @NonNull Menu menu) {
 -        switch (featureId) {
@@ -1295,7 +1293,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -4883,8 +4192,5 @@
+@@ -4883,8 +4191,5 @@
       */
      public void invalidateOptionsMenu() {
 -        if (mWindow.hasFeature(Window.FEATURE_OPTIONS_PANEL) &&
@@ -1305,7 +1303,7 @@
 +        if (mWindow != null) mWindow.invalidatePanelMenu(Window.FEATURE_OPTIONS_PANEL);
      }
  
-@@ -5098,8 +4404,5 @@
+@@ -5098,8 +4403,5 @@
       */
      public void openOptionsMenu() {
 -        if (mWindow.hasFeature(Window.FEATURE_OPTIONS_PANEL) &&
@@ -1315,7 +1313,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -5109,8 +4412,5 @@
+@@ -5109,8 +4411,5 @@
       */
      public void closeOptionsMenu() {
 -        if (mWindow.hasFeature(Window.FEATURE_OPTIONS_PANEL) &&
@@ -1325,21 +1323,21 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -5142,5 +4442,5 @@
+@@ -5142,5 +4441,5 @@
       */
      public void registerForContextMenu(View view) {
 -        view.setOnCreateContextMenuListener(this);
 +        throw new UnsupportedOperationException("The embedded view has no context menu");
      }
  
-@@ -5153,5 +4453,5 @@
+@@ -5153,5 +4452,5 @@
       */
      public void unregisterForContextMenu(View view) {
 -        view.setOnCreateContextMenuListener(null);
 +        // The embedded view has no context-menu listener.
      }
  
-@@ -5470,13 +4770,9 @@
+@@ -5470,13 +4769,9 @@
       */
      public boolean onSearchRequested() {
 -        final int uiMode = getResources().getConfiguration().uiMode
@@ -1358,21 +1356,21 @@
 +        return true;
      }
  
-@@ -5623,5 +4919,5 @@
+@@ -5623,5 +4918,5 @@
              initWindowDecorActionBar();
              if (mActionBar != null) {
 -                mMenuInflater = new MenuInflater(mActionBar.getThemedContext(), this);
 +                mMenuInflater = new MenuInflater(mActionBar.getThemedContext());
              } else {
                  mMenuInflater = new MenuInflater(this);
-@@ -5634,5 +4930,5 @@
+@@ -5634,5 +4929,5 @@
      public void setTheme(int resid) {
          super.setTheme(resid);
 -        mWindow.setTheme(resid);
 +        if (mWindow != null) mWindow.setTheme(resid);
      }
  
-@@ -5843,68 +5139,7 @@
+@@ -5843,68 +5138,7 @@
       * @see Context#DEVICE_ID_DEFAULT
       */
 -    @FlaggedApi(Flags.FLAG_DEVICE_AWARE_PERMISSION_APIS_ENABLED)
@@ -1442,13 +1440,13 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -5966,5 +5201,4 @@
+@@ -5966,5 +5200,4 @@
       * @see #requestPermissions
       */
 -    @FlaggedApi(Flags.FLAG_DEVICE_AWARE_PERMISSION_APIS_ENABLED)
      public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
              @NonNull int[] grantResults, int deviceId) {
-@@ -5983,8 +5217,5 @@
+@@ -5983,8 +5216,5 @@
      @Override
      public boolean shouldShowRequestPermissionRationale(@NonNull String permission) {
 -        if (Flags.shouldShowPermissionRationaleInContextEnabled()) {
@@ -1458,13 +1456,13 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6002,5 +5233,4 @@
+@@ -6002,5 +5232,4 @@
       * @see #onRequestPermissionsResult
       */
 -    @FlaggedApi(Flags.FLAG_DEVICE_AWARE_PERMISSION_APIS_ENABLED)
      @SuppressLint("OnNameExpected")
      // Suppress lint as this is an overload of the original API.
-@@ -6065,37 +5295,8 @@
+@@ -6065,37 +5294,8 @@
      public void startActivityForResult(@RequiresPermission Intent intent, int requestCode,
              @Nullable Bundle options) {
 -        if (mParent == null) {
@@ -1506,7 +1504,7 @@
 +        getBaseContext().startActivity(intent, options);
      }
  
-@@ -6106,11 +5307,5 @@
+@@ -6106,11 +5306,5 @@
       */
      private void cancelInputsAndStartExitTransition(Bundle options) {
 -        final View decor = mWindow != null ? mWindow.peekDecorView() : null;
@@ -1519,7 +1517,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6124,15 +5319,9 @@
+@@ -6124,15 +5318,9 @@
       */
      public boolean isActivityTransitionRunning() {
 -        return mActivityTransitionState.isTransitionRunning();
@@ -1537,21 +1535,21 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6170,5 +5359,5 @@
+@@ -6170,5 +5358,5 @@
      @RequiresPermission(anyOf = {INTERACT_ACROSS_USERS, INTERACT_ACROSS_USERS_FULL})
      public void startActivityForResultAsUser(@NonNull Intent intent, int requestCode,
 -            @NonNull @CanBeCURRENT UserHandle user) {
 +            @NonNull UserHandle user) {
          startActivityForResultAsUser(intent, requestCode, null, user);
      }
-@@ -6209,5 +5398,5 @@
+@@ -6209,5 +5397,5 @@
      @RequiresPermission(anyOf = {INTERACT_ACROSS_USERS, INTERACT_ACROSS_USERS_FULL})
      public void startActivityForResultAsUser(@NonNull Intent intent, int requestCode,
 -            @Nullable Bundle options, @NonNull @CanBeCURRENT UserHandle user) {
 +            @Nullable Bundle options, @NonNull UserHandle user) {
          startActivityForResultAsUser(intent, mEmbeddedID, requestCode, options, user);
      }
-@@ -6249,28 +5438,6 @@
+@@ -6249,28 +5437,6 @@
      public void startActivityForResultAsUser(@NonNull Intent intent, @NonNull String resultWho,
              int requestCode,
 -            @Nullable Bundle options, @NonNull @CanBeCURRENT UserHandle user) {
@@ -1582,14 +1580,14 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6279,5 +5446,5 @@
+@@ -6279,5 +5445,5 @@
       */
      @Override
 -    public void startActivityAsUser(Intent intent, @CanBeCURRENT UserHandle user) {
 +    public void startActivityAsUser(Intent intent, UserHandle user) {
          startActivityAsUser(intent, null, user);
      }
-@@ -6299,19 +5466,6 @@
+@@ -6299,19 +5465,6 @@
      @RequiresPermission(anyOf = {INTERACT_ACROSS_USERS, INTERACT_ACROSS_USERS_FULL})
      public void startActivityAsUser(@NonNull Intent intent,
 -            @Nullable Bundle options, @NonNull @CanBeCURRENT UserHandle user) {
@@ -1611,7 +1609,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6344,17 +5498,5 @@
+@@ -6344,17 +5497,5 @@
      public void startActivityAsCaller(Intent intent, @Nullable Bundle options,
              boolean ignoreTargetSecurity, int userId, int requestCode) {
 -        if (mParent != null) {
@@ -1630,7 +1628,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6444,40 +5586,5 @@
+@@ -6444,40 +5585,5 @@
              @Nullable Bundle options)
              throws IntentSender.SendIntentException {
 -        try {
@@ -1672,7 +1670,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6522,12 +5629,5 @@
+@@ -6522,12 +5628,5 @@
      @Override
      public void startActivity(Intent intent, @Nullable Bundle options) {
 -        getAutofillClientController().onStartActivity(intent, mIntent);
@@ -1686,7 +1684,7 @@
 +        getBaseContext().startActivity(intent, options);
      }
  
-@@ -6572,6 +5672,5 @@
+@@ -6572,6 +5671,5 @@
      @Override
      public void startActivities(Intent[] intents, @Nullable Bundle options) {
 -        mInstrumentation.execStartActivities(this, mMainThread.getApplicationThread(),
@@ -1694,7 +1692,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6685,43 +5784,5 @@
+@@ -6685,43 +5783,5 @@
      public boolean startActivityIfNeeded(@RequiresPermission @NonNull Intent intent,
              int requestCode, @Nullable Bundle options) {
 -        if (Instrumentation.DEBUG_START_ACTIVITY) {
@@ -1739,7 +1737,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6770,18 +5831,5 @@
+@@ -6770,18 +5830,5 @@
      public boolean startNextMatchingActivity(@RequiresPermission @NonNull Intent intent,
              @Nullable Bundle options) {
 -        if (mParent == null) {
@@ -1759,7 +1757,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6831,15 +5879,5 @@
+@@ -6831,15 +5878,5 @@
      public void startActivityFromChild(@NonNull Activity child, @RequiresPermission Intent intent,
              int requestCode, @Nullable Bundle options) {
 -        options = transferSpringboardActivityOptions(options);
@@ -1776,14 +1774,14 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -6897,5 +5935,5 @@
+@@ -6897,5 +5934,5 @@
      private void startActivityAsUserFromFragment(@NonNull Fragment fragment,
              @RequiresPermission Intent intent, int requestCode, @Nullable Bundle options,
 -            @CanBeCURRENT UserHandle user) {
 +            UserHandle user) {
          startActivityForResultAsUser(intent, fragment.mWho, requestCode, options, user);
      }
-@@ -6908,19 +5946,5 @@
+@@ -6908,19 +5945,5 @@
      public void startActivityForResult(
              String who, Intent intent, int requestCode, @Nullable Bundle options) {
 -        Uri referrer = onProvideReferrer();
@@ -1804,7 +1802,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7092,10 +6116,5 @@
+@@ -7092,10 +6115,5 @@
      public void overrideActivityTransition(@OverrideTransition int overrideType,
              @AnimRes int enterAnim, @AnimRes int exitAnim, @ColorInt int backgroundColor) {
 -        if (overrideType != OVERRIDE_TRANSITION_OPEN && overrideType != OVERRIDE_TRANSITION_CLOSE) {
@@ -1816,7 +1814,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7110,9 +6129,5 @@
+@@ -7110,9 +6128,5 @@
       */
      public void clearOverrideActivityTransition(@OverrideTransition int overrideType) {
 -        if (overrideType != OVERRIDE_TRANSITION_OPEN && overrideType != OVERRIDE_TRANSITION_CLOSE) {
@@ -1827,7 +1825,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7166,6 +6181,5 @@
+@@ -7166,6 +6180,5 @@
      @Deprecated
      public void overridePendingTransition(int enterAnim, int exitAnim, int backgroundColor) {
 -        ActivityClient.getInstance().overridePendingTransition(mToken, getPackageName(), enterAnim,
@@ -1835,54 +1833,54 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7200,5 +6214,5 @@
+@@ -7200,5 +6213,5 @@
      @RequiresPermission(android.Manifest.permission.MANAGE_MEDIA_PROJECTION)
      public final void setForceSendResultForMediaProjection() {
 -        ActivityClient.getInstance().setForceSendResultForMediaProjection(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7304,5 +6318,5 @@
+@@ -7304,5 +6317,5 @@
      @Nullable
      public String getCallingPackage() {
 -        return ActivityClient.getInstance().getCallingPackage(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7323,5 +6337,5 @@
+@@ -7323,5 +6336,5 @@
      @Nullable
      public ComponentName getCallingActivity() {
 -        return ActivityClient.getInstance().getCallingActivity(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7363,5 +6377,5 @@
+@@ -7363,5 +6376,5 @@
       */
      public int getLaunchedFromUid() {
 -        return ActivityClient.getInstance().getLaunchedFromUid(getActivityToken());
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7404,5 +6418,5 @@
+@@ -7404,5 +6417,5 @@
      @Nullable
      public String getLaunchedFromPackage() {
 -        return ActivityClient.getInstance().getLaunchedFromPackage(getActivityToken());
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7416,5 +6430,4 @@
+@@ -7416,5 +6429,4 @@
       * @see ComponentCaller
       */
 -    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
      @SuppressLint("OnNameExpected")
      public @NonNull ComponentCaller getInitialCaller() {
-@@ -7444,5 +6457,4 @@
+@@ -7444,5 +6456,4 @@
       * @see #getCaller
       */
 -    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
      @SuppressLint("OnNameExpected")
      public @NonNull ComponentCaller getCurrentCaller() {
-@@ -7540,11 +6552,5 @@
+@@ -7540,11 +6551,5 @@
       */
      public void recreate() {
 -        if (mParent != null) {
@@ -1895,7 +1893,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7555,27 +6561,5 @@
+@@ -7555,27 +6560,5 @@
      @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
      private void finish(int finishTask) {
 -        if (DEBUG_FINISH_ACTIVITY) {
@@ -1924,7 +1922,7 @@
 +        mFinished = true;
      }
  
-@@ -7604,13 +6588,5 @@
+@@ -7604,13 +6587,5 @@
       */
      public void finishAffinity() {
 -        if (mParent != null) {
@@ -1939,7 +1937,7 @@
 +        finish();
      }
  
-@@ -7638,7 +6614,5 @@
+@@ -7638,7 +6613,5 @@
       */
      public void finishAfterTransition() {
 -        if (!mActivityTransitionState.startExitBackTransition(this)) {
@@ -1948,7 +1946,7 @@
 +        finish();
      }
  
-@@ -7653,9 +6627,5 @@
+@@ -7653,9 +6626,5 @@
       */
      public void finishActivity(int requestCode) {
 -        if (mParent == null) {
@@ -1959,27 +1957,27 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7671,5 +6641,5 @@
+@@ -7671,5 +6640,5 @@
      @Deprecated
      public void finishActivityFromChild(@NonNull Activity child, int requestCode) {
 -        ActivityClient.getInstance().finishSubActivity(mToken, child.mEmbeddedID, requestCode);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7694,5 +6664,5 @@
+@@ -7694,5 +6663,5 @@
       */
      public boolean releaseInstance() {
 -        return ActivityClient.getInstance().releaseActivityInstance(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7749,5 +6719,4 @@
+@@ -7749,5 +6718,4 @@
       *               intent.
       */
 -    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
      public void onActivityResult(int requestCode, int resultCode, @Nullable Intent data,
              @NonNull ComponentCaller caller) {
-@@ -7773,25 +6742,4 @@
+@@ -7773,25 +6741,4 @@
      }
  
 -    /**
@@ -2005,7 +2003,7 @@
 -    }
  
      /**
-@@ -7844,17 +6792,6 @@
+@@ -7844,17 +6791,6 @@
       */
      public PendingIntent createPendingResult(int requestCode, @NonNull Intent data,
 -            @PendingIntent.Flags int flags) {
@@ -2025,7 +2023,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7886,12 +6823,4 @@
+@@ -7886,12 +6822,4 @@
       */
      public void setRequestedOrientation(@ActivityInfo.ScreenOrientation int requestedOrientation) {
 -        if (requestedOrientation == mLastRequestedOrientation) {
@@ -2038,7 +2036,7 @@
 -        }
          mLastRequestedOrientation = requestedOrientation;
      }
-@@ -7924,12 +6853,5 @@
+@@ -7924,12 +6852,5 @@
      @ActivityInfo.ScreenOrientation
      public int getRequestedOrientation() {
 -        if (mLastRequestedOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSET) {
@@ -2052,34 +2050,34 @@
 +        return mLastRequestedOrientation;
      }
  
-@@ -7941,5 +6863,5 @@
+@@ -7941,5 +6862,5 @@
       */
      public int getTaskId() {
 -        return ActivityClient.getInstance().getTaskForActivity(mToken, false /* onlyRoot */);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7951,5 +6873,5 @@
+@@ -7951,5 +6872,5 @@
       */
      public boolean isTaskRoot() {
 -        return mWindowControllerCallback.isTaskRoot();
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7966,5 +6888,5 @@
+@@ -7966,5 +6887,5 @@
       */
      public boolean moveTaskToBack(boolean nonRoot) {
 -        return ActivityClient.getInstance().moveActivityTaskToBack(mToken, nonRoot);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -7997,5 +6919,4 @@
+@@ -7997,5 +6918,4 @@
  
      /** @hide */
 -    @Override
      public final ComponentName contentCaptureClientGetComponentName() {
          return getComponentName();
-@@ -8043,28 +6964,10 @@
+@@ -8043,28 +6963,10 @@
  
      private void ensureSearchManager() {
 -        if (mSearchManager != null) {
@@ -2110,7 +2108,7 @@
 +        if (WINDOW_SERVICE.equals(name) && mWindowManager != null) return mWindowManager;
          return super.getSystemService(name);
      }
-@@ -8120,15 +7023,7 @@
+@@ -8120,15 +7022,7 @@
  
      protected void onTitleChanged(CharSequence title, int color) {
 -        if (mTitleReady) {
@@ -2129,7 +2127,7 @@
 +            if (color != 0) mWindow.setTitleColor(color);
          }
      }
-@@ -8152,32 +7047,5 @@
+@@ -8152,32 +7046,5 @@
          if (mTaskDescription != taskDescription) {
              mTaskDescription.copyFromPreserveHiddenFields(taskDescription);
 -            // Scale the icon down to something reasonable if it is provided
@@ -2163,7 +2161,7 @@
 +        }
      }
  
-@@ -8416,8 +7284,5 @@
+@@ -8416,8 +7283,5 @@
      @TestApi
      public final boolean addDumpable(@NonNull Dumpable dumpable) {
 -        if (mDumpableContainer == null) {
@@ -2173,7 +2171,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8434,110 +7299,10 @@
+@@ -8434,110 +7298,10 @@
              @SuppressLint("UseParcelFileDescriptor") @Nullable FileDescriptor fd,
              @NonNull PrintWriter writer, @Nullable String[] args) {
 -
@@ -2286,14 +2284,14 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8560,5 +7325,5 @@
+@@ -8560,5 +7324,5 @@
       */
      public boolean isImmersive() {
 -        return ActivityClient.getInstance().isImmersive(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8571,8 +7336,5 @@
+@@ -8571,8 +7335,5 @@
       */
      final boolean isTopOfTask() {
 -        if (mToken == null || mWindow == null) {
@@ -2303,7 +2301,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8613,10 +7375,5 @@
+@@ -8613,10 +7374,5 @@
  
      private boolean convertFromTranslucentInternal() {
 -        mTranslucentCallback = null;
@@ -2315,7 +2313,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8647,50 +7404,13 @@
+@@ -8647,50 +7403,13 @@
      public boolean convertToTranslucent(TranslucentConversionListener callback,
              ActivityOptions options) {
 -        mTranslucentCallback = callback;
@@ -2371,7 +2369,7 @@
 +
  
      /**
-@@ -8811,9 +7531,5 @@
+@@ -8811,9 +7530,5 @@
       */
      public void dispatchEnterAnimationComplete() {
 -        onEnterAnimationComplete();
@@ -2382,14 +2380,14 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8833,5 +7549,5 @@
+@@ -8833,5 +7548,5 @@
       */
      public void setImmersive(boolean i) {
 -        ActivityClient.getInstance().setImmersive(mToken, i);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8892,7 +7608,5 @@
+@@ -8892,7 +7607,5 @@
      public void setVrModeEnabled(boolean enabled, @NonNull ComponentName requestedComponent)
            throws PackageManager.NameNotFoundException {
 -        if (ActivityClient.getInstance().setVrMode(mToken, enabled, requestedComponent) != 0) {
@@ -2398,7 +2396,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8938,12 +7652,5 @@
+@@ -8938,12 +7651,5 @@
      @Override
      public ActionMode onWindowStartingActionMode(ActionMode.Callback callback) {
 -        // Only Primary ActionModes are represented in the ActionBar.
@@ -2412,7 +2410,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8998,18 +7705,5 @@
+@@ -8998,18 +7704,5 @@
       */
      public boolean shouldUpRecreateTask(Intent targetIntent) {
 -        try {
@@ -2432,7 +2430,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9037,30 +7731,5 @@
+@@ -9037,30 +7730,5 @@
       */
      public boolean navigateUpTo(Intent upIntent) {
 -        if (mParent == null) {
@@ -2464,7 +2462,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9126,8 +7795,5 @@
+@@ -9126,8 +7794,5 @@
       */
      public void setEnterSharedElementCallback(SharedElementCallback callback) {
 -        if (callback == null) {
@@ -2474,7 +2472,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9142,8 +7808,5 @@
+@@ -9142,8 +7807,5 @@
       */
      public void setExitSharedElementCallback(SharedElementCallback callback) {
 -        if (callback == null) {
@@ -2484,21 +2482,21 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9164,5 +7827,5 @@
+@@ -9164,5 +7826,5 @@
       */
      public void postponeEnterTransition() {
 -        mActivityTransitionState.postponeEnterTransition();
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9173,5 +7836,5 @@
+@@ -9173,5 +7835,5 @@
       */
      public void startPostponedEnterTransition() {
 -        mActivityTransitionState.startPostponedEnterTransition();
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9184,9 +7847,5 @@
+@@ -9184,9 +7846,5 @@
       */
      public DragAndDropPermissions requestDragAndDropPermissions(DragEvent event) {
 -        DragAndDropPermissions dragAndDropPermissions = DragAndDropPermissions.obtain(event);
@@ -2509,7 +2507,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9198,93 +7857,5 @@
+@@ -9198,93 +7856,5 @@
      }
  
 -    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
@@ -2604,7 +2602,7 @@
 +
  
      /** @hide */
-@@ -9304,9 +7875,4 @@
+@@ -9304,9 +7874,4 @@
      }
  
 -    /** @hide */
@@ -2614,7 +2612,7 @@
 -    }
  
      /** @hide */
-@@ -9321,105 +7887,32 @@
+@@ -9321,105 +7886,32 @@
      @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
      final void performCreate(Bundle icicle, PersistableBundle persistentState) {
 -        if (Trace.isTagEnabled(Trace.TRACE_TAG_WINDOW_MANAGER)) {
@@ -2732,7 +2730,7 @@
 -        Trace.traceEnd(Trace.TRACE_TAG_WINDOW_MANAGER);
      }
  
-@@ -9431,269 +7924,79 @@
+@@ -9431,269 +7923,79 @@
       */
      final void performRestart(boolean start) {
 -        Trace.traceBegin(Trace.TRACE_TAG_WINDOW_MANAGER, "performRestart");
@@ -3042,13 +3040,13 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9702,5 +8005,4 @@
+@@ -9702,5 +8004,4 @@
       */
      @UnsupportedAppUsage
 -    @FlaggedApi(android.nfc.Flags.FLAG_ENABLE_NFC_MAINLINE)
      @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
      public final boolean isResumed() {
-@@ -9729,57 +8031,10 @@
+@@ -9729,57 +8030,10 @@
      void dispatchActivityResult(String who, int requestCode, int resultCode, Intent data,
              String reason) {
 -        if (android.security.Flags.contentUriPermissionApis()) {
@@ -3108,56 +3106,56 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9807,5 +8062,5 @@
+@@ -9807,5 +8061,5 @@
       */
      public void startLockTask() {
 -        ActivityClient.getInstance().startLockTaskModeByToken(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9827,5 +8082,5 @@
+@@ -9827,5 +8081,5 @@
       */
      public void stopLockTask() {
 -        ActivityClient.getInstance().stopLockTaskModeByToken(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9836,5 +8091,5 @@
+@@ -9836,5 +8090,5 @@
       */
      public void showLockTaskEscapeMessage() {
 -        ActivityClient.getInstance().showLockTaskEscapeMessage(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9947,5 +8202,5 @@
+@@ -9947,5 +8201,5 @@
       */
      public void setRecentsScreenshotEnabled(boolean enabled) {
 -        ActivityClient.getInstance().setRecentsScreenshotEnabled(mToken, enabled);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9964,5 +8219,5 @@
+@@ -9964,5 +8218,5 @@
       */
      public void setShowWhenLocked(boolean showWhenLocked) {
 -        ActivityClient.getInstance().setShowWhenLocked(mToken, showWhenLocked);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -9983,5 +8238,5 @@
+@@ -9983,5 +8237,5 @@
       */
      public void setInheritShowWhenLocked(boolean inheritShowWhenLocked) {
 -        ActivityClient.getInstance().setInheritShowWhenLocked(mToken, inheritShowWhenLocked);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -10006,5 +8261,5 @@
+@@ -10006,5 +8260,5 @@
       */
      public void setTurnScreenOn(boolean turnScreenOn) {
 -        ActivityClient.getInstance().setTurnScreenOn(mToken, turnScreenOn);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -10025,18 +8280,7 @@
+@@ -10025,18 +8279,7 @@
      @SuppressLint("OnNameExpected")
      public void setAllowCrossUidActivitySwitchFromBelow(boolean allowed) {
 -        ActivityClient.getInstance().setAllowCrossUidActivitySwitchFromBelow(mToken, allowed);
@@ -3179,7 +3177,7 @@
 +
  
      /**
-@@ -10047,20 +8291,7 @@
+@@ -10047,20 +8290,7 @@
      @RequiresPermission(CONTROL_REMOTE_APP_TRANSITION_ANIMATIONS)
      public void unregisterRemoteAnimations() {
 -        ActivityClient.getInstance().unregisterRemoteAnimations(mToken);
@@ -3203,21 +3201,21 @@
 +
  
      /**
-@@ -10080,5 +8311,5 @@
+@@ -10080,5 +8310,5 @@
       */
      public void enableTaskLocaleOverride() {
 -        ActivityClient.getInstance().enableTaskLocaleOverride(mToken);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -10089,5 +8320,5 @@
+@@ -10089,5 +8319,5 @@
      @RequiresPermission(INTERNAL_SYSTEM_WINDOW)
      public void setActivityRecordInputSinkEnabled(boolean enabled) {
 -        ActivityClient.getInstance().setActivityRecordInputSinkEnabled(mToken, enabled);
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -10204,42 +8435,7 @@
+@@ -10204,42 +8434,7 @@
      @NonNull
      public OnBackInvokedDispatcher getOnBackInvokedDispatcher() {
 -        if (mWindow == null) {
@@ -3263,7 +3261,7 @@
 +
  
      /**
-@@ -10265,8 +8461,5 @@
+@@ -10265,8 +8460,5 @@
              @NonNull @CallbackExecutor Executor executor,
              @NonNull ScreenCaptureCallback callback) {
 -        if (mScreenCaptureCallbackHandler == null) {
@@ -3273,7 +3271,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -10277,36 +8470,9 @@
+@@ -10277,36 +8469,9 @@
      @RequiresPermission(DETECT_SCREEN_CAPTURE)
      public void unregisterScreenCaptureCallback(@NonNull ScreenCaptureCallback callback) {
 -        if (mScreenCaptureCallbackHandler != null) {
@@ -3312,7 +3310,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -10322,15 +8488,5 @@
+@@ -10322,15 +8487,5 @@
       */
      private boolean shouldStartAppJankTracking() {
 -        if (mApplication.getApplicationInfo().category == ApplicationInfo.CATEGORY_UNDEFINED) {
@@ -3329,7 +3327,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -10339,31 +8495,10 @@
+@@ -10339,31 +8494,10 @@
       */
      private void stopAppJankTracking() {
 -        if (!android.app.jank.Flags.detailedAppJankMetricsLoggingEnabled()) {
@@ -3363,7 +3361,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -10378,3 +8513,57 @@
+@@ -10378,3 +8512,59 @@
          }
      }
 +    private boolean mEmbeddedStarted;
@@ -3385,11 +3383,13 @@
 +        if (theme != 0) setTheme(theme);
 +    }
 +
-+    final void attachEmbeddedWindow(Window window) {
++    final PhoneWindow attachEmbeddedWindow() {
++        PhoneWindow window = new PhoneWindow(this);
 +        mWindow = window;
 +        mWindowManager = window.getWindowManager();
 +        mWindow.setCallback(this);
 +        getLayoutInflater().setPrivateFactory(this);
++        return window;
 +    }
 +
 +    final void performBackPressed() {

@@ -21,7 +21,7 @@ struct App {
 
 constexpr App kApps[] = {
     {"DeskClock", "com.android.deskclock", "com.android.deskclock.DeskClock",
-     "mipmap/ic_launcher_alarmclock", "Clock", "com.android.deskclock.DeskClockApplication"},
+     "mipmap/ic_launcher_alarmclock", "CLOCK", "com.android.deskclock.DeskClockApplication"},
     {"Browser2", "org.chromium.webview_shell", "org.chromium.webview_shell.WebViewBrowserActivity",
      "drawable/ic_launcher", "about:blank"},
     {"Music", "com.android.music", "com.android.music.MusicBrowserActivity",
@@ -156,7 +156,7 @@ void Verify(const App& app, const std::filesystem::path& path, const std::vector
     const auto first = Latest(scene);
     Require(first.draws > 0 && first.text.contains(app.initial_text), first.text);
     if (app.name == "DeskClock") {
-        for (auto label : {"Alarm\n", "Clock\n", "Timer\n", "Stopwatch\n"})
+        for (auto label : {"ALARM\n", "CLOCK\n", "TIMER\n", "STOPWATCH\n"})
             Require(first.text.contains(label), first.text);
         Require(HasClockTime(first.text), first.text);
     } else if (app.name == "Gallery2") {

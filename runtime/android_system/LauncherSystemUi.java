@@ -6,12 +6,13 @@ import android.content.res.AssetManager;
 import android.content.res.Resources;
 import android.graphics.Rect;
 import android.view.ContextThemeWrapper;
-import android.view.EmbeddedWindow;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+
+import com.android.internal.policy.PhoneWindow;
 
 import java.io.IOException;
 import java.util.function.Consumer;
@@ -68,7 +69,7 @@ public final class LauncherSystemUi extends ContextThemeWrapper implements Consu
             navParams.height = height;
             navigation.setLayoutParams(navParams);
         }
-        ((EmbeddedWindow) activity.getWindow()).setNavigationBarInset(height);
+        ((PhoneWindow) activity.getWindow()).setNavigationBarInset(height);
     }
 
     public void tintSignals(View status, int tint) {

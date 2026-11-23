@@ -27,16 +27,17 @@ import android.os.UserHandle;
 import android.os.UserManager;
 import android.view.Choreographer;
 import android.view.Display;
-import android.view.EmbeddedWindow;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
-import com.android.internal.policy.PhoneLayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewRootImpl;
 import android.view.WindowManager;
 import android.view.WindowMetrics;
+import com.android.internal.policy.PhoneLayoutInflater;
+import com.android.internal.policy.PhoneWindow;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import org.xmlpull.v1.XmlPullParser;
@@ -97,7 +98,7 @@ public final class UiRuntime {
             displays = new DisplayManager(new Display(resources));
             windows = new WindowManager() {
                 @Override public Display getDefaultDisplay() { return getDisplay(); }
-                @Override public WindowMetrics getCurrentWindowMetrics() { return EmbeddedWindow.displayMetrics(AppContext.this); }
+                @Override public WindowMetrics getCurrentWindowMetrics() { return PhoneWindow.displayMetrics(AppContext.this); }
                 @Override public WindowMetrics getMaximumWindowMetrics() { return getCurrentWindowMetrics(); }
                 @Override public void addView(View view, ViewGroup.LayoutParams params) {
                     throw new IllegalStateException("Window is required to add a view");
@@ -260,13 +261,13 @@ public final class UiRuntime {
             Activity activity = nativeCreateActivity(manifest.activity);
             ComponentName component = new ComponentName(manifest.info.packageName, manifest.activity);
             activity.attachEmbedded(app, Intent.makeMainActivity(component), manifest.theme);
-            EmbeddedWindow window = new EmbeddedWindow(activity);
-            activity.attachEmbeddedWindow(window);
+            PhoneWindow window = activity.attachEmbeddedWindow();
             try (TypedArray attrs = activity.obtainStyledAttributes(
                     new int[] {android.R.attr.windowBackground})) {
                 if (attrs.hasValue(0)) window.setBackgroundDrawable(attrs.getDrawable(0));
             }
-            root = new ViewRootImpl(window.getDecorView(), window);
+            root = new ViewRootImpl(activity, activity.getDisplay(), window);
+            root.setView(window.getDecorView(), window.getAttributes(), null);
             current = activity;
             activity.performCreate(null);
             resume();
@@ -473,7 +474,7 @@ public final class UiRuntime {
         if (action == MotionEvent.ACTION_SCROLL) {
             MotionEvent event = MotionEvent.fromHost(time, time, action, new int[] {id}, new float[] {x},
                     new float[] {y}, meta, dx, dy);
-            boolean handled = current.dispatchGenericMotionEvent(event);
+            boolean handled = root.dispatchHostInputEvent(event);
             finishIfRequested();
             return handled;
         }
@@ -501,7 +502,7 @@ public final class UiRuntime {
         else if (event.getActionMasked() == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_UP) {
             pointers.remove(index);
         }
-        boolean handled = current.dispatchTouchEvent(event);
+        boolean handled = root.dispatchHostInputEvent(event);
         finishIfRequested();
         return handled;
     }
@@ -517,7 +518,7 @@ public final class UiRuntime {
             if (event.getAction() == KeyEvent.ACTION_UP && !event.isCanceled()) sendHome();
             return true;
         }
-        boolean handled = current.dispatchKeyEvent(event);
+        boolean handled = root.dispatchHostInputEvent(event);
         finishIfRequested();
         return handled;
     }

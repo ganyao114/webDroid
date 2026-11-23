@@ -134,6 +134,9 @@ if(EMSCRIPTEN)
             _wa_input_push _wa_input_poll
             _wa_sf_codec_requests _wa_sf_codec_events _wa_sf_webview_requests _wa_sf_webview_events
             _wa_canvas_begin _wa_canvas_draw_color _wa_canvas_end)
+        if(BUILD_TESTING)
+            list(APPEND exports _wa_canvas_measure_text)
+        endif()
     else()
         target_link_options(android_system PRIVATE -sFILESYSTEM=0)
     endif()

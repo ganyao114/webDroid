@@ -363,7 +363,8 @@ static double text_advance(const char *text, uint32_t len, uint32_t face, uint32
     while (at < len) {
         if (wa_utf8_next(text, len, &at, &cp) < 0)
             cp = 0xfffd;
-        if (cp < WA_FONT_ASCII_FIRST || cp == 0x7f || cp == 0x200d ||
+        /* TextUtils uses U+FEFF to preserve offsets after ellipsizing. */
+        if (cp < WA_FONT_ASCII_FIRST || cp == 0x7f || cp == 0x200d || cp == 0xfeff ||
             (cp >= 0x300 && cp <= 0x36f) || (cp >= 0xfe00 && cp <= 0xfe0f) ||
             (cp >= 0x1f3fb && cp <= 0x1f3ff))
             continue;
