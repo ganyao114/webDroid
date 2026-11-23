@@ -1,6 +1,7 @@
 package android.app;
 
 import android.appwidget.AppWidgetManager;
+import android.content.ClipboardManager;
 import android.content.ComponentName;
 import android.content.BroadcastReceiver;
 import android.content.ContentResolver;
@@ -8,6 +9,7 @@ import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.LauncherApps;
@@ -18,13 +20,19 @@ import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
 import android.hardware.display.DisplayManager;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.IBinder;
 import android.os.Looper;
 import android.os.LocaleList;
+import android.os.PowerManager;
+import android.os.SystemClock;
 import android.os.UserHandle;
 import android.os.UserManager;
+import android.os.storage.StorageManager;
+import android.util.ArrayMap;
 import android.view.Choreographer;
 import android.view.Display;
 import android.view.KeyEvent;
@@ -38,6 +46,7 @@ import android.view.WindowMetrics;
 import com.android.internal.policy.PhoneLayoutInflater;
 import com.android.internal.policy.PhoneWindow;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import org.xmlpull.v1.XmlPullParser;
@@ -89,10 +98,41 @@ public final class UiRuntime {
         private SearchManager search;
         private android.view.inputmethod.InputMethodManager inputMethod;
         private android.view.accessibility.AccessibilityManager accessibility;
+        private ClipboardManager clipboard;
+        private PowerManager power;
+        private BatteryManager battery;
+        private UiModeManager uiMode;
+        private KeyguardManager keyguard;
+        private NotificationManager notifications;
+        private StorageManager storage;
         private Resources.Theme theme;
+        private final ArrayMap<String, Integer> serviceTypes;
+        private final ArrayList<String> manifestReceivers;
+        private final ArrayMap<ComponentName, RunningService> runningServices = new ArrayMap<>();
+        private final ArrayMap<ServiceConnection, RunningService> connections = new ArrayMap<>();
+        private boolean closing;
+        private boolean interactive = true;
 
-        AppContext(Resources resources, ApplicationInfo info) {
+        private static final class RunningService {
+            final Service instance;
+            final ComponentName name;
+            int nextStartId;
+            boolean started;
+            int clients;
+            Intent bindIntent;
+            IBinder binding;
+            boolean rebind;
+
+            RunningService(Service instance, ComponentName name) {
+                this.instance = instance;
+                this.name = name;
+            }
+        }
+
+        AppContext(Resources resources, ApplicationInfo info, Manifest manifest) {
             this.resources = resources; this.info = info;
+            serviceTypes = manifest.serviceTypes;
+            manifestReceivers = manifest.receivers;
             packages = PackageManager.forHost(this);
             resolver = new ContentResolver(this) {};
             displays = new DisplayManager(new Display(resources));
@@ -113,6 +153,7 @@ public final class UiRuntime {
         }
         @Override public AssetManager getAssets() { return resources.getAssets(); }
         @Override public Resources getResources() { return resources; }
+        @Override public int getDisplayId() { return getDisplay().getDisplayId(); }
         @Override public String getPackageName() { return info.packageName; }
         @Override public Context getApplicationContext() { return application == null ? this : application; }
         @Override public Context createConfigurationContext(Configuration override) {
@@ -133,6 +174,27 @@ public final class UiRuntime {
             };
         }
         void closeResources() {
+            closing = true;
+            try {
+                for (RunningService service : new ArrayList<>(runningServices.values())) {
+                    try {
+                        destroyService(service);
+                    } catch (RuntimeException error) {
+                        android.util.Log.e("UiRuntime", "Service shutdown failed: " + service.name, error);
+                    }
+                }
+            } finally {
+                try {
+                    connections.clear();
+                    if (clipboard != null) clipboard.detachEmbedded();
+                    if (notifications != null) notifications.cancelAll();
+                    PendingIntent.cancelEmbeddedForContext(getApplicationContext());
+                } finally {
+                    releaseResources();
+                }
+            }
+        }
+        private void releaseResources() {
             receivers.clear();
             for (Resources configured : configuredResources) configured.close();
             configuredResources.clear();
@@ -148,10 +210,25 @@ public final class UiRuntime {
         }
         @Override public Intent registerReceiver(BroadcastReceiver receiver, IntentFilter filter, String permission,
                                                  Handler handler, int flags) {
+            Intent batteryState = filter.hasAction(Intent.ACTION_BATTERY_CHANGED)
+                    ? new Intent(Intent.ACTION_BATTERY_CHANGED)
+                            .putExtra(BatteryManager.EXTRA_LEVEL, 100)
+                            .putExtra(BatteryManager.EXTRA_SCALE, 100)
+                            .putExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_FULL)
+                            .putExtra(BatteryManager.EXTRA_PLUGGED, BatteryManager.BATTERY_PLUGGED_AC)
+                            .putExtra(BatteryManager.EXTRA_PRESENT, true)
+                    : null;
             if (receiver != null && (permission == null || permission.isEmpty())) {
-                receivers.add(new ReceiverRegistration(receiver, filter, handler == null ? new Handler(getMainLooper()) : handler));
+                ReceiverRegistration registration = new ReceiverRegistration(receiver, filter,
+                        handler == null ? new Handler(getMainLooper()) : handler);
+                receivers.add(registration);
+                if (batteryState != null) {
+                    registration.handler.post(() -> {
+                        if (receivers.contains(registration)) deliverBroadcast(receiver, new Intent(batteryState), true);
+                    });
+                }
             }
-            return null;
+            return batteryState;
         }
         @Override public void unregisterReceiver(BroadcastReceiver receiver) {
             boolean removed = false;
@@ -165,6 +242,18 @@ public final class UiRuntime {
         }
         @Override public void sendBroadcast(Intent intent) {
             if (intent.getPackage() != null && !intent.getPackage().equals(getPackageName())) return;
+            Intent copy = new Intent(intent);
+            ComponentName component = copy.getComponent();
+            if (component != null) {
+                if (component.getPackageName().equals(getPackageName())
+                        && manifestReceivers.contains(component.getClassName())) {
+                    new Handler(getMainLooper()).post(() -> {
+                        if (!closing) deliverBroadcast(
+                                instantiate(component.getClassName(), BroadcastReceiver.class), copy, false);
+                    });
+                }
+                return;
+            }
             var data = intent.getData();
             String scheme = data == null ? null : data.getScheme();
             for (ReceiverRegistration registration : receivers) {
@@ -172,17 +261,24 @@ public final class UiRuntime {
                         data, intent.getCategories(), "BroadcastReceiver") < 0) continue;
                 registration.handler.post(() -> {
                     if (!receivers.contains(registration)) return;
-                    BroadcastReceiver receiver = registration.receiver;
-                    var result = new BroadcastReceiver.PendingResult(0, null, null,
-                            BroadcastReceiver.PendingResult.TYPE_REGISTERED, false, false, null, 0, 0);
-                    receiver.setPendingResult(result);
-                    try {
-                        receiver.onReceive(getApplicationContext(), intent);
-                    } finally {
-                        if (receiver.getPendingResult() == result) result.finish();
-                        receiver.setPendingResult(null);
-                    }
+                    deliverBroadcast(registration.receiver, new Intent(copy), false);
                 });
+            }
+        }
+        @Override public void sendBroadcast(Intent intent, String permission) {
+            if (permission == null || checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) {
+                sendBroadcast(intent);
+            }
+        }
+        private void deliverBroadcast(BroadcastReceiver receiver, Intent intent, boolean sticky) {
+            var result = new BroadcastReceiver.PendingResult(0, null, null,
+                    BroadcastReceiver.PendingResult.TYPE_REGISTERED, false, sticky, null, 0, 0);
+            receiver.setPendingResult(result);
+            try {
+                receiver.onReceive(getApplicationContext(), intent);
+            } finally {
+                if (receiver.getPendingResult() == result) result.finish();
+                receiver.setPendingResult(null);
             }
         }
         @Override public ApplicationInfo getApplicationInfo() { return info; }
@@ -198,11 +294,160 @@ public final class UiRuntime {
         @Override public void setTheme(int id) { info.theme = id; theme = null; }
         @Override public void startActivity(Intent intent) { startActivity(intent, null); }
         @Override public void startActivity(Intent intent, Bundle options) { packages.launch(intent, UserHandle.SYSTEM, options); }
+        @Override public ComponentName startService(Intent intent) {
+            RunningService service = getService(intent, true);
+            if (service == null) return null;
+            service.started = true;
+            service.instance.onStartCommand(new Intent(intent), 0, ++service.nextStartId);
+            return service.name;
+        }
+        @Override public ComponentName startForegroundService(Intent intent) { return startService(intent); }
+        @Override public boolean stopService(Intent intent) {
+            RunningService service = getService(intent, false);
+            return service != null && stopService(service, -1);
+        }
+        @Override public boolean bindService(Intent intent, ServiceConnection connection, int flags) {
+            if (connections.containsKey(connection)) return true;
+            RunningService service = getService(intent, (flags & BIND_AUTO_CREATE) != 0);
+            if (service == null) return false;
+            if (service.bindIntent == null) {
+                service.bindIntent = new Intent(intent);
+                service.binding = service.instance.onBind(service.bindIntent);
+            } else if (service.clients == 0 && service.rebind) {
+                service.rebind = false;
+                service.instance.onRebind(new Intent(intent));
+            }
+            service.clients++;
+            connections.put(connection, service);
+            new Handler(getMainLooper()).post(() -> {
+                if (connections.get(connection) != service) return;
+                if (service.binding == null) connection.onNullBinding(service.name);
+                else connection.onServiceConnected(service.name, service.binding);
+            });
+            return true;
+        }
+        @Override public void unbindService(ServiceConnection connection) {
+            RunningService service = connections.remove(connection);
+            if (service == null) throw new IllegalArgumentException("Service connection is not bound");
+            if (--service.clients == 0) {
+                service.rebind = service.instance.onUnbind(service.bindIntent);
+                if (!service.started) destroyService(service);
+            }
+        }
+        private RunningService getService(Intent intent, boolean create) {
+            ComponentName name = intent.getComponent();
+            if (closing || name == null || !getPackageName().equals(name.getPackageName())) return null;
+            RunningService service = runningServices.get(name);
+            if (service != null || !create) return service;
+            Integer type = serviceTypes.get(name.getClassName());
+            if (type == null) return null;
+            Service instance = instantiate(name.getClassName(), Service.class);
+            RunningService record = new RunningService(instance, name);
+            instance.attachEmbedded(this, name.getClassName(), application, type,
+                    startId -> stopService(record, startId));
+            runningServices.put(name, record);
+            try {
+                instance.onCreate();
+            } catch (RuntimeException | Error failure) {
+                runningServices.remove(name);
+                instance.detachAndCleanUp();
+                throw failure;
+            }
+            return record;
+        }
+        private boolean stopService(RunningService service, int startId) {
+            if (!service.started || (startId != -1 && startId != service.nextStartId)) return false;
+            service.started = false;
+            if (service.clients == 0) destroyService(service);
+            return true;
+        }
+        private void destroyService(RunningService service) {
+            if (runningServices.get(service.name) != service) return;
+            runningServices.remove(service.name);
+            service.started = false;
+            try {
+                service.instance.onDestroy();
+            } finally {
+                service.instance.detachAndCleanUp();
+            }
+        }
+        @Override public File getExternalFilesDir(String type) { return externalDirectory("data", "files", type); }
+        @Override public File[] getExternalFilesDirs(String type) { return new File[] {getExternalFilesDir(type)}; }
+        @Override public File getExternalCacheDir() { return externalDirectory("data", "cache", null); }
+        @Override public File[] getExternalCacheDirs() { return new File[] {getExternalCacheDir()}; }
+        @Override public File[] getExternalMediaDirs() { return new File[] {externalDirectory("media", null, null)}; }
+        @Override public File getObbDir() { return externalDirectory("obb", null, null); }
+        @Override public File[] getObbDirs() { return new File[] {getObbDir()}; }
+        private File externalDirectory(String area, String directory, String type) {
+            File path = StorageManager.getEmbeddedPackageDirectory(getPackageName(), area);
+            if (directory != null) path = new File(path, directory);
+            if (type != null) {
+                if (type.isEmpty() || type.equals(".") || type.equals("..") || type.indexOf('/') >= 0) {
+                    throw new IllegalArgumentException("Invalid storage directory name " + type);
+                }
+                path = new File(path, type);
+            }
+            return path;
+        }
+        void setInteractive(boolean interactive) {
+            this.interactive = interactive;
+            if (power != null) power.setEmbeddedInteractive(interactive);
+        }
+        @Override public void applyEmbeddedUiMode(int mode) {
+            Configuration configuration = new Configuration(resources.getConfiguration());
+            if (configuration.uiMode == mode) return;
+            configuration.uiMode = mode;
+            resources.updateConfiguration(configuration, resources.getDisplayMetrics());
+            for (Resources configured : configuredResources) {
+                Configuration override = new Configuration(configured.getConfiguration());
+                override.uiMode = mode;
+                configured.updateConfiguration(override, configured.getDisplayMetrics());
+            }
+            if (application != null) application.onConfigurationChanged(configuration);
+            for (RunningService service : new ArrayList<>(runningServices.values())) {
+                service.instance.onConfigurationChanged(configuration);
+            }
+            if (context == this && current != null) {
+                current.onConfigurationChanged(configuration);
+                current.getWindow().getDecorView().requestLayout();
+            }
+        }
         @Override public Object getSystemService(String name) {
             if (DISPLAY_SERVICE.equals(name)) return displays;
             if (WINDOW_SERVICE.equals(name)) return windows;
             if (USER_SERVICE.equals(name)) return users;
             if (APPWIDGET_SERVICE.equals(name)) return widgets;
+            if (CLIPBOARD_SERVICE.equals(name)) {
+                if (clipboard == null) clipboard = new ClipboardManager(this, new Handler(getMainLooper()));
+                return clipboard;
+            }
+            if (POWER_SERVICE.equals(name)) {
+                if (power == null) {
+                    power = new PowerManager(this, new Handler(getMainLooper()));
+                    power.setEmbeddedInteractive(interactive);
+                }
+                return power;
+            }
+            if (BATTERY_SERVICE.equals(name)) {
+                if (battery == null) battery = new BatteryManager(this);
+                return battery;
+            }
+            if (UI_MODE_SERVICE.equals(name)) {
+                if (uiMode == null) uiMode = new UiModeManager(this);
+                return uiMode;
+            }
+            if (KEYGUARD_SERVICE.equals(name)) {
+                if (keyguard == null) keyguard = new KeyguardManager(this);
+                return keyguard;
+            }
+            if (NOTIFICATION_SERVICE.equals(name)) {
+                if (notifications == null) notifications = new NotificationManager(this);
+                return notifications;
+            }
+            if (STORAGE_SERVICE.equals(name)) {
+                if (storage == null) storage = new StorageManager(this, getMainLooper());
+                return storage;
+            }
             if (SEARCH_SERVICE.equals(name)) {
                 if (search == null) search = new SearchManager(this);
                 return search;
@@ -235,6 +480,8 @@ public final class UiRuntime {
     }
     private static final class Manifest {
         final ApplicationInfo info = new ApplicationInfo();
+        final ArrayMap<String, Integer> serviceTypes = new ArrayMap<>();
+        final ArrayList<String> receivers = new ArrayList<>();
         String application;
         String activity;
         int theme;
@@ -253,7 +500,7 @@ public final class UiRuntime {
             if (!locales.isEmpty()) LocaleList.setDefault(locales);
             if (width > 0 && height > 0) resources.updateDisplay(width, height, density);
             Manifest manifest = readManifest(resources, apkPath, requested, withFramework ? 1 : 0);
-            AppContext app = new AppContext(resources, manifest.info);
+            AppContext app = new AppContext(resources, manifest.info, manifest);
             context = app;
             Application.setEmbeddedProcessName(manifest.info.packageName);
             app.application = createApplication(app, manifest.application);
@@ -283,15 +530,17 @@ public final class UiRuntime {
     }
 
     private static Application createApplication(AppContext context, String name) {
-        Application application;
-        try {
-            application = name == null ? new Application()
-                    : (Application) Class.forName(name).getDeclaredConstructor().newInstance();
-        } catch (ReflectiveOperationException error) {
-            throw new IllegalArgumentException("Cannot instantiate application " + name, error);
-        }
+        Application application = name == null ? new Application() : instantiate(name, Application.class);
         application.attach(context);
         return application;
+    }
+
+    private static <T> T instantiate(String name, Class<T> type) {
+        try {
+            return type.cast(Class.forName(name).getDeclaredConstructor().newInstance());
+        } catch (ReflectiveOperationException error) {
+            throw new IllegalArgumentException("Cannot instantiate " + name, error);
+        }
     }
 
     private static Manifest readManifest(Resources res, String path, String requested, int baseIndex)
@@ -320,8 +569,16 @@ public final class UiRuntime {
                     if (result.info.labelRes == 0) result.info.nonLocalizedLabel = xml.getAttributeValue(XmlValues.ANDROID, "label");
                 } else if (xml.getDepth() == 2 && "uses-sdk".equals(xml.getName())) {
                     result.info.targetSdkVersion = xml.getAttributeIntValue(XmlValues.ANDROID, "targetSdkVersion", 37);
-                } else if (xml.getDepth() == 3 && "activity".equals(xml.getName())) {
+                } else if (xml.getDepth() == 3 && xml.getAttributeBooleanValue(XmlValues.ANDROID, "enabled", true)) {
+                    String tag = xml.getName();
                     String name = xml.getAttributeValue(XmlValues.ANDROID, "name");
+                    if (name != null && "service".equals(tag)) {
+                        result.serviceTypes.put(fullName(result.info.packageName, name),
+                                xml.getAttributeIntValue(XmlValues.ANDROID, "foregroundServiceType", 0));
+                    } else if (name != null && "receiver".equals(tag)) {
+                        result.receivers.add(fullName(result.info.packageName, name));
+                    }
+                    if (!"activity".equals(tag)) continue;
                     if (name == null) continue;
                     name = fullName(result.info.packageName, name);
                     int theme = xml.getAttributeResourceValue(XmlValues.ANDROID, "theme", 0);
@@ -373,7 +630,17 @@ public final class UiRuntime {
         if (current != null) current.onNewIntent(Intent.makeMainActivity(current.getComponentName())
                 .addCategory(Intent.CATEGORY_HOME));
     }
-    public static void sendBack() { if (current != null) current.performBackPressed(); }
+    public static void sendBack() {
+        if (current == null) return;
+        PhoneWindow window = (PhoneWindow) current.getWindow();
+        long now = SystemClock.uptimeMillis();
+        if (window.dispatchEmbeddedKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK, 0))) {
+            window.dispatchEmbeddedKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK, 0));
+        } else {
+            current.performBackPressed();
+        }
+        finishIfRequested();
+    }
     public static void sendAllApps() {
         if (current != null) current.onNewIntent(new Intent(Intent.ACTION_ALL_APPS)
                 .setComponent(current.getComponentName()));
@@ -382,6 +649,7 @@ public final class UiRuntime {
         if (context != null && context.launcher != null) context.launcher.dispatchPackageChanged(name, replaced);
     }
     public static void pause() {
+        if (context != null) context.setInteractive(false);
         pauseActivity(current, root);
         finishIfRequested();
     }
@@ -392,11 +660,13 @@ public final class UiRuntime {
         activity.performPause();
     }
     public static void stop() {
+        if (context != null) context.setInteractive(false);
         pauseActivity(current, root);
         if (current != null) current.performStop(false, "host stop");
         finishIfRequested();
     }
     public static void resume() {
+        if (context != null) context.setInteractive(true);
         if (current != null && !current.isResumed() && !current.isFinishing()) {
             current.performResume(false, "host resume");
             if (current != null && current.isResumed() && !current.isFinishing()) {

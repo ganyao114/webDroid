@@ -1,0 +1,1555 @@
+--- a/frameworks/base/core/java/android/view/Surface.java
++++ b/frameworks/base/core/java/android/view/Surface.java
+@@ -16,34 +16,19 @@
+ 
+ package android.view;
+ 
+-import static android.system.OsConstants.EINVAL;
+-
+-import android.annotation.FlaggedApi;
++
+ import android.annotation.FloatRange;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+-import android.annotation.SuppressLint;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.pm.ActivityInfo;
+-import android.content.res.CompatibilityInfo.Translator;
+-import android.graphics.BLASTBufferQueue;
++import android.graphics.Bitmap;
+ import android.graphics.Canvas;
+-import android.graphics.ColorSpace;
+-import android.graphics.HardwareRenderer;
+-import android.graphics.Matrix;
+ import android.graphics.Point;
+-import android.graphics.RecordingCanvas;
+ import android.graphics.Rect;
+-import android.graphics.RenderNode;
+ import android.graphics.SurfaceTexture;
+-import android.hardware.HardwareBuffer;
+-import android.os.Build;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.util.Log;
+-import android.view.flags.Flags;
+-import dalvik.system.CloseGuard;
+-import dalvik.system.VMRuntime;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -66,49 +51,6 @@
+ public class Surface implements Parcelable {
+     private static final String TAG = "Surface";
+ 
+-    private static native long nativeCreateFromSurfaceTexture(SurfaceTexture surfaceTexture)
+-            throws OutOfResourcesException;
+-
+-    private static native long nativeCreateFromSurfaceControl(long surfaceControlNativeObject);
+-    private static native long nativeGetFromSurfaceControl(long surfaceObject,
+-            long surfaceControlNativeObject);
+-    private static native long nativeGetFromBlastBufferQueue(long surfaceObject,
+-                                                             long blastBufferQueueNativeObject);
+-
+-    private static native long nativeLockCanvas(long nativeObject, Canvas canvas, Rect dirty)
+-            throws OutOfResourcesException;
+-    private static native void nativeUnlockCanvasAndPost(long nativeObject, Canvas canvas);
+-
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    private static native void nativeRelease(long nativeObject);
+-    private static native boolean nativeIsValid(long nativeObject);
+-    private static native boolean nativeIsConsumerRunningBehind(long nativeObject);
+-    private static native long nativeReadFromParcel(long nativeObject, Parcel source);
+-    private static native void nativeWriteToParcel(long nativeObject, Parcel dest);
+-
+-    private static native void nativeAllocateBuffers(long nativeObject);
+-
+-    private static native int nativeGetWidth(long nativeObject);
+-    private static native int nativeGetHeight(long nativeObject);
+-
+-    private static native long nativeGetNextFrameNumber(long nativeObject);
+-    private static native int nativeSetScalingMode(long nativeObject, int scalingMode);
+-    private static native int nativeForceScopedDisconnect(long nativeObject);
+-    private static native int nativeAttachAndQueueBufferWithColorSpace(long nativeObject,
+-            HardwareBuffer buffer, int colorSpaceId);
+-
+-    private static native int nativeSetSharedBufferModeEnabled(long nativeObject, boolean enabled);
+-    private static native int nativeSetAutoRefreshEnabled(long nativeObject, boolean enabled);
+-
+-    private static native int nativeSetFrameRate(
+-            long nativeObject, float frameRate, int compatibility, int changeFrameRateStrategy);
+-
+-    private static native int nativeSetProducerThrottlingEnabled(
+-            long nativeObject, boolean enabled);
+-    private static native int nativeIsProducerThrottlingEnabled(long nativeObject);
+-
+-    private static native void nativeDestroy(long nativeObject);
+-
+     // 5KB is a balanced guess, since these are still pretty heavyweight objects, but if we make
+     // this too big, it can overwhelm the GC.
+     private static final long SURFACE_NATIVE_ALLOCATION_SIZE_BYTES = 5_000;
+@@ -133,30 +75,16 @@
+         }
+     };
+ 
+-    private final CloseGuard mCloseGuard = CloseGuard.get();
+-
+     // Guarded state.
+     @UnsupportedAppUsage
+     final Object mLock = new Object(); // protects the native state
+     @UnsupportedAppUsage
+     private String mName;
+-    @UnsupportedAppUsage
+-    long mNativeObject; // package scope only for SurfaceControl access
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    private long mLockedObject;
++ // package scope only for SurfaceControl access
+     private int mGenerationId; // incremented each time mNativeObject changes
+-    private final Canvas mCanvas = new CompatibleCanvas();
+-
+     // A matrix to scale the matrix set by application. This is set to null for
+     // non compatibility mode.
+-    private Matrix mCompatibleMatrix;
+-
+-    private HwuiContext mHwuiContext;
+-
+     private boolean mIsSingleBuffered;
+-    private boolean mIsSharedBufferModeEnabled;
+-    private boolean mIsAutoRefreshEnabled;
+-
+     /** @hide */
+     @Retention(RetentionPolicy.SOURCE)
+     @IntDef(prefix = { "SCALING_MODE_" }, value = {
+@@ -345,26 +273,26 @@
+      */
+     public static final int FRAME_RATE_CATEGORY_HIGH = 5;
+ 
++    private SurfaceTexture mTexture;
++    private Canvas mLockedCanvas;
++    private long mFrameNumber = 1;
++
++    private static final class SurfaceToken extends android.os.Binder {
++        final SurfaceTexture texture;
++        SurfaceToken(SurfaceTexture texture) { this.texture = texture; }
++    }
++
++    /** @hide */
++    public Bitmap getEmbeddedBitmap() {
++        return mTexture == null ? null : mTexture.getEmbeddedBitmap();
++    }
++
+     /**
+      * Create an empty surface, which will later be filled in by readFromParcel().
+      * @hide
+      */
+     @UnsupportedAppUsage
+     public Surface() {
+-        registerNativeMemoryUsage();
+-    }
+-
+-    /**
+-     * Create a Surface associated with a given {@link SurfaceControl}. Buffers submitted to this
+-     * surface will be displayed by the system compositor according to the parameters
+-     * specified by the control. Multiple surfaces may be constructed from one SurfaceControl,
+-     * but only one can be connected (e.g. have an active EGL context) at a time.
+-     *
+-     * @param from The SurfaceControl to associate this Surface with
+-     */
+-    public Surface(@NonNull SurfaceControl from) {
+-        copyFrom(from);
+-        registerNativeMemoryUsage();
+     }
+ 
+     /**
+@@ -384,55 +312,21 @@
+      * @throws OutOfResourcesException if the surface could not be created.
+      */
+     public Surface(SurfaceTexture surfaceTexture) {
+-        if (surfaceTexture == null) {
+-            throw new IllegalArgumentException("surfaceTexture must not be null");
+-        }
++        if (surfaceTexture == null) throw new IllegalArgumentException("surfaceTexture is null");
++        mTexture = surfaceTexture;
+         mIsSingleBuffered = surfaceTexture.isSingleBuffered();
+-        synchronized (mLock) {
+-            mName = surfaceTexture.toString();
+-            setNativeObjectLocked(nativeCreateFromSurfaceTexture(surfaceTexture));
+-        }
+-        registerNativeMemoryUsage();
+     }
+ 
+     /* called from android_view_Surface_createFromIGraphicBufferProducer() */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    private Surface(long nativeObject) {
+-        synchronized (mLock) {
+-            setNativeObjectLocked(nativeObject);
+-        }
+-        registerNativeMemoryUsage();
+-    }
+-
+-    @Override
+-    protected void finalize() throws Throwable {
+-        try {
+-            if (mCloseGuard != null) {
+-                mCloseGuard.warnIfOpen();
+-            }
+-            release();
+-        } finally {
+-            super.finalize();
+-            freeNativeMemoryUsage();
+-        }
+-    }
+-
+     /**
+      * Release the local reference to the server-side surface.
+      * Always call release() when you're done with a Surface.
+      * This will make the surface invalid.
+      */
+     public void release() {
+-        synchronized (mLock) {
+-            if (mHwuiContext != null) {
+-                mHwuiContext.destroy();
+-                mHwuiContext = null;
+-            }
+-            if (mNativeObject != 0) {
+-                nativeRelease(mNativeObject);
+-                setNativeObjectLocked(0);
+-            }
+-        }
++        mTexture = null;
++        mLockedCanvas = null;
++        mGenerationId++;
+     }
+ 
+     /**
+@@ -443,24 +337,7 @@
+      */
+     @UnsupportedAppUsage
+     public void destroy() {
+-        synchronized (mLock) {
+-            if (mNativeObject != 0) {
+-                nativeDestroy(mNativeObject);
+-            }
+-            release();
+-        }
+-    }
+-
+-    /**
+-     * Destroys the HwuiContext without completely
+-     * releasing the Surface.
+-     * @hide
+-     */
+-    public void hwuiDestroy() {
+-        if (mHwuiContext != null) {
+-            mHwuiContext.destroy();
+-            mHwuiContext = null;
+-        }
++        release();
+     }
+ 
+     /**
+@@ -470,10 +347,7 @@
+      * Otherwise returns false.
+      */
+     public boolean isValid() {
+-        synchronized (mLock) {
+-            if (mNativeObject == 0) return false;
+-            return nativeIsValid(mNativeObject);
+-        }
++        return mTexture != null && !mTexture.isReleased();
+     }
+ 
+     /**
+@@ -497,10 +371,7 @@
+      */
+     @UnsupportedAppUsage
+     public long getNextFrameNumber() {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            return nativeGetNextFrameNumber(mNativeObject);
+-        }
++        return mFrameNumber;
+     }
+ 
+     /**
+@@ -510,10 +381,7 @@
+      * @hide
+      */
+     public boolean isConsumerRunningBehind() {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            return nativeIsConsumerRunningBehind(mNativeObject);
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -524,10 +392,7 @@
+      */
+     @NonNull
+     public Point getDefaultSize() {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            return new Point(nativeGetWidth(mNativeObject), nativeGetHeight(mNativeObject));
+-        }
++        return !isValid() ? new Point(0, 0) : mTexture.getEmbeddedSize();
+     }
+ 
+     /**
+@@ -550,18 +415,10 @@
+      */
+     public Canvas lockCanvas(Rect inOutDirty)
+             throws Surface.OutOfResourcesException, IllegalArgumentException {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            if (mLockedObject != 0) {
+-                // Ideally, nativeLockCanvas() would throw in this situation and prevent the
+-                // double-lock, but that won't happen if mNativeObject was updated.  We can't
+-                // abandon the old mLockedObject because it might still be in use, so instead
+-                // we just refuse to re-lock the Surface.
+-                throw new IllegalArgumentException("Surface was already locked");
+-            }
+-            mLockedObject = nativeLockCanvas(mNativeObject, mCanvas, inOutDirty);
+-            return mCanvas;
+-        }
++        if (!isValid()) throw new IllegalArgumentException("Surface is released");
++        if (mLockedCanvas != null) throw new IllegalStateException("Canvas is already locked");
++        mLockedCanvas = mTexture.lockEmbeddedCanvas(inOutDirty);
++        return mLockedCanvas;
+     }
+ 
+     /**
+@@ -571,36 +428,10 @@
+      * @param canvas The canvas previously obtained from {@link #lockCanvas}.
+      */
+     public void unlockCanvasAndPost(Canvas canvas) {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-
+-            if (mHwuiContext != null) {
+-                mHwuiContext.unlockAndPost(canvas);
+-            } else {
+-                unlockSwCanvasAndPost(canvas);
+-            }
+-        }
+-    }
+-
+-    private void unlockSwCanvasAndPost(Canvas canvas) {
+-        if (canvas != mCanvas) {
+-            throw new IllegalArgumentException("canvas object must be the same instance that "
+-                    + "was previously returned by lockCanvas");
+-        }
+-        if (mNativeObject != mLockedObject) {
+-            Log.w(TAG, "WARNING: Surface's mNativeObject (0x" +
+-                    Long.toHexString(mNativeObject) + ") != mLockedObject (0x" +
+-                    Long.toHexString(mLockedObject) +")");
+-        }
+-        if (mLockedObject == 0) {
+-            throw new IllegalStateException("Surface was not locked");
+-        }
+-        try {
+-            nativeUnlockCanvasAndPost(mLockedObject, canvas);
+-        } finally {
+-            nativeRelease(mLockedObject);
+-            mLockedObject = 0;
+-        }
++        if (canvas == null || canvas != mLockedCanvas) throw new IllegalArgumentException("Canvas was not locked by this Surface");
++        mLockedCanvas = null;
++        mFrameNumber++;
++        mTexture.postEmbeddedFrame(canvas);
+     }
+ 
+     /**
+@@ -622,15 +453,7 @@
+      * @throws IllegalStateException If the canvas cannot be locked.
+      */
+     public Canvas lockHardwareCanvas() {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            if (mHwuiContext == null) {
+-                mHwuiContext = new HwuiContext(false);
+-            }
+-            return mHwuiContext.lockCanvas(
+-                    nativeGetWidth(mNativeObject),
+-                    nativeGetHeight(mNativeObject));
+-        }
++        return lockCanvas(null);
+     }
+ 
+     /**
+@@ -655,157 +478,7 @@
+      * @hide
+      */
+     public Canvas lockHardwareWideColorGamutCanvas() {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            if (mHwuiContext != null && !mHwuiContext.isWideColorGamut()) {
+-                mHwuiContext.destroy();
+-                mHwuiContext = null;
+-            }
+-            if (mHwuiContext == null) {
+-                mHwuiContext = new HwuiContext(true);
+-            }
+-            return mHwuiContext.lockCanvas(
+-                    nativeGetWidth(mNativeObject),
+-                    nativeGetHeight(mNativeObject));
+-        }
+-    }
+-
+-    /**
+-     * @deprecated This API has been removed and is not supported.  Do not use.
+-     */
+-    @Deprecated
+-    public void unlockCanvas(Canvas canvas) {
+-        throw new UnsupportedOperationException();
+-    }
+-
+-    /**
+-     * Sets the translator used to scale canvas's width/height in compatibility
+-     * mode.
+-     */
+-    void setCompatibilityTranslator(Translator translator) {
+-        if (translator != null) {
+-            float appScale = translator.applicationScale;
+-            mCompatibleMatrix = new Matrix();
+-            mCompatibleMatrix.setScale(appScale, appScale);
+-        }
+-    }
+-
+-    private void updateNativeObject(long newNativeObject) {
+-        synchronized (mLock) {
+-            if (newNativeObject == mNativeObject) {
+-                return;
+-            }
+-            if (mNativeObject != 0) {
+-                nativeRelease(mNativeObject);
+-            }
+-            setNativeObjectLocked(newNativeObject);
+-        }
+-    }
+-
+-    /**
+-     * Copy another surface to this one.  This surface now holds a reference
+-     * to the same data as the original surface, and is -not- the owner.
+-     * This is for use by the window manager when returning a window surface
+-     * back from a client, converting it from the representation being managed
+-     * by the window manager to the representation the client uses to draw
+-     * in to it.
+-     *
+-     * @param other {@link SurfaceControl} to copy from.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public void copyFrom(SurfaceControl other) {
+-        if (other == null) {
+-            throw new IllegalArgumentException("other must not be null");
+-        }
+-
+-        long surfaceControlPtr = other.mNativeObject;
+-        if (surfaceControlPtr == 0) {
+-            throw new NullPointerException(
+-                    "null SurfaceControl native object. Are you using a released SurfaceControl?");
+-        }
+-        long newNativeObject = nativeGetFromSurfaceControl(mNativeObject, surfaceControlPtr);
+-        updateNativeObject(newNativeObject);
+-    }
+-
+-    /**
+-     * Update the surface if the BLASTBufferQueue IGraphicBufferProducer is different from this
+-     * surface's IGraphicBufferProducer.
+-     *
+-     * @param queue {@link BLASTBufferQueue} to copy from.
+-     * @hide
+-     */
+-    public void copyFrom(BLASTBufferQueue queue) {
+-        if (queue == null) {
+-            throw new IllegalArgumentException("queue must not be null");
+-        }
+-
+-        long blastBufferQueuePtr = queue.mNativeObject;
+-        if (blastBufferQueuePtr == 0) {
+-            throw new NullPointerException("Null BLASTBufferQueue native object");
+-        }
+-        long newNativeObject = nativeGetFromBlastBufferQueue(mNativeObject, blastBufferQueuePtr);
+-        updateNativeObject(newNativeObject);
+-    }
+-
+-    /**
+-     * Gets a reference a surface created from this one.  This surface now holds a reference
+-     * to the same data as the original surface, and is -not- the owner.
+-     * This is for use by the window manager when returning a window surface
+-     * back from a client, converting it from the representation being managed
+-     * by the window manager to the representation the client uses to draw
+-     * in to it.
+-     *
+-     * @param other {@link SurfaceControl} to create surface from.
+-     *
+-     * @hide
+-     */
+-    public void createFrom(SurfaceControl other) {
+-        if (other == null) {
+-            throw new IllegalArgumentException("other must not be null");
+-        }
+-
+-        long surfaceControlPtr = other.mNativeObject;
+-        if (surfaceControlPtr == 0) {
+-            throw new NullPointerException(
+-                    "null SurfaceControl native object. Are you using a released SurfaceControl?");
+-        }
+-        long newNativeObject = nativeCreateFromSurfaceControl(surfaceControlPtr);
+-
+-        synchronized (mLock) {
+-            if (mNativeObject != 0) {
+-                nativeRelease(mNativeObject);
+-            }
+-            setNativeObjectLocked(newNativeObject);
+-        }
+-    }
+-
+-    /**
+-     * This is intended to be used by {@link SurfaceView#updateWindow} only.
+-     * @param other access is not thread safe
+-     * @hide
+-     * @deprecated
+-     */
+-    @Deprecated
+-    @UnsupportedAppUsage
+-    public void transferFrom(Surface other) {
+-        if (other == null) {
+-            throw new IllegalArgumentException("other must not be null");
+-        }
+-        if (other != this) {
+-            final long newPtr;
+-            synchronized (other.mLock) {
+-                newPtr = other.mNativeObject;
+-                other.setNativeObjectLocked(0);
+-            }
+-
+-            synchronized (mLock) {
+-                if (mNativeObject != 0) {
+-                    nativeRelease(mNativeObject);
+-                }
+-                setNativeObjectLocked(newPtr);
+-            }
+-        }
++        return lockCanvas(null);
+     }
+ 
+     @Override
+@@ -814,67 +487,24 @@
+     }
+ 
+     public void readFromParcel(Parcel source) {
+-        if (source == null) {
+-            throw new IllegalArgumentException("source must not be null");
+-        }
+-
+-        synchronized (mLock) {
+-            // nativeReadFromParcel() will either return mNativeObject, or
+-            // create a new native Surface and return it after reducing
+-            // the reference count on mNativeObject.  Either way, it is
+-            // not necessary to call nativeRelease() here.
+-            // NOTE: This must be kept synchronized with the native parceling code
+-            // in frameworks/native/libs/Surface.cpp
+-            mName = source.readString();
+-            mIsSingleBuffered = source.readInt() != 0;
+-            setNativeObjectLocked(nativeReadFromParcel(mNativeObject, source));
+-        }
++        if (source == null) throw new IllegalArgumentException("source is null");
++        mName = source.readString8();
++        SurfaceToken token = (SurfaceToken) source.readStrongBinder();
++        mTexture = token == null ? null : token.texture;
++        mGenerationId++;
+     }
+ 
+     @Override
+     public void writeToParcel(Parcel dest, int flags) {
+-        if (dest == null) {
+-            throw new IllegalArgumentException("dest must not be null");
+-        }
+-        synchronized (mLock) {
+-            // NOTE: This must be kept synchronized with the native parceling code
+-            // in frameworks/native/libs/Surface.cpp
+-            dest.writeString(mName);
+-            dest.writeInt(mIsSingleBuffered ? 1 : 0);
+-            nativeWriteToParcel(mNativeObject, dest);
+-        }
+-        if ((flags & Parcelable.PARCELABLE_WRITE_RETURN_VALUE) != 0) {
+-            release();
+-        }
++        if (dest == null) throw new IllegalArgumentException("dest is null");
++        dest.writeString8(mName);
++        dest.writeStrongBinder(isValid() ? new SurfaceToken(mTexture) : null);
++        if ((flags & PARCELABLE_WRITE_RETURN_VALUE) != 0) release();
+     }
+ 
+     @Override
+     public String toString() {
+-        synchronized (mLock) {
+-            return "Surface(name=" + mName + " mNativeObject=" + mNativeObject + ")/@0x"
+-                    + Integer.toHexString(System.identityHashCode(this));
+-        }
+-    }
+-
+-    private void setNativeObjectLocked(long ptr) {
+-        if (mNativeObject != ptr) {
+-            if (mNativeObject == 0 && ptr != 0) {
+-                mCloseGuard.open("Surface.release");
+-            } else if (mNativeObject != 0 && ptr == 0) {
+-                mCloseGuard.close();
+-            }
+-            mNativeObject = ptr;
+-            mGenerationId += 1;
+-            if (mHwuiContext != null) {
+-                mHwuiContext.updateSurface();
+-            }
+-        }
+-    }
+-
+-    private void checkNotReleasedLocked() {
+-        if (mNativeObject == 0) {
+-            throw new IllegalStateException("Surface has already been released.");
+-        }
++        return "Surface(name=" + mName + ")/@" + Integer.toHexString(System.identityHashCode(this));
+     }
+ 
+     /**
+@@ -882,10 +512,7 @@
+      * @hide
+      */
+     public void allocateBuffers() {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            nativeAllocateBuffers(mNativeObject);
+-        }
++        if (!isValid()) throw new IllegalStateException("Surface is released");
+     }
+ 
+     /**
+@@ -893,46 +520,8 @@
+      * @hide
+      */
+      public void setScalingMode(@ScalingMode int scalingMode) {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            int err = nativeSetScalingMode(mNativeObject, scalingMode);
+-            if (err != 0) {
+-                throw new IllegalArgumentException("Invalid scaling mode: " + scalingMode);
+-            }
+-        }
+-    }
+-
+-    void forceScopedDisconnect() {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            int err = nativeForceScopedDisconnect(mNativeObject);
+-            if (err != 0) {
+-                throw new RuntimeException("Failed to disconnect Surface instance (bad object?)");
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Transfer ownership of buffer with a color space and present it on the Surface.
+-     * The supported color spaces are SRGB and Display P3, other color spaces will be
+-     * treated as SRGB.
+-     * @hide
+-     */
+-    public void attachAndQueueBufferWithColorSpace(HardwareBuffer buffer, ColorSpace colorSpace) {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            if (colorSpace == null) {
+-                colorSpace = ColorSpace.get(ColorSpace.Named.SRGB);
+-            }
+-            int err = nativeAttachAndQueueBufferWithColorSpace(mNativeObject, buffer,
+-                    colorSpace.getId());
+-            if (err != 0) {
+-                throw new RuntimeException(
+-                        "Failed to attach and queue buffer to Surface (bad object?), "
+-                        + "native error: " + err);
+-            }
+-        }
+-    }
++         if (!isValid()) throw new IllegalStateException("Surface is released");
++     }
+ 
+     /**
+      * Returns whether or not this Surface is backed by a single-buffered SurfaceTexture
+@@ -940,371 +529,6 @@
+      */
+     public boolean isSingleBuffered() {
+         return mIsSingleBuffered;
+-    }
+-
+-    /**
+-     * <p>The shared buffer mode allows both the application and the surface compositor
+-     * (SurfaceFlinger) to concurrently access this surface's buffer. While the
+-     * application is still required to issue a present request
+-     * (see {@link #unlockCanvasAndPost(Canvas)}) to the compositor when an update is required,
+-     * the compositor may trigger an update at any time. Since the surface's buffer is shared
+-     * between the application and the compositor, updates triggered by the compositor may
+-     * cause visible tearing.</p>
+-     *
+-     * <p>The shared buffer mode can be used with
+-     * {@link #setAutoRefreshEnabled(boolean) auto-refresh} to avoid the overhead of
+-     * issuing present requests.</p>
+-     *
+-     * <p>If the application uses the shared buffer mode to reduce latency, it is
+-     * recommended to use software rendering (see {@link #lockCanvas(Rect)} to ensure
+-     * the graphics workloads are not affected by other applications and/or the system
+-     * using the GPU. When using software rendering, the application should update the
+-     * smallest possible region of the surface required.</p>
+-     *
+-     * <p class="note">The shared buffer mode might not be supported by the underlying
+-     * hardware. Enabling shared buffer mode on hardware that does not support it will
+-     * not yield an error but the application will not benefit from lower latency (and
+-     * tearing will not be visible).</p>
+-     *
+-     * <p class="note">Depending on how many and what kind of surfaces are visible, the
+-     * surface compositor may need to copy the shared buffer before it is displayed. When
+-     * this happens, the latency benefits of shared buffer mode will be reduced.</p>
+-     *
+-     * @param enabled True to enable the shared buffer mode on this surface, false otherwise
+-     *
+-     * @see #isSharedBufferModeEnabled()
+-     * @see #setAutoRefreshEnabled(boolean)
+-     *
+-     * @hide
+-     */
+-    public void setSharedBufferModeEnabled(boolean enabled) {
+-        if (mIsSharedBufferModeEnabled != enabled) {
+-            int error = nativeSetSharedBufferModeEnabled(mNativeObject, enabled);
+-            if (error != 0) {
+-                throw new RuntimeException(
+-                        "Failed to set shared buffer mode on Surface (bad object?)");
+-            } else {
+-                mIsSharedBufferModeEnabled = enabled;
+-            }
+-        }
+-    }
+-
+-    /**
+-     * @return True if shared buffer mode is enabled on this surface, false otherwise
+-     *
+-     * @see #setSharedBufferModeEnabled(boolean)
+-     *
+-     * @hide
+-     */
+-    public boolean isSharedBufferModeEnabled() {
+-        return mIsSharedBufferModeEnabled;
+-    }
+-
+-    /**
+-     * <p>When auto-refresh is enabled, the surface compositor (SurfaceFlinger)
+-     * automatically updates the display on a regular refresh cycle. The application
+-     * can continue to issue present requests but it is not required. Enabling
+-     * auto-refresh may result in visible tearing.</p>
+-     *
+-     * <p>Auto-refresh has no effect if the {@link #setSharedBufferModeEnabled(boolean)
+-     * shared buffer mode} is not enabled.</p>
+-     *
+-     * <p>Because auto-refresh will trigger continuous updates of the display, it is
+-     * recommended to turn it on only when necessary. For example, in a drawing/painting
+-     * application auto-refresh should be enabled on finger/pen down and disabled on
+-     * finger/pen up.</p>
+-     *
+-     * @param enabled True to enable auto-refresh on this surface, false otherwise
+-     *
+-     * @see #isAutoRefreshEnabled()
+-     * @see #setSharedBufferModeEnabled(boolean)
+-     *
+-     * @hide
+-     */
+-    public void setAutoRefreshEnabled(boolean enabled) {
+-        if (mIsAutoRefreshEnabled != enabled) {
+-            int error = nativeSetAutoRefreshEnabled(mNativeObject, enabled);
+-            if (error != 0) {
+-                throw new RuntimeException("Failed to set auto refresh on Surface (bad object?)");
+-            } else {
+-                mIsAutoRefreshEnabled = enabled;
+-            }
+-        }
+-    }
+-
+-    /**
+-     * @return True if auto-refresh is enabled on this surface, false otherwise
+-     *
+-     * @hide
+-     */
+-    public boolean isAutoRefreshEnabled() {
+-        return mIsAutoRefreshEnabled;
+-    }
+-
+-    /**
+-     * Parameter object for {@link #setFrameRate(FrameRateParams)}, describing the intended frame
+-     * rate for the Surface that setFrameRate is called on.
+-     */
+-    @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-    public static class FrameRateParams {
+-        private FrameRateParams() {}
+-
+-        /**
+-         * A static FrameRateParams that can be passed directly into {@link
+-         * #setFrameRate(FrameRateParams)} to indicate the surface has no preference and any frame
+-         * rate is acceptable.
+-         */
+-        @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-        @NonNull
+-        public static final FrameRateParams IGNORE =
+-                new FrameRateParams.Builder().setDesiredRateRange(0f, Float.MAX_VALUE).build();
+-
+-        @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-        public static final class Builder {
+-            private float mDesiredMinRate;
+-            private float mDesiredMaxRate;
+-            private float mFixedSourceRate;
+-            private int mChangeFrameRateStrategy;
+-
+-            /**
+-             * Sets the desired frame rate range (inclusive) values for the surface, specifying that
+-             * the surface prefers the device render rate to be in the range [desiredMinRate,
+-             * desiredMaxRate].
+-
+-             * Set desiredMaxRate to FLOAT.MAX_VALUE to indicate the surface prefers any value
+-             * greater than or equal to desiredMinRate.
+-             *
+-             * Set desiredMinRate = desiredMaxRate to indicate the surface prefers an exact frame
+-             * rate. Note that this is different than specifying the fixed source frame rate with
+-             * {@link FrameRateParams.Builder#setFixedSourceRate}. To reiterate, this call is used
+-             * to specify the surface's frame rate preference to be within the desired range.
+-             *
+-             * desiredMaxRate must be greater than or equal to desiredMinRate.
+-             * The values should be greater than or equal to 0.
+-             *
+-             * If the surface has no preference and any frame rate is acceptable, use the constant
+-             * {@link FrameRateParams#IGNORE} in {@link #setFrameRate(FrameRateParams)} instead of
+-             * building {@link FrameRateParams.Builder}.
+-             *
+-             * @see FrameRateParams#getDesiredMinRate()
+-             * @see FrameRateParams#getDesiredMaxRate()
+-             */
+-            @SuppressLint("MissingGetterMatchingBuilder")
+-            @NonNull
+-            @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-            public Builder setDesiredRateRange(@FloatRange(from = 0.0) float desiredMinRate,
+-                    @FloatRange(from = 0.0) float desiredMaxRate) {
+-                if (desiredMaxRate < desiredMinRate) {
+-                    Log.e(TAG,
+-                            "Failed to set desired frame rate range. desiredMaxRate should be "
+-                                    + "greater than or equal to desiredMinRate");
+-                    return this;
+-                }
+-                mDesiredMinRate = desiredMinRate;
+-                mDesiredMaxRate = desiredMaxRate;
+-                return this;
+-            }
+-
+-            /**
+-             * Sets the fixed frame rate of the surface when its content has a fixed frame rate,
+-             * e.g. a video with a fixed frame rate.
+-             *
+-             * When the frame rate chosen for the surface is the {@code fixedSourceRate} or a
+-             * multiple, the surface can render without frame pulldown, for optimal smoothness. For
+-             * example, a 30 fps video ({@code fixedSourceRate=30}) renders just as well on 30 fps,
+-             * 60 fps, 90 fps, 120 fps, and so on.
+-             *
+-             * This method to set the fixed source rate can also be used together with a desired
+-             * frame rate range via {@link FrameRateParams.Builder#setDesiredRateRange}. This still
+-             * means the surface's content has a fixed frame rate of the provided {@code
+-             * fixedSourceRate}, as well as it preferring to be within the desired frame rate range.
+-             * For example, a 30 fps video {@code fixedSourceRate=30} and desired frame rate range
+-             * [60,90] means the surface ideally prefers 60 fps (which is 30 fps * 2) or 90 fps (30
+-             * fps * 3).
+-             *
+-             * @see FrameRateParams#getFixedSourceRate()
+-             */
+-            @NonNull
+-            @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-            public Builder setFixedSourceRate(@FloatRange(from = 0.0) float fixedSourceRate) {
+-                mFixedSourceRate = fixedSourceRate;
+-                return this;
+-            }
+-
+-            /**
+-             * Whether display refresh rate transitions caused by this surface should be seamless. A
+-             * seamless transition is one that doesn't have any visual interruptions, such as a
+-             * black screen for a second or two. Value is
+-             * Surface.CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS, or Surface.CHANGE_FRAME_RATE_ALWAYS
+-             *
+-             * @see FrameRateParams#getChangeFrameRateStrategy()
+-             */
+-            @NonNull
+-            @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-            public Builder setChangeFrameRateStrategy(
+-                    @ChangeFrameRateStrategy int changeFrameRateStrategy) {
+-                mChangeFrameRateStrategy = changeFrameRateStrategy;
+-                return this;
+-            }
+-
+-            /**
+-             * Builds the FrameRateParams object.
+-             */
+-            @NonNull
+-            @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-            public FrameRateParams build() {
+-                FrameRateParams frameRate = new FrameRateParams();
+-                frameRate.mDesiredMinRate = this.mDesiredMinRate;
+-                frameRate.mDesiredMaxRate = this.mDesiredMaxRate;
+-                frameRate.mFixedSourceRate = this.mFixedSourceRate;
+-                frameRate.mChangeFrameRateStrategy = this.mChangeFrameRateStrategy;
+-                return frameRate;
+-            }
+-        }
+-
+-        /**
+-         * Gets the minimum desired frame rate.
+-         * @see FrameRateParams.Builder#setDesiredRateRange()
+-         */
+-        @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-        public float getDesiredMinRate() {
+-            return mDesiredMinRate;
+-        }
+-
+-        /**
+-         * Gets the maximum desired frame rate.
+-         * @see FrameRateParams.Builder#setDesiredRateRange()
+-         */
+-        @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-        public float getDesiredMaxRate() {
+-            return mDesiredMaxRate;
+-        }
+-
+-        /**
+-         * Gets the fixed source frame rate.
+-         * @see FrameRateParams.Builder#setFixedSourceRate()
+-         */
+-        @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-        public float getFixedSourceRate() {
+-            return mFixedSourceRate;
+-        }
+-
+-        /**
+-         * Gets the strategy when changing frame rate.
+-         * @see FrameRateParams.Builder#setChangeFrameRateStrategy
+-         */
+-        @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-        @ChangeFrameRateStrategy
+-        public int getChangeFrameRateStrategy() {
+-            return mChangeFrameRateStrategy;
+-        }
+-
+-        float mDesiredMinRate;
+-        float mDesiredMaxRate;
+-        float mFixedSourceRate;
+-        int mChangeFrameRateStrategy;
+-    }
+-
+-    /**
+-     * Sets the intended frame rate for this surface.
+-     *
+-     * <p>On devices that are capable of running the display at different frame rates,
+-     * the system may choose a display refresh rate to better match this surface's frame
+-     * rate. Usage of this API won't introduce frame rate throttling, or affect other
+-     * aspects of the application's frame production pipeline. However, because the system
+-     * may change the display refresh rate, calls to this function may result in changes
+-     * to Choreographer callback timings, and changes to the time interval at which the
+-     * system releases buffers back to the application.</p>
+-     *
+-     * <p>Note that this only has an effect for surfaces presented on the display. If this
+-     * surface is consumed by something other than the system compositor, e.g. a media
+-     * codec, this call has no effect.</p>
+-     *
+-     * @param frameRateParams The parameters describing the intended frame rate of this surface.
+-     *         Refer to {@link FrameRateParams} for details.
+-     * @throws IllegalArgumentException If <code>frameRateParams</code> is invalid.
+-     * @see #clearFrameRate()
+-     */
+-    @FlaggedApi(com.android.graphics.surfaceflinger.flags.Flags.FLAG_ARR_SETFRAMERATE_API)
+-    public void setFrameRate(@NonNull FrameRateParams frameRateParams) {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            // TODO(b/362798998): Logic currently incomplete: it uses fixed source rate over the
+-            // desired min/max rates. Fix when plumbing is upgraded.
+-            int compatibility = frameRateParams.getFixedSourceRate() == 0
+-                    ? FRAME_RATE_COMPATIBILITY_DEFAULT
+-                    : FRAME_RATE_COMPATIBILITY_FIXED_SOURCE;
+-            float frameRate = compatibility == FRAME_RATE_COMPATIBILITY_DEFAULT
+-                    ? frameRateParams.getDesiredMinRate()
+-                    : frameRateParams.getFixedSourceRate();
+-            int error = nativeSetFrameRate(mNativeObject, frameRate, compatibility,
+-                    frameRateParams.getChangeFrameRateStrategy());
+-            if (error == -EINVAL) {
+-                throw new IllegalArgumentException("Invalid argument to Surface.setFrameRate()");
+-            } else if (error != 0) {
+-                Log.e(TAG, "Failed to set frame rate on Surface. Native error: " + error);
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Control CPU throttling for Vulkan/EGL producers.
+-     *
+-     * <p>By default Vulkan and EGL producers are CPU throttled when they queue a buffer and the
+-     * consumer is still processing the previous buffer. In practice, it means that eglSwapBuffers()
+-     * or vkPresentKHR() calls will stall the CPU until the GPU is done processing the previous
+-     * frame. This API allows to disable this throttling while queueing a buffer.</p>
+-     *
+-     * <p>While the default it to have throttling enabled, the more correct and efficient behavior
+-     * is to have it disabled. Unfortunately, some Vulkan applications may inadvertently rely
+-     * on this stall which effectively behaves as consumer/producer synchronization, albeit,
+-     * inefficiently. It is therefore recommended to always disable throttling and perform
+-     * proper synchronization in Vulkan.</p>
+-     *
+-     * <p>If the CPU produces frames faster than the GPU, natural throttling will happen when a
+-     * buffer is dequeued, based on the size of the queue. This typically happen during the
+-     * first drawing in OpenGL ES and in vkAcquireNextImageKHR() in Vulkan.</p>
+-     *
+-     * <p>This API has no effect in asynchronous mode, where throttling is always enabled.</p>
+-     *
+-     * @param enabled true to enable back-pressure, false to disable it.
+-     * @throws IllegalArgumentException If the native window is invalid.
+-     * @see #isProducerThrottlingEnabled
+-     */
+-    @FlaggedApi(com.android.graphics.libgui.flags.Flags.FLAG_BQ_PRODUCER_BACKPRESSURE_CONTROL)
+-    public void setProducerThrottlingEnabled(boolean enabled) {
+-        int error = nativeSetProducerThrottlingEnabled(mNativeObject, enabled);
+-        if (error < 0) {
+-            if (error == -EINVAL) {
+-                throw new IllegalArgumentException(
+-                        "Invalid native surface when calling "
+-                                + "Surface.setProducerThrottlingEnabled()");
+-            }
+-            throw new RuntimeException("Surface.setProducerThrottlingEnabled() failed. "
+-                    + "Native error: " + error);
+-        }
+-    }
+-
+-    /**
+-     * Check if CPU throttling is enabled.
+-     *
+-     * @throws IllegalArgumentException If the native window is invalid.
+-     * @return  true if back-pressure is enabled, false otherwise.
+-     * @see #setProducerThrottlingEnabled
+-     */
+-    @FlaggedApi(com.android.graphics.libgui.flags.Flags.FLAG_BQ_PRODUCER_BACKPRESSURE_CONTROL)
+-    public boolean isProducerThrottlingEnabled() {
+-        int error = nativeIsProducerThrottlingEnabled(mNativeObject);
+-        if (error < 0) {
+-            if (error == -EINVAL) {
+-                throw new IllegalArgumentException(
+-                        "Invalid native surface when calling "
+-                                + "Surface.isProducerThrottlingEnabled()");
+-            }
+-            throw new RuntimeException("Surface.isProducerThrottlingEnabled() failed. "
+-                    + "Native error: " + error);
+-        }
+-        return error != 0;
+     }
+ 
+     /**
+@@ -1346,16 +570,7 @@
+     public void setFrameRate(@FloatRange(from = 0.0) float frameRate,
+             @FrameRateCompatibility int compatibility,
+             @ChangeFrameRateStrategy int changeFrameRateStrategy) {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            int error = nativeSetFrameRate(mNativeObject, frameRate, compatibility,
+-                    changeFrameRateStrategy);
+-            if (error == -EINVAL) {
+-                throw new IllegalArgumentException("Invalid argument to Surface.setFrameRate()");
+-            } else if (error != 0) {
+-                Log.e(TAG, "Failed to set frame rate on Surface. Native error: " + error);
+-            }
+-        }
++        if (!isValid()) throw new IllegalStateException("Surface is released");
+     }
+ 
+     /**
+@@ -1370,17 +585,7 @@
+      * @see #setFrameRate(float, int, int)
+      */
+     public void clearFrameRate() {
+-        synchronized (mLock) {
+-            checkNotReleasedLocked();
+-            // The values FRAME_RATE_COMPATIBILITY_DEFAULT and CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS
+-            // are ignored because the value of frameRate is 0
+-            int error = nativeSetFrameRate(mNativeObject, 0,
+-                    FRAME_RATE_COMPATIBILITY_DEFAULT, CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS);
+-            if (error != 0) {
+-                throw new RuntimeException("Failed to clear the frame rate on Surface. Native error"
+-                        + ": " + error);
+-            }
+-        }
++        setFrameRate(0, FRAME_RATE_COMPATIBILITY_DEFAULT, CHANGE_FRAME_RATE_ONLY_IF_SEAMLESS);
+     }
+ 
+     /**
+@@ -1435,120 +640,4 @@
+         }
+     }
+ 
+-    /**
+-     * A Canvas class that can handle the compatibility mode.
+-     * This does two things differently.
+-     * <ul>
+-     * <li>Returns the width and height of the target metrics, rather than
+-     * native. For example, the canvas returns 320x480 even if an app is running
+-     * in WVGA high density.
+-     * <li>Scales the matrix in setMatrix by the application scale, except if
+-     * the matrix looks like obtained from getMatrix. This is a hack to handle
+-     * the case that an application uses getMatrix to keep the original matrix,
+-     * set matrix of its own, then set the original matrix back. There is no
+-     * perfect solution that works for all cases, and there are a lot of cases
+-     * that this model does not work, but we hope this works for many apps.
+-     * </ul>
+-     */
+-    private final class CompatibleCanvas extends Canvas {
+-        // A temp matrix to remember what an application obtained via {@link getMatrix}
+-        private Matrix mOrigMatrix = null;
+-
+-        @Override
+-        public void setMatrix(Matrix matrix) {
+-            if (mCompatibleMatrix == null || mOrigMatrix == null || mOrigMatrix.equals(matrix)) {
+-                // don't scale the matrix if it's not compatibility mode, or
+-                // the matrix was obtained from getMatrix.
+-                super.setMatrix(matrix);
+-            } else {
+-                Matrix m = new Matrix(mCompatibleMatrix);
+-                m.preConcat(matrix);
+-                super.setMatrix(m);
+-            }
+-        }
+-
+-        @SuppressWarnings("deprecation")
+-        @Override
+-        public void getMatrix(Matrix m) {
+-            super.getMatrix(m);
+-            if (mOrigMatrix == null) {
+-                mOrigMatrix = new Matrix();
+-            }
+-            mOrigMatrix.set(m);
+-        }
+-    }
+-
+-    private final class HwuiContext {
+-        private final RenderNode mRenderNode;
+-        private HardwareRenderer mHardwareRenderer;
+-        private RecordingCanvas mCanvas;
+-        private final boolean mIsWideColorGamut;
+-        private int mWidth;
+-        private int mHeight;
+-
+-        HwuiContext(boolean isWideColorGamut) {
+-            mRenderNode = RenderNode.create("HwuiCanvas", null);
+-            mRenderNode.setClipToBounds(false);
+-            mRenderNode.setForceDarkAllowed(false);
+-            mIsWideColorGamut = isWideColorGamut;
+-
+-            mHardwareRenderer = new HardwareRenderer();
+-            mHardwareRenderer.setContentRoot(mRenderNode);
+-            mHardwareRenderer.setSurface(Surface.this, true);
+-            mHardwareRenderer.setColorMode(
+-                    isWideColorGamut
+-                            ? ActivityInfo.COLOR_MODE_WIDE_COLOR_GAMUT
+-                            : ActivityInfo.COLOR_MODE_DEFAULT);
+-            mHardwareRenderer.setLightSourceAlpha(0.0f, 0.0f);
+-            mHardwareRenderer.setLightSourceGeometry(0.0f, 0.0f, 0.0f, 0.0f);
+-            Point p = Surface.this.getDefaultSize();
+-            mWidth = p.x;
+-            mHeight = p.y;
+-        }
+-
+-        Canvas lockCanvas(int width, int height) {
+-            if (mCanvas != null) {
+-                throw new IllegalStateException("Surface was already locked!");
+-            }
+-            if (mWidth != width || mHeight != height) {
+-                mWidth = width;
+-                mHeight = height;
+-                mHardwareRenderer.setSurface(Surface.this, true);
+-            }
+-            mCanvas = mRenderNode.beginRecording(width, height);
+-            return mCanvas;
+-        }
+-
+-        void unlockAndPost(Canvas canvas) {
+-            if (canvas != mCanvas) {
+-                throw new IllegalArgumentException("canvas object must be the same instance that "
+-                        + "was previously returned by lockCanvas");
+-            }
+-            mRenderNode.endRecording();
+-            mCanvas = null;
+-            mHardwareRenderer.createRenderRequest()
+-                    .setVsyncTime(System.nanoTime())
+-                    .syncAndDraw();
+-        }
+-
+-        void updateSurface() {
+-            mHardwareRenderer.setSurface(Surface.this, true);
+-        }
+-
+-        void destroy() {
+-            mHardwareRenderer.destroy();
+-        }
+-
+-        boolean isWideColorGamut() {
+-            return mIsWideColorGamut;
+-        }
+-    }
+-
+-    private static void registerNativeMemoryUsage() {
+-        VMRuntime.getRuntime().registerNativeAllocation(SURFACE_NATIVE_ALLOCATION_SIZE_BYTES);
+-    }
+-
+-    private static void freeNativeMemoryUsage() {
+-        VMRuntime.getRuntime().registerNativeFree(SURFACE_NATIVE_ALLOCATION_SIZE_BYTES);
+-    }
+ }
+--- a/frameworks/base/graphics/java/android/graphics/SurfaceTexture.java
++++ b/frameworks/base/graphics/java/android/graphics/SurfaceTexture.java
+@@ -16,19 +16,13 @@
+ 
+ package android.graphics;
+ 
+-import android.annotation.FloatRange;
+ import android.annotation.Nullable;
+ import android.annotation.SuppressLint;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.hardware.DataSpace.NamedDataSpace;
+ import android.os.Build;
+ import android.os.Handler;
+ import android.os.Looper;
+ import android.os.Message;
+-import android.os.Trace;
+-import android.view.Surface;
+-import android.view.TextureView;
+-import android.view.flags.Flags;
+ 
+ import java.lang.ref.WeakReference;
+ 
+@@ -83,18 +77,6 @@
+     private final Looper mCreatorLooper;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     private Handler mOnFrameAvailableHandler;
+-    private Handler mOnSetFrameRateHandler;
+-
+-    /**
+-     * These fields are used by native code, do not access or modify.
+-     */
+-    @UnsupportedAppUsage(trackingBug = 176388660)
+-    private long mSurfaceTexture;
+-    @UnsupportedAppUsage(trackingBug = 176388660)
+-    private long mProducer;
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    private long mFrameAvailableListener;
+-
+     private boolean mIsSingleBuffered;
+ 
+     /**
+@@ -102,21 +84,6 @@
+      */
+     public interface OnFrameAvailableListener {
+         void onFrameAvailable(SurfaceTexture surfaceTexture);
+-    }
+-
+-    /**
+-     * Callback interface for being notified that a producer set a frame rate
+-     * @hide
+-     */
+-    public interface OnSetFrameRateListener {
+-        /**
+-         * Called when the producer sets a frame rate
+-         * @hide
+-         */
+-        void onSetFrameRate(SurfaceTexture surfaceTexture,
+-                            @FloatRange(from = 0.0) float frameRate,
+-                                 @Surface.FrameRateCompatibility int compatibility,
+-                                 @Surface.ChangeFrameRateStrategy int changeFrameRateStrategy);
+     }
+ 
+     /**
+@@ -164,9 +131,7 @@
+      * @throws android.view.Surface.OutOfResourcesException If the SurfaceTexture cannot be created.
+      */
+     public SurfaceTexture(int texName, boolean singleBufferMode) {
+-        mCreatorLooper = Looper.myLooper();
+-        mIsSingleBuffered = singleBufferMode;
+-        nativeInit(false, texName, singleBufferMode, new WeakReference<SurfaceTexture>(this));
++        this(singleBufferMode);
+     }
+ 
+     /**
+@@ -193,7 +158,6 @@
+     public SurfaceTexture(boolean singleBufferMode) {
+         mCreatorLooper = Looper.myLooper();
+         mIsSingleBuffered = singleBufferMode;
+-        nativeInit(true, 0, singleBufferMode, new WeakReference<SurfaceTexture>(this));
+     }
+ 
+     /**
+@@ -244,48 +208,6 @@
+         }
+     }
+ 
+-    private static class SetFrameRateArgs {
+-        SetFrameRateArgs(@FloatRange(from = 0.0) float frameRate,
+-                                @Surface.FrameRateCompatibility int compatibility,
+-                   @Surface.ChangeFrameRateStrategy int changeFrameRateStrategy) {
+-            this.mFrameRate = frameRate;
+-            this.mCompatibility = compatibility;
+-            this.mChangeFrameRateStrategy = changeFrameRateStrategy;
+-        }
+-        final float mFrameRate;
+-        final int mCompatibility;
+-        final int mChangeFrameRateStrategy;
+-    }
+-
+-    /**
+-     * Register a callback to be invoked when the producer sets a frame rate using
+-     * Surface.setFrameRate.
+-     * @hide
+-     */
+-    public void setOnSetFrameRateListener(@Nullable final OnSetFrameRateListener listener,
+-                                            @Nullable Handler handler) {
+-        if (listener != null) {
+-            Looper looper = handler != null ? handler.getLooper() :
+-                    mCreatorLooper != null ? mCreatorLooper : Looper.getMainLooper();
+-            mOnSetFrameRateHandler = new Handler(looper, null, true /*async*/) {
+-                @Override
+-                public void handleMessage(Message msg) {
+-                    Trace.traceBegin(Trace.TRACE_TAG_VIEW, "onSetFrameRateHandler");
+-                    try {
+-                        SetFrameRateArgs args = (SetFrameRateArgs) msg.obj;
+-                        listener.onSetFrameRate(SurfaceTexture.this,
+-                                args.mFrameRate, args.mCompatibility,
+-                                args.mChangeFrameRateStrategy);
+-                    } finally {
+-                        Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+-                    }
+-                }
+-            };
+-        } else {
+-            mOnSetFrameRateHandler = null;
+-        }
+-    }
+-
+     /**
+      * Set the default size of the image buffers.  The image producer may override the buffer size,
+      * in which case the producer-set buffer size will be used, not the default size set by this
+@@ -306,7 +228,9 @@
+      * updateTexImage() is called.
+      */
+     public void setDefaultBufferSize(int width, int height) {
+-        nativeSetDefaultBufferSize(width, height);
++        if (width <= 0 || height <= 0) throw new IllegalArgumentException("Invalid surface size");
++        mWidth = width;
++        mHeight = height;
+     }
+ 
+     /**
+@@ -315,7 +239,7 @@
+      * It will implicitly bind its texture to the {@code GL_TEXTURE_EXTERNAL_OES} texture target.
+      */
+     public void updateTexImage() {
+-        nativeUpdateTexImage();
++        if (mReleased) throw new IllegalStateException("SurfaceTexture is released");
+     }
+ 
+     /**
+@@ -325,7 +249,7 @@
+      * For more information see {@link #SurfaceTexture(int, boolean)}.
+      */
+     public void releaseTexImage() {
+-        nativeReleaseTexImage();
++        mFrame = null;
+     }
+ 
+     /**
+@@ -340,10 +264,7 @@
+      * context at a time.
+      */
+     public void detachFromGLContext() {
+-        int err = nativeDetachFromGLContext();
+-        if (err != 0) {
+-            throw new RuntimeException("Error during detachFromGLContext (see logcat for details)");
+-        }
++        throw new UnsupportedOperationException("Software SurfaceTexture has no GL texture");
+     }
+ 
+     /**
+@@ -360,10 +281,7 @@
+      * must be unused in the OpenGL ES context that is current on the calling thread.
+      */
+     public void attachToGLContext(int texName) {
+-        int err = nativeAttachToGLContext(texName);
+-        if (err != 0) {
+-            throw new RuntimeException("Error during attachToGLContext (see logcat for details)");
+-        }
++        throw new UnsupportedOperationException("Software SurfaceTexture has no GL texture");
+     }
+ 
+     /**
+@@ -387,12 +305,8 @@
+      *     16 elements.
+      */
+     public void getTransformMatrix(float[] mtx) {
+-        // Note we intentionally don't check mtx for null, so this will result in a
+-        // NullPointerException. But it's safe because it happens before the call to native.
+-        if (mtx.length != 16) {
+-            throw new IllegalArgumentException();
+-        }
+-        nativeGetTransformMatrix(mtx);
++        if (mtx.length != 16) throw new IllegalArgumentException("Transform must be 4 by 4");
++        for (int i = 0; i < mtx.length; i++) mtx[i] = i % 5 == 0 ? 1f : 0f;
+     }
+ 
+     /**
+@@ -413,7 +327,7 @@
+      */
+ 
+     public long getTimestamp() {
+-        return nativeGetTimestamp();
++        return mTimestamp;
+     }
+ 
+     /**
+@@ -421,8 +335,8 @@
+      * set by the most recent call to {@link #updateTexImage}.
+      */
+     @SuppressLint("MethodNameUnits")
+-    public @NamedDataSpace int getDataSpace() {
+-        return nativeGetDataSpace();
++    public int getDataSpace() {
++        return 0;
+     }
+ 
+     /**
+@@ -444,7 +358,10 @@
+      * @see #isReleased()
+      */
+     public void release() {
+-        nativeRelease();
++        mReleased = true;
++        mFrame = null;
++        mWorkingFrame = null;
++        mOnFrameAvailableHandler = null;
+     }
+ 
+     /**
+@@ -453,16 +370,7 @@
+      * @see #release()
+      */
+     public boolean isReleased() {
+-        return nativeIsReleased();
+-    }
+-
+-    @Override
+-    protected void finalize() throws Throwable {
+-        try {
+-            nativeFinalize();
+-        } finally {
+-            super.finalize();
+-        }
++        return mReleased;
+     }
+ 
+     /**
+@@ -481,35 +389,6 @@
+     }
+ 
+     /**
+-     * This method is invoked from native code only.
+-     * @hide
+-     */
+-    @SuppressWarnings({"UnusedDeclaration"})
+-    private static void postOnSetFrameRateEventFromNative(WeakReference<SurfaceTexture> weakSelf,
+-            @FloatRange(from = 0.0) float frameRate,
+-            @Surface.FrameRateCompatibility int compatibility,
+-            @Surface.ChangeFrameRateStrategy int changeFrameRateStrategy) {
+-        Trace.traceBegin(Trace.TRACE_TAG_VIEW, "postOnSetFrameRateEventFromNative");
+-        try {
+-            if (Flags.toolkitSetFrameRateReadOnly()) {
+-                SurfaceTexture st = weakSelf.get();
+-                if (st != null) {
+-                    Handler handler = st.mOnSetFrameRateHandler;
+-                    if (handler != null) {
+-                        Message msg = new Message();
+-                        msg.obj = new SetFrameRateArgs(frameRate, compatibility,
+-                                changeFrameRateStrategy);
+-                        handler.sendMessage(msg);
+-                    }
+-                }
+-            }
+-        } finally {
+-            Trace.traceEnd(Trace.TRACE_TAG_VIEW);
+-        }
+-
+-    }
+-
+-    /**
+      * Returns {@code true} if the SurfaceTexture is single-buffered.
+      * @hide
+      */
+@@ -517,19 +396,48 @@
+         return mIsSingleBuffered;
+     }
+ 
+-    private native void nativeInit(boolean isDetached, int texName,
+-            boolean singleBufferMode, WeakReference<SurfaceTexture> weakSelf)
+-            throws Surface.OutOfResourcesException;
+-    private native void nativeFinalize();
+-    private native void nativeGetTransformMatrix(float[] mtx);
+-    private native long nativeGetTimestamp();
+-    private native int nativeGetDataSpace();
+-    private native void nativeSetDefaultBufferSize(int width, int height);
+-    private native void nativeUpdateTexImage();
+-    private native void nativeReleaseTexImage();
+-    @UnsupportedAppUsage
+-    private native int nativeDetachFromGLContext();
+-    private native int nativeAttachToGLContext(int texName);
+-    private native void nativeRelease();
+-    private native boolean nativeIsReleased();
++
++    private int mWidth = 1;
++    private int mHeight = 1;
++    private boolean mReleased;
++    private Bitmap mFrame;
++    private Bitmap mWorkingFrame;
++    private long mTimestamp;
++
++    /** @hide */
++    public Point getEmbeddedSize() {
++        return new Point(mWidth, mHeight);
++    }
++
++    /** @hide */
++    public Bitmap getEmbeddedBitmap() {
++        return mFrame;
++    }
++
++    /** @hide */
++    public Canvas lockEmbeddedCanvas(Rect dirty) {
++        if (mReleased) throw new IllegalStateException("SurfaceTexture is released");
++        if (mWorkingFrame != null) throw new IllegalStateException("A frame is already locked");
++        mWorkingFrame = Bitmap.createBitmap(mWidth, mHeight, Bitmap.Config.ARGB_8888);
++        Canvas canvas = new Canvas(mWorkingFrame);
++        if (mFrame != null && mFrame.getWidth() == mWidth && mFrame.getHeight() == mHeight) {
++            canvas.drawBitmap(mFrame, 0, 0, null);
++        } else if (dirty != null) {
++            dirty.set(0, 0, mWidth, mHeight);
++        }
++        return canvas;
++    }
++
++    /** @hide */
++    public void postEmbeddedFrame(Canvas canvas) {
++        if (mReleased || mWorkingFrame == null) return;
++        Bitmap previous = mFrame;
++        mFrame = mWorkingFrame;
++        mWorkingFrame = null;
++        mTimestamp = System.nanoTime();
++        if (previous != null) previous.recycle();
++        if (mOnFrameAvailableHandler != null) {
++            mOnFrameAvailableHandler.sendEmptyMessage(0);
++        }
++    }
+ }

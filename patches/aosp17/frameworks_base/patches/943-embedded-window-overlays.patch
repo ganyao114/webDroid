@@ -1,0 +1,225 @@
+--- a/frameworks/base/core/java/com/android/internal/policy/PhoneWindow.java
++++ b/frameworks/base/core/java/com/android/internal/policy/PhoneWindow.java
+@@ -40,6 +40,7 @@
+ import android.util.SparseArray;
+ import android.view.Display;
+ import android.view.InputQueue;
++import android.view.Gravity;
+ import android.view.KeyEvent;
+ import android.view.LayoutInflater;
+ import android.view.MotionEvent;
+@@ -165,15 +166,183 @@
+             @Override public WindowMetrics getCurrentWindowMetrics() { return displayMetrics(context); }
+             @Override public WindowMetrics getMaximumWindowMetrics() { return getCurrentWindowMetrics(); }
+             @Override public void addView(View view, ViewGroup.LayoutParams params) {
+-                ((ViewGroup) getDecorView()).addView(view, params);
++                if (params instanceof WindowManager.LayoutParams windowParams) {
++                    addEmbeddedView(view, windowParams, null);
++                } else {
++                    ((ViewGroup) getDecorView()).addView(view, params);
++                }
++            }
++            @Override public void addEmbeddedView(View view, WindowManager.LayoutParams params,
++                    Window.Callback callback) {
++                EmbeddedLayer layer = new EmbeddedLayer(view, callback, params);
++                mEmbeddedLayers.add(layer);
++                ((ViewGroup) getDecorView()).addView(layer,
++                        new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
++                if (layer.takesFocus()) {
++                    layer.previousFocus = mDecor.findFocus();
++                    if (layer.previousFocus != null) layer.previousFocus.clearFocus();
++                    view.requestFocus();
++                    if (callback != null) callback.onWindowFocusChanged(true);
++                }
+             }
+             @Override public void updateViewLayout(View view, ViewGroup.LayoutParams params) {
+-                view.setLayoutParams(params);
++                EmbeddedLayer layer = findEmbeddedLayer(view);
++                if (layer != null) layer.update((WindowManager.LayoutParams) params);
++                else view.setLayoutParams(params);
+             }
+             @Override public void removeView(View view) {
+-                if (mDecor != null) mDecor.removeView(view);
++                EmbeddedLayer layer = findEmbeddedLayer(view);
++                if (layer == null) {
++                    if (mDecor != null) mDecor.removeView(view);
++                    return;
++                }
++                mEmbeddedLayers.remove(layer);
++                if (mEmbeddedTouchTarget == layer) mEmbeddedTouchTarget = null;
++                layer.removeView(view);
++                mDecor.removeView(layer);
++                if (layer.callback != null) layer.callback.onWindowFocusChanged(false);
++                if (layer.previousFocus != null && layer.previousFocus.isAttachedToWindow()) {
++                    layer.previousFocus.requestFocus();
++                }
+             }
+         }, null, null);
++    }
++
++    private final java.util.ArrayList<EmbeddedLayer> mEmbeddedLayers = new java.util.ArrayList<>();
++    private EmbeddedLayer mEmbeddedTouchTarget;
++
++    private final class EmbeddedLayer extends FrameLayout {
++        final View view;
++        final Window.Callback callback;
++        View previousFocus;
++        private int flags;
++
++        EmbeddedLayer(View view, Window.Callback callback, WindowManager.LayoutParams attrs) {
++            super(PhoneWindow.this.getContext());
++            this.view = view;
++            this.callback = callback;
++            addView(view, new FrameLayout.LayoutParams(attrs.width, attrs.height));
++            update(attrs);
++        }
++
++        void update(WindowManager.LayoutParams attrs) {
++            if (flags != attrs.flags) {
++                flags = attrs.flags;
++                invalidate();
++            }
++            int gravity = Gravity.getAbsoluteGravity(attrs.gravity, view.getLayoutDirection());
++            boolean right = (gravity & Gravity.HORIZONTAL_GRAVITY_MASK) == Gravity.RIGHT;
++            boolean bottom = (gravity & Gravity.VERTICAL_GRAVITY_MASK) == Gravity.BOTTOM;
++            int leftMargin = right ? 0 : attrs.x;
++            int rightMargin = right ? attrs.x : 0;
++            int topMargin = bottom ? 0 : attrs.y;
++            int bottomMargin = bottom ? attrs.y : 0;
++            FrameLayout.LayoutParams previous = (FrameLayout.LayoutParams) view.getLayoutParams();
++            if (previous.width == attrs.width && previous.height == attrs.height
++                    && previous.gravity == gravity && previous.leftMargin == leftMargin
++                    && previous.rightMargin == rightMargin && previous.topMargin == topMargin
++                    && previous.bottomMargin == bottomMargin) return;
++            FrameLayout.LayoutParams placement =
++                    new FrameLayout.LayoutParams(attrs.width, attrs.height, gravity);
++            placement.setMargins(leftMargin, topMargin, rightMargin, bottomMargin);
++            view.setLayoutParams(placement);
++        }
++
++        @Override public void draw(android.graphics.Canvas canvas) {
++            if (view.getVisibility() != View.VISIBLE) return;
++            if ((flags & WindowManager.LayoutParams.FLAG_DIM_BEHIND) != 0) {
++                canvas.drawColor(0x66000000);
++            }
++            super.draw(canvas);
++        }
++
++        @Override public boolean dispatchTouchEvent(MotionEvent event) { return false; }
++
++        boolean takesFocus() {
++            return (flags & WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) == 0;
++        }
++
++        boolean isModal() {
++            return takesFocus() && (flags & WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL) == 0;
++        }
++
++        boolean contains(float x, float y) {
++            return x >= view.getLeft() && x < view.getRight()
++                    && y >= view.getTop() && y < view.getBottom();
++        }
++
++        boolean dispatchMotion(MotionEvent event, boolean outside) {
++            MotionEvent local = MotionEvent.obtain(event);
++            try {
++                local.offsetLocation(-view.getLeft(), -view.getTop());
++                if (outside) local.setAction(MotionEvent.ACTION_OUTSIDE);
++                if (local.getActionMasked() == MotionEvent.ACTION_SCROLL) {
++                    return callback == null ? view.dispatchGenericMotionEvent(local)
++                            : callback.dispatchGenericMotionEvent(local);
++                }
++                return callback == null ? view.dispatchTouchEvent(local)
++                        : callback.dispatchTouchEvent(local);
++            } finally {
++                local.recycle();
++            }
++        }
++    }
++
++    private EmbeddedLayer findEmbeddedLayer(View view) {
++        for (EmbeddedLayer layer : mEmbeddedLayers) {
++            if (layer.view == view) return layer;
++        }
++        return null;
++    }
++
++    /** @hide */
++    public boolean dispatchEmbeddedKeyEvent(KeyEvent event) {
++        for (int i = mEmbeddedLayers.size() - 1; i >= 0; i--) {
++            EmbeddedLayer layer = mEmbeddedLayers.get(i);
++            if (layer.takesFocus() && layer.view.getVisibility() == View.VISIBLE) {
++                if (layer.callback == null) layer.view.dispatchKeyEvent(event);
++                else layer.callback.dispatchKeyEvent(event);
++                return true;
++            }
++        }
++        return false;
++    }
++
++    /** @hide */
++    public boolean dispatchEmbeddedMotionEvent(MotionEvent event) {
++        int action = event.getActionMasked();
++        if (action == MotionEvent.ACTION_DOWN) mEmbeddedTouchTarget = null;
++        EmbeddedLayer target = mEmbeddedTouchTarget;
++        if (target != null && action != MotionEvent.ACTION_SCROLL) {
++            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
++                mEmbeddedTouchTarget = null;
++            }
++            target.dispatchMotion(event, false);
++            return true;
++        }
++        if (action != MotionEvent.ACTION_DOWN && action != MotionEvent.ACTION_SCROLL) return false;
++        for (int i = mEmbeddedLayers.size() - 1; i >= 0; i--) {
++            EmbeddedLayer layer = mEmbeddedLayers.get(i);
++            if (layer.view.getVisibility() != View.VISIBLE
++                    || (layer.flags & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) != 0) continue;
++            boolean inside = layer.contains(event.getX(), event.getY());
++            if (inside) {
++                boolean handled = layer.dispatchMotion(event, false);
++                if (handled || layer.isModal()) {
++                    if (action == MotionEvent.ACTION_DOWN && mEmbeddedLayers.contains(layer)) {
++                        mEmbeddedTouchTarget = layer;
++                    }
++                    return true;
++                }
++            } else if (action == MotionEvent.ACTION_DOWN) {
++                if (layer.callback != null
++                        || (layer.flags & WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH) != 0) {
++                    layer.dispatchMotion(event, true);
++                }
++                if (layer.isModal()) return true;
++            }
++        }
++        return false;
+     }
+ 
+     @Override
+--- a/frameworks/base/core/java/android/view/WindowManager.java
++++ b/frameworks/base/core/java/android/view/WindowManager.java
+@@ -111,6 +111,11 @@
+  */
+ @SystemService(Context.WINDOW_SERVICE)
+ public interface WindowManager extends ViewManager {
++    /** @hide */
++    default void addEmbeddedView(View view, LayoutParams params, Window.Callback callback) {
++        addView(view, params);
++    }
++
+ 
+     /** @hide */
+     int DOCKED_INVALID = -1;
+--- a/frameworks/base/core/java/android/view/ViewRootImpl.java
++++ b/frameworks/base/core/java/android/view/ViewRootImpl.java
+@@ -211,9 +211,11 @@
+         if (!mAdded) return false;
+         Window.Callback callback = mHostWindow == null ? null : mHostWindow.getCallback();
+         if (event instanceof KeyEvent key) {
++            if (mHostWindow != null && mHostWindow.dispatchEmbeddedKeyEvent(key)) return true;
+             return callback != null ? callback.dispatchKeyEvent(key) : mView.dispatchKeyEvent(key);
+         }
+         if (event instanceof MotionEvent motion) {
++            if (mHostWindow != null && mHostWindow.dispatchEmbeddedMotionEvent(motion)) return true;
+             if (motion.getActionMasked() != MotionEvent.ACTION_SCROLL) {
+                 return callback != null ? callback.dispatchTouchEvent(motion)
+                         : mView.dispatchTouchEvent(motion);

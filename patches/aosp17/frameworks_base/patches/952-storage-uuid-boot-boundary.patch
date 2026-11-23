@@ -1,0 +1,88 @@
+--- a/libcore/ojluni/src/main/java/java/util/UUID.java
++++ b/libcore/ojluni/src/main/java/java/util/UUID.java
+@@ -25,12 +25,7 @@
+ 
+ package java.util;
+ 
+-import android.compat.Compatibility;
+-import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledSince;
+-
+-import dalvik.annotation.compat.VersionCodes;
+-import dalvik.system.VMRuntime;
++
+ 
+ import java.security.*;
+ 
+@@ -225,18 +220,6 @@
+     }
+ 
+     /**
+-     * Since Android 14 {@link #fromString} does more strict input argument
+-     * validation.
+-     *
+-     * This flag is enabled for apps targeting Android 14+.
+-     *
+-     * @hide
+-     */
+-    @ChangeId
+-    @EnabledSince(targetSdkVersion = VersionCodes.UPSIDE_DOWN_CAKE)
+-    public static final long ENABLE_STRICT_VALIDATION = 263076149L;
+-
+-    /**
+      * Creates a {@code UUID} from the string standard representation as
+      * described in the {@link #toString} method.
+      *
+@@ -251,17 +234,7 @@
+      *
+      */
+     public static UUID fromString(String name) {
+-        // BEGIN Android-changed: Java 8 behaviour is more lenient and the new implementation
+-        // might break apps (b/254278943).
+-        // Using old implementation for apps targeting Android older than U.
+-        if (!(VMRuntime.getSdkVersion() >= VersionCodes.UPSIDE_DOWN_CAKE
+-                && Compatibility.isChangeEnabled(ENABLE_STRICT_VALIDATION))) {
+-            return fromStringJava8(name);
+-        }
+-
+         return fromStringCurrentJava(name);
+-        // END Android-changed: Java 8 behaviour is more lenient and the new implementation
+-        // might break apps (b/254278943).
+     }
+ 
+     /**
+@@ -315,14 +288,14 @@
+             throw new IllegalArgumentException("Invalid UUID string: " + name);
+         }
+ 
+-        long mostSigBits = Long.parseLong(name, 0, dash1, 16) & 0xffffffffL;
++        long mostSigBits = Long.parseLong(name.substring(0, dash1), 16) & 0xffffffffL;
+         mostSigBits <<= 16;
+-        mostSigBits |= Long.parseLong(name, dash1 + 1, dash2, 16) & 0xffffL;
++        mostSigBits |= Long.parseLong(name.substring(dash1 + 1, dash2), 16) & 0xffffL;
+         mostSigBits <<= 16;
+-        mostSigBits |= Long.parseLong(name, dash2 + 1, dash3, 16) & 0xffffL;
+-        long leastSigBits = Long.parseLong(name, dash3 + 1, dash4, 16) & 0xffffL;
++        mostSigBits |= Long.parseLong(name.substring(dash2 + 1, dash3), 16) & 0xffffL;
++        long leastSigBits = Long.parseLong(name.substring(dash3 + 1, dash4), 16) & 0xffffL;
+         leastSigBits <<= 48;
+-        leastSigBits |= Long.parseLong(name, dash4 + 1, len, 16) & 0xffffffffffffL;
++        leastSigBits |= Long.parseLong(name.substring(dash4 + 1, len), 16) & 0xffffffffffffL;
+ 
+         return new UUID(mostSigBits, leastSigBits);
+     }
+@@ -528,8 +501,12 @@
+ 
+     /** Returns val represented by the specified number of hex digits. */
+     private static String digits(long val, int digits) {
+-        long hi = 1L << (digits * 4);
+-        return Long.toHexString(hi | (val & (hi - 1))).substring(1);
++        char[] hex = new char[digits];
++        for (int i = digits - 1; i >= 0; i--) {
++            hex[i] = "0123456789abcdef".charAt((int) (val & 0xf));
++            val >>>= 4;
++        }
++        return new String(hex);
+     }
+ 
+     /**

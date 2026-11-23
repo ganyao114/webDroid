@@ -1138,13 +1138,19 @@
 +    }
  
      /** @hide */
-@@ -4862,5 +4951,4 @@
+@@ -4862,5 +4951,10 @@
       * @see android.security.authenticationpolicy.AuthenticationPolicyManager
       */
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
      public abstract Object getSystemService(@ServiceName @NonNull String name);
++
++    /** @hide */
++    public void applyEmbeddedUiMode(int uiMode) {
++        Context application = getApplicationContext();
++        if (application != null && application != this) application.applyEmbeddedUiMode(uiMode);
++    }
  
-@@ -4923,6 +5011,17 @@
+@@ -4923,6 +5017,29 @@
       * @return The service name or null if the class is not a supported system service.
       */
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
@@ -1160,89 +1166,101 @@
 +        if (type == android.app.WallpaperManager.class) return WALLPAPER_SERVICE;
 +        if (type == android.view.accessibility.AccessibilityManager.class) return ACCESSIBILITY_SERVICE;
 +        if (type == android.app.SearchManager.class) return SEARCH_SERVICE;
++        if (type == null) return null;
++        switch (type.getName()) {
++            case "android.content.ClipboardManager":
++            case "android.text.ClipboardManager":
++                return CLIPBOARD_SERVICE;
++            case "android.os.PowerManager": return POWER_SERVICE;
++            case "android.os.BatteryManager": return BATTERY_SERVICE;
++            case "android.app.UiModeManager": return UI_MODE_SERVICE;
++            case "android.app.KeyguardManager": return KEYGUARD_SERVICE;
++            case "android.app.NotificationManager": return NOTIFICATION_SERVICE;
++            case "android.os.storage.StorageManager": return STORAGE_SERVICE;
++        }
 +        return null;
 +    }
  
      /**
-@@ -5172,5 +5271,4 @@
+@@ -5172,5 +5289,4 @@
       * @see android.security.keystore.KeyStoreManager
       */
 -    @FlaggedApi(android.security.Flags.FLAG_KEYSTORE_GRANT_API)
      public static final String KEYSTORE_SERVICE = "keystore";
  
-@@ -5219,5 +5317,4 @@
+@@ -5219,5 +5335,4 @@
       * feedback.
       */
 -    @FlaggedApi(android.os.multisensory.Flags.FLAG_ENABLE_MULTISENSORY_FEEDBACK)
      @SuppressLint("ServiceName")
      public static final String MULTISENSORY_MANAGER_SERVICE = "multisensory_manager";
-@@ -5317,5 +5414,4 @@
+@@ -5317,5 +5432,4 @@
       * @hide
       */
 -    @FlaggedApi(com.android.net.thread.platform.flags.Flags.FLAG_THREAD_ENABLED_PLATFORM)
      @SystemApi
      public static final String THREAD_NETWORK_SERVICE = "thread_network";
-@@ -5480,5 +5576,4 @@
+@@ -5480,5 +5594,4 @@
       * @hide
       */
 -    @FlaggedApi(android.net.wifi.flags.Flags.FLAG_USD)
      @SystemApi
      public static final String WIFI_USD_SERVICE = "wifi_usd";
-@@ -5687,5 +5782,4 @@
+@@ -5687,5 +5800,4 @@
       * @see android.telephony.PhoneNumberManager
       */
 -    @FlaggedApi(com.android.internal.telephony.flags.Flags.FLAG_ENABLE_PHONE_NUMBER_PARSING_API)
      public static final String TELEPHONY_PHONE_NUMBER_SERVICE = "telephony_phone_number";
  
-@@ -5841,5 +5935,4 @@
+@@ -5841,5 +5953,4 @@
       * @see #getSystemService(String)
       */
 -    @FlaggedApi(android.service.autofill.Flags.FLAG_PUBLIC_AUTOFILL_SERVICE_NAME)
      public static final String AUTOFILL_SERVICE = "autofill";
  
-@@ -6236,5 +6329,4 @@
+@@ -6236,5 +6347,4 @@
       * @see android.hardware.serial.SerialManager
       */
 -    @FlaggedApi(android.hardware.serial.flags.Flags.FLAG_ENABLE_WIRED_SERIAL_API)
      public static final String SERIAL_SERVICE = "serial";
  
-@@ -6413,5 +6505,4 @@
+@@ -6413,5 +6523,4 @@
       * @see android.media.tv.ad.TvAdManager
       */
 -    @FlaggedApi(android.media.tv.flags.Flags.FLAG_ENABLE_AD_SERVICE_FW)
      public static final String TV_AD_SERVICE = "tv_ad";
  
-@@ -6538,5 +6629,4 @@
+@@ -6538,5 +6647,4 @@
       * @hide
       */
 -    @FlaggedApi(FLAG_ENABLE_LSKF_RESET_MANAGER)
      public static final String LSKF_RESET_SERVICE = "lskf_reset";
  
-@@ -6922,5 +7012,4 @@
+@@ -6922,5 +7030,4 @@
       * @hide
       */
 -    @FlaggedApi(com.android.ranging.flags.Flags.FLAG_RANGING_STACK_ENABLED)
      @SystemApi
      public static final String RANGING_SERVICE = "ranging";
-@@ -7147,5 +7236,4 @@
+@@ -7147,5 +7254,4 @@
       * @see #getSystemService(String)
       */
 -    @FlaggedApi(com.android.webapp.flags.Flags.FLAG_ENABLE_WEB_APP_SERVICE_V2)
      public static final String WEB_APP_SERVICE = "web_app";
  
-@@ -7219,5 +7307,4 @@
+@@ -7219,5 +7325,4 @@
       * @hide
       */
 -    @FlaggedApi(android.permission.flags.Flags.FLAG_ENHANCED_CONFIRMATION_MODE_APIS_ENABLED)
      @SystemApi
      public static final String ECM_ENHANCED_CONFIRMATION_SERVICE = "ecm_enhanced_confirmation";
-@@ -7237,5 +7324,4 @@
+@@ -7237,5 +7342,4 @@
       * @see E2eeContactKeysManager
       */
 -    @FlaggedApi(android.provider.Flags.FLAG_USER_KEYS)
      public static final String CONTACT_KEYS_SERVICE = "contact_keys";
  
-@@ -7259,8 +7345,6 @@
+@@ -7259,8 +7363,6 @@
       * @hide
       */
 -    @FlaggedApi(android.webkit.Flags.FLAG_UPDATE_SERVICE_IPC_WRAPPER)
@@ -1251,38 +1269,38 @@
 -    @RequiresFeature(PackageManager.FEATURE_WEBVIEW)
      public static final String WEBVIEW_UPDATE_SERVICE = "webviewupdate";
  
-@@ -7273,6 +7357,4 @@
+@@ -7273,6 +7375,4 @@
       * @hide
       */
 -    @FlaggedApi(
 -            com.android.server.telecom.flags.Flags.FLAG_TELECOM_MAINLINE_BLOCKED_NUMBERS_MANAGER)
      @SystemApi
      public static final String BLOCKED_NUMBERS_SERVICE = "blocked_numbers";
-@@ -7307,5 +7389,4 @@
+@@ -7307,5 +7407,4 @@
       */
      @SystemApi
 -    @FlaggedApi(android.app.supervision.flags.Flags.FLAG_SUPERVISION_MANAGER_APIS)
      public static final String SUPERVISION_SERVICE = "supervision";
  
-@@ -7332,5 +7413,4 @@
+@@ -7332,5 +7431,4 @@
       */
      @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
 -    @FlaggedApi(android.security.Flags.FLAG_UPROBESTATS_BRIDGE_SERVICE)
      public static final String UPROBESTATS_BRIDGE_SERVICE = "uprobestats_bridge";
  
-@@ -7346,5 +7426,4 @@
+@@ -7346,5 +7444,4 @@
       * @see android.service.chooser.ChooserManager
       */
 -    @FlaggedApi(android.service.chooser.Flags.FLAG_INTERACTIVE_CHOOSER)
      public static final String CHOOSER_SERVICE = "chooser";
  
-@@ -7396,5 +7475,4 @@
+@@ -7396,5 +7493,4 @@
       */
      @SystemApi
 -    @FlaggedApi(android.bettertogether.flags.Flags.FLAG_ENABLE_D2D_CONNECTIVITY_SERVICE)
      public static final String D2D_CONNECTIVITY_SERVICE = "d2d_connectivity";
  
-@@ -7417,9 +7495,9 @@
+@@ -7417,9 +7513,9 @@
      @CheckResult(suggest="#enforcePermission(String,int,int,String)")
      @PackageManager.PermissionResult
 -    @PermissionMethod
@@ -1297,7 +1315,7 @@
 +    }
  
      /** @hide */
-@@ -7427,8 +7505,8 @@
+@@ -7427,8 +7523,8 @@
      @PackageManager.PermissionResult
      @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
@@ -1310,7 +1328,7 @@
 +    }
  
      /**
-@@ -7455,8 +7533,7 @@
+@@ -7455,8 +7551,7 @@
      @CheckResult(suggest="#enforceCallingPermission(String,String)")
      @PackageManager.PermissionResult
 -    @PermissionMethod
@@ -1322,7 +1340,7 @@
 +    }
  
      /**
-@@ -7478,8 +7555,7 @@
+@@ -7478,8 +7573,7 @@
      @CheckResult(suggest="#enforceCallingOrSelfPermission(String,String)")
      @PackageManager.PermissionResult
 -    @PermissionMethod(orSelf = true)
@@ -1334,7 +1352,7 @@
 +    }
  
      /**
-@@ -7495,7 +7571,8 @@
+@@ -7495,7 +7589,8 @@
       */
      @PackageManager.PermissionResult
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
@@ -1346,7 +1364,7 @@
 +    }
  
      /**
-@@ -7511,9 +7588,8 @@
+@@ -7511,9 +7606,8 @@
       * @see #checkPermission(String, int, int)
       */
 -    @PermissionMethod
@@ -1360,7 +1378,7 @@
 +    }
  
      /**
-@@ -7535,9 +7611,8 @@
+@@ -7535,9 +7629,8 @@
       * @see #checkCallingPermission(String)
       */
 -    @PermissionMethod
@@ -1374,7 +1392,7 @@
 +    }
  
      /**
-@@ -7554,9 +7629,8 @@
+@@ -7554,9 +7647,8 @@
       * @see #checkCallingOrSelfPermission(String)
       */
 -    @PermissionMethod(orSelf = true)
@@ -1388,14 +1406,14 @@
 +    }
  
      /**
-@@ -7597,6 +7671,4 @@
+@@ -7597,6 +7689,4 @@
       * @see Activity#onRequestPermissionsResult(int, String[], int[])
       */
 -    @FlaggedApi(
 -            android.permission.flags.Flags.FLAG_SHOULD_SHOW_PERMISSION_RATIONALE_IN_CONTEXT_ENABLED)
      public boolean shouldShowRequestPermissionRationale(@NonNull String permission) {
          throw new RuntimeException("Not implemented. Must override in a subclass.");
-@@ -7632,6 +7704,8 @@
+@@ -7632,6 +7722,8 @@
       * @see #revokeUriPermission
       */
 -    public abstract void grantUriPermission(String toPackage, Uri uri,
@@ -1406,7 +1424,7 @@
 +    }
  
      /**
-@@ -7663,5 +7737,7 @@
+@@ -7663,5 +7755,7 @@
       * @see #grantUriPermission
       */
 -    public abstract void revokeUriPermission(Uri uri, @Intent.AccessUriMode int modeFlags);
@@ -1415,7 +1433,7 @@
 +    }
  
      /**
-@@ -7686,6 +7762,8 @@
+@@ -7686,6 +7780,8 @@
       * @see #grantUriPermission
       */
 -    public abstract void revokeUriPermission(String toPackage, Uri uri,
@@ -1426,7 +1444,7 @@
 +    }
  
      /**
-@@ -7710,6 +7788,8 @@
+@@ -7710,6 +7806,8 @@
      @CheckResult(suggest="#enforceUriPermission(Uri,int,int,String)")
      @PackageManager.PermissionResult
 -    public abstract int checkUriPermission(Uri uri, int pid, int uid,
@@ -1437,7 +1455,7 @@
 +    }
  
      /**
-@@ -7737,8 +7817,7 @@
+@@ -7737,8 +7835,7 @@
       * @see #checkUriPermission(Uri, int, int, int)
       */
 -    @FlaggedApi(android.security.Flags.FLAG_CONTENT_URI_PERMISSION_APIS)
@@ -1447,14 +1465,14 @@
 +            int modeFlags) {
          throw new RuntimeException("Not implemented. Must override in a subclass.");
      }
-@@ -7770,5 +7849,5 @@
+@@ -7770,5 +7867,5 @@
      @PackageManager.PermissionResult
      public int[] checkUriPermissions(@NonNull List<Uri> uris, int pid, int uid,
 -            @Intent.AccessUriMode int modeFlags) {
 +            int modeFlags) {
          throw new RuntimeException("Not implemented. Must override in a subclass.");
      }
-@@ -7777,6 +7856,8 @@
+@@ -7777,6 +7874,8 @@
      @SuppressWarnings("HiddenAbstractMethod")
      @PackageManager.PermissionResult
 -    public abstract int checkUriPermission(Uri uri, int pid, int uid,
@@ -1465,7 +1483,7 @@
 +    }
  
      /**
-@@ -7801,5 +7882,7 @@
+@@ -7801,5 +7900,7 @@
      @CheckResult(suggest="#enforceCallingUriPermission(Uri,int,String)")
      @PackageManager.PermissionResult
 -    public abstract int checkCallingUriPermission(Uri uri, @Intent.AccessUriMode int modeFlags);
@@ -1474,14 +1492,14 @@
 +    }
  
      /**
-@@ -7825,5 +7908,5 @@
+@@ -7825,5 +7926,5 @@
      @PackageManager.PermissionResult
      public int[] checkCallingUriPermissions(@NonNull List<Uri> uris,
 -            @Intent.AccessUriMode int modeFlags) {
 +            int modeFlags) {
          throw new RuntimeException("Not implemented. Must override in a subclass.");
      }
-@@ -7846,6 +7929,8 @@
+@@ -7846,6 +7947,8 @@
      @CheckResult(suggest="#enforceCallingOrSelfUriPermission(Uri,int,String)")
      @PackageManager.PermissionResult
 -    public abstract int checkCallingOrSelfUriPermission(Uri uri,
@@ -1492,14 +1510,14 @@
 +    }
  
      /**
-@@ -7867,5 +7952,5 @@
+@@ -7867,5 +7970,5 @@
      @PackageManager.PermissionResult
      public int[] checkCallingOrSelfUriPermissions(@NonNull List<Uri> uris,
 -            @Intent.AccessUriMode int modeFlags) {
 +            int modeFlags) {
          throw new RuntimeException("Not implemented. Must override in a subclass.");
      }
-@@ -7893,7 +7978,9 @@
+@@ -7893,7 +7996,9 @@
      @CheckResult(suggest="#enforceUriPermission(Uri,String,String,int,int,int,String)")
      @PackageManager.PermissionResult
 -    public abstract int checkUriPermission(@Nullable Uri uri, @Nullable String readPermission,
@@ -1511,7 +1529,7 @@
 +    }
  
      /**
-@@ -7914,6 +8001,8 @@
+@@ -7914,6 +8019,8 @@
       * @see #checkUriPermission(Uri, int, int, int)
       */
 -    public abstract void enforceUriPermission(
@@ -1522,7 +1540,7 @@
 +    }
  
      /**
-@@ -7934,6 +8023,8 @@
+@@ -7934,6 +8041,8 @@
       * @see #checkCallingUriPermission(Uri, int)
       */
 -    public abstract void enforceCallingUriPermission(
@@ -1533,7 +1551,7 @@
 +    }
  
      /**
-@@ -7951,6 +8042,8 @@
+@@ -7951,6 +8060,8 @@
       * @see #checkCallingOrSelfUriPermission(Uri, int)
       */
 -    public abstract void enforceCallingOrSelfUriPermission(
@@ -1544,7 +1562,7 @@
 +    }
  
      /**
-@@ -7973,8 +8066,10 @@
+@@ -7973,8 +8084,10 @@
       * @see #checkUriPermission(Uri, String, String, int, int, int)
       */
 -    public abstract void enforceUriPermission(
@@ -1558,7 +1576,7 @@
 +    }
  
  
-@@ -8116,6 +8211,8 @@
+@@ -8116,6 +8229,8 @@
       * the given package name.
       */
 -    public abstract Context createPackageContext(String packageName,
@@ -1569,7 +1587,7 @@
 +    }
  
      /**
-@@ -8131,8 +8228,5 @@
+@@ -8131,8 +8246,5 @@
              @NonNull String packageName, @CreatePackageOptions int flags, @NonNull UserHandle user)
              throws PackageManager.NameNotFoundException {
 -        if (Build.IS_ENG) {
@@ -1579,7 +1597,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8147,9 +8241,6 @@
+@@ -8147,9 +8259,6 @@
      @NonNull
      public Context createContextAsUser(
 -            @CanBeALL @CanBeCURRENT @NonNull UserHandle user, @CreatePackageOptions int flags) {
@@ -1591,7 +1609,7 @@
 +        throw new UnsupportedOperationException("No platform service in the embedded runtime");
      }
  
-@@ -8161,6 +8252,8 @@
+@@ -8161,6 +8270,8 @@
      @SuppressWarnings("HiddenAbstractMethod")
      @UnsupportedAppUsage
 -    public abstract Context createApplicationContext(ApplicationInfo application,
@@ -1602,7 +1620,7 @@
 +    }
  
      /**
-@@ -8195,6 +8288,8 @@
+@@ -8195,6 +8306,8 @@
       * @return A {@link Context} with the given split's code and/or resources loaded.
       */
 -    public abstract Context createContextForSplit(String splitName)
@@ -1613,7 +1631,7 @@
 +    }
  
      /**
-@@ -8208,6 +8303,5 @@
+@@ -8208,6 +8321,5 @@
      @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
      @TestApi
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
@@ -1621,7 +1639,7 @@
 +    public UserHandle getUser() {
          return android.os.Process.myUserHandle();
      }
-@@ -8219,7 +8313,6 @@
+@@ -8219,7 +8331,6 @@
      @UnsupportedAppUsage
      @TestApi
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
@@ -1631,7 +1649,7 @@
 +        return UserHandle.USER_SYSTEM;
      }
  
-@@ -8239,7 +8332,8 @@
+@@ -8239,7 +8350,8 @@
       * @return A {@link Context} with the given configuration override.
       */
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
@@ -1643,7 +1661,7 @@
 +    }
  
      /**
-@@ -8269,6 +8363,8 @@
+@@ -8269,6 +8381,8 @@
       * @return A context for the display.
       */
 -    @DisplayContext
@@ -1654,7 +1672,7 @@
 +    }
  
      /**
-@@ -8407,9 +8503,5 @@
+@@ -8407,9 +8521,5 @@
       * such as {@link android.app.Application Application} or {@link android.app.Service Service}.
       */
 -    @UiContext
@@ -1665,7 +1683,7 @@
 +    public Context createWindowContext(int type, Bundle options) { return createWindowContext(getDisplay(), type, options); }
  
      /**
-@@ -8435,10 +8527,7 @@
+@@ -8435,10 +8545,7 @@
       * @see #WALLPAPER_SERVICE
       */
 -    @UiContext
@@ -1679,7 +1697,7 @@
 +        return this;
      }
  
-@@ -8510,5 +8599,7 @@
+@@ -8510,5 +8617,7 @@
       * @see #isDeviceProtectedStorage()
       */
 -    public abstract Context createDeviceProtectedStorageContext();
@@ -1688,7 +1706,7 @@
 +    }
  
      /**
-@@ -8539,5 +8630,7 @@
+@@ -8539,5 +8648,7 @@
      @SuppressWarnings("HiddenAbstractMethod")
      @SystemApi
 -    public abstract Context createCredentialProtectedStorageContext();
@@ -1697,7 +1715,7 @@
 +    }
  
      /**
-@@ -8566,6 +8659,7 @@
+@@ -8566,6 +8677,7 @@
       */
      @SuppressWarnings("HiddenAbstractMethod")
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
@@ -1707,7 +1725,7 @@
 +    }
  
      /**
-@@ -8580,5 +8674,7 @@
+@@ -8580,5 +8692,7 @@
      @NonNull
      public Display getDisplay() {
 -        throw new RuntimeException("Not implemented. Must override in a subclass.");
@@ -1716,14 +1734,14 @@
 +        return manager.getDisplay(Display.DEFAULT_DISPLAY);
      }
  
-@@ -8590,6 +8686,4 @@
+@@ -8590,6 +8704,4 @@
       */
      @Nullable
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
 -            comment = "Always returns null for now, until we fully support Display")
      public Display getDisplayNoVerify() {
          throw new RuntimeException("Not implemented. Must override in a subclass.");
-@@ -8605,7 +8699,7 @@
+@@ -8605,7 +8717,7 @@
      @SuppressWarnings("HiddenAbstractMethod")
      @TestApi
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl",
@@ -1734,7 +1752,7 @@
 +    }
  
      /**
-@@ -8629,5 +8723,7 @@
+@@ -8629,5 +8741,7 @@
      @SuppressLint("UnflaggedApi") // @TestApi without associated feature.
      @TestApi
 -    public abstract void updateDisplay(int displayId);
@@ -1743,19 +1761,19 @@
 +    }
  
      /**
-@@ -8683,5 +8779,4 @@
+@@ -8683,5 +8797,4 @@
       * @see #isUiContext()
       */
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
      public int getDeviceId() {
          throw new RuntimeException("Not implemented. Must override in a subclass.");
-@@ -8731,5 +8826,4 @@
+@@ -8731,5 +8844,4 @@
       * @see #CONTEXT_RESTRICTED
       */
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
      public boolean isRestricted() {
          return false;
-@@ -8742,6 +8836,7 @@
+@@ -8742,6 +8854,7 @@
       * @see #createDeviceProtectedStorageContext()
       */
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
@@ -1765,7 +1783,7 @@
 +    }
  
      /**
-@@ -8754,6 +8849,7 @@
+@@ -8754,6 +8867,7 @@
      @SuppressWarnings("HiddenAbstractMethod")
      @SystemApi
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
@@ -1775,7 +1793,7 @@
 +    }
  
      /**
-@@ -8762,6 +8858,7 @@
+@@ -8762,6 +8876,7 @@
       */
      @SuppressWarnings("HiddenAbstractMethod")
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
@@ -1785,7 +1803,7 @@
 +    }
  
      /**
-@@ -8803,19 +8900,5 @@
+@@ -8803,19 +8918,5 @@
      }
  
 -    /**
@@ -1806,7 +1824,7 @@
 +
  
      /**
-@@ -8832,29 +8915,10 @@
+@@ -8832,29 +8933,10 @@
       * @hide
       */
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
@@ -1838,7 +1856,7 @@
 +
  
      /**
-@@ -8862,40 +8926,10 @@
+@@ -8862,40 +8944,10 @@
       */
      public final boolean isAutofillCompatibilityEnabled() {
 -        final AutofillOptions options = getAutofillOptions();
@@ -1885,7 +1903,7 @@
 +
  
      /**
-@@ -8934,5 +8968,4 @@
+@@ -8934,5 +8986,4 @@
       * @see android.os.StrictMode.VmPolicy.Builder#detectIncorrectContextUse()
       */
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")

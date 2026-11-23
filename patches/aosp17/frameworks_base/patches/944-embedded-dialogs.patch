@@ -1,0 +1,210 @@
+--- a/frameworks/base/core/java/android/app/Dialog.java
++++ b/frameworks/base/core/java/android/app/Dialog.java
+@@ -30,9 +30,9 @@
+ import android.content.Context;
+ import android.content.ContextWrapper;
+ import android.content.DialogInterface;
+-import android.content.pm.ApplicationInfo;
+ import android.content.res.Configuration;
+ import android.content.res.Resources;
++import android.content.res.TypedArray;
+ import android.graphics.drawable.Drawable;
+ import android.net.Uri;
+ import android.os.Build;
+@@ -60,12 +60,9 @@
+ import android.view.Window;
+ import android.view.WindowManager;
+ import android.view.accessibility.AccessibilityEvent;
+-import android.window.OnBackInvokedCallback;
+ import android.window.OnBackInvokedDispatcher;
+-import android.window.WindowOnBackInvokedDispatcher;
+ 
+ import com.android.internal.R;
+-import com.android.internal.app.WindowDecorActionBar;
+ import com.android.internal.policy.PhoneWindow;
+ 
+ import java.lang.ref.WeakReference;
+@@ -112,7 +109,6 @@
+ 
+     View mDecor;
+ 
+-    private ActionBar mActionBar;
+     /**
+      * This field should be made private, so it is hidden from the SDK.
+      * @hide
+@@ -156,8 +152,6 @@
+ 
+     /** A {@link Runnable} to run instead of dismissing when {@link #dismiss()} is called. */
+     private Runnable mDismissOverride;
+-    private OnBackInvokedCallback mDefaultBackCallback;
+-
+     /**
+      * Creates a dialog window that uses the default dialog theme.
+      * <p>
+@@ -208,14 +202,13 @@
+         final Window w = new PhoneWindow(mContext);
+         mWindow = w;
+         w.setCallback(this);
+-        w.setOnWindowDismissedCallback(this);
+-        w.setOnWindowSwipeDismissedCallback(() -> {
+-            if (mCancelable) {
+-                cancel();
+-            }
+-        });
+         w.setWindowManager(mWindowManager, null, null);
+         w.setGravity(Gravity.CENTER);
++        w.setLayout(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT);
++        w.addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
++        try (TypedArray attrs = mContext.obtainStyledAttributes(new int[] {android.R.attr.windowBackground})) {
++            if (attrs.hasValue(0)) w.setBackgroundDrawable(attrs.getDrawable(0));
++        }
+ 
+         mListenersHandler = new ListenersHandler(this);
+     }
+@@ -256,7 +249,7 @@
+      * @return The ActionBar attached to the dialog or null if no ActionBar is present.
+      */
+     public @Nullable ActionBar getActionBar() {
+-        return mActionBar;
++        return null;
+     }
+ 
+     /**
+@@ -333,12 +326,6 @@
+         onStart();
+         mDecor = mWindow.getDecorView();
+ 
+-        if (mActionBar == null && mWindow.hasFeature(Window.FEATURE_ACTION_BAR)) {
+-            final ApplicationInfo info = mContext.getApplicationInfo();
+-            mWindow.setDefaultIcon(info.icon);
+-            mWindow.setDefaultLogo(info.logo);
+-            mActionBar = new WindowDecorActionBar(this);
+-        }
+ 
+         WindowManager.LayoutParams l = mWindow.getAttributes();
+         boolean restoreSoftInputMode = false;
+@@ -349,7 +336,7 @@
+             restoreSoftInputMode = true;
+         }
+ 
+-        mWindowManager.addView(mDecor, l);
++        mWindowManager.addEmbeddedView(mDecor, l, this);
+         if (restoreSoftInputMode) {
+             l.softInputMode &=
+                     ~WindowManager.LayoutParams.SOFT_INPUT_IS_FORWARD_NAVIGATION;
+@@ -453,32 +440,12 @@
+      * Called when the dialog is starting.
+      */
+     protected void onStart() {
+-        if (mActionBar != null) mActionBar.setShowHideAnimationEnabled(true);
+-        if (allowsRegisterDefaultOnBackInvokedCallback() && mContext != null
+-                && WindowOnBackInvokedDispatcher.isOnBackInvokedCallbackEnabled(mContext)) {
+-            // Add onBackPressed as default back behavior.
+-            mDefaultBackCallback = this::onBackPressed;
+-            getOnBackInvokedDispatcher().registerSystemOnBackInvokedCallback(mDefaultBackCallback);
+-        }
+     }
+ 
+     /**
+      * Called to tell you that you're stopping.
+      */
+     protected void onStop() {
+-        if (mActionBar != null) mActionBar.setShowHideAnimationEnabled(false);
+-        if (mDefaultBackCallback != null) {
+-            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(mDefaultBackCallback);
+-            mDefaultBackCallback = null;
+-        }
+-    }
+-
+-    /**
+-     * Whether this dialog allows to register the default onBackInvokedCallback.
+-     * @hide
+-     */
+-    protected boolean allowsRegisterDefaultOnBackInvokedCallback() {
+-        return true;
+     }
+ 
+     private static final String DIALOG_SHOWING_TAG = "android:dialogShowing";
+@@ -715,18 +682,9 @@
+      */
+     @Override
+     public boolean onKeyUp(int keyCode, @NonNull KeyEvent event) {
+-        if (event.isTracking() && !event.isCanceled()) {
+-            switch (keyCode) {
+-                case KeyEvent.KEYCODE_BACK:
+-                    if (!WindowOnBackInvokedDispatcher.isOnBackInvokedCallbackEnabled(mContext)
+-                            || !allowsRegisterDefaultOnBackInvokedCallback()) {
+-                        onBackPressed();
+-                        return true;
+-                    }
+-                    break;
+-                case KeyEvent.KEYCODE_ESCAPE:
+-                    return true;
+-            }
++        if (keyCode == KeyEvent.KEYCODE_BACK && event.isTracking() && !event.isCanceled()) {
++            onBackPressed();
++            return true;
+         }
+         return false;
+     }
+@@ -895,14 +853,9 @@
+      */
+     @Override
+     public boolean dispatchKeyEvent(@NonNull KeyEvent event) {
+-        if ((mOnKeyListener != null) && (mOnKeyListener.onKey(this, event.getKeyCode(), event))) {
+-            return true;
+-        }
+-        if (mWindow.superDispatchKeyEvent(event)) {
+-            return true;
+-        }
+-        return event.dispatch(this, mDecor != null
+-                ? mDecor.getKeyDispatcherState() : null, this);
++        if (mOnKeyListener != null && mOnKeyListener.onKey(this, event.getKeyCode(), event)) return true;
++        if (mWindow.superDispatchKeyEvent(event)) return true;
++        return event.dispatch(this, mDecor == null ? null : mDecor.getKeyDispatcherState(), this);
+     }
+ 
+     /**
+@@ -1025,9 +978,6 @@
+      */
+     @Override
+     public boolean onMenuOpened(int featureId, @NonNull Menu menu) {
+-        if (featureId == Window.FEATURE_ACTION_BAR) {
+-            mActionBar.dispatchMenuVisibilityChanged(true);
+-        }
+         return true;
+     }
+ 
+@@ -1044,9 +994,7 @@
+      */
+     @Override
+     public void onPanelClosed(int featureId, @NonNull Menu menu) {
+-        if (featureId == Window.FEATURE_ACTION_BAR) {
+-            mActionBar.dispatchMenuVisibilityChanged(false);
+-        }
++        if (featureId == Window.FEATURE_OPTIONS_PANEL) onOptionsMenuClosed(menu);
+     }
+ 
+     /**
+@@ -1195,20 +1143,12 @@
+ 
+     @Override
+     public ActionMode onWindowStartingActionMode(ActionMode.Callback callback) {
+-        if (mActionBar != null && mActionModeTypeStarting == ActionMode.TYPE_PRIMARY) {
+-            return mActionBar.startActionMode(callback);
+-        }
+         return null;
+     }
+ 
+     @Override
+     public ActionMode onWindowStartingActionMode(ActionMode.Callback callback, int type) {
+-        try {
+-            mActionModeTypeStarting = type;
+-            return onWindowStartingActionMode(callback);
+-        } finally {
+-            mActionModeTypeStarting = ActionMode.TYPE_PRIMARY;
+-        }
++        return null;
+     }
+ 
+     /**

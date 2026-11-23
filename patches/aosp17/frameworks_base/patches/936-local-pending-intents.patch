@@ -1,0 +1,1119 @@
+--- a/frameworks/base/core/java/android/app/PendingIntent.java
++++ b/frameworks/base/core/java/android/app/PendingIntent.java
+@@ -16,54 +16,34 @@
+ 
+ package android.app;
+ 
+-import static android.app.ActivityManager.INTENT_SENDER_ACTIVITY;
+-import static android.app.ActivityManager.INTENT_SENDER_BROADCAST;
+-import static android.app.ActivityManager.INTENT_SENDER_FOREGROUND_SERVICE;
+-import static android.app.ActivityManager.INTENT_SENDER_SERVICE;
+-import static android.app.ActivityManager.START_ABORTED;
+ 
+ import android.Manifest.permission;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+-import android.annotation.SpecialUsers.CanBeALL;
+-import android.annotation.SpecialUsers.CanBeCURRENT;
+ import android.annotation.SystemApi;
+ import android.annotation.SystemApi.Client;
+ import android.annotation.TestApi;
+-import android.app.ActivityManager.PendingIntentInfo;
+-import android.compat.Compatibility;
+ import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledAfter;
+ import android.compat.annotation.EnabledSince;
+ import android.compat.annotation.Overridable;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+-import android.content.IIntentReceiver;
+-import android.content.IIntentSender;
+ import android.content.Intent;
+ import android.content.IntentSender;
+ import android.content.pm.PackageManager.ResolveInfoFlagsBits;
+-import android.content.pm.ParceledListSlice;
+ import android.content.pm.ResolveInfo;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.IBinder;
+-import android.os.Looper;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.os.RemoteException;
+ import android.os.UserHandle;
+ import android.util.AndroidException;
+-import android.util.ArraySet;
+-import android.util.Log;
+ import android.util.Pair;
+-import android.util.proto.ProtoOutputStream;
+-
+-import com.android.internal.annotations.GuardedBy;
+-import com.android.internal.os.IResultReceiver;
++
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -134,43 +114,13 @@
+  */
+ public final class PendingIntent implements Parcelable {
+     private static final String TAG = "PendingIntent";
+-    @NonNull
+-    private final IIntentSender mTarget;
+-    private IBinder mWhitelistToken;
+-
++    private final Token mTarget;
+     // cached pending intent information
+-    private @Nullable PendingIntentInfo mCachedInfo;
+-
+-    /**
+-     * Structure to store information related to {@link #addCancelListener}, which is rarely used,
+-     * so we lazily allocate it to keep the PendingIntent class size small.
+-     */
+-    private final class CancelListerInfo extends IResultReceiver.Stub {
+-        private final ArraySet<Pair<Executor, CancelListener>> mCancelListeners = new ArraySet<>();
+-
+-        /**
+-         * Whether the PI is canceled or not. Note this is essentially a "cache" that's updated
+-         * only when the client uses {@link #addCancelListener}. Even if this is false, that
+-         * still doesn't know the PI is *not* canceled, but if it's true, this PI is definitely
+-         * canceled.
+-         */
+-        private boolean mCanceled;
+-
+-        @Override
+-        public void send(int resultCode, Bundle resultData) throws RemoteException {
+-            notifyCancelListeners();
+-        }
+-    }
+-
+-    @GuardedBy("mTarget")
+-    private @Nullable CancelListerInfo mCancelListerInfo;
+-
+     /**
+      * It is now required to specify either {@link #FLAG_IMMUTABLE}
+      * or {@link #FLAG_MUTABLE} when creating a PendingIntent.
+      */
+     @ChangeId
+-    @EnabledAfter(targetSdkVersion = android.os.Build.VERSION_CODES.R)
+     static final long PENDING_INTENT_EXPLICIT_MUTABILITY_REQUIRED = 160794467L;
+ 
+     /** @hide */
+@@ -184,7 +134,6 @@
+      * @hide
+      */
+     @ChangeId
+-    @EnabledAfter(targetSdkVersion = Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+     public static final long PENDING_INTENT_OPTIONS_CHECK = 320664730L;
+ 
+     /** @hide */
+@@ -345,48 +294,6 @@
+                 int resultCode, String resultData, Bundle resultExtras);
+     }
+ 
+-    private static class FinishedDispatcher extends IIntentReceiver.Stub
+-            implements Runnable {
+-        private final PendingIntent mPendingIntent;
+-        private final OnFinished mWho;
+-        private final Handler mHandler;
+-        private Intent mIntent;
+-        private int mResultCode;
+-        private String mResultData;
+-        private Bundle mResultExtras;
+-        private static Handler sDefaultSystemHandler;
+-        FinishedDispatcher(PendingIntent pi, OnFinished who, Handler handler) {
+-            mPendingIntent = pi;
+-            mWho = who;
+-            if (handler == null && ActivityThread.isSystem()) {
+-                // We assign a default handler for the system process to avoid deadlocks when
+-                // processing receivers in various components that hold global service locks.
+-                if (sDefaultSystemHandler == null) {
+-                    sDefaultSystemHandler = new Handler(Looper.getMainLooper());
+-                }
+-                mHandler = sDefaultSystemHandler;
+-            } else {
+-                mHandler = handler;
+-            }
+-        }
+-        public void performReceive(Intent intent, int resultCode, String data,
+-                Bundle extras, boolean serialized, boolean sticky, int sendingUser) {
+-            mIntent = intent;
+-            mResultCode = resultCode;
+-            mResultData = data;
+-            mResultExtras = extras;
+-            if (mHandler == null) {
+-                run();
+-            } else {
+-                mHandler.post(this);
+-            }
+-        }
+-        public void run() {
+-            mWho.onSendFinished(mPendingIntent, mIntent, mResultCode,
+-                    mResultData, mResultExtras);
+-        }
+-    }
+-
+     /**
+      * Listener for observing when pending intents are written to a parcel.
+      *
+@@ -450,7 +357,7 @@
+                 "Cannot set both FLAG_IMMUTABLE and FLAG_MUTABLE for PendingIntent");
+         }
+ 
+-        if (Compatibility.isChangeEnabled(PENDING_INTENT_EXPLICIT_MUTABILITY_REQUIRED)
++        if (context.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.S
+                 && !isFlagImmutableSet && !isFlagMutableSet) {
+             String msg = packageName + ": Targeting S+ (version " + Build.VERSION_CODES.S
+                     + " and above) requires that one of FLAG_IMMUTABLE or FLAG_MUTABLE"
+@@ -467,13 +374,8 @@
+         // happens on the server side, but this warning has to stay here to preserve the client
+         // side stack trace for app developers.
+         if (isNewMutableDisallowedImplicitPendingIntent(flags, intent, isActivityResultType)
+-                && !Compatibility.isChangeEnabled(BLOCK_MUTABLE_IMPLICIT_PENDING_INTENT)) {
+-            String msg = "New mutable implicit PendingIntent: pkg=" + packageName
+-                    + ", action=" + intent.getAction()
+-                    + ", featureId=" + context.getAttributionTag()
+-                    + ". This will be blocked once the app targets U+"
+-                    + " for security reasons.";
+-            Log.w(TAG, new StackTrace(msg));
++                && context.getApplicationInfo().targetSdkVersion >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
++            throw new IllegalArgumentException("Mutable PendingIntent requires an explicit target");
+         }
+     }
+ 
+@@ -572,23 +474,8 @@
+     @UnsupportedAppUsage
+     public static PendingIntent getActivityAsUser(Context context, int requestCode,
+             @NonNull Intent intent, int flags, Bundle options,
+-            @CanBeCURRENT UserHandle user) {
+-        String packageName = context.getPackageName();
+-        String resolvedType = intent.resolveTypeIfNeeded(context.getContentResolver());
+-        checkPendingIntent(flags, intent, context, /* isActivityResultType */ false);
+-        try {
+-            intent.migrateExtraStreamToClipData(context);
+-            intent.prepareToLeaveProcess(context);
+-            IIntentSender target =
+-                ActivityManager.getService().getIntentSenderWithFeature(
+-                    INTENT_SENDER_ACTIVITY, packageName,
+-                    context.getAttributionTag(), null, null, requestCode, new Intent[] { intent },
+-                    resolvedType != null ? new String[] { resolvedType } : null,
+-                    flags, options, user.getIdentifier());
+-            return target != null ? new PendingIntent(target) : null;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            UserHandle user) {
++        return getEmbedded(context, INTENT_SENDER_ACTIVITY, requestCode, new Intent[] {intent}, flags, options, user);
+     }
+ 
+     /**
+@@ -702,25 +589,8 @@
+      * activity is started, not when the pending intent is created.
+      */
+     public static PendingIntent getActivitiesAsUser(Context context, int requestCode,
+-            @NonNull Intent[] intents, int flags, Bundle options, @CanBeCURRENT UserHandle user) {
+-        String packageName = context.getPackageName();
+-        String[] resolvedTypes = new String[intents.length];
+-        for (int i=0; i<intents.length; i++) {
+-            intents[i].migrateExtraStreamToClipData(context);
+-            intents[i].prepareToLeaveProcess(context);
+-            resolvedTypes[i] = intents[i].resolveTypeIfNeeded(context.getContentResolver());
+-            checkPendingIntent(flags, intents[i], context, /* isActivityResultType */ false);
+-        }
+-        try {
+-            IIntentSender target =
+-                ActivityManager.getService().getIntentSenderWithFeature(
+-                    INTENT_SENDER_ACTIVITY, packageName,
+-                    context.getAttributionTag(), null, null, requestCode, intents, resolvedTypes,
+-                    flags, options, user.getIdentifier());
+-            return target != null ? new PendingIntent(target) : null;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            @NonNull Intent[] intents, int flags, Bundle options, UserHandle user) {
++        return getEmbedded(context, INTENT_SENDER_ACTIVITY, requestCode, intents, flags, options, user);
+     }
+ 
+     /**
+@@ -759,22 +629,8 @@
+      */
+     @UnsupportedAppUsage
+     public static PendingIntent getBroadcastAsUser(Context context, int requestCode,
+-            Intent intent, int flags, @CanBeALL @CanBeCURRENT UserHandle userHandle) {
+-        String packageName = context.getPackageName();
+-        String resolvedType = intent.resolveTypeIfNeeded(context.getContentResolver());
+-        checkPendingIntent(flags, intent, context, /* isActivityResultType */ false);
+-        try {
+-            intent.prepareToLeaveProcess(context);
+-            IIntentSender target =
+-                ActivityManager.getService().getIntentSenderWithFeature(
+-                    INTENT_SENDER_BROADCAST, packageName,
+-                    context.getAttributionTag(), null, null, requestCode, new Intent[] { intent },
+-                    resolvedType != null ? new String[] { resolvedType } : null,
+-                    flags, null, userHandle.getIdentifier());
+-            return target != null ? new PendingIntent(target) : null;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++            Intent intent, int flags, UserHandle userHandle) {
++        return getEmbedded(context, INTENT_SENDER_BROADCAST, requestCode, new Intent[] {intent}, flags, null, userHandle);
+     }
+ 
+     /**
+@@ -839,21 +695,7 @@
+ 
+     private static PendingIntent buildServicePendingIntent(Context context, int requestCode,
+             Intent intent, int flags, int serviceKind) {
+-        String packageName = context.getPackageName();
+-        String resolvedType = intent.resolveTypeIfNeeded(context.getContentResolver());
+-        checkPendingIntent(flags, intent, context, /* isActivityResultType */ false);
+-        try {
+-            intent.prepareToLeaveProcess(context);
+-            IIntentSender target =
+-                ActivityManager.getService().getIntentSenderWithFeature(
+-                    serviceKind, packageName, context.getAttributionTag(),
+-                    null, null, requestCode, new Intent[] { intent },
+-                    resolvedType != null ? new String[] { resolvedType } : null,
+-                    flags, null, context.getUserId());
+-            return target != null ? new PendingIntent(target) : null;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return getEmbedded(context, serviceKind, requestCode, new Intent[] {intent}, flags, null, context.getUser());
+     }
+ 
+     /**
+@@ -864,7 +706,7 @@
+      */
+     @NonNull
+     public IntentSender getIntentSender() {
+-        return new IntentSender(mTarget, mWhitelistToken);
++        return new IntentSender(this);
+     }
+ 
+     /**
+@@ -872,10 +714,13 @@
+      * owning a PendingIntent can cancel it.
+      */
+     public void cancel() {
+-        try {
+-            ActivityManager.getService().cancelIntentSender(mTarget);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
++        if (mTarget.context == null) return;
++        mTarget.context = null;
++        sTokens.remove(mTarget);
++        ArrayList<Pair<Executor, CancelListener>> listeners = new ArrayList<>(mTarget.listeners);
++        mTarget.listeners.clear();
++        for (Pair<Executor, CancelListener> pair : listeners) {
++            pair.first.execute(() -> pair.second.onCanceled(this));
+         }
+     }
+ 
+@@ -1097,39 +942,39 @@
+             @Nullable OnFinished onFinished, @Nullable Handler handler,
+             @Nullable String requiredPermission, @Nullable Bundle options)
+             throws CanceledException {
+-        try {
+-            if (intent != null) {
+-                intent.collectExtraIntentKeys();
+-            }
+-            String resolvedType = intent != null ?
+-                    intent.resolveTypeIfNeeded(context.getContentResolver())
+-                    : null;
+-
+-            if (context != null && isActivity()) {
+-                // Set the context display id as preferred for this activity launches, so that it
+-                // can land on caller's display. Or just brought the task to front at the display
+-                // where it was on since it has higher preference.
+-                ActivityOptions activityOptions = options != null ? new ActivityOptions(options)
+-                        : ActivityOptions.makeBasic();
+-                activityOptions.setCallerDisplayId(context.getDisplayId());
+-                options = activityOptions.toBundle();
+-            }
+-
+-            final IApplicationThread app = ActivityThread.currentActivityThread()
+-                    .getApplicationThread();
+-            int result = ActivityManager.getService().sendIntentSender(app,
+-                    mTarget, mWhitelistToken, code, intent, resolvedType,
+-                    onFinished != null
+-                            ? new FinishedDispatcher(this, onFinished, handler)
+-                            : null,
+-                    requiredPermission, options);
+-            if (result == START_ABORTED && Build.isDebuggable()) {
+-                Log.w(TAG, new StackTrace("Activity start aborted"));
+-            }
+-            return result;
+-        } catch (RemoteException e) {
+-            throw new CanceledException(e);
+-        }
++        Context creator = mTarget.context;
++        if (creator == null) throw new CanceledException();
++        Intent dispatch = new Intent(mTarget.intent());
++        if (!isImmutable() && intent != null) dispatch.fillIn(intent, mTarget.flags);
++        Bundle launchOptions = mTarget.options == null ? new Bundle() : new Bundle(mTarget.options);
++        if (options != null) launchOptions.putAll(options);
++        if ((mTarget.flags & FLAG_ONE_SHOT) != 0) cancel();
++        switch (mTarget.type) {
++            case INTENT_SENDER_ACTIVITY:
++                for (int i = 0; i < mTarget.intents.length - 1; i++) {
++                    creator.startActivity(new Intent(mTarget.intents[i]), launchOptions);
++                }
++                creator.startActivity(dispatch, launchOptions);
++                break;
++            case INTENT_SENDER_BROADCAST:
++                if (requiredPermission == null) creator.sendBroadcast(dispatch);
++                else creator.sendBroadcast(dispatch, requiredPermission);
++                break;
++            case INTENT_SENDER_FOREGROUND_SERVICE:
++                if (creator.startForegroundService(dispatch) == null) throw new CanceledException();
++                break;
++            case INTENT_SENDER_SERVICE:
++                if (creator.startService(dispatch) == null) throw new CanceledException();
++                break;
++            default:
++                throw new CanceledException();
++        }
++        if (onFinished != null) {
++            Runnable completion = () -> onFinished.onSendFinished(this, dispatch, code, null, null);
++            if (handler == null) completion.run();
++            else handler.post(completion);
++        }
++        return 0;
+     }
+ 
+     /**
+@@ -1160,7 +1005,7 @@
+      */
+     @Nullable
+     public String getCreatorPackage() {
+-        return getCachedInfo().getCreatorPackage();
++        return mTarget.creatorPackage;
+     }
+ 
+     /**
+@@ -1182,7 +1027,7 @@
+      * none associated with it.
+      */
+     public int getCreatorUid() {
+-        return getCachedInfo().getCreatorUid();
++        return mTarget.creatorUid;
+     }
+ 
+     /**
+@@ -1209,49 +1054,11 @@
+     @TestApi
+     public boolean addCancelListener(@NonNull Executor executor,
+             @NonNull CancelListener cancelListener) {
+-        synchronized (mTarget) {
+-            if (mCancelListerInfo != null && mCancelListerInfo.mCanceled) {
+-                return false;
+-            }
+-            if (mCancelListerInfo == null) {
+-                mCancelListerInfo = new CancelListerInfo();
+-            }
+-            final CancelListerInfo cli = mCancelListerInfo;
+-
+-            boolean wasEmpty = cli.mCancelListeners.isEmpty();
+-            cli.mCancelListeners.add(Pair.create(executor, cancelListener));
+-            if (wasEmpty) {
+-                boolean success;
+-                try {
+-                    success = ActivityManager.getService().registerIntentSenderCancelListenerEx(
+-                            mTarget, cli);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-                if (!success) {
+-                    cli.mCanceled = true;
+-                }
+-                return success;
+-            } else {
+-                return !cli.mCanceled;
+-            }
+-        }
+-    }
+-
+-    private void notifyCancelListeners() {
+-        ArraySet<Pair<Executor, CancelListener>> cancelListeners;
+-        synchronized (mTarget) {
+-            // When notifyCancelListeners() is called, mCancelListerInfo must always be non-null.
+-            final CancelListerInfo cli = mCancelListerInfo;
+-            cli.mCanceled = true;
+-            cancelListeners = new ArraySet<>(cli.mCancelListeners);
+-            cli.mCancelListeners.clear();
+-        }
+-        int size = cancelListeners.size();
+-        for (int i = 0; i < size; i++) {
+-            final Pair<Executor, CancelListener> pair = cancelListeners.valueAt(i);
+-            pair.first.execute(() -> pair.second.onCanceled(this));
+-        }
++        Objects.requireNonNull(executor);
++        Objects.requireNonNull(cancelListener);
++        if (mTarget.context == null) return false;
++        mTarget.listeners.add(Pair.create(executor, cancelListener));
++        return true;
+     }
+ 
+     /**
+@@ -1271,25 +1078,7 @@
+     @SystemApi(client = SystemApi.Client.MODULE_LIBRARIES)
+     @TestApi
+     public void removeCancelListener(@NonNull CancelListener cancelListener) {
+-        synchronized (mTarget) {
+-            final CancelListerInfo cli = mCancelListerInfo;
+-            if (cli == null || cli.mCancelListeners.size() == 0) {
+-                return;
+-            }
+-            for (int i = cli.mCancelListeners.size() - 1; i >= 0; i--) {
+-                if (cli.mCancelListeners.valueAt(i).second == cancelListener) {
+-                    cli.mCancelListeners.removeAt(i);
+-                }
+-            }
+-            if (cli.mCancelListeners.isEmpty()) {
+-                try {
+-                    ActivityManager.getService().unregisterIntentSenderCancelListener(mTarget,
+-                            cli);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
++        mTarget.listeners.removeIf(pair -> pair.second == cancelListener);
+     }
+ 
+     /**
+@@ -1313,8 +1102,7 @@
+      */
+     @NonNull
+     public UserHandle getCreatorUserHandle() {
+-        int uid = getCachedInfo().getCreatorUid();
+-        return UserHandle.getUserHandleForUid(uid);
++        return mTarget.user;
+     }
+ 
+     /**
+@@ -1322,19 +1110,14 @@
+      * Check to verify that this PendingIntent targets a specific package.
+      */
+     public boolean isTargetedToPackage() {
+-        try {
+-            return ActivityManager.getService()
+-                .isIntentSenderTargetedToPackage(mTarget);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return mTarget.intent().getPackage() != null || mTarget.intent().getComponent() != null;
+     }
+ 
+     /**
+      * Check if this PendingIntent is marked with {@link #FLAG_IMMUTABLE}.
+      */
+     public boolean isImmutable() {
+-        return getCachedInfo().isImmutable();
++        return (mTarget.flags & FLAG_IMMUTABLE) != 0;
+     }
+ 
+     /**
+@@ -1342,28 +1125,28 @@
+      * {@link #getActivity} or {@link #getActivities}.
+      */
+     public boolean isActivity() {
+-        return getCachedInfo().getIntentSenderType() == INTENT_SENDER_ACTIVITY;
++        return mTarget.type == INTENT_SENDER_ACTIVITY;
+     }
+ 
+     /**
+      * @return TRUE if this {@link PendingIntent} was created with {@link #getForegroundService}.
+      */
+     public boolean isForegroundService() {
+-        return getCachedInfo().getIntentSenderType() == INTENT_SENDER_FOREGROUND_SERVICE;
++        return mTarget.type == INTENT_SENDER_FOREGROUND_SERVICE;
+     }
+ 
+     /**
+      * @return TRUE if this {@link PendingIntent} was created with {@link #getService}.
+      */
+     public boolean isService() {
+-        return getCachedInfo().getIntentSenderType() == INTENT_SENDER_SERVICE;
++        return mTarget.type == INTENT_SENDER_SERVICE;
+     }
+ 
+     /**
+      * @return TRUE if this {@link PendingIntent} was created with {@link #getBroadcast}.
+      */
+     public boolean isBroadcast() {
+-        return getCachedInfo().getIntentSenderType() == INTENT_SENDER_BROADCAST;
++        return mTarget.type == INTENT_SENDER_BROADCAST;
+     }
+ 
+     /**
+@@ -1372,12 +1155,7 @@
+      */
+     @UnsupportedAppUsage
+     public Intent getIntent() {
+-        try {
+-            return ActivityManager.getService()
+-                .getIntentForIntentSender(mTarget);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return new Intent(mTarget.intent());
+     }
+ 
+     /**
+@@ -1386,12 +1164,7 @@
+      */
+     @UnsupportedAppUsage
+     public String getTag(String prefix) {
+-        try {
+-            return ActivityManager.getService()
+-                .getTagForIntentSender(mTarget, prefix);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return (prefix == null ? "" : prefix) + mTarget.intent().getAction();
+     }
+ 
+     /**
+@@ -1410,16 +1183,14 @@
+     @SystemApi(client = Client.MODULE_LIBRARIES)
+     @TestApi
+     public @NonNull List<ResolveInfo> queryIntentComponents(@ResolveInfoFlagsBits int flags) {
+-        try {
+-            ParceledListSlice<ResolveInfo> parceledList = ActivityManager.getService()
+-                    .queryIntentComponentsForIntentSender(mTarget, flags);
+-            if (parceledList == null) {
+-                return Collections.emptyList();
+-            }
+-            return parceledList.getList();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        Context creator = mTarget.context;
++        if (creator == null) return Collections.emptyList();
++        Intent intent = getIntent();
++        var packages = creator.getPackageManager();
++        if (isActivity()) return packages.queryIntentActivities(intent, flags);
++        if (isBroadcast()) return packages.queryBroadcastReceivers(intent, flags);
++        ResolveInfo service = packages.resolveService(intent, flags);
++        return service == null ? Collections.emptyList() : Collections.singletonList(service);
+     }
+ 
+     /**
+@@ -1435,15 +1206,7 @@
+     @TestApi
+     @RequiresPermission(android.Manifest.permission.GET_INTENT_SENDER_INTENT)
+     public boolean intentFilterEquals(@Nullable PendingIntent other) {
+-        if (other == null) {
+-            return false;
+-        }
+-        try {
+-            return ActivityManager.getService().getIntentForIntentSender(other.mTarget)
+-                    .filterEquals(getIntent());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return other != null && other.mTarget.intent().filterEquals(mTarget.intent());
+     }
+ 
+     /**
+@@ -1458,15 +1221,15 @@
+     @Override
+     public boolean equals(@Nullable Object otherObj) {
+         if (otherObj instanceof PendingIntent) {
+-            return mTarget.asBinder().equals(((PendingIntent)otherObj)
+-                    .mTarget.asBinder());
++            return mTarget.equals(((PendingIntent)otherObj)
++                    .mTarget);
+         }
+         return false;
+     }
+ 
+     @Override
+     public int hashCode() {
+-        return mTarget.asBinder().hashCode();
++        return mTarget.hashCode();
+     }
+ 
+     @Override
+@@ -1475,24 +1238,17 @@
+         sb.append("PendingIntent{");
+         sb.append(Integer.toHexString(System.identityHashCode(this)));
+         sb.append(": ");
+-        sb.append(mTarget.asBinder());
++        sb.append(mTarget);
+         sb.append('}');
+         return sb.toString();
+     }
+ 
+-    /** @hide */
+-    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-        proto.write(PendingIntentProto.TARGET, mTarget.asBinder().toString());
+-        proto.end(token);
+-    }
+-
+     public int describeContents() {
+         return 0;
+     }
+ 
+     public void writeToParcel(Parcel out, int flags) {
+-        out.writeStrongBinder(mTarget.asBinder());
++        out.writeStrongBinder(mTarget);
+         final List<OnMarshaledListener> listeners = sOnMarshaledListener.get();
+         final int numListeners = listeners.size();
+         for (int i = 0; i < numListeners; i++) {
+@@ -1504,7 +1260,7 @@
+         public PendingIntent createFromParcel(Parcel in) {
+             IBinder target = in.readStrongBinder();
+             return target != null
+-                    ? new PendingIntent(target, in.getClassCookie(PendingIntent.class))
++                    ? new PendingIntent(target)
+                     : null;
+         }
+ 
+@@ -1523,7 +1279,7 @@
+      */
+     public static void writePendingIntentOrNullToParcel(@Nullable PendingIntent sender,
+             @NonNull Parcel out) {
+-        out.writeStrongBinder(sender != null ? sender.mTarget.asBinder() : null);
++        out.writeStrongBinder(sender != null ? sender.mTarget : null);
+         if (sender != null) {
+             final List<OnMarshaledListener> listeners = sOnMarshaledListener.get();
+             final int numListeners = listeners.size();
+@@ -1546,7 +1302,7 @@
+     @Nullable
+     public static PendingIntent readPendingIntentOrNullFromParcel(@NonNull Parcel in) {
+         IBinder b = in.readStrongBinder();
+-        return b != null ? new PendingIntent(b, in.getClassCookie(PendingIntent.class)) : null;
++        return b != null ? new PendingIntent(b) : null;
+     }
+ 
+     /**
+@@ -1554,25 +1310,18 @@
+      * @param target the backing IIntentSender
+      * @hide
+      */
+-    public PendingIntent(IIntentSender target) {
++    private PendingIntent(Token target) {
+         mTarget = Objects.requireNonNull(target);
+     }
+ 
+-    /*package*/ PendingIntent(IBinder target, Object cookie) {
+-        mTarget = Objects.requireNonNull(IIntentSender.Stub.asInterface(target));
+-        if (cookie != null) {
+-            mWhitelistToken = (IBinder)cookie;
+-        }
++    /*package*/ /** @hide */
++    public PendingIntent(IBinder target) {
++        this((Token) target);
+     }
+ 
+     /** @hide */
+-    public IIntentSender getTarget() {
++    public IBinder getTarget() {
+         return mTarget;
+-    }
+-
+-    /** @hide */
+-    public IBinder getWhitelistToken() {
+-        return mWhitelistToken;
+     }
+ 
+     /**
+@@ -1591,15 +1340,81 @@
+         void onCanceled(@NonNull PendingIntent intent);
+     }
+ 
+-    private PendingIntentInfo getCachedInfo() {
+-        if (mCachedInfo == null) {
+-            try {
+-                mCachedInfo = ActivityManager.getService().getInfoForIntentSender(mTarget);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
++
++    private static final int INTENT_SENDER_BROADCAST = 1;
++    private static final int INTENT_SENDER_ACTIVITY = 2;
++    private static final int INTENT_SENDER_SERVICE = 4;
++    private static final int INTENT_SENDER_FOREGROUND_SERVICE = 5;
++    private static final ArrayList<Token> sTokens = new ArrayList<>();
++
++    private static final class Token extends android.os.Binder {
++        Context context;
++        final String creatorPackage;
++        final int creatorUid;
++        final UserHandle user;
++        final int type;
++        final int requestCode;
++        final int flags;
++        final Intent[] intents;
++        final Bundle options;
++        final ArrayList<Pair<Executor, CancelListener>> listeners = new ArrayList<>();
++
++        Token(Context context, int type, int requestCode, Intent[] intents, int flags,
++                Bundle options, UserHandle user) {
++            this.context = context;
++            this.creatorPackage = context.getPackageName();
++            this.creatorUid = context.getApplicationInfo().uid;
++            this.type = type;
++            this.requestCode = requestCode;
++            this.intents = intents;
++            this.flags = flags;
++            this.options = options == null ? null : new Bundle(options);
++            this.user = user;
++        }
++
++        Intent intent() {
++            return intents[intents.length - 1];
++        }
++    }
++
++    private static PendingIntent getEmbedded(Context context, int type, int requestCode,
++            Intent[] intents, int flags, Bundle options, UserHandle user) {
++        if (intents.length == 0) throw new IllegalArgumentException("At least one intent is required");
++        Context application = context.getApplicationContext();
++        Context owner = application == null ? context : application;
++        Intent[] copies = new Intent[intents.length];
++        for (int i = 0; i < intents.length; i++) {
++            checkPendingIntent(flags, intents[i], context, false);
++            copies[i] = new Intent(intents[i]);
++        }
++        int identityFlags = flags & ~(FLAG_NO_CREATE | FLAG_CANCEL_CURRENT | FLAG_UPDATE_CURRENT);
++        for (int i = 0; i < sTokens.size(); i++) {
++            Token previous = sTokens.get(i);
++            if (previous.context == owner && previous.type == type && previous.requestCode == requestCode
++                    && previous.flags == identityFlags && previous.user.equals(user)
++                    && previous.intent().filterEquals(copies[copies.length - 1])) {
++                PendingIntent pending = new PendingIntent(previous);
++                if ((flags & FLAG_CANCEL_CURRENT) != 0) {
++                    pending.cancel();
++                    break;
++                }
++                if ((flags & FLAG_UPDATE_CURRENT) != 0) {
++                    previous.intent().replaceExtras(copies[copies.length - 1]);
++                }
++                return pending;
+             }
+         }
+-
+-        return mCachedInfo;
++        if ((flags & FLAG_NO_CREATE) != 0) return null;
++        Token token = new Token(owner, type, requestCode, copies, identityFlags, options, user);
++        sTokens.add(token);
++        return new PendingIntent(token);
++    }
++
++    /** @hide */
++    public static void cancelEmbeddedForContext(Context owner) {
++        ArrayList<Token> snapshot = new ArrayList<>(sTokens);
++        for (Token token : snapshot) {
++            if (token.context == owner) new PendingIntent(token).cancel();
++        }
+     }
+ }
+--- a/frameworks/base/core/java/android/content/IntentSender.java
++++ b/frameworks/base/core/java/android/content/IntentSender.java
+@@ -16,35 +16,18 @@
+ 
+ package android.content;
+ 
+-import static android.os.Build.VERSION_CODES.BAKLAVA;
+-import static android.os.Build.VERSION_CODES.VANILLA_ICE_CREAM;
+-
+-import static com.android.window.flags.Flags.balCoverIntentSender;
+-
+-import android.annotation.FlaggedApi;
++
++
+ import android.annotation.Nullable;
+-import android.app.ActivityManager;
+-import android.app.ActivityManager.PendingIntentInfo;
+-import android.app.ActivityOptions;
+-import android.app.ActivityThread;
+-import android.app.IApplicationThread;
+-import android.app.StackTrace;
+-import android.app.compat.CompatChanges;
+-import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledAfter;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.IBinder;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.os.RemoteException;
+ import android.os.UserHandle;
+ import android.util.AndroidException;
+-import android.util.Log;
+-
+-import com.android.window.flags.Flags;
++
+ 
+ import java.util.concurrent.Executor;
+ 
+@@ -77,27 +60,8 @@
+  */
+ public class IntentSender implements Parcelable {
+     private static final String TAG = "IntentSender";
+-    /** If enabled consider the deprecated @hide method as removed. */
+-    @ChangeId
+-    @EnabledAfter(targetSdkVersion = VANILLA_ICE_CREAM)
+-    private static final long REMOVE_HIDDEN_SEND_INTENT_METHOD = 356174596;
+-
+-    /** If enabled PendingIntent hardening also applies to IntentSender. */
+-    @ChangeId
+-    @EnabledAfter(targetSdkVersion = BAKLAVA)
+-    private static final long COVER_INTENT_SENDER = 405995292;
+-
+-    private static final Bundle SEND_INTENT_DEFAULT_OPTIONS =
+-            ActivityOptions.makeBasic().setPendingIntentBackgroundActivityStartMode(
+-                    ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_COMPAT).toBundle();
+-
+-    @UnsupportedAppUsage
+-    private final IIntentSender mTarget;
+-    IBinder mWhitelistToken;
+-
++    private final android.app.PendingIntent mTarget;
+     // cached pending intent information
+-    private @Nullable PendingIntentInfo mCachedInfo;
+-
+     /**
+      * Exception thrown when trying to send through a PendingIntent that
+      * has been canceled or is otherwise no longer able to execute the request.
+@@ -135,38 +99,6 @@
+          */
+         void onSendFinished(IntentSender IntentSender, Intent intent,
+                 int resultCode, String resultData, Bundle resultExtras);
+-    }
+-
+-    private static class FinishedDispatcher extends IIntentReceiver.Stub
+-            implements Runnable {
+-        private final IntentSender mIntentSender;
+-        private final OnFinished mWho;
+-        private final Executor mExecutor;
+-        private Intent mIntent;
+-        private int mResultCode;
+-        private String mResultData;
+-        private Bundle mResultExtras;
+-        FinishedDispatcher(IntentSender pi, OnFinished who, Executor executor) {
+-            mIntentSender = pi;
+-            mWho = who;
+-            mExecutor = executor;
+-        }
+-        public void performReceive(Intent intent, int resultCode, String data,
+-                Bundle extras, boolean serialized, boolean sticky, int sendingUser) {
+-            mIntent = intent;
+-            mResultCode = resultCode;
+-            mResultData = data;
+-            mResultExtras = extras;
+-            if (mExecutor == null) {
+-                run();
+-            } else {
+-                mExecutor.execute(this);
+-            }
+-        }
+-        public void run() {
+-            mWho.onSendFinished(mIntentSender, mIntent, mResultCode,
+-                    mResultData, mResultExtras);
+-        }
+     }
+ 
+     /**
+@@ -230,12 +162,6 @@
+     }
+ 
+     private Bundle getSendIntentDefaultOptions() {
+-        if (!balCoverIntentSender()) {
+-            return SEND_INTENT_DEFAULT_OPTIONS;
+-        }
+-        if (!CompatChanges.isChangeEnabled(COVER_INTENT_SENDER)) {
+-            return SEND_INTENT_DEFAULT_OPTIONS;
+-        }
+         return null;
+     }
+ 
+@@ -271,9 +197,6 @@
+             OnFinished onFinished, Handler handler, String requiredPermission,
+             @Nullable Bundle options)
+             throws SendIntentException {
+-        if (CompatChanges.isChangeEnabled(REMOVE_HIDDEN_SEND_INTENT_METHOD)) {
+-            throw new NoSuchMethodError("This overload of sendIntent was removed.");
+-        }
+         sendIntent(context, code, intent, requiredPermission, options,
+                 handler == null ? null : handler::post, onFinished);
+     }
+@@ -305,34 +228,18 @@
+      * @throws SendIntentException Throws CanceledIntentException if the IntentSender
+      * is no longer allowing more intents to be sent through it.
+      */
+-    @FlaggedApi(Flags.FLAG_BAL_SEND_INTENT_WITH_OPTIONS)
+     public void sendIntent(@Nullable Context context, int code, @Nullable Intent intent,
+             @Nullable String requiredPermission, @Nullable Bundle options,
+             @Nullable Executor executor, @Nullable OnFinished onFinished)
+             throws SendIntentException {
+         try {
+-            if (intent != null) {
+-                intent.collectExtraIntentKeys();
+-            }
+-            String resolvedType = intent != null ?
+-                    intent.resolveTypeIfNeeded(context.getContentResolver())
+-                    : null;
+-            final IApplicationThread app = ActivityThread.currentActivityThread()
+-                    .getApplicationThread();
+-            int res = ActivityManager.getService().sendIntentSender(app, mTarget, mWhitelistToken,
+-                    code, intent, resolvedType,
+-                    onFinished != null
+-                            ? new FinishedDispatcher(this, onFinished, executor)
+-                            : null,
+-                    requiredPermission, options);
+-            if (res == ActivityManager.START_ABORTED && Build.isDebuggable()) {
+-                Log.w(TAG, new StackTrace("Activity start aborted"));
+-            }
+-            if (res < 0) {
+-                throw new SendIntentException();
+-            }
+-        } catch (RemoteException e) {
+-            throw new SendIntentException();
++            mTarget.send(context, code, intent, onFinished == null ? null : (pending, sent, result, data, extras) -> {
++                Runnable completion = () -> onFinished.onSendFinished(this, sent, result, data, extras);
++                if (executor == null) completion.run();
++                else executor.execute(completion);
++            }, null, requiredPermission, options);
++        } catch (android.app.PendingIntent.CanceledException e) {
++            throw new SendIntentException(e);
+         }
+     }
+ 
+@@ -354,7 +261,7 @@
+      * none associated with it.
+      */
+     public String getCreatorPackage() {
+-        return getCachedInfo().getCreatorPackage();
++        return mTarget.getCreatorPackage();
+     }
+ 
+     /**
+@@ -367,7 +274,7 @@
+      * none associated with it.
+      */
+     public int getCreatorUid() {
+-        return getCachedInfo().getCreatorUid();
++        return mTarget.getCreatorUid();
+     }
+ 
+     /**
+@@ -382,8 +289,7 @@
+      * none associated with it.
+      */
+     public UserHandle getCreatorUserHandle() {
+-        int uid = getCachedInfo().getCreatorUid();
+-        return uid > 0 ? new UserHandle(UserHandle.getUserId(uid)) : null;
++        return mTarget.getCreatorUserHandle();
+     }
+ 
+     /**
+@@ -394,15 +300,15 @@
+     @Override
+     public boolean equals(@Nullable Object otherObj) {
+         if (otherObj instanceof IntentSender) {
+-            return mTarget.asBinder().equals(((IntentSender)otherObj)
+-                    .mTarget.asBinder());
++            return mTarget.getTarget().equals(((IntentSender)otherObj)
++                    .mTarget.getTarget());
+         }
+         return false;
+     }
+ 
+     @Override
+     public int hashCode() {
+-        return mTarget.asBinder().hashCode();
++        return mTarget.getTarget().hashCode();
+     }
+ 
+     @Override
+@@ -411,7 +317,7 @@
+         sb.append("IntentSender{");
+         sb.append(Integer.toHexString(System.identityHashCode(this)));
+         sb.append(": ");
+-        sb.append(mTarget != null ? mTarget.asBinder() : null);
++        sb.append(mTarget != null ? mTarget.getTarget() : null);
+         sb.append('}');
+         return sb.toString();
+     }
+@@ -421,7 +327,7 @@
+     }
+ 
+     public void writeToParcel(Parcel out, int flags) {
+-        out.writeStrongBinder(mTarget.asBinder());
++        out.writeStrongBinder(mTarget.getTarget());
+     }
+ 
+     public static final @android.annotation.NonNull Parcelable.Creator<IntentSender> CREATOR
+@@ -446,7 +352,7 @@
+      */
+     public static void writeIntentSenderOrNullToParcel(IntentSender sender,
+             Parcel out) {
+-        out.writeStrongBinder(sender != null ? sender.mTarget.asBinder()
++        out.writeStrongBinder(sender != null ? sender.mTarget.getTarget()
+                 : null);
+     }
+ 
+@@ -467,42 +373,18 @@
+ 
+     /** @hide */
+     @UnsupportedAppUsage
+-    public IIntentSender getTarget() {
+-        return mTarget;
++    public IBinder getTarget() {
++        return mTarget.getTarget();
+     }
+ 
+     /** @hide */
+-    public IBinder getWhitelistToken() {
+-        return mWhitelistToken;
+-    }
+-
+-    /** @hide */
+-    @UnsupportedAppUsage
+-    public IntentSender(IIntentSender target) {
++    public IntentSender(android.app.PendingIntent target) {
+         mTarget = target;
+-    }
+-
+-    /** @hide */
+-    public IntentSender(IIntentSender target, IBinder allowlistToken) {
+-        mTarget = target;
+-        mWhitelistToken = allowlistToken;
+     }
+ 
+     /** @hide */
+     public IntentSender(IBinder target) {
+-        mTarget = IIntentSender.Stub.asInterface(target);
+-    }
+-
+-    private PendingIntentInfo getCachedInfo() {
+-        if (mCachedInfo == null) {
+-            try {
+-                mCachedInfo = ActivityManager.getService().getInfoForIntentSender(mTarget);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-
+-        return mCachedInfo;
++        this(new android.app.PendingIntent(target));
+     }
+ 
+     /**
+@@ -510,6 +392,6 @@
+      * @hide
+      */
+     public boolean isImmutable() {
+-        return getCachedInfo().isImmutable();
++        return mTarget.isImmutable();
+     }
+ }

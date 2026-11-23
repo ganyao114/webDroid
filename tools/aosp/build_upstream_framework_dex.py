@@ -22,6 +22,13 @@ REPO = Path(__file__).resolve().parents[2]
 PROFILE = REPO / "patches/aosp17/frameworks_base"
 COMPATIBILITY = Path(__file__).with_name("framework_build")
 JAVA_BASE = Path("libcore/ojluni/src/main/java")
+SPARSE_FRAMEWORK_ROOTS = ("frameworks/base/core/java", "frameworks/base/media/java")
+SPARSE_SOURCE_MIRRORS = {
+    "frameworks/base/core/java/android/service/notification/StatusBarNotification.java":
+        "937-status-bar-source-mirror.patch",
+    "frameworks/base/media/java/android/media/AudioAttributes.java":
+        "949-audio-attributes-source-mirror.patch",
+}
 FRAMEWORK_DEX = "aosp17_upstream_framework.dex"
 FRAMEWORK_JAR = "aosp17_upstream_framework_classes.jar"
 SERVICES_DEX = "aosp17_upstream_services.dex"
@@ -166,30 +173,43 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def read_libcore_source(args, name, inputs):
-    """Resolve a libcore source excluded from a sparse checkout without fetching blobs."""
-    relative = Path(name).relative_to(JAVA_BASE)
-    repo = args.aosp_root / "libcore"
+def read_sparse_source(args, name, inputs):
+    """Read the pinned source from Git or a byte-identical SDK source mirror."""
+    if name.startswith("libcore/"):
+        project = "libcore"
+        relative = Path(name).relative_to(JAVA_BASE)
+    else:
+        project = "frameworks/base"
+        source_root = next(root for root in SPARSE_FRAMEWORK_ROOTS if name.startswith(f"{root}/"))
+        relative = Path(name).relative_to(source_root)
+    repo = args.aosp_root / project
     git = ("git", "--no-optional-locks", "-C", repo)
     env = {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
     head = subprocess.check_output(
         [*git, "rev-parse", "--path-format=absolute", "--git-path", "HEAD"],
         env=env, text=True).strip()
     inputs.add(Path(head))
-    tree_path = Path(name).relative_to("libcore").as_posix()
+    tree_path = Path(name).relative_to(project).as_posix()
     blob = subprocess.check_output([*git, "rev-parse", "--verify", f"HEAD:{tree_path}"],
                                    env=env).strip()
     local = subprocess.run([*git, "cat-file", "blob", blob.decode("ascii")],
                            env=env, capture_output=True, check=False)
     if local.returncode == 0:
         return local.stdout
-    # The SDK source bundle also contains libcore Java sources. Only accept it
-    # when Git confirms that every byte matches the selected libcore blob.
+    # Only use the SDK source bundle when Git confirms that every byte matches
+    # the selected upstream blob.
     mirror = args.sdk_sources / relative
     data = mirror.read_bytes()
     actual = subprocess.check_output([*git, "hash-object", "--stdin"], input=data, env=env)
+    if actual.strip() != blob and name in SPARSE_SOURCE_MIRRORS:
+        mirror_patch = PROFILE / "patches" / SPARSE_SOURCE_MIRRORS[name]
+        inputs.add(mirror_patch)
+        staged = {name: data}
+        apply_patch(mirror_patch, staged)
+        data = staged[name]
+        actual = subprocess.check_output([*git, "hash-object", "--stdin"], input=data, env=env)
     if actual.strip() != blob:
-        raise ValueError(f"{mirror}: does not match libcore {tree_path} at HEAD")
+        raise ValueError(f"{mirror}: does not match {project}/{tree_path} at HEAD")
     inputs.add(mirror)
     return data
 
@@ -438,14 +458,14 @@ def resource_flag_declarations(symbols, destination, program_sources):
                      "kind": "compile_only", "sha256": digest(file.read_bytes())}
 
 
-def javac(args, files, classes, classpath, *options, sourcepath=()):
+def javac(args, files, classes, classpath, *options, sourcepath=(), debug_info="source,lines"):
     classes.mkdir()
     if files:
         sources = classes.with_suffix(".sources")
         sources.write_text("".join(json.dumps(str(file), ensure_ascii=False) + "\n"
                                    for file in sorted(files)), encoding="utf-8")
         run(args.javac, "--release", "17", *options, "-encoding", "UTF-8", "-proc:none", "-implicit:none",
-            "-g:source,lines", "-XDstringConcat=inline", "-sourcepath", os.pathsep.join(map(str, sourcepath)),
+            f"-g:{debug_info}", "-XDstringConcat=inline", "-sourcepath", os.pathsep.join(map(str, sourcepath)),
             "-classpath", os.pathsep.join(map(str, classpath)), "-d", classes, "@" + str(sources))
 
 
@@ -476,11 +496,13 @@ def compatibility_source_path(args, stage, inputs, primary_sources):
     return (stage,)
 
 
-def jar_from_classes(path, *directories):
+def jar_from_classes(path, *directories, exclude=()):
     entries = {}
     for classes in directories:
         for file in classes.rglob("*.class"):
             name = file.relative_to(classes).as_posix()
+            if name in exclude:
+                continue
             if name in entries:
                 raise ValueError(f"{classes}: duplicate class {name}")
             entries[name] = file.read_bytes()
@@ -579,10 +601,14 @@ def dex_from_jar(args, stage, jar, output, classpath, *, compressed_archive=Fals
     artifact = stage / (output + ".dex")
     if count == 1 and not compressed_archive:
         (out / names[0]).replace(artifact)
+    elif compressed_archive:
+        # The guest loads the ZIP entry and the inflated DEX into linear memory.
+        with zipfile.ZipFile(artifact, "w") as archive:
+            for name in sorted(names):
+                archive.writestr(zipfile.ZipInfo(name), (out / name).read_bytes(),
+                                 compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
     else:
-        # ART recognizes ZIP archives by magic, including single-shard archives.
-        compression = zipfile.ZIP_DEFLATED if compressed_archive else zipfile.ZIP_STORED
-        write_jar(artifact, {name: (out / name).read_bytes() for name in names}, compression=compression)
+        write_jar(artifact, {name: (out / name).read_bytes() for name in names})
     return names
 
 
@@ -624,8 +650,9 @@ def build(args, stage):
             path = args.aosp_root / name
             if (not name.startswith(("frameworks/base/", "libcore/")) or path.suffix != ".java"):
                 raise ValueError(f"{manifest}: expected an upstream Java file in [{group}]: {name}")
-            if group == "java-base" and not path.is_file():
-                java[name] = read_libcore_source(args, name, inputs)
+            if not path.is_file() and any(name.startswith(f"{directory}/")
+                                          for directory in (JAVA_BASE, *SPARSE_FRAMEWORK_ROOTS)):
+                java[name] = read_sparse_source(args, name, inputs)
             else:
                 inputs.add(path)
                 java[name] = path.read_bytes()
@@ -738,17 +765,34 @@ def build(args, stage):
         staged["framework"].append(path)
         sdk_runtime_sources.append({"path": name, "sha256": digest(path.read_bytes())})
     guest_api = compatibility_source_path(args, stage / "compatibility-api", inputs, java)
+    # Omit debug tables from the eagerly loaded DEX. Interpreter errors still
+    # record the method and DEX PC.
     javac(args, staged["framework"], framework, sdk_classpath, "-Xprefer:source",
-          sourcepath=guest_api)
-    javac(args, staged["java-base"], core_library, sdk_classpath,
-          "--patch-module", f"java.base={java_base}")
+          sourcepath=guest_api, debug_info="none")
+    thread_api = "org/wasmandroid/ui/ThreadContext"
+    boot_thread_context = stage_java(java_base, thread_api + ".java", thread_context.read_bytes())
+    javac(args, [*staged["java-base"], boot_thread_context], core_library, sdk_classpath,
+          "--patch-module", f"java.base={java_base}", debug_info="none")
+    (core_library / (thread_api + ".class")).unlink()
     javac(args, staged["services"], services, [framework, *sdk_classpath])
     framework_jar = stage / FRAMEWORK_JAR
     services_jar = stage / SERVICES_JAR
     jar_from_classes(framework_jar, framework, core_library)
     jar_from_classes(services_jar, services)
+    # Javac inlines these hidden scalar resource constants. Keep them in the
+    # compiler JAR and resolve resource names from framework-res.apk at runtime.
+    # R.styleable's arrays and every public android.R class remain in the DEX.
+    compile_only_symbols = {
+        f"com/android/internal/R${kind}.class"
+        for kind in ("attr", "bool", "color", "drawable", "string", "style")
+    }
+    framework_program = stage / "framework-program.jar"
+    framework_symbols = stage / "framework-symbols.jar"
+    jar_from_classes(framework_program, framework, core_library, exclude=compile_only_symbols)
+    write_jar(framework_symbols, {name: (framework / name).read_bytes() for name in compile_only_symbols})
     dex_files = {
-        FRAMEWORK_DEX: dex_from_jar(args, stage, framework_jar, Path(FRAMEWORK_DEX).stem, [],
+        FRAMEWORK_DEX: dex_from_jar(args, stage, framework_program, Path(FRAMEWORK_DEX).stem,
+                                    [framework_symbols],
                                     compressed_archive=True),
         SERVICES_DEX: dex_from_jar(args, stage, services_jar, Path(SERVICES_DEX).stem, [framework_jar]),
     }
@@ -766,6 +810,7 @@ def build(args, stage):
               "upstream_resources": resources, "disabled_resource_flags": resource_flags,
               "defined_methods": defined_methods(stage), "dex_files": dex_files,
               "patches": patches, "stats": stats, "generated": generated,
+              "compile_only_resource_symbols": sorted(compile_only_symbols),
               "sdk_compile_only_annotations": sdk_sources,
               "sdk_runtime_interfaces": [{"path": parser_entry, "sha256": digest(parser_source.read_bytes())}],
               "sdk_runtime_sources": sdk_runtime_sources,
