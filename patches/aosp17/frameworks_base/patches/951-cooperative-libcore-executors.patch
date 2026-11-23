@@ -1,0 +1,879 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ExecutorService.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ExecutorService.java
+@@ -391,23 +391,7 @@
+     // TODO(b/369520931): Add desugaring support for this method.
+     @Override
+     default void close() {
+-        boolean terminated = isTerminated();
+-        if (!terminated) {
+-            shutdown();
+-            boolean interrupted = false;
+-            while (!terminated) {
+-                try {
+-                    terminated = awaitTermination(1L, TimeUnit.DAYS);
+-                } catch (InterruptedException e) {
+-                    if (!interrupted) {
+-                        shutdownNow();
+-                        interrupted = true;
+-                    }
+-                }
+-            }
+-            if (interrupted) {
+-                Thread.currentThread().interrupt();
+-            }
+-        }
++        // A running task cannot wait for its own executor to terminate.
++        shutdown();
+     }
+ }
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/Executors.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/Executors.java
+@@ -35,15 +35,11 @@
+ 
+ package java.util.concurrent;
+ 
+-import static java.lang.ref.Reference.reachabilityFence;
+-import dalvik.annotation.optimization.ReachabilitySensitive;
+-import java.lang.ref.Cleaner.Cleanable;
+ import java.security.PrivilegedAction;
+ import java.security.PrivilegedExceptionAction;
+ import java.util.Collection;
+ import java.util.List;
+ import java.util.concurrent.atomic.AtomicInteger;
+-import jdk.internal.ref.CleanerFactory;
+ 
+ // BEGIN android-note
+ // removed security manager docs
+@@ -91,9 +87,7 @@
+      * @throws IllegalArgumentException if {@code nThreads <= 0}
+      */
+     public static ExecutorService newFixedThreadPool(int nThreads) {
+-        return new ThreadPoolExecutor(nThreads, nThreads,
+-                                      0L, TimeUnit.MILLISECONDS,
+-                                      new LinkedBlockingQueue<Runnable>());
++        return newFixedThreadPool(nThreads, defaultThreadFactory());
+     }
+ 
+     /**
+@@ -112,10 +106,7 @@
+      * @since 1.8
+      */
+     public static ExecutorService newWorkStealingPool(int parallelism) {
+-        return new ForkJoinPool
+-            (parallelism,
+-             ForkJoinPool.defaultForkJoinWorkerThreadFactory,
+-             null, true);
++        return newFixedThreadPool(parallelism);
+     }
+ 
+     /**
+@@ -128,10 +119,7 @@
+      * @since 1.8
+      */
+     public static ExecutorService newWorkStealingPool() {
+-        return new ForkJoinPool
+-            (Runtime.getRuntime().availableProcessors(),
+-             ForkJoinPool.defaultForkJoinWorkerThreadFactory,
+-             null, true);
++        return newSingleThreadExecutor();
+     }
+ 
+     /**
+@@ -154,10 +142,8 @@
+      * @throws IllegalArgumentException if {@code nThreads <= 0}
+      */
+     public static ExecutorService newFixedThreadPool(int nThreads, ThreadFactory threadFactory) {
+-        return new ThreadPoolExecutor(nThreads, nThreads,
+-                                      0L, TimeUnit.MILLISECONDS,
+-                                      new LinkedBlockingQueue<Runnable>(),
+-                                      threadFactory);
++        if (nThreads <= 0) throw new IllegalArgumentException("Nonpositive pool size");
++        return new EmbeddedExecutor(threadFactory);
+     }
+ 
+     /**
+@@ -190,11 +176,7 @@
+      * @throws NullPointerException if threadFactory is null
+      */
+     public static ExecutorService newSingleThreadExecutor(ThreadFactory threadFactory) {
+-        return new AutoShutdownDelegatedExecutorService
+-            (new ThreadPoolExecutor(1, 1,
+-                                    0L, TimeUnit.MILLISECONDS,
+-                                    new LinkedBlockingQueue<Runnable>(),
+-                                    threadFactory));
++        return new DelegatedExecutorService(new EmbeddedExecutor(threadFactory));
+     }
+ 
+     /**
+@@ -214,9 +196,7 @@
+      * @return the newly created thread pool
+      */
+     public static ExecutorService newCachedThreadPool() {
+-        return new ThreadPoolExecutor(0, Integer.MAX_VALUE,
+-                                      60L, TimeUnit.SECONDS,
+-                                      new SynchronousQueue<Runnable>());
++        return newSingleThreadExecutor();
+     }
+ 
+     /**
+@@ -230,10 +210,7 @@
+      * @throws NullPointerException if threadFactory is null
+      */
+     public static ExecutorService newCachedThreadPool(ThreadFactory threadFactory) {
+-        return new ThreadPoolExecutor(0, Integer.MAX_VALUE,
+-                                      60L, TimeUnit.SECONDS,
+-                                      new SynchronousQueue<Runnable>(),
+-                                      threadFactory);
++        return newSingleThreadExecutor(threadFactory);
+     }
+ 
+     /**
+@@ -251,7 +228,7 @@
+      * @since 21
+      */
+     public static ExecutorService newThreadPerTaskExecutor(ThreadFactory threadFactory) {
+-        return ThreadPerTaskExecutor.create(threadFactory);
++        return new EmbeddedExecutor(threadFactory);
+     }
+ 
+     /**
+@@ -266,76 +243,7 @@
+      * @since 21
+      */
+     public static ExecutorService newVirtualThreadPerTaskExecutor() {
+-        ThreadFactory factory = Thread.ofVirtual().factory();
+-        return newThreadPerTaskExecutor(factory);
+-    }
+-
+-    /**
+-     * Creates a single-threaded executor that can schedule commands
+-     * to run after a given delay, or to execute periodically.
+-     * (Note however that if this single
+-     * thread terminates due to a failure during execution prior to
+-     * shutdown, a new one will take its place if needed to execute
+-     * subsequent tasks.)  Tasks are guaranteed to execute
+-     * sequentially, and no more than one task will be active at any
+-     * given time. Unlike the otherwise equivalent
+-     * {@code newScheduledThreadPool(1)} the returned executor is
+-     * guaranteed not to be reconfigurable to use additional threads.
+-     *
+-     * @return the newly created scheduled executor
+-     */
+-    public static ScheduledExecutorService newSingleThreadScheduledExecutor() {
+-        return new DelegatedScheduledExecutorService
+-            (new ScheduledThreadPoolExecutor(1));
+-    }
+-
+-    /**
+-     * Creates a single-threaded executor that can schedule commands
+-     * to run after a given delay, or to execute periodically.  (Note
+-     * however that if this single thread terminates due to a failure
+-     * during execution prior to shutdown, a new one will take its
+-     * place if needed to execute subsequent tasks.)  Tasks are
+-     * guaranteed to execute sequentially, and no more than one task
+-     * will be active at any given time. Unlike the otherwise
+-     * equivalent {@code newScheduledThreadPool(1, threadFactory)}
+-     * the returned executor is guaranteed not to be reconfigurable to
+-     * use additional threads.
+-     *
+-     * @param threadFactory the factory to use when creating new threads
+-     * @return the newly created scheduled executor
+-     * @throws NullPointerException if threadFactory is null
+-     */
+-    public static ScheduledExecutorService newSingleThreadScheduledExecutor(ThreadFactory threadFactory) {
+-        return new DelegatedScheduledExecutorService
+-            (new ScheduledThreadPoolExecutor(1, threadFactory));
+-    }
+-
+-    /**
+-     * Creates a thread pool that can schedule commands to run after a
+-     * given delay, or to execute periodically.
+-     * @param corePoolSize the number of threads to keep in the pool,
+-     * even if they are idle
+-     * @return the newly created scheduled thread pool
+-     * @throws IllegalArgumentException if {@code corePoolSize < 0}
+-     */
+-    public static ScheduledExecutorService newScheduledThreadPool(int corePoolSize) {
+-        return new ScheduledThreadPoolExecutor(corePoolSize);
+-    }
+-
+-    /**
+-     * Creates a thread pool that can schedule commands to run after a
+-     * given delay, or to execute periodically.
+-     * @param corePoolSize the number of threads to keep in the pool,
+-     * even if they are idle
+-     * @param threadFactory the factory to use when the executor
+-     * creates a new thread
+-     * @return the newly created scheduled thread pool
+-     * @throws IllegalArgumentException if {@code corePoolSize < 0}
+-     * @throws NullPointerException if threadFactory is null
+-     */
+-    public static ScheduledExecutorService newScheduledThreadPool(
+-            int corePoolSize, ThreadFactory threadFactory) {
+-        return new ScheduledThreadPoolExecutor(corePoolSize, threadFactory);
++        return newSingleThreadExecutor();
+     }
+ 
+     /**
+@@ -352,22 +260,6 @@
+         if (executor == null)
+             throw new NullPointerException();
+         return new DelegatedExecutorService(executor);
+-    }
+-
+-    /**
+-     * Returns an object that delegates all defined {@link
+-     * ScheduledExecutorService} methods to the given executor, but
+-     * not any other methods that might otherwise be accessible using
+-     * casts. This provides a way to safely "freeze" configuration and
+-     * disallow tuning of a given concrete implementation.
+-     * @param executor the underlying implementation
+-     * @return a {@code ScheduledExecutorService} instance
+-     * @throws NullPointerException if executor null
+-     */
+-    public static ScheduledExecutorService unconfigurableScheduledExecutorService(ScheduledExecutorService executor) {
+-        if (executor == null)
+-            throw new NullPointerException();
+-        return new DelegatedScheduledExecutorService(executor);
+     }
+ 
+     // Android-changed: Removed references to SecurityManager from javadoc.
+@@ -583,26 +475,15 @@
+      */
+     private static class DefaultThreadFactory implements ThreadFactory {
+         private static final AtomicInteger poolNumber = new AtomicInteger(1);
+-        private final ThreadGroup group;
+         private final AtomicInteger threadNumber = new AtomicInteger(1);
+         private final String namePrefix;
+ 
+         DefaultThreadFactory() {
+-            group = Thread.currentThread().getThreadGroup();
+-            namePrefix = "pool-" +
+-                          poolNumber.getAndIncrement() +
+-                         "-thread-";
++            namePrefix = "pool-" + poolNumber.getAndIncrement() + "-thread-";
+         }
+ 
+         public Thread newThread(Runnable r) {
+-            Thread t = new Thread(group, r,
+-                                  namePrefix + threadNumber.getAndIncrement(),
+-                                  0);
+-            if (t.isDaemon())
+-                t.setDaemon(false);
+-            if (t.getPriority() != Thread.NORM_PRIORITY)
+-                t.setPriority(Thread.NORM_PRIORITY);
+-            return t;
++            return new Thread(r, namePrefix + threadNumber.getAndIncrement());
+         }
+     }
+ 
+@@ -635,132 +516,190 @@
+             implements ExecutorService {
+         // Android-added: @ReachabilitySensitive
+         // Needed for FinalizableDelegatedExecutorService below.
+-        @ReachabilitySensitive
+         private final ExecutorService e;
+         DelegatedExecutorService(ExecutorService executor) { e = executor; }
+         public void execute(Runnable command) {
+-            try {
+-                e.execute(command);
+-            } finally { reachabilityFence(this); }
++            e.execute(command);
+         }
+         public void shutdown() {
+-            try {
+-                e.shutdown();
+-            } finally { reachabilityFence(this); }
++            e.shutdown();
+         }
+         public List<Runnable> shutdownNow() {
+-            try {
+-                return e.shutdownNow();
+-            } finally { reachabilityFence(this); }
++            return e.shutdownNow();
+         }
+         public boolean isShutdown() {
+-            try {
+-                return e.isShutdown();
+-            } finally { reachabilityFence(this); }
++            return e.isShutdown();
+         }
+         public boolean isTerminated() {
+-            try {
+-                return e.isTerminated();
+-            } finally { reachabilityFence(this); }
++            return e.isTerminated();
+         }
+         public boolean awaitTermination(long timeout, TimeUnit unit)
+             throws InterruptedException {
+-            try {
+-                return e.awaitTermination(timeout, unit);
+-            } finally { reachabilityFence(this); }
++            return e.awaitTermination(timeout, unit);
+         }
+         public Future<?> submit(Runnable task) {
+-            try {
+-                return e.submit(task);
+-            } finally { reachabilityFence(this); }
++            return e.submit(task);
+         }
+         public <T> Future<T> submit(Callable<T> task) {
+-            try {
+-                return e.submit(task);
+-            } finally { reachabilityFence(this); }
++            return e.submit(task);
+         }
+         public <T> Future<T> submit(Runnable task, T result) {
+-            try {
+-                return e.submit(task, result);
+-            } finally { reachabilityFence(this); }
++            return e.submit(task, result);
+         }
+         public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks)
+             throws InterruptedException {
+-            try {
+-                return e.invokeAll(tasks);
+-            } finally { reachabilityFence(this); }
++            return e.invokeAll(tasks);
+         }
+         public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks,
+                                              long timeout, TimeUnit unit)
+             throws InterruptedException {
+-            try {
+-                return e.invokeAll(tasks, timeout, unit);
+-            } finally { reachabilityFence(this); }
++            return e.invokeAll(tasks, timeout, unit);
+         }
+         public <T> T invokeAny(Collection<? extends Callable<T>> tasks)
+             throws InterruptedException, ExecutionException {
+-            try {
+-                return e.invokeAny(tasks);
+-            } finally { reachabilityFence(this); }
++            return e.invokeAny(tasks);
+         }
+         public <T> T invokeAny(Collection<? extends Callable<T>> tasks,
+                                long timeout, TimeUnit unit)
+             throws InterruptedException, ExecutionException, TimeoutException {
+-            try {
+-                return e.invokeAny(tasks, timeout, unit);
+-            } finally { reachabilityFence(this); }
+-        }
+-    }
+-
+-    /**
+-     * A DelegatedExecutorService that uses a Cleaner to shut down the underlying
+-     * ExecutorService when the wrapper becomes phantom reachable.
+-     */
+-    private static class AutoShutdownDelegatedExecutorService
+-            extends DelegatedExecutorService {
+-        private final Cleanable cleanable;
+-        AutoShutdownDelegatedExecutorService(ExecutorService executor) {
+-            super(executor);
+-            Runnable action = () -> {
+-                if (!executor.isShutdown()) {
+-                    executor.shutdown();
+-                }
+-            };
+-            cleanable = CleanerFactory.cleaner().register(this, action);
+-        }
+-        @Override
+-        public void shutdown() {
+-            super.shutdown();
+-            cleanable.clean();  // unregisters the cleanable
+-        }
+-    }
+-
+-    /**
+-     * A wrapper class that exposes only the ScheduledExecutorService
+-     * methods of a ScheduledExecutorService implementation.
+-     */
+-    private static class DelegatedScheduledExecutorService
+-            extends DelegatedExecutorService
+-            implements ScheduledExecutorService {
+-        private final ScheduledExecutorService e;
+-        DelegatedScheduledExecutorService(ScheduledExecutorService executor) {
+-            super(executor);
+-            e = executor;
+-        }
+-        public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {
+-            return e.schedule(command, delay, unit);
+-        }
+-        public <V> ScheduledFuture<V> schedule(Callable<V> callable, long delay, TimeUnit unit) {
+-            return e.schedule(callable, delay, unit);
+-        }
+-        public ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit) {
+-            return e.scheduleAtFixedRate(command, initialDelay, period, unit);
+-        }
+-        public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit) {
+-            return e.scheduleWithFixedDelay(command, initialDelay, delay, unit);
++            return e.invokeAny(tasks, timeout, unit);
+         }
+     }
+ 
+     /** Cannot instantiate. */
+     private Executors() {}
++
++    /** Runs the upstream FutureTask state machine on the guest's interpreter thread. */
++    private static final class EmbeddedExecutor implements ExecutorService {
++        private final java.util.ArrayDeque<Runnable> queue = new java.util.ArrayDeque<>();
++        private final ThreadFactory factory;
++        private Thread worker;
++        private boolean running;
++        private boolean shutdown;
++
++        EmbeddedExecutor(ThreadFactory factory) {
++            this.factory = java.util.Objects.requireNonNull(factory);
++        }
++
++        @Override public void execute(Runnable command) {
++            java.util.Objects.requireNonNull(command);
++            if (shutdown) throw new RejectedExecutionException("Executor is shut down");
++            if (worker == null) {
++                worker = factory.newThread(this::drain);
++                if (worker == null) throw new RejectedExecutionException("Thread factory returned null");
++            }
++            queue.addLast(command);
++            if (running) return;
++            running = true;
++            Thread previous = org.wasmandroid.ui.ThreadContext.swap(worker);
++            try {
++                worker.run();
++            } finally {
++                org.wasmandroid.ui.ThreadContext.swap(previous);
++                running = false;
++            }
++        }
++
++        private void drain() {
++            Runnable next;
++            while ((next = queue.pollFirst()) != null) {
++                next.run();
++            }
++        }
++
++        @Override public void shutdown() {
++            shutdown = true;
++        }
++
++        @Override public List<Runnable> shutdownNow() {
++            shutdown = true;
++            List<Runnable> pending = new java.util.ArrayList<>(queue);
++            queue.clear();
++            return pending;
++        }
++
++        @Override public boolean isShutdown() {
++            return shutdown;
++        }
++
++        @Override public boolean isTerminated() {
++            return shutdown && !running && queue.isEmpty();
++        }
++
++        @Override public boolean awaitTermination(long timeout, TimeUnit unit)
++                throws InterruptedException {
++            java.util.Objects.requireNonNull(unit);
++            if (Thread.interrupted()) throw new InterruptedException();
++            return isTerminated();
++        }
++
++        @Override public <T> Future<T> submit(Callable<T> task) {
++            FutureTask<T> future = new FutureTask<>(task);
++            execute(future);
++            return future;
++        }
++
++        @Override public <T> Future<T> submit(Runnable task, T result) {
++            FutureTask<T> future = new FutureTask<>(task, result);
++            execute(future);
++            return future;
++        }
++
++        @Override public Future<?> submit(Runnable task) {
++            return submit(task, null);
++        }
++
++        @Override public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks)
++                throws InterruptedException {
++            return invokeAll(tasks, Long.MAX_VALUE, TimeUnit.NANOSECONDS);
++        }
++
++        @Override public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks,
++                long timeout, TimeUnit unit) throws InterruptedException {
++            if (running) throw new IllegalStateException("Cannot wait for tasks on their executor");
++            long budget = unit.toNanos(timeout);
++            long start = System.nanoTime();
++            List<Future<T>> futures = new java.util.ArrayList<>(tasks.size());
++            for (Callable<T> task : tasks) futures.add(new FutureTask<>(task));
++            try {
++                for (Future<T> future : futures) {
++                    if (Thread.interrupted()) throw new InterruptedException();
++                    if (System.nanoTime() - start >= budget) break;
++                    execute((Runnable) future);
++                }
++            } finally {
++                for (Future<T> future : futures) if (!future.isDone()) future.cancel(false);
++            }
++            return futures;
++        }
++
++        @Override public <T> T invokeAny(Collection<? extends Callable<T>> tasks)
++                throws InterruptedException, ExecutionException {
++            try {
++                return invokeAny(tasks, Long.MAX_VALUE, TimeUnit.NANOSECONDS);
++            } catch (TimeoutException error) {
++                throw new ExecutionException(error);
++            }
++        }
++
++        @Override public <T> T invokeAny(Collection<? extends Callable<T>> tasks,
++                long timeout, TimeUnit unit)
++                throws InterruptedException, ExecutionException, TimeoutException {
++            if (running) throw new IllegalStateException("Cannot wait for tasks on their executor");
++            if (tasks.isEmpty()) throw new IllegalArgumentException("No tasks");
++            long budget = unit.toNanos(timeout);
++            long start = System.nanoTime();
++            ExecutionException last = null;
++            for (Callable<T> task : tasks) {
++                if (Thread.interrupted()) throw new InterruptedException();
++                if (System.nanoTime() - start >= budget) throw new TimeoutException();
++                try {
++                    return submit(task).get();
++                } catch (ExecutionException error) {
++                    last = error;
++                }
++            }
++            throw last;
++        }
++    }
+ }
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/FutureTask.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/FutureTask.java
+@@ -35,11 +35,7 @@
+ 
+ package java.util.concurrent;
+ 
+-import jdk.internal.invoke.MhUtil;
+-
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+-import java.util.concurrent.locks.LockSupport;
++
+ 
+ /**
+  * A cancellable asynchronous computation.  This class provides a base
+@@ -106,9 +102,6 @@
+     private Object outcome; // non-volatile, protected by state reads/writes
+     /** The thread running the callable; CASed during run() */
+     private volatile Thread runner;
+-    /** Treiber stack of waiting threads */
+-    private volatile WaitNode waiters;
+-
+     /**
+      * Returns result or throws exception for completed task.
+      *
+@@ -164,22 +157,10 @@
+     }
+ 
+     public boolean cancel(boolean mayInterruptIfRunning) {
+-        if (!(state == NEW && STATE.compareAndSet
+-              (this, NEW, mayInterruptIfRunning ? INTERRUPTING : CANCELLED)))
+-            return false;
+-        try {    // in case call to interrupt throws exception
+-            if (mayInterruptIfRunning) {
+-                try {
+-                    Thread t = runner;
+-                    if (t != null)
+-                        t.interrupt();
+-                } finally { // final state
+-                    STATE.setRelease(this, INTERRUPTED);
+-                }
+-            }
+-        } finally {
+-            finishCompletion();
+-        }
++        if (state != NEW) return false;
++        state = CANCELLED;
++        if (mayInterruptIfRunning && runner != null) runner.interrupt();
++        finishCompletion();
+         return true;
+     }
+ 
+@@ -188,8 +169,10 @@
+      */
+     public V get() throws InterruptedException, ExecutionException {
+         int s = state;
+-        if (s <= COMPLETING)
+-            s = awaitDone(false, 0L);
++        if (s <= COMPLETING) {
++            if (Thread.interrupted()) throw new InterruptedException();
++            throw new IllegalStateException("Cannot wait for a queued task on its executor");
++        }
+         return report(s);
+     }
+ 
+@@ -198,12 +181,12 @@
+      */
+     public V get(long timeout, TimeUnit unit)
+         throws InterruptedException, ExecutionException, TimeoutException {
+-        if (unit == null)
+-            throw new NullPointerException();
++        if (unit == null) throw new NullPointerException();
+         int s = state;
+-        if (s <= COMPLETING &&
+-            (s = awaitDone(true, unit.toNanos(timeout))) <= COMPLETING)
++        if (s <= COMPLETING) {
++            if (Thread.interrupted()) throw new InterruptedException();
+             throw new TimeoutException();
++        }
+         return report(s);
+     }
+ 
+@@ -290,9 +273,10 @@
+      * @param v the value
+      */
+     protected void set(V v) {
+-        if (STATE.compareAndSet(this, NEW, COMPLETING)) {
++        if (state == NEW) {
++            state = COMPLETING;
+             outcome = v;
+-            STATE.setRelease(this, NORMAL); // final state
++            state = NORMAL; // final state
+             finishCompletion();
+         }
+     }
+@@ -308,17 +292,17 @@
+      * @param t the cause of failure
+      */
+     protected void setException(Throwable t) {
+-        if (STATE.compareAndSet(this, NEW, COMPLETING)) {
++        if (state == NEW) {
++            state = COMPLETING;
+             outcome = t;
+-            STATE.setRelease(this, EXCEPTIONAL); // final state
++            state = EXCEPTIONAL; // final state
+             finishCompletion();
+         }
+     }
+ 
+     public void run() {
+-        if (state != NEW ||
+-            !RUNNER.compareAndSet(this, null, Thread.currentThread()))
+-            return;
++        if (state != NEW || runner != null) return;
++        runner = Thread.currentThread();
+         try {
+             Callable<V> c = callable;
+             if (c != null && state == NEW) {
+@@ -341,9 +325,6 @@
+             runner = null;
+             // state must be re-read after nulling runner to prevent
+             // leaked interrupts
+-            int s = state;
+-            if (s >= INTERRUPTING)
+-                handlePossibleCancellationInterrupt(s);
+         }
+     }
+ 
+@@ -357,9 +338,9 @@
+      * @return {@code true} if successfully run and reset
+      */
+     protected boolean runAndReset() {
+-        if (state != NEW ||
+-            !RUNNER.compareAndSet(this, null, Thread.currentThread()))
++        if (state != NEW || runner != null)
+             return false;
++        runner = Thread.currentThread();
+         boolean ran = false;
+         int s = state;
+         try {
+@@ -379,43 +360,8 @@
+             // state must be re-read after nulling runner to prevent
+             // leaked interrupts
+             s = state;
+-            if (s >= INTERRUPTING)
+-                handlePossibleCancellationInterrupt(s);
+         }
+         return ran && s == NEW;
+-    }
+-
+-    /**
+-     * Ensures that any interrupt from a possible cancel(true) is only
+-     * delivered to a task while in run or runAndReset.
+-     */
+-    private void handlePossibleCancellationInterrupt(int s) {
+-        // It is possible for our interrupter to stall before getting a
+-        // chance to interrupt us.  Let's spin-wait patiently.
+-        if (s == INTERRUPTING)
+-            while (state == INTERRUPTING)
+-                Thread.yield(); // wait out pending interrupt
+-
+-        // assert state == INTERRUPTED;
+-
+-        // We want to clear any interrupt we may have received from
+-        // cancel(true).  However, it is permissible to use interrupts
+-        // as an independent mechanism for a task to communicate with
+-        // its caller, and there is no way to clear only the
+-        // cancellation interrupt.
+-        //
+-        // Thread.interrupted();
+-    }
+-
+-    /**
+-     * Simple linked list nodes to record waiting threads in a Treiber
+-     * stack.  See other classes such as Phaser and SynchronousQueue
+-     * for more detailed explanation.
+-     */
+-    static final class WaitNode {
+-        volatile Thread thread;
+-        volatile WaitNode next;
+-        WaitNode() { thread = Thread.currentThread(); }
+     }
+ 
+     /**
+@@ -423,125 +369,8 @@
+      * nulls out callable.
+      */
+     private void finishCompletion() {
+-        // assert state > COMPLETING;
+-        for (WaitNode q; (q = waiters) != null;) {
+-            if (WAITERS.weakCompareAndSet(this, q, null)) {
+-                for (;;) {
+-                    Thread t = q.thread;
+-                    if (t != null) {
+-                        q.thread = null;
+-                        LockSupport.unpark(t);
+-                    }
+-                    WaitNode next = q.next;
+-                    if (next == null)
+-                        break;
+-                    q.next = null; // unlink to help gc
+-                    q = next;
+-                }
+-                break;
+-            }
+-        }
+-
+         done();
+-
+-        callable = null;        // to reduce footprint
+-    }
+-
+-    /**
+-     * Awaits completion or aborts on interrupt or timeout.
+-     *
+-     * @param timed true if use timed waits
+-     * @param nanos time to wait, if timed
+-     * @return state upon completion or at timeout
+-     */
+-    private int awaitDone(boolean timed, long nanos)
+-        throws InterruptedException {
+-        // The code below is very delicate, to achieve these goals:
+-        // - call nanoTime exactly once for each call to park
+-        // - if nanos <= 0L, return promptly without allocation or nanoTime
+-        // - if nanos == Long.MIN_VALUE, don't underflow
+-        // - if nanos == Long.MAX_VALUE, and nanoTime is non-monotonic
+-        //   and we suffer a spurious wakeup, we will do no worse than
+-        //   to park-spin for a while
+-        long startTime = 0L;    // Special value 0L means not yet parked
+-        WaitNode q = null;
+-        boolean queued = false;
+-        for (;;) {
+-            int s = state;
+-            if (s > COMPLETING) {
+-                if (q != null)
+-                    q.thread = null;
+-                return s;
+-            }
+-            else if (s == COMPLETING)
+-                // We may have already promised (via isDone) that we are done
+-                // so never return empty-handed or throw InterruptedException
+-                Thread.yield();
+-            else if (Thread.interrupted()) {
+-                removeWaiter(q);
+-                throw new InterruptedException();
+-            }
+-            else if (q == null) {
+-                if (timed && nanos <= 0L)
+-                    return s;
+-                q = new WaitNode();
+-            }
+-            else if (!queued)
+-                queued = WAITERS.weakCompareAndSet(this, q.next = waiters, q);
+-            else if (timed) {
+-                final long parkNanos;
+-                if (startTime == 0L) { // first time
+-                    startTime = System.nanoTime();
+-                    if (startTime == 0L)
+-                        startTime = 1L;
+-                    parkNanos = nanos;
+-                } else {
+-                    long elapsed = System.nanoTime() - startTime;
+-                    if (elapsed >= nanos) {
+-                        removeWaiter(q);
+-                        return state;
+-                    }
+-                    parkNanos = nanos - elapsed;
+-                }
+-                // nanoTime may be slow; recheck before parking
+-                if (state < COMPLETING)
+-                    LockSupport.parkNanos(this, parkNanos);
+-            }
+-            else
+-                LockSupport.park(this);
+-        }
+-    }
+-
+-    /**
+-     * Tries to unlink a timed-out or interrupted wait node to avoid
+-     * accumulating garbage.  Internal nodes are simply unspliced
+-     * without CAS since it is harmless if they are traversed anyway
+-     * by releasers.  To avoid effects of unsplicing from already
+-     * removed nodes, the list is retraversed in case of an apparent
+-     * race.  This is slow when there are a lot of nodes, but we don't
+-     * expect lists to be long enough to outweigh higher-overhead
+-     * schemes.
+-     */
+-    private void removeWaiter(WaitNode node) {
+-        if (node != null) {
+-            node.thread = null;
+-            retry:
+-            for (;;) {          // restart on removeWaiter race
+-                for (WaitNode pred = null, q = waiters, s; q != null; q = s) {
+-                    s = q.next;
+-                    if (q.thread != null)
+-                        pred = q;
+-                    else if (pred != null) {
+-                        pred.next = s;
+-                        if (pred.thread == null) // check for race
+-                            continue retry;
+-                    }
+-                    else if (!WAITERS.compareAndSet(this, q, s))
+-                        continue retry;
+-                }
+-                break;
+-            }
+-        }
++        callable = null;
+     }
+ 
+     /**
+@@ -585,18 +414,4 @@
+     }
+ 
+     // VarHandle mechanics
+-    private static final VarHandle STATE;
+-    private static final VarHandle RUNNER;
+-    private static final VarHandle WAITERS;
+-    static {
+-        MethodHandles.Lookup l = MethodHandles.lookup();
+-        STATE = MhUtil.findVarHandle(l, "state", int.class);
+-        RUNNER = MhUtil.findVarHandle(l, "runner", Thread.class);
+-        WAITERS = MhUtil.findVarHandle(l, "waiters", WaitNode.class);
+-
+-        // Reduce the risk of rare disastrous classloading in first call to
+-        // LockSupport.park: https://bugs.openjdk.org/browse/JDK-8074773
+-        Class<?> ensureLoaded = LockSupport.class;
+-    }
+-
+ }

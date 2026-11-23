@@ -1,0 +1,55 @@
+--- a/frameworks/base/core/java/android/view/LayoutInflater.java
++++ b/frameworks/base/core/java/android/view/LayoutInflater.java
+@@ -568,13 +568,11 @@
+ 
+             } catch (XmlPullParserException e) {
+                 final InflateException ie = new InflateException(e.getMessage(), e);
+-                ie.setStackTrace(new StackTraceElement[0]);
+                 throw ie;
+             } catch (Exception e) {
+                 final InflateException ie = new InflateException(
+                         getParserStateDescription(inflaterContext, attrs)
+                         + ": " + e.getMessage(), e);
+-                ie.setStackTrace(new StackTraceElement[0]);
+                 throw ie;
+             } finally {
+                 // Don't retain static reference on context.
+@@ -741,7 +739,6 @@
+             final InflateException ie = new InflateException(
+                     getParserStateDescription(viewContext, attrs)
+                     + ": Error inflating class " + (prefix != null ? (prefix + name) : name), e);
+-            ie.setStackTrace(new StackTraceElement[0]);
+             throw ie;
+ 
+         } catch (ClassCastException e) {
+@@ -749,7 +746,6 @@
+             final InflateException ie = new InflateException(
+                     getParserStateDescription(viewContext, attrs)
+                     + ": Class is not a View " + (prefix != null ? (prefix + name) : name), e);
+-            ie.setStackTrace(new StackTraceElement[0]);
+             throw ie;
+         } catch (ClassNotFoundException e) {
+             // If loadClass fails, we should propagate the exception.
+@@ -758,7 +754,6 @@
+             final InflateException ie = new InflateException(
+                     getParserStateDescription(viewContext, attrs) + ": Error inflating class "
+                             + (clazz == null ? "<unknown>" : clazz.getName()), e);
+-            ie.setStackTrace(new StackTraceElement[0]);
+             throw ie;
+         }
+     }
+@@ -892,14 +887,12 @@
+             final InflateException ie = new InflateException(
+                     getParserStateDescription(context, attrs)
+                     + ": Error inflating class " + name, e);
+-            ie.setStackTrace(new StackTraceElement[0]);
+             throw ie;
+ 
+         } catch (Exception e) {
+             final InflateException ie = new InflateException(
+                     getParserStateDescription(context, attrs)
+                     + ": Error inflating class " + name, e);
+-            ie.setStackTrace(new StackTraceElement[0]);
+             throw ie;
+         }
+     }

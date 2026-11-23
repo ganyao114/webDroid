@@ -1,0 +1,3059 @@
+--- a/frameworks/base/core/java/android/os/PowerManager.java
++++ b/frameworks/base/core/java/android/os/PowerManager.java
+@@ -16,14 +16,10 @@
+ 
+ package android.os;
+ 
+-import static android.app.PropertyInvalidatedCache.MODULE_SYSTEM;
+-
+-import static com.android.server.power.feature.flags.Flags.FLAG_PARTIAL_SLEEP_WAKELOCKS;
+-import static com.android.server.power.feature.flags.Flags.FLAG_SHUTDOWN_SYSTEM_API;
++
+ 
+ import android.Manifest.permission;
+ import android.annotation.CallbackExecutor;
+-import android.annotation.FlaggedApi;
+ import android.annotation.FloatRange;
+ import android.annotation.IntDef;
+ import android.annotation.IntRange;
+@@ -35,36 +31,18 @@
+ import android.annotation.SystemApi;
+ import android.annotation.SystemService;
+ import android.annotation.TestApi;
+-import android.app.PropertyInvalidatedCache;
+-import android.companion.virtual.VirtualDeviceManager;
+-import android.companion.virtual.VirtualDeviceParams;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+-import android.service.dreams.Sandman;
+-import android.util.ArrayMap;
+-import android.util.ArraySet;
+ import android.util.Log;
+-import android.util.proto.ProtoOutputStream;
+-import android.view.Display;
+ 
+ import com.android.internal.R;
+-import com.android.internal.annotations.GuardedBy;
+-import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.util.Preconditions;
+ 
+ import java.lang.annotation.ElementType;
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+ import java.lang.annotation.Target;
+-import java.net.InetAddress;
+-import java.net.UnknownHostException;
+-import java.time.Duration;
+-import java.util.ArrayList;
+-import java.util.Collections;
+-import java.util.List;
+ import java.util.Map;
+ import java.util.Objects;
+-import java.util.Set;
+ import java.util.concurrent.Executor;
+ 
+ /**
+@@ -88,7 +66,7 @@
+      * but the CPU will be kept on until all partial wake locks have been released.
+      * </p>
+      */
+-    public static final int PARTIAL_WAKE_LOCK = OsProtoEnums.PARTIAL_WAKE_LOCK; // 0x00000001
++    public static final int PARTIAL_WAKE_LOCK = 0x1; // 0x00000001
+ 
+     /**
+      * Wake lock level: Ensures that the screen is on (but may be dimmed);
+@@ -105,7 +83,7 @@
+      * as the user moves between applications and doesn't require a special permission.
+      */
+     @Deprecated
+-    public static final int SCREEN_DIM_WAKE_LOCK = OsProtoEnums.SCREEN_DIM_WAKE_LOCK; // 0x00000006
++    public static final int SCREEN_DIM_WAKE_LOCK = 0x6; // 0x00000006
+ 
+     /**
+      * Wake lock level: Ensures that the screen is on at full brightness;
+@@ -123,7 +101,7 @@
+      */
+     @Deprecated
+     public static final int SCREEN_BRIGHT_WAKE_LOCK =
+-            OsProtoEnums.SCREEN_BRIGHT_WAKE_LOCK; // 0x0000000a
++            0xa; // 0x0000000a
+ 
+     /**
+      * Wake lock level: Ensures that the screen and keyboard backlight are on at
+@@ -140,7 +118,7 @@
+      * as the user moves between applications and doesn't require a special permission.
+      */
+     @Deprecated
+-    public static final int FULL_WAKE_LOCK = OsProtoEnums.FULL_WAKE_LOCK; // 0x0000001a
++    public static final int FULL_WAKE_LOCK = 0x1a; // 0x0000001a
+ 
+     /**
+      * Wake lock level: Turns the screen off when the proximity sensor activates.
+@@ -162,7 +140,7 @@
+      * </p>
+      */
+     public static final int PROXIMITY_SCREEN_OFF_WAKE_LOCK =
+-            OsProtoEnums.PROXIMITY_SCREEN_OFF_WAKE_LOCK; // 0x00000020
++            0x20; // 0x00000020
+ 
+     /**
+      * Wake lock level: Put the screen in a low power state and allow the CPU to suspend
+@@ -176,7 +154,7 @@
+      *
+      * @hide
+      */
+-    public static final int DOZE_WAKE_LOCK = OsProtoEnums.DOZE_WAKE_LOCK; // 0x00000040
++    public static final int DOZE_WAKE_LOCK = 0x40; // 0x00000040
+ 
+     /**
+      * Wake lock level: Keep the device awake enough to allow drawing to occur.
+@@ -190,7 +168,7 @@
+      *
+      * @hide
+      */
+-    public static final int DRAW_WAKE_LOCK = OsProtoEnums.DRAW_WAKE_LOCK; // 0x00000080
++    public static final int DRAW_WAKE_LOCK = 0x80; // 0x00000080
+ 
+     /**
+      * Wake lock level: Override the current screen timeout.
+@@ -206,7 +184,7 @@
+      * @hide
+      */
+     public static final int SCREEN_TIMEOUT_OVERRIDE_WAKE_LOCK =
+-            OsProtoEnums.SCREEN_TIMEOUT_OVERRIDE_WAKE_LOCK; // 0x00000100
++            0x100; // 0x00000100
+ 
+     /**
+      * Wake lock level: Keep the device asleep - for the user, but ensure that the CPU
+@@ -216,7 +194,7 @@
+      * @hide
+      */
+     public static final int PARTIAL_SLEEP_WAKE_LOCK =
+-            OsProtoEnums.PARTIAL_SLEEP_WAKE_LOCK; // 0x00000200
++            0x200; // 0x00000200
+ 
+     /**
+      * Mask for the wake lock level component of a combined wake lock level and flags integer.
+@@ -411,7 +389,6 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_LOW_LIGHT_DREAM_BEHAVIOR)
+     public static final int FLAG_AMBIENT_SUPPRESSION_NONE = 0;
+ 
+     /**
+@@ -419,7 +396,6 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_LOW_LIGHT_DREAM_BEHAVIOR)
+     public static final int FLAG_AMBIENT_SUPPRESSION_DREAM = 1;
+ 
+     /**
+@@ -427,7 +403,6 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_LOW_LIGHT_DREAM_BEHAVIOR)
+     public static final int FLAG_AMBIENT_SUPPRESSION_AOD = 1 << 1;
+ 
+     /**
+@@ -435,7 +410,6 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_LOW_LIGHT_DREAM_BEHAVIOR)
+     public static final int FLAG_AMBIENT_SUPPRESSION_ALL =
+             FLAG_AMBIENT_SUPPRESSION_DREAM
+                     | FLAG_AMBIENT_SUPPRESSION_AOD;
+@@ -450,7 +424,6 @@
+             FLAG_AMBIENT_SUPPRESSION_ALL,
+     })
+     @Retention(RetentionPolicy.SOURCE)
+-    @FlaggedApi(Flags.FLAG_LOW_LIGHT_DREAM_BEHAVIOR)
+     public @interface FlagAmbientSuppression{}
+ 
+     /** @hide */
+@@ -1279,137 +1252,23 @@
+ 
+     private static final int MAX_CACHE_ENTRIES = 1;
+ 
+-    private static PropertyInvalidatedCache.Args getCacheArgs(String api) {
+-        return new PropertyInvalidatedCache.Args(MODULE_SYSTEM)
+-                .maxEntries(MAX_CACHE_ENTRIES)
+-                .isolateUids(false)
+-                .cacheNulls(false)
+-                .api(api);
+-    }
+-
+-    private final PropertyInvalidatedCache<Void, Boolean> mPowerSaveModeCache =
+-            new PropertyInvalidatedCache<>(getCacheArgs(CACHE_KEY_IS_POWER_SAVE_MODE_API),
+-                    CACHE_KEY_IS_POWER_SAVE_MODE_API, null) {
+-                @Override
+-                public Boolean recompute(Void query) {
+-                    try {
+-                        return mService.isPowerSaveMode();
+-                    } catch (RemoteException e) {
+-                        throw e.rethrowFromSystemServer();
+-                    }
+-                }
+-            };
+-
+-    private final PropertyInvalidatedCache<Integer, Boolean> mInteractiveCache =
+-            new PropertyInvalidatedCache<>(getCacheArgs(CACHE_KEY_IS_INTERACTIVE_API),
+-                    CACHE_KEY_IS_INTERACTIVE_API, null) {
+-                @Override
+-                public Boolean recompute(Integer displayId) {
+-                    try {
+-                        if (displayId == null) {
+-                            return mService.isInteractive();
+-                        } else {
+-                            return mService.isDisplayInteractive(displayId);
+-                        }
+-                    } catch (RemoteException e) {
+-                        throw e.rethrowFromSystemServer();
+-                    }
+-                }
+-            };
+-
+     final Context mContext;
+-    @UnsupportedAppUsage
+-    final IPowerManager mService;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P)
+     final Handler mHandler;
+-    final IThermalService mThermalService;
+-
+-    /** We lazily initialize them.*/
+-    private PowerExemptionManager mPowerExemptionManager;
+-    private VirtualDeviceManager mVirtualDeviceManager;
+-
+-    @GuardedBy("mThermalStatusListenerMap")
+-    private final ArrayMap<OnThermalStatusChangedListener, IThermalStatusListener>
+-            mThermalStatusListenerMap = new ArrayMap<>();
+-    @GuardedBy("mThermalHeadroomListenerMap")
+-    private final ArrayMap<OnThermalHeadroomChangedListener, IThermalHeadroomListener>
+-            mThermalHeadroomListenerMap = new ArrayMap<>();
+-
+-    private final ArrayMap<ScreenTimeoutPolicyListener, IScreenTimeoutPolicyListener>
+-            mScreenTimeoutPolicyListeners = new ArrayMap<>();
+-
+-    /**
+-     * @hide
+-     */
+-    public PowerManager(Context context, IPowerManager service, IThermalService thermalService,
+-            Handler handler) {
++    private boolean mInteractive = true;
++    private boolean mPowerSave;
++
++    /** @hide */
++    public void setEmbeddedInteractive(boolean interactive) {
++        mInteractive = interactive;
++    }
++
++    /**
++     * @hide
++     */
++    public PowerManager(Context context, Handler handler) {
+         mContext = context;
+-        mService = service;
+-        mThermalService = thermalService;
+         mHandler = handler;
+-    }
+-
+-    private PowerExemptionManager getPowerExemptionManager() {
+-        if (mPowerExemptionManager == null) {
+-            // No need for synchronization; getSystemService() will return the same object anyway.
+-            mPowerExemptionManager = mContext.getSystemService(PowerExemptionManager.class);
+-        }
+-        return mPowerExemptionManager;
+-    }
+-
+-    /**
+-     * Gets the minimum supported screen brightness setting.
+-     * The screen may be allowed to become dimmer than this value but
+-     * this is the minimum value that can be set by the user.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public int getMinimumScreenBrightnessSetting() {
+-        return mContext.getResources().getInteger(
+-                com.android.internal.R.integer.config_screenBrightnessSettingMinimum);
+-    }
+-
+-    /**
+-     * Gets the maximum supported screen brightness setting.
+-     * The screen may be allowed to become dimmer than this value but
+-     * this is the maximum value that can be set by the user.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public int getMaximumScreenBrightnessSetting() {
+-        return mContext.getResources().getInteger(
+-                com.android.internal.R.integer.config_screenBrightnessSettingMaximum);
+-    }
+-
+-    /**
+-     * Gets the default screen brightness setting.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public int getDefaultScreenBrightnessSetting() {
+-        return mContext.getResources().getInteger(
+-                com.android.internal.R.integer.config_screenBrightnessSettingDefault);
+-    }
+-
+-    /**
+-     * Gets a float screen brightness setting.
+-     * @hide
+-     */
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    public float getBrightnessConstraint(@BrightnessConstraint int constraint) {
+-        return getBrightnessConstraint(Display.DEFAULT_DISPLAY, constraint);
+-    }
+-
+-    /**
+-     * Gets a float screen brightness setting for a specific display.
+-     * @hide
+-     */
+-    public float getBrightnessConstraint(int displayId, @BrightnessConstraint int constraint) {
+-        try {
+-            return mService.getBrightnessConstraint(displayId, constraint);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+     }
+ 
+     /**
+@@ -1530,11 +1389,7 @@
+             case SCREEN_TIMEOUT_OVERRIDE_WAKE_LOCK:
+                 break;
+             case PARTIAL_SLEEP_WAKE_LOCK:
+-                if (com.android.server.power.feature.flags.Flags.partialSleepWakelocks()) {
+-                    break;
+-                }
+-                throw new IllegalArgumentException(
+-                        "Partial sleep wake lock flag not rolled out yet");
++                break;
+             default:
+                 throw new IllegalArgumentException("Must specify a valid wake lock level.");
+         }
+@@ -1606,11 +1461,6 @@
+             android.Manifest.permission.USER_ACTIVITY
+     })
+     public void userActivity(long when, @UserActivityEvent int event, @UserActivityFlag int flags) {
+-        try {
+-            mService.userActivity(mContext.getDisplayId(), when, event, flags);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+     }
+ 
+     /**
+@@ -1676,14 +1526,9 @@
+      */
+     @TestApi
+     @RequiresPermission(android.Manifest.permission.DEVICE_POWER)
+-    @FlaggedApi(FLAG_PARTIAL_SLEEP_WAKELOCKS)
+     @UnsupportedAppUsage
+     public void goToSleep(long time, int reason, int flags) {
+-        try {
+-            mService.goToSleep(time, reason, flags);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        setEmbeddedInteractive(false);
+     }
+ 
+     /**
+@@ -1716,11 +1561,7 @@
+      */
+     @RequiresPermission(android.Manifest.permission.DEVICE_POWER)
+     public void goToSleep(int displayId, long time, @GoToSleepReason int reason, int flags) {
+-        try {
+-            mService.goToSleepWithDisplayId(displayId, time, reason, flags);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        goToSleep(time, reason, flags);
+     }
+ 
+     /**
+@@ -1757,11 +1598,7 @@
+      * @hide
+      */
+     public void wakeUp(long time, @WakeReason int reason, String details) {
+-        try {
+-            mService.wakeUp(time, reason, details, mContext.getOpPackageName());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        setEmbeddedInteractive(true);
+     }
+ 
+     /**
+@@ -1797,161 +1634,7 @@
+      * @hide
+      */
+     public void wakeUp(long time, @WakeReason int reason, String details, int displayId) {
+-        try {
+-            mService.wakeUpWithDisplayId(time, reason, details, mContext.getOpPackageName(),
+-                    displayId);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Forces the device to start napping.
+-     * <p>
+-     * If the device is currently awake, starts dreaming, otherwise does nothing.
+-     * When the dream ends or if the dream cannot be started, the device will
+-     * either wake up or go to sleep depending on whether there has been recent
+-     * user activity.
+-     * </p><p>
+-     * Requires the {@link android.Manifest.permission#DEVICE_POWER} permission.
+-     * </p>
+-     *
+-     * @param time The time when the request to nap was issued, in the
+-     * {@link SystemClock#uptimeMillis()} time base.  This timestamp is used to correctly
+-     * order the nap request with other power management functions.  It should be set
+-     * to the timestamp of the input event that caused the request to nap.
+-     *
+-     * @see #wakeUp
+-     * @see #goToSleep
+-     *
+-     * @hide Requires signature permission.
+-     */
+-    public void nap(long time) {
+-        try {
+-            mService.nap(time);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Requests the device to start dreaming.
+-     * <p>
+-     * If dream can not be started, for example if another {@link PowerManager} transition is in
+-     * progress, does nothing. Unlike {@link #nap(long)}, this does not put device to sleep when
+-     * dream ends.
+-     * </p><p>
+-     * Requires the {@link android.Manifest.permission#READ_DREAM_STATE} and
+-     * {@link android.Manifest.permission#WRITE_DREAM_STATE} permissions.
+-     * </p>
+-     *
+-     * @param time The time when the request to nap was issued, in the
+-     * {@link SystemClock#uptimeMillis()} time base.  This timestamp may be used to correctly
+-     * order the dream request with other power management functions.  It should be set
+-     * to the timestamp of the input event that caused the request to dream.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(allOf = {
+-            android.Manifest.permission.READ_DREAM_STATE,
+-            android.Manifest.permission.WRITE_DREAM_STATE })
+-    public void dream(long time) {
+-        Sandman.startDreamByUserRequest(mContext);
+-    }
+-
+-    /**
+-     * Boosts the brightness of the screen to maximum for a predetermined
+-     * period of time.  This is used to make the screen more readable in bright
+-     * daylight for a short duration.
+-     * <p>
+-     * Requires the {@link android.Manifest.permission#DEVICE_POWER} permission.
+-     * </p>
+-     *
+-     * @param time The time when the request to boost was issued, in the
+-     * {@link SystemClock#uptimeMillis()} time base.  This timestamp is used to correctly
+-     * order the boost request with other power management functions.  It should be set
+-     * to the timestamp of the input event that caused the request to boost.
+-     *
+-     * @hide Requires signature permission.
+-     */
+-    public void boostScreenBrightness(long time) {
+-        try {
+-            mService.boostScreenBrightness(time);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Adds a listener to be notified about changes in screen timeout policy.
+-     *
+-     * <p>The screen timeout policy determines the behavior of the device's screen
+-     * after a period of inactivity. It can be used to understand if the display is going
+-     * to be turned off after a timeout to conserve power, or if it will be kept on indefinitely.
+-     * For example, it might be useful for adjusting display switch conditions on foldable
+-     * devices based on the current timeout policy.
+-     *
+-     * <p>See {@link ScreenTimeoutPolicy} for possible values.
+-     *
+-     * <p>The listener will be fired with the initial state upon subscribing.
+-     *
+-     * <p>IScreenTimeoutPolicyListener is called on either system server's main thread or
+-     * on a binder thread if subscribed outside the system service process.
+-     *
+-     * @param displayId display id for which to be notified about screen timeout policy changes
+-     * @param executor executor on which to execute ScreenTimeoutPolicyListener methods
+-     * @param listener listener that will be fired on screem timeout policy updates
+-     * @hide
+-     */
+-    @RequiresPermission(android.Manifest.permission.DEVICE_POWER)
+-    public void addScreenTimeoutPolicyListener(int displayId,
+-            @NonNull @CallbackExecutor Executor executor,
+-            @NonNull ScreenTimeoutPolicyListener listener) {
+-        Objects.requireNonNull(listener, "listener cannot be null");
+-        Objects.requireNonNull(executor, "executor cannot be null");
+-        Preconditions.checkArgument(!mScreenTimeoutPolicyListeners.containsKey(listener),
+-                "Listener already registered: %s", listener);
+-
+-        final IScreenTimeoutPolicyListener stub = new IScreenTimeoutPolicyListener.Stub() {
+-            public void onScreenTimeoutPolicyChanged(int screenTimeoutPolicy) {
+-                final long token = Binder.clearCallingIdentity();
+-                try {
+-                    executor.execute(() ->
+-                            listener.onScreenTimeoutPolicyChanged(screenTimeoutPolicy));
+-                } finally {
+-                    Binder.restoreCallingIdentity(token);
+-                }
+-            }
+-        };
+-
+-        try {
+-            mService.addScreenTimeoutPolicyListener(displayId, stub);
+-            mScreenTimeoutPolicyListeners.put(listener, stub);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Removes a listener that is used to listen for screen timeout policy changes.
+-     * @see PowerManager#addScreenTimeoutPolicyListener(int, ScreenTimeoutPolicyListener)
+-     * @param displayId display id for which to be notified about screen timeout changes
+-     * @hide
+-     */
+-    @RequiresPermission(android.Manifest.permission.DEVICE_POWER)
+-    public void removeScreenTimeoutPolicyListener(int displayId,
+-            @NonNull ScreenTimeoutPolicyListener listener) {
+-        Objects.requireNonNull(listener, "listener cannot be null");
+-        IScreenTimeoutPolicyListener internalListener = mScreenTimeoutPolicyListeners.get(listener);
+-        Preconditions.checkArgument(internalListener != null, "Listener was not added");
+-
+-        try {
+-            mService.removeScreenTimeoutPolicyListener(displayId, internalListener);
+-            mScreenTimeoutPolicyListeners.remove(listener);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        wakeUp(time, reason, details);
+     }
+ 
+    /**
+@@ -1961,11 +1644,11 @@
+      * @return True if the specified wake lock level is supported.
+      */
+     public boolean isWakeLockLevelSupported(int level) {
+-        try {
+-            return mService.isWakeLockLevelSupportedWithDisplayId(level, mContext.getDisplayId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return switch (level) {
++            case PARTIAL_WAKE_LOCK, SCREEN_DIM_WAKE_LOCK, SCREEN_BRIGHT_WAKE_LOCK,
++                    FULL_WAKE_LOCK, DOZE_WAKE_LOCK, DRAW_WAKE_LOCK -> true;
++            default -> false;
++        };
+     }
+ 
+     /**
+@@ -2040,231 +1723,9 @@
+      */
+     @TestApi
+     public boolean isInteractive(int displayId) {
+-        return mInteractiveCache.query(displayId);
+-    }
+-
+-    /**
+-     * Returns {@code true} if this device supports rebooting userspace.
+-     *
+-     * <p>This method exists solely for the sake of re-using same logic between {@code PowerManager}
+-     * and {@code PowerManagerService}.
+-     *
+-     * @deprecated TODO(b/292469129): remove this method.
+-     * @hide
+-     */
+-    public static boolean isRebootingUserspaceSupportedImpl() {
+-        return false;
+-    }
+-
+-    /**
+-     * Returns {@code true} if this device supports rebooting userspace.
+-     *
+-     * @deprecated userspace reboot is deprecated, this method always returns {@code false}.
+-     */
+-    public boolean isRebootingUserspaceSupported() {
+-        return isRebootingUserspaceSupportedImpl();
+-    }
+-
+-    /**
+-     * Reboot the device.  Will not return if the reboot is successful.
+-     * <p>
+-     * Requires the {@link android.Manifest.permission#REBOOT} permission.
+-     * </p>
+-     * <p>
+-     * If the {@code reason} string contains ",quiescent", then the screen stays off during reboot
+-     * and is not turned on again until the user triggers the device to wake up (for example,
+-     * by pressing the power key).
+-     * This behavior applies to Android TV devices launched on Android 11 (API level 30) or higher.
+-     * </p>
+-     *
+-     * @param reason code to pass to the kernel (e.g., "recovery") to
+-     *               request special boot modes, or null.
+-     * @throws UnsupportedOperationException if userspace reboot was requested on a device that
+-     *                                       doesn't support it.
+-     */
+-    @RequiresPermission(permission.REBOOT)
+-    public void reboot(@Nullable String reason) {
+-        if (REBOOT_USERSPACE.equals(reason) && !isRebootingUserspaceSupported()) {
+-            throw new UnsupportedOperationException(
+-                    "Attempted userspace reboot on a device that doesn't support it");
+-        }
+-        try {
+-            mService.reboot(false, reason, true);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Creates a new sleep lock, which is a wake lock that holds a {@link #PARTIAL_SLEEP_WAKE_LOCK}.
+-     * <p>
+-     * A sleep lock is a specialized, non-reference-counted wake lock that keeps the CPU running
+-     * and keeps the display(s) off. When a sleep lock is held, it supersedes all other
+-     * wake locks, meaning they will be ignored.
+-     * </p><p>
+-     * Since this is a non-reference-counted lock, a single call to {@link SleepLock#release()}
+-     * is sufficient to release it, regardless of how many times {@link SleepLock#acquire(long)}
+-     * was called.
+-     * </p><p>
+-     * Call {@link SleepLock#acquire(long)} with a timeout on the returned object to acquire the
+-     * sleep lock, and {@link SleepLock#release()} to release it when you are done. It is important
+-     * to release the lock as soon as the work is complete.
+-     * </p>
+-     *
+-     * @param displayId The ID of the display with which this sleep lock is associated. The lock
+-     *                  will apply to the display group of this display. Use
+-     *                  {@link android.view.Display#DEFAULT_DISPLAY} for the default display.
+-     * @param tag A tag for debugging purposes. Follow the naming conventions described in
+-     *            {@link #newWakeLock(int, String)}.
+-     * @return A new {@link SleepLock} object.
+-     * @throws RuntimeException if partial sleep wake locks are not enabled on the device.
+-     *
+-     * @see SleepLock
+-     * @see #PARTIAL_SLEEP_WAKE_LOCK
+-     * @hide
+-     */
+-    @FlaggedApi(FLAG_PARTIAL_SLEEP_WAKELOCKS)
+-    @TestApi
+-    @NonNull
+-    @RequiresPermission(permission.ACQUIRE_SLEEP_LOCK)
+-    public SleepLock newSleepLock(int displayId, @NonNull String tag) throws RuntimeException {
+-        if (!mContext.getResources().getBoolean(R.bool.config_allowPartialSleepWakeLocks)) {
+-            throw new RuntimeException("Partial Sleep WakeLocks are not allowed on this device "
+-                    + "due to the configuration");
+-        }
+-
+-        return new SleepLock(displayId, tag);
+-    }
+-
+-    /**
+-     * A specialized, non-reference-counted wake lock that keeps the CPU running
+-     * and keeps the display(s) off.
+-     * <p>
+-     * An instance of this class can be obtained by calling
+-     * {@link PowerManager#newSleepLock(int, String)}.
+-     * </p><p>
+-     * When a sleep lock is held, it supersedes all other wake locks, meaning they will be ignored.
+-     * Since this is a non-reference-counted lock, a single call to {@link #release()}
+-     * is sufficient to release it.
+-     * </p><p>
+-     * Use {@link #acquire(long)} to acquire the lock and {@link #release()} to release it.
+-     * Use {@link #release()} to check whether the wakelock is currently held.
+-     * </p>
+-     *
+-     * @see #newSleepLock(int, String)
+-     * @hide
+-     */
+-    @FlaggedApi(FLAG_PARTIAL_SLEEP_WAKELOCKS)
+-    @TestApi
+-    @SuppressLint("NotCloseable")
+-    public final class SleepLock {
+-        private static final int SLEEP_LOCK = PowerManager.PARTIAL_SLEEP_WAKE_LOCK;
+-        @NonNull
+-        private final String mTag;
+-        private final int mDisplayId;
+-        private final int mDefaultTimeoutMillis;
+-        @NonNull
+-        private final WakeLock mWakelock;
+-
+-        /**
+-         *
+-         * @param displayId The ID of the display with which this sleep lock is associated. The lock
+-         *                  will apply to the display group of this display. Use
+-         *                  {@link android.view.Display#DEFAULT_DISPLAY} for the default display.
+-         * @param tag A tag for debugging purposes. Follow the naming conventions described in
+-         *            {@link #newWakeLock(int, String)}.
+-         *
+-         * @hide
+-         */
+-        public SleepLock(int displayId, @NonNull String tag) {
+-            mDisplayId = displayId;
+-            mTag = tag;
+-            mDefaultTimeoutMillis = mContext.getResources().getInteger(
+-                    R.integer.config_maximumPartialSleepWakeLockDuration);
+-            mWakelock = new WakeLock(SLEEP_LOCK, mTag, mContext.getOpPackageName(), mDisplayId);
+-            mWakelock.setReferenceCounted(false);
+-        }
+-
+-        /**
+-         * Acquires the sleep lock for a given timeout.
+-         * <p>
+-         * The lock is automatically released after the specified timeout expires.
+-         * </p><p>
+-         * The requested timeout may be capped at a system-defined maximum value to
+-         * prevent the lock from being held indefinitely.
+-         * </p>
+-         *
+-         * @param timeoutMillis The amount of time to hold the lock for, in milliseconds.
+-         */
+-        @RequiresPermission(permission.ACQUIRE_SLEEP_LOCK)
+-        public void acquire(long timeoutMillis) {
+-            mWakelock.acquire(Math.min(timeoutMillis, mDefaultTimeoutMillis));
+-        }
+-
+-
+-        /**
+-         * Releases the sleep lock.
+-         */
+-        @RequiresPermission(permission.ACQUIRE_SLEEP_LOCK)
+-        public void release() {
+-            try {
+-                mWakelock.release();
+-            } catch (RuntimeException ignore) {
+-                // wakelock already released by system due to timeout
+-            }
+-        }
+-
+-        /**
+-         * Returns whether the sleep lock has been acquired but not yet released.
+-         *
+-         * @return {@code true} if the lock is held, {@code false} otherwise.
+-         */
+-        @VisibleForTesting
+-        public boolean isHeld() {
+-            return mWakelock.isHeld();
+-        }
+-
+-        /**
+-         * {@inheritDoc}
+-         */
+-        @Override
+-        public String toString() {
+-            return "mTag: " + mTag + ", mDisplayId: " + mDisplayId + ", mDefaultTimeoutMillis: "
+-                    + mDefaultTimeoutMillis + ", mWakelock: " + mWakelock;
+-        }
+-    }
+-
+-
+-    /**
+-     * Reboot the device. Will not return if the reboot is successful.
+-     * <p>
+-     * Requires the {@link android.Manifest.permission#REBOOT} permission.
+-     * </p>
+-     * @hide
+-     */
+-    @RequiresPermission(permission.REBOOT)
+-    public void rebootSafeMode() {
+-        try {
+-            mService.rebootSafeMode(false, true);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns true if the platform has auto power save modes (eg. Doze & app standby) enabled.
+-     * This doesn't necessarily mean that the individual features are enabled. For example, if this
+-     * returns true, Doze might be enabled while app standby buckets remain disabled.
+-     * @hide
+-     */
+-    @TestApi
+-    public boolean areAutoPowerSaveModesEnabled() {
+-        try {
+-            return mService.areAutoPowerSaveModesEnabled();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
++        return mInteractive;
++    }
++
+ 
+     /**
+      * Returns true if the device is currently in power save mode.  When in this mode,
+@@ -2275,7 +1736,7 @@
+      * @return Returns true if currently in low power mode, else false.
+      */
+     public boolean isPowerSaveMode() {
+-        return mPowerSaveModeCache.query(null);
++        return mPowerSave;
+     }
+ 
+     /**
+@@ -2292,11 +1753,11 @@
+             android.Manifest.permission.POWER_SAVER
+     })
+     public boolean setPowerSaveModeEnabled(boolean mode) {
+-        try {
+-            return mService.setPowerSaveModeEnabled(mode);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        if (mPowerSave != mode) {
++            mPowerSave = mode;
++            mContext.sendBroadcast(new android.content.Intent(ACTION_POWER_SAVE_MODE_CHANGED));
++        }
++        return true;
+     }
+ 
+     /**
+@@ -2304,156 +1765,9 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(android.os.Flags.FLAG_BATTERY_SAVER_SUPPORTED_CHECK_API)
+     @TestApi
+     public boolean isBatterySaverSupported() {
+-        try {
+-            return mService.isBatterySaverSupported();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Gets the current policy for full power save mode.
+-     *
+-     * @return The {@link BatterySaverPolicyConfig} which is currently set for the full power save
+-     *          policy level.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @NonNull
+-    public BatterySaverPolicyConfig getFullPowerSavePolicy() {
+-        try {
+-            return mService.getFullPowerSavePolicy();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Sets the policy for full power save mode.
+-     *
+-     * Any settings set by this API will persist for only one session of full battery saver mode.
+-     * The settings set by this API are cleared upon exit of full battery saver mode, and the
+-     * caller is expected to set the desired values again for the next full battery saver mode
+-     * session if desired.
+-     *
+-     * Use-cases:
+-     * 1. Set policy outside of full battery saver mode
+-     *     - full policy set -> enter BS -> policy setting applied -> exit BS -> setting cleared
+-     * 2. Set policy inside of full battery saver mode
+-     *     - enter BS -> full policy set -> policy setting applied -> exit BS -> setting cleared
+-     *
+-     * This API is intended to be used with {@link #getFullPowerSavePolicy()} API when a client only
+-     * wants to modify a specific setting(s) and leave the remaining policy attributes the same.
+-     * Example:
+-     * BatterySaverPolicyConfig newFullPolicyConfig =
+-     *     new BatterySaverPolicyConfig.Builder(powerManager.getFullPowerSavePolicy())
+-     *         .setSoundTriggerMode(PowerManager.SOUND_TRIGGER_MODE_ALL_DISABLED)
+-     *         .build();
+-     * powerManager.setFullPowerSavePolicy(newFullPolicyConfig);
+-     *
+-     * @return true if there was an effectual change. If full battery saver is enabled, then this
+-     * will return true.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.DEVICE_POWER,
+-            android.Manifest.permission.POWER_SAVER
+-    })
+-    public boolean setFullPowerSavePolicy(@NonNull BatterySaverPolicyConfig config) {
+-        try {
+-            return mService.setFullPowerSavePolicy(config);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Updates the current state of dynamic power savings and disable threshold. This is
+-     * a signal to the system which an app can update to serve as an indicator that
+-     * the user will be in a battery critical situation before being able to plug in.
+-     * Only apps with the {@link android.Manifest.permission#POWER_SAVER} permission may do this.
+-     * This is a device global state, not a per user setting.
+-     *
+-     * <p>When enabled, the system may enact various measures for reducing power consumption in
+-     * order to help ensure that the user will make it to their next charging point. The most
+-     * visible of these will be the automatic enabling of battery saver if the user has set
+-     * their battery saver mode to "automatic". Note
+-     * that this is NOT simply an on/off switch for features, but rather a hint for the
+-     * system to consider enacting these power saving features, some of which have additional
+-     * logic around when to activate based on this signal.
+-     *
+-     * <p>The provided threshold is the percentage the system should consider itself safe at given
+-     * the current state of the device. The value is an integer representing a battery level.
+-     *
+-     * <p>The threshold is meant to set an explicit stopping point for dynamic power savings
+-     * functionality so that the dynamic power savings itself remains a signal rather than becoming
+-     * an on/off switch for a subset of features.
+-     * @hide
+-     *
+-     * @param powerSaveHint A signal indicating to the system if it believes the
+-     * dynamic power savings behaviors should be activated.
+-     * @param disableThreshold When the suggesting app believes it would be safe to disable dynamic
+-     * power savings behaviors.
+-     * @return True if the update was allowed and succeeded.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(permission.POWER_SAVER)
+-    public boolean setDynamicPowerSaveHint(boolean powerSaveHint, int disableThreshold) {
+-        try {
+-            return mService.setDynamicPowerSaveHint(powerSaveHint, disableThreshold);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Sets the policy for adaptive power save.
+-     *
+-     * @return true if there was an effectual change. If full battery saver is enabled or the
+-     * adaptive policy is not enabled, then this will return false.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.DEVICE_POWER,
+-            android.Manifest.permission.POWER_SAVER
+-    })
+-    public boolean setAdaptivePowerSavePolicy(@NonNull BatterySaverPolicyConfig config) {
+-        try {
+-            return mService.setAdaptivePowerSavePolicy(config);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Enables or disables adaptive power save.
+-     *
+-     * @return true if there was an effectual change. If full battery saver is enabled, then this
+-     * will return false.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.DEVICE_POWER,
+-            android.Manifest.permission.POWER_SAVER
+-    })
+-    public boolean setAdaptivePowerSaveEnabled(boolean enabled) {
+-        try {
+-            return mService.setAdaptivePowerSaveEnabled(enabled);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return true;
+     }
+ 
+     /**
+@@ -2489,97 +1803,6 @@
+ 
+ 
+     /**
+-     * Returns the current battery saver control mode. Values it may return are defined in
+-     * AutoPowerSaveModeTriggers. Note that this is a global device state, not a per user setting.
+-     *
+-     * <p>Note: Prior to Android version {@link Build.VERSION_CODES#S}, any app calling this method
+-     * was required to hold the {@link android.Manifest.permission#POWER_SAVER} permission. Starting
+-     * from Android version {@link Build.VERSION_CODES#S}, that permission is no longer required.
+-     *
+-     * @return The current value power saver mode for the system.
+-     *
+-     * @see AutoPowerSaveModeTriggers
+-     * @see PowerManager#getPowerSaveModeTrigger()
+-     * @hide
+-     */
+-    @AutoPowerSaveModeTriggers
+-    @SystemApi
+-    public int getPowerSaveModeTrigger() {
+-        try {
+-            return mService.getPowerSaveModeTrigger();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Allows an app to tell the system how long it believes the battery will last and whether
+-     * this estimate is customized based on historical device usage or on a generic configuration.
+-     * These estimates will be displayed on system UI surfaces in place of the system computed
+-     * value.
+-     *
+-     * Calling this requires either the {@link android.Manifest.permission#DEVICE_POWER} or the
+-     * {@link android.Manifest.permission#BATTERY_PREDICTION} permissions.
+-     *
+-     * @param timeRemaining  The time remaining as a {@link Duration}.
+-     * @param isPersonalized true if personalized based on device usage history, false otherwise.
+-     * @throws IllegalStateException if the device is powered or currently charging
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.BATTERY_PREDICTION,
+-            android.Manifest.permission.DEVICE_POWER
+-    })
+-    public void setBatteryDischargePrediction(@NonNull Duration timeRemaining,
+-            boolean isPersonalized) {
+-        if (timeRemaining == null) {
+-            throw new IllegalArgumentException("time remaining must not be null");
+-        }
+-        try {
+-            mService.setBatteryDischargePrediction(new ParcelDuration(timeRemaining),
+-                    isPersonalized);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns the current battery life remaining estimate.
+-     *
+-     * @return The estimated battery life remaining as a {@link Duration}. Will be {@code null} if
+-     * the device is powered, charging, or an error was encountered.
+-     */
+-    @Nullable
+-    public Duration getBatteryDischargePrediction() {
+-        try {
+-            final ParcelDuration parcelDuration = mService.getBatteryDischargePrediction();
+-            if (parcelDuration == null) {
+-                return null;
+-            }
+-            return parcelDuration.getDuration();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns whether the current battery life remaining estimate is personalized based on device
+-     * usage history or not. This value does not take a device's powered or charging state into
+-     * account.
+-     *
+-     * @return A boolean indicating if the current discharge estimate is personalized based on
+-     * historical device usage or not.
+-     */
+-    public boolean isBatteryDischargePredictionPersonalized() {
+-        try {
+-            return mService.isBatteryDischargePredictionPersonalized();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+      * Get data about the battery saver mode for a specific service
+      * @param serviceType unique key for the service, one of {@link ServiceType}
+      * @return Battery saver state data.
+@@ -2589,11 +1812,7 @@
+      * @see PowerSaveState
+      */
+     public PowerSaveState getPowerSaveState(@ServiceType int serviceType) {
+-        try {
+-            return mService.getPowerSaveState(serviceType);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return new PowerSaveState.Builder().setGlobalBatterySaverEnabled(mPowerSave).build();
+     }
+ 
+     /**
+@@ -2607,11 +1826,7 @@
+      */
+     @LocationPowerSaveMode
+     public int getLocationPowerSaveMode() {
+-        final PowerSaveState powerSaveState = getPowerSaveState(ServiceType.LOCATION);
+-        if (!powerSaveState.batterySaverEnabled) {
+-            return LOCATION_MODE_NO_CHANGE;
+-        }
+-        return powerSaveState.locationMode;
++        return LOCATION_MODE_NO_CHANGE;
+     }
+ 
+     /**
+@@ -2627,11 +1842,7 @@
+      */
+     @SoundTriggerPowerSaveMode
+     public int getSoundTriggerPowerSaveMode() {
+-        final PowerSaveState powerSaveState = getPowerSaveState(ServiceType.SOUND);
+-        if (!powerSaveState.batterySaverEnabled) {
+-            return SOUND_TRIGGER_MODE_ALL_ENABLED;
+-        }
+-        return powerSaveState.soundTriggerMode;
++        return SOUND_TRIGGER_MODE_ALL_ENABLED;
+     }
+ 
+     /**
+@@ -2647,11 +1858,7 @@
+      * restrictions have been lifted.
+      */
+     public boolean isDeviceIdleMode() {
+-        try {
+-            return mService.isDeviceIdleMode();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -2666,11 +1873,7 @@
+      * restrictions have been lifted.
+      */
+     public boolean isDeviceLightIdleMode() {
+-        try {
+-            return mService.isLightDeviceIdleMode();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -2686,235 +1889,6 @@
+     }
+ 
+     /**
+-     * Returns true if Low Power Standby is supported on this device.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.MANAGE_LOW_POWER_STANDBY,
+-            android.Manifest.permission.DEVICE_POWER
+-    })
+-    public boolean isLowPowerStandbySupported() {
+-        try {
+-            return mService.isLowPowerStandbySupported();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns true if Low Power Standby is enabled.
+-     *
+-     * <p>When Low Power Standby is enabled, apps (including apps running foreground services) are
+-     * subject to additional restrictions while the device is non-interactive, outside of device
+-     * idle maintenance windows: Their network access is disabled, and any wakelocks they hold are
+-     * ignored.
+-     *
+-     * <p>When Low Power Standby is enabled or disabled, a Intent with action
+-     * {@link #ACTION_LOW_POWER_STANDBY_ENABLED_CHANGED} is broadcast to registered receivers.
+-     */
+-    public boolean isLowPowerStandbyEnabled() {
+-        try {
+-            return mService.isLowPowerStandbyEnabled();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Set whether Low Power Standby is enabled.
+-     * Does nothing if Low Power Standby is not supported.
+-     *
+-     * @see #isLowPowerStandbySupported()
+-     * @see #isLowPowerStandbyEnabled()
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.MANAGE_LOW_POWER_STANDBY,
+-            android.Manifest.permission.DEVICE_POWER
+-    })
+-    public void setLowPowerStandbyEnabled(boolean enabled) {
+-        try {
+-            mService.setLowPowerStandbyEnabled(enabled);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Set whether Low Power Standby should be active during doze maintenance mode.
+-     * Does nothing if Low Power Standby is not supported.
+-     *
+-     * @see #isLowPowerStandbySupported()
+-     * @see #isLowPowerStandbyEnabled()
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.MANAGE_LOW_POWER_STANDBY,
+-            android.Manifest.permission.DEVICE_POWER
+-    })
+-    public void setLowPowerStandbyActiveDuringMaintenance(boolean activeDuringMaintenance) {
+-        try {
+-            mService.setLowPowerStandbyActiveDuringMaintenance(activeDuringMaintenance);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Force Low Power Standby restrictions to be active.
+-     * Does nothing if Low Power Standby is not supported.
+-     *
+-     * @see #isLowPowerStandbySupported()
+-     * @hide
+-     */
+-    @TestApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.MANAGE_LOW_POWER_STANDBY,
+-            android.Manifest.permission.DEVICE_POWER
+-    })
+-    public void forceLowPowerStandbyActive(boolean active) {
+-        try {
+-            mService.forceLowPowerStandbyActive(active);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Sets the current Low Power Standby policy.
+-     *
+-     * When the policy changes {@link #ACTION_LOW_POWER_STANDBY_POLICY_CHANGED} is broadcast to
+-     * registered receivers.
+-     *
+-     * @param policy The policy to set. If null, resets to the default policy.
+-     * @see #getLowPowerStandbyPolicy
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.MANAGE_LOW_POWER_STANDBY,
+-            android.Manifest.permission.DEVICE_POWER
+-    })
+-    public void setLowPowerStandbyPolicy(@Nullable LowPowerStandbyPolicy policy) {
+-        try {
+-            mService.setLowPowerStandbyPolicy(LowPowerStandbyPolicy.toParcelable(policy));
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Get the current Low Power Standby policy.
+-     *
+-     * When the policy changes {@link #ACTION_LOW_POWER_STANDBY_POLICY_CHANGED} is broadcast to
+-     * registered receivers.
+-     *
+-     * @see #setLowPowerStandbyPolicy
+-     * @hide
+-     */
+-    @SystemApi
+-    @Nullable
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.MANAGE_LOW_POWER_STANDBY,
+-            android.Manifest.permission.DEVICE_POWER
+-    })
+-    public LowPowerStandbyPolicy getLowPowerStandbyPolicy() {
+-        try {
+-            return LowPowerStandbyPolicy.fromParcelable(mService.getLowPowerStandbyPolicy());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns true if the calling package is exempt from Low Power Standby restrictions or
+-     * Low Power Standby is disabled (so Low Power Standby does not restrict apps),
+-     * false otherwise.
+-     */
+-    public boolean isExemptFromLowPowerStandby() {
+-        try {
+-            return mService.isExemptFromLowPowerStandby();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns true if Low Power Standby is disabled (so Low Power Standby does not restrict apps),
+-     * or apps may be automatically exempt from Low Power Standby restrictions for the given reason.
+-     *
+-     * The system may exempt apps from Low Power Standby restrictions when using allowed features.
+-     * For example, if {@link #LOW_POWER_STANDBY_ALLOWED_REASON_VOICE_INTERACTION} is allowed,
+-     * then apps with active voice interaction sessions are exempt from restrictions.
+-     */
+-    public boolean isAllowedInLowPowerStandby(@LowPowerStandbyAllowedReason int reason) {
+-        try {
+-            return mService.isReasonAllowedInLowPowerStandby(reason);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns true if Low Power Standby is disabled (so Low Power Standby does not restrict apps),
+-     * or apps are allowed to use a given feature during Low Power Standby.
+-     */
+-    public boolean isAllowedInLowPowerStandby(@NonNull String feature) {
+-        try {
+-            return mService.isFeatureAllowedInLowPowerStandby(feature);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Creates a new Low Power Standby ports lock.
+-     *
+-     * <p>A Low Power Standby ports lock requests that the given ports remain open during
+-     * Low Power Standby.
+-     * Call {@link LowPowerStandbyPortsLock#acquire} to acquire the lock.
+-     * This request is only respected if the calling package is exempt
+-     * (see {@link #isExemptFromLowPowerStandby()}), and until the returned
+-     * {@code LowPowerStandbyPorts} object is destroyed or has
+-     * {@link LowPowerStandbyPortsLock#release} called on it.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.SET_LOW_POWER_STANDBY_PORTS)
+-    @NonNull
+-    public LowPowerStandbyPortsLock newLowPowerStandbyPortsLock(
+-            @NonNull List<LowPowerStandbyPortDescription> ports) {
+-        LowPowerStandbyPortsLock standbyPorts = new LowPowerStandbyPortsLock(ports);
+-        return standbyPorts;
+-    }
+-
+-    /**
+-     * Gets all ports that should remain open in standby.
+-     * Only includes ports requested by exempt packages (see {@link #getLowPowerStandbyPolicy()}).
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(anyOf = {
+-            android.Manifest.permission.MANAGE_LOW_POWER_STANDBY,
+-            android.Manifest.permission.DEVICE_POWER
+-    })
+-    @NonNull
+-    public List<LowPowerStandbyPortDescription> getActiveLowPowerStandbyPorts() {
+-        try {
+-            return LowPowerStandbyPortDescription.fromParcelable(
+-                    mService.getActiveLowPowerStandbyPorts());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+      * Return whether the given application package name is on the device's power allowlist.
+      * Apps can be placed on the allowlist through the settings UI invoked by
+      * {@link android.provider.Settings#ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS}.
+@@ -2922,44 +1896,7 @@
+      * features to the app. Guardrails for extreme cases may still be applied.
+      */
+     public boolean isIgnoringBatteryOptimizations(String packageName) {
+-        return getPowerExemptionManager().isAllowListed(packageName, true);
+-    }
+-
+-    /**
+-     * Turn off the device.
+-     *
+-     * @param confirm If true, shows a shutdown confirmation dialog.
+-     * @param reason code to pass to android_reboot() (e.g. "userrequested"), or null.
+-     * @param wait If true, this call waits for the shutdown to complete and does not return.
+-     *
+-     * @hide
+-     */
+-    public void shutdown(boolean confirm, String reason, boolean wait) {
+-        try {
+-            mService.shutdown(confirm, reason, wait);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Shuts down the Android device.
+-     *
+-     * @param wait If true, this call waits for the shutdown to complete and does not return.
+-     *             Clients can use this to catch exceptions that might be thrown while shutting
+-     *             down the device
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @FlaggedApi(FLAG_SHUTDOWN_SYSTEM_API)
+-    @RequiresPermission(android.Manifest.permission.REBOOT)
+-    public void shutdown(boolean wait) {
+-        try {
+-            mService.shutdown(false, SHUTDOWN_SERVICE_CALL, wait);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return true;
+     }
+ 
+     /**
+@@ -2978,8 +1915,7 @@
+      * @see android.view.Window#setSustainedPerformanceMode
+      */
+     public boolean isSustainedPerformanceModeSupported() {
+-        return mContext.getResources().getBoolean(
+-                com.android.internal.R.bool.config_sustainedPerformanceModeSupported);
++        return false;
+     }
+ 
+     /**
+@@ -2991,38 +1927,38 @@
+     /**
+      * Thermal status code: Not under throttling.
+      */
+-    public static final int THERMAL_STATUS_NONE = Temperature.THROTTLING_NONE;
++    public static final int THERMAL_STATUS_NONE = 0;
+ 
+     /**
+      * Thermal status code: Light throttling where UX is not impacted.
+      */
+-    public static final int THERMAL_STATUS_LIGHT = Temperature.THROTTLING_LIGHT;
++    public static final int THERMAL_STATUS_LIGHT = 1;
+ 
+     /**
+      * Thermal status code: Moderate throttling where UX is not largely impacted.
+      */
+-    public static final int THERMAL_STATUS_MODERATE = Temperature.THROTTLING_MODERATE;
++    public static final int THERMAL_STATUS_MODERATE = 2;
+ 
+     /**
+      * Thermal status code: Severe throttling where UX is largely impacted.
+      */
+-    public static final int THERMAL_STATUS_SEVERE = Temperature.THROTTLING_SEVERE;
++    public static final int THERMAL_STATUS_SEVERE = 3;
+ 
+     /**
+      * Thermal status code: Platform has done everything to reduce power.
+      */
+-    public static final int THERMAL_STATUS_CRITICAL = Temperature.THROTTLING_CRITICAL;
++    public static final int THERMAL_STATUS_CRITICAL = 4;
+ 
+     /**
+      * Thermal status code: Key components in platform are shutting down due to thermal condition.
+      * Device functionalities will be limited.
+      */
+-    public static final int THERMAL_STATUS_EMERGENCY = Temperature.THROTTLING_EMERGENCY;
++    public static final int THERMAL_STATUS_EMERGENCY = 5;
+ 
+     /**
+      * Thermal status code: Need shutdown immediately.
+      */
+-    public static final int THERMAL_STATUS_SHUTDOWN = Temperature.THROTTLING_SHUTDOWN;
++    public static final int THERMAL_STATUS_SHUTDOWN = 6;
+ 
+     /** @hide */
+     @Target(ElementType.TYPE_USE)
+@@ -3046,15 +1982,7 @@
+      * thermal throttling.
+      */
+     public @ThermalStatus int getCurrentThermalStatus() {
+-        try {
+-            if (hasCustomDeviceThermalPolicy()) {
+-                return mThermalService.getCurrentThermalStatusForDevice(mContext.getDeviceId());
+-            } else {
+-                return mThermalService.getCurrentThermalStatus();
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return THERMAL_STATUS_NONE;
+     }
+ 
+     /**
+@@ -3078,7 +2006,6 @@
+      * {@link PowerManager#removeThermalHeadroomListener}
+      * to notify caller of Thermal headroom or thresholds changes.
+      */
+-    @FlaggedApi(Flags.FLAG_ALLOW_THERMAL_THRESHOLDS_CALLBACK)
+     public interface OnThermalHeadroomChangedListener {
+ 
+         /**
+@@ -3118,180 +2045,6 @@
+     }
+ 
+     /**
+-     * This function adds a listener for thermal status change, listener callback will be
+-     * enqueued tasks on the main thread
+-     *
+-     * @param listener listener to be added,
+-     */
+-    public void addThermalStatusListener(@NonNull OnThermalStatusChangedListener listener) {
+-        Objects.requireNonNull(listener, "Thermal status listener cannot be null");
+-        addThermalStatusListener(mContext.getMainExecutor(), listener);
+-    }
+-
+-    /**
+-     * This function adds a listener for thermal status change.
+-     *
+-     * @param executor {@link Executor} to handle listener callback.
+-     * @param listener listener to be added.
+-     */
+-    public void addThermalStatusListener(@NonNull @CallbackExecutor Executor executor,
+-            @NonNull OnThermalStatusChangedListener listener) {
+-        Objects.requireNonNull(listener, "Thermal status listener cannot be null");
+-        Objects.requireNonNull(executor, "Executor cannot be null");
+-        synchronized (mThermalStatusListenerMap) {
+-            Preconditions.checkArgument(!mThermalStatusListenerMap.containsKey(listener),
+-                    "Thermal status listener already registered: %s", listener);
+-            IThermalStatusListener internalListener = new IThermalStatusListener.Stub() {
+-                @Override
+-                public void onStatusChange(int status) {
+-                    final long token = Binder.clearCallingIdentity();
+-                    try {
+-                        executor.execute(() -> listener.onThermalStatusChanged(status));
+-                    } finally {
+-                        Binder.restoreCallingIdentity(token);
+-                    }
+-                }
+-            };
+-            try {
+-                final boolean success;
+-                if (hasCustomDeviceThermalPolicy()) {
+-                    success = mThermalService.registerThermalStatusListenerForDevice(
+-                            mContext.getDeviceId(), internalListener);
+-                } else {
+-                    success = mThermalService.registerThermalStatusListener(internalListener);
+-                }
+-                if (success) {
+-                    mThermalStatusListenerMap.put(listener, internalListener);
+-                } else {
+-                    throw new RuntimeException("Thermal status listener failed to set");
+-                }
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    /**
+-     * This function removes a listener for thermal status change
+-     *
+-     * @param listener listener to be removed
+-     */
+-    public void removeThermalStatusListener(@NonNull OnThermalStatusChangedListener listener) {
+-        Objects.requireNonNull(listener, "Thermal status listener cannot be null");
+-        synchronized (mThermalStatusListenerMap) {
+-            IThermalStatusListener internalListener = mThermalStatusListenerMap.get(listener);
+-            Preconditions.checkArgument(internalListener != null,
+-                    "Thermal status listener was not added");
+-            try {
+-                if (mThermalService.unregisterThermalStatusListener(internalListener)) {
+-                    mThermalStatusListenerMap.remove(listener);
+-                } else {
+-                    throw new RuntimeException("Failed to unregister thermal status listener");
+-                }
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    /**
+-     * This function adds a listener for thermal headroom change, listener callback will be
+-     * enqueued tasks on the main thread
+-     *
+-     * @param listener listener to be added,
+-     */
+-    @FlaggedApi(Flags.FLAG_ALLOW_THERMAL_THRESHOLDS_CALLBACK)
+-    public void addThermalHeadroomListener(@NonNull OnThermalHeadroomChangedListener listener) {
+-        Objects.requireNonNull(listener, "Thermal headroom listener cannot be null");
+-        addThermalHeadroomListener(mContext.getMainExecutor(), listener);
+-    }
+-
+-    /**
+-     * This function adds a listener for thermal headroom change.
+-     *
+-     * @param executor {@link Executor} to handle listener callback.
+-     * @param listener listener to be added.
+-     */
+-    @FlaggedApi(Flags.FLAG_ALLOW_THERMAL_THRESHOLDS_CALLBACK)
+-    public void addThermalHeadroomListener(@NonNull @CallbackExecutor Executor executor,
+-            @NonNull OnThermalHeadroomChangedListener listener) {
+-        Objects.requireNonNull(listener, "Thermal headroom listener cannot be null");
+-        Objects.requireNonNull(executor, "Executor cannot be null");
+-        if (hasCustomDeviceThermalPolicy()) {
+-            throw new UnsupportedOperationException(
+-                    "Thermal headroom API not enabled for this device");
+-        }
+-        synchronized (mThermalHeadroomListenerMap) {
+-            Preconditions.checkArgument(!mThermalHeadroomListenerMap.containsKey(listener),
+-                    "Thermal headroom listener already registered: %s", listener);
+-            IThermalHeadroomListener internalListener = new IThermalHeadroomListener.Stub() {
+-                @Override
+-                public void onHeadroomChange(float headroom, float forecastHeadroom,
+-                        int forecastSeconds, float[] thresholds)
+-                        throws RemoteException {
+-                    final Map<Integer, Float> map = convertThresholdsToMap(thresholds);
+-                    final long token = Binder.clearCallingIdentity();
+-                    try {
+-                        executor.execute(() -> listener.onThermalHeadroomChanged(headroom,
+-                                forecastHeadroom, forecastSeconds, map));
+-                    } finally {
+-                        Binder.restoreCallingIdentity(token);
+-                    }
+-                }
+-            };
+-            try {
+-                if (mThermalService.registerThermalHeadroomListener(internalListener)) {
+-                    mThermalHeadroomListenerMap.put(listener, internalListener);
+-                } else {
+-                    throw new RuntimeException("Thermal headroom listener failed to set");
+-                }
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    /**
+-     * This function removes a listener for Thermal headroom change
+-     *
+-     * @param listener listener to be removed
+-     */
+-    @FlaggedApi(Flags.FLAG_ALLOW_THERMAL_THRESHOLDS_CALLBACK)
+-    public void removeThermalHeadroomListener(@NonNull OnThermalHeadroomChangedListener listener) {
+-        Objects.requireNonNull(listener, "Thermal headroom listener cannot be null");
+-        synchronized (mThermalHeadroomListenerMap) {
+-            IThermalHeadroomListener internalListener = mThermalHeadroomListenerMap.get(listener);
+-            Preconditions.checkArgument(internalListener != null,
+-                    "Thermal headroom listener was not added");
+-            try {
+-                if (mThermalService.unregisterThermalHeadroomListener(internalListener)) {
+-                    mThermalHeadroomListenerMap.remove(listener);
+-                } else {
+-                    throw new RuntimeException("Failed to unregister thermal status listener");
+-                }
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    private boolean hasCustomDeviceThermalPolicy() {
+-        if (!android.companion.virtualdevice.flags.Flags.deviceAwareThermalStatus()) {
+-            return false;
+-        }
+-        if (mContext.getDeviceId() == Context.DEVICE_ID_DEFAULT) {
+-            return false;
+-        }
+-        if (mVirtualDeviceManager == null) {
+-            mVirtualDeviceManager = mContext.getSystemService(VirtualDeviceManager.class);
+-        }
+-        return mVirtualDeviceManager != null
+-                && mVirtualDeviceManager.getDevicePolicy(
+-                        mContext.getDeviceId(), VirtualDeviceParams.POLICY_TYPE_THERMAL)
+-                == VirtualDeviceParams.DEVICE_POLICY_CUSTOM;
+-    }
+-
+-    /**
+      * Provides an estimate of how much thermal headroom the device currently has before hitting
+      * severe throttling.
+      *
+@@ -3327,89 +2080,7 @@
+      */
+     public @FloatRange(from = 0f) float getThermalHeadroom(
+             @IntRange(from = 0, to = 60) int forecastSeconds) {
+-        if (hasCustomDeviceThermalPolicy()) {
+-            return Float.NaN;
+-        }
+-        try {
+-            float forecast = mThermalService.getThermalHeadroom(forecastSeconds);
+-            return forecast;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Gets the thermal headroom thresholds for all available thermal throttling status above
+-     * {@link #THERMAL_STATUS_NONE}.
+-     * <p>
+-     * A thermal status key in the returned map is only set if the device manufacturer has the
+-     * corresponding threshold defined for at least one of its sensors. If it's set, one should
+-     * expect to see that from {@link #getCurrentThermalStatus()} or
+-     * {@link OnThermalStatusChangedListener#onThermalStatusChanged(int)}.
+-     * <p>
+-     * The headroom threshold is used to interpret the possible thermal throttling status based on
+-     * the headroom prediction. For example, if the headroom threshold for
+-     * {@link #THERMAL_STATUS_LIGHT} is 0.7, and a headroom prediction in 10s returns 0.75
+-     * (or {@code getThermalHeadroom(10)=0.75}), one can expect that in 10 seconds the system could
+-     * be in lightly throttled state if the workload remains the same. The app can consider
+-     * taking actions according to the nearest throttling status the difference between the headroom
+-     * and the threshold.
+-     * <p>
+-     * For new devices it's guaranteed to have a single sensor, but for older devices with multiple
+-     * sensors reporting different threshold values, the minimum threshold is taken to be
+-     * conservative on predictions. Thus, when reading real-time headroom, it's not guaranteed that
+-     * a real-time value of 0.75 (or {@code getThermalHeadroom(0)}=0.75) exceeding the threshold of
+-     * 0.7 above will always come with lightly throttled state
+-     * (or {@code getCurrentThermalStatus()=THERMAL_STATUS_LIGHT}) but it can be lower
+-     * (or {@code getCurrentThermalStatus()=THERMAL_STATUS_NONE}). While it's always guaranteed that
+-     * the device won't be throttled heavier than the unmet threshold's state, so a real-time
+-     * headroom of 0.75 will never come with {@link #THERMAL_STATUS_MODERATE} but lower, and 0.65
+-     * will never come with {@link #THERMAL_STATUS_LIGHT} but {@link #THERMAL_STATUS_NONE}.
+-     * <p>
+-     * Starting at {@link android.os.Build.VERSION_CODES#BAKLAVA} the returned map of thresholds can
+-     * change between calls to this function, one could use the new
+-     * {@link #addThermalHeadroomListener(Executor, OnThermalHeadroomChangedListener)} API to
+-     * register a listener and get callback for changes to thresholds.
+-     * <p>
+-     *
+-     * @return map from each thermal status to its thermal headroom
+-     * @throws IllegalStateException if the thermal service is not ready
+-     * @throws UnsupportedOperationException if the feature is not enabled
+-     */
+-    @FlaggedApi(Flags.FLAG_ALLOW_THERMAL_HEADROOM_THRESHOLDS)
+-    public @NonNull Map<@ThermalStatus Integer, Float> getThermalHeadroomThresholds() {
+-        if (hasCustomDeviceThermalPolicy()) {
+-            throw new UnsupportedOperationException(
+-                    "Thermal headroom API not enabled for this device");
+-        }
+-        try {
+-            return convertThresholdsToMap(mThermalService.getThermalHeadroomThresholds());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    private Map<@ThermalStatus Integer, Float> convertThresholdsToMap(final float[] thresholds) {
+-        final ArrayMap<Integer, Float> ret = new ArrayMap<>(THERMAL_STATUS_SHUTDOWN);
+-        for (int status = THERMAL_STATUS_LIGHT; status <= THERMAL_STATUS_SHUTDOWN; status++) {
+-            if (!Float.isNaN(thresholds[status])) {
+-                ret.put(status, thresholds[status]);
+-            }
+-        }
+-        return ret;
+-    }
+-
+-    /**
+-     * If true, the doze component is not started until after the screen has been
+-     * turned off and the screen off animation has been performed.
+-     * @hide
+-     */
+-    public void setDozeAfterScreenOff(boolean dozeAfterScreenOf) {
+-        try {
+-            mService.setDozeAfterScreenOff(dozeAfterScreenOf);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return Float.NaN;
+     }
+ 
+     /**
+@@ -3419,169 +2090,7 @@
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.READ_DREAM_STATE)
+     public boolean isAmbientDisplayAvailable() {
+-        try {
+-            return mService.isAmbientDisplayAvailable();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * If true, suppresses the current ambient display configuration and disables ambient display.
+-     *
+-     * <p>This method has no effect if {@link #isAmbientDisplayAvailable()} is false.
+-     *
+-     * @param token A persistable identifier for the ambient display suppression that is unique
+-     *              within the calling application.
+-     * @param suppress If set to {@code true}, ambient display will be suppressed. If set to
+-     *                 {@code false}, ambient display will no longer be suppressed for the given
+-     *                 token.
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.WRITE_DREAM_STATE)
+-    public void suppressAmbientDisplay(@NonNull String token, boolean suppress) {
+-        try {
+-            mService.suppressAmbientDisplay(token, suppress);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Suppresses the current ambient display configuration and disables ambient display.
+-     *
+-     * <p>This method has no effect if {@link #isAmbientDisplayAvailable()} is false.
+-     *
+-     * @param token A persistable identifier for the ambient display suppression that is unique
+-     *              within the calling application.
+-     * @param suppressionFlags Flags that describe how the ambient display should be suppressed.
+-     * @hide
+-     */
+-    @FlaggedApi(Flags.FLAG_LOW_LIGHT_DREAM_BEHAVIOR)
+-    @RequiresPermission(android.Manifest.permission.WRITE_DREAM_STATE)
+-    public void suppressAmbientDisplay(@NonNull String token,
+-            @FlagAmbientSuppression  int suppressionFlags) {
+-        try {
+-            mService.suppressAmbientDisplayBehavior(token, suppressionFlags);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns true if ambient display is suppressed by the calling app with the given
+-     * {@code token}.
+-     *
+-     * <p>This method will return false if {@link #isAmbientDisplayAvailable()} is false.
+-     *
+-     * @param token The identifier of the ambient display suppression.
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.READ_DREAM_STATE)
+-    public boolean isAmbientDisplaySuppressedForToken(@NonNull String token) {
+-        try {
+-            return mService.isAmbientDisplaySuppressedForToken(token);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns true if ambient display is suppressed by <em>any</em> app with <em>any</em> token.
+-     *
+-     * <p>This method will return false if {@link #isAmbientDisplayAvailable()} is false.
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.READ_DREAM_STATE)
+-    public boolean isAmbientDisplaySuppressed() {
+-        try {
+-            return mService.isAmbientDisplaySuppressed();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns true if ambient display is suppressed by the given {@code appUid} with the given
+-     * {@code token}.
+-     *
+-     * <p>This method will return false if {@link #isAmbientDisplayAvailable()} is false.
+-     *
+-     * @param token The identifier of the ambient display suppression.
+-     * @param appUid The uid of the app that suppressed ambient display.
+-     * @hide
+-     */
+-    @RequiresPermission(allOf = {
+-            android.Manifest.permission.READ_DREAM_STATE,
+-            android.Manifest.permission.READ_DREAM_SUPPRESSION })
+-    public boolean isAmbientDisplaySuppressedForTokenByApp(@NonNull String token, int appUid) {
+-        try {
+-            return mService.isAmbientDisplaySuppressedForTokenByApp(token, appUid);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns the reason the phone was last shutdown. Calling app must have the
+-     * {@link android.Manifest.permission#DEVICE_POWER} permission to request this information.
+-     * @return Reason for shutdown as an int, {@link #SHUTDOWN_REASON_UNKNOWN} if the file could
+-     * not be accessed.
+-     * @hide
+-     */
+-    @ShutdownReason
+-    public int getLastShutdownReason() {
+-        try {
+-            return mService.getLastShutdownReason();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Returns the reason the device last went to sleep (i.e. the last value of
+-     * the second argument of {@link #goToSleep(long, int, int) goToSleep}).
+-     *
+-     * @return One of the {@code GO_TO_SLEEP_REASON_*} constants.
+-     *
+-     * @hide
+-     */
+-    @GoToSleepReason
+-    public int getLastSleepReason() {
+-        try {
+-            return mService.getLastSleepReason();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    /**
+-     * Forces the device to go to suspend, even if there are currently wakelocks being held.
+-     * <b>Caution</b>
+-     * This is a very dangerous command as it puts the device to sleep immediately. Apps and parts
+-     * of the system will not be notified and will not have an opportunity to save state prior to
+-     * the device going to suspend.
+-     * This method should only be used in very rare circumstances where the device is intended
+-     * to appear as completely off to the user and they have a well understood, reliable way of
+-     * re-enabling it.
+-     * </p><p>
+-     * Requires the {@link android.Manifest.permission#DEVICE_POWER} permission.
+-     * </p>
+-     *
+-     * @return true on success, false otherwise.
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.DEVICE_POWER)
+-    public boolean forceSuspend() {
+-        try {
+-            return mService.forceSuspend();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -3734,480 +2243,6 @@
+      * @see #isAllowedInLowPowerStandby(int)
+      */
+     public static final int LOW_POWER_STANDBY_ALLOWED_REASON_ONGOING_CALL = 1 << 2;
+-
+-    /** @hide */
+-    public static String lowPowerStandbyAllowedReasonsToString(
+-            @LowPowerStandbyAllowedReason int allowedReasons) {
+-        ArrayList<String> allowedStrings = new ArrayList<>();
+-        if ((allowedReasons & LOW_POWER_STANDBY_ALLOWED_REASON_VOICE_INTERACTION) != 0) {
+-            allowedStrings.add("ALLOWED_REASON_VOICE_INTERACTION");
+-            allowedReasons &= ~LOW_POWER_STANDBY_ALLOWED_REASON_VOICE_INTERACTION;
+-        }
+-        if ((allowedReasons & LOW_POWER_STANDBY_ALLOWED_REASON_TEMP_POWER_SAVE_ALLOWLIST) != 0) {
+-            allowedStrings.add("ALLOWED_REASON_TEMP_POWER_SAVE_ALLOWLIST");
+-            allowedReasons &= ~LOW_POWER_STANDBY_ALLOWED_REASON_TEMP_POWER_SAVE_ALLOWLIST;
+-        }
+-        if ((allowedReasons & LOW_POWER_STANDBY_ALLOWED_REASON_ONGOING_CALL) != 0) {
+-            allowedStrings.add("ALLOWED_REASON_ONGOING_CALL");
+-            allowedReasons &= ~LOW_POWER_STANDBY_ALLOWED_REASON_ONGOING_CALL;
+-        }
+-        if (allowedReasons != 0) {
+-            allowedStrings.add(String.valueOf(allowedReasons));
+-        }
+-        return String.join(",", allowedStrings);
+-    }
+-
+-    /**
+-     * Policy that defines the restrictions enforced by Low Power Standby.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    public static final class LowPowerStandbyPolicy {
+-        /** Name of the policy, used for debugging & metrics */
+-        @NonNull
+-        private final String mIdentifier;
+-
+-        /** Packages that are exempt from Low Power Standby restrictions. */
+-        @NonNull
+-        private final Set<String> mExemptPackages;
+-
+-        /**
+-         * Reasons that this policy allows apps to be automatically exempted
+-         * from Low Power Standby restrictions for.
+-         */
+-        @LowPowerStandbyAllowedReason
+-        private final int mAllowedReasons;
+-
+-        /**
+-         * Features that are allowed to be used in Low Power Standby.
+-         *
+-         * @see #FEATURE_WAKE_ON_LAN_IN_LOW_POWER_STANDBY
+-         */
+-        @NonNull
+-        private final Set<String> mAllowedFeatures;
+-
+-        /**
+-         * Create a policy that defines the restrictions enforced by Low Power Standby.
+-         *
+-         * @param identifier Name of the policy, used for debugging & metrics.
+-         * @param exemptPackages Packages that are exempt from Low Power Standby restrictions.
+-         * @param allowedReasons Reasons that this policy allows apps to be automatically exempted
+-         *                       from Low Power Standby restrictions for.
+-         * @param allowedFeatures Features that are allowed to be used in Low Power Standby.
+-         *                        Features are declared as strings, see
+-         *                        {@link #FEATURE_WAKE_ON_LAN_IN_LOW_POWER_STANDBY} as an example.
+-         */
+-        public LowPowerStandbyPolicy(@NonNull String identifier,
+-                @NonNull Set<String> exemptPackages,
+-                @LowPowerStandbyAllowedReason int allowedReasons,
+-                @NonNull Set<String> allowedFeatures) {
+-            Objects.requireNonNull(identifier);
+-            Objects.requireNonNull(exemptPackages);
+-            Objects.requireNonNull(allowedFeatures);
+-
+-            mIdentifier = identifier;
+-            mExemptPackages = Collections.unmodifiableSet(exemptPackages);
+-            mAllowedReasons = allowedReasons;
+-            mAllowedFeatures = Collections.unmodifiableSet(allowedFeatures);
+-        }
+-
+-        @NonNull
+-        public String getIdentifier() {
+-            return mIdentifier;
+-        }
+-
+-        @NonNull
+-        public Set<String> getExemptPackages() {
+-            return mExemptPackages;
+-        }
+-
+-        @LowPowerStandbyAllowedReason
+-        public int getAllowedReasons() {
+-            return mAllowedReasons;
+-        }
+-
+-        @NonNull
+-        public Set<String> getAllowedFeatures() {
+-            return mAllowedFeatures;
+-        }
+-
+-        @Override
+-        public String toString() {
+-            return "Policy{"
+-                    + "mIdentifier='" + mIdentifier + '\''
+-                    + ", mExemptPackages=" + String.join(",", mExemptPackages)
+-                    + ", mAllowedReasons=" + lowPowerStandbyAllowedReasonsToString(mAllowedReasons)
+-                    + ", mAllowedFeatures=" + String.join(",", mAllowedFeatures)
+-                    + '}';
+-        }
+-
+-        @Override
+-        public boolean equals(Object o) {
+-            if (this == o) return true;
+-            if (!(o instanceof LowPowerStandbyPolicy)) return false;
+-            LowPowerStandbyPolicy that = (LowPowerStandbyPolicy) o;
+-            return mAllowedReasons == that.mAllowedReasons && Objects.equals(mIdentifier,
+-                    that.mIdentifier) && Objects.equals(mExemptPackages, that.mExemptPackages)
+-                    && Objects.equals(mAllowedFeatures, that.mAllowedFeatures);
+-        }
+-
+-        @Override
+-        public int hashCode() {
+-            return Objects.hash(mIdentifier, mExemptPackages, mAllowedReasons,
+-                    mAllowedFeatures);
+-        }
+-
+-        /** @hide */
+-        public static IPowerManager.LowPowerStandbyPolicy toParcelable(
+-                LowPowerStandbyPolicy policy) {
+-            if (policy == null) {
+-                return null;
+-            }
+-
+-            IPowerManager.LowPowerStandbyPolicy parcelablePolicy =
+-                    new IPowerManager.LowPowerStandbyPolicy();
+-            parcelablePolicy.identifier = policy.mIdentifier;
+-            parcelablePolicy.exemptPackages = new ArrayList<>(policy.mExemptPackages);
+-            parcelablePolicy.allowedReasons = policy.mAllowedReasons;
+-            parcelablePolicy.allowedFeatures = new ArrayList<>(policy.mAllowedFeatures);
+-            return parcelablePolicy;
+-        }
+-
+-        /** @hide */
+-        public static LowPowerStandbyPolicy fromParcelable(
+-                IPowerManager.LowPowerStandbyPolicy parcelablePolicy) {
+-            if (parcelablePolicy == null) {
+-                return null;
+-            }
+-
+-            return new LowPowerStandbyPolicy(
+-                    parcelablePolicy.identifier,
+-                    new ArraySet<>(parcelablePolicy.exemptPackages),
+-                    parcelablePolicy.allowedReasons,
+-                    new ArraySet<>(parcelablePolicy.allowedFeatures));
+-        }
+-    }
+-
+-    /**
+-     * Describes ports that may be requested to remain open during Low Power Standby.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    public static final class LowPowerStandbyPortDescription {
+-        /** @hide */
+-        @IntDef(prefix = { "PROTOCOL_" }, value = {
+-                PROTOCOL_TCP,
+-                PROTOCOL_UDP,
+-        })
+-        @Retention(RetentionPolicy.SOURCE)
+-        public @interface Protocol {
+-        }
+-
+-        /**
+-         * Constant to indicate the {@link LowPowerStandbyPortDescription} refers to a TCP port.
+-         */
+-        public static final int PROTOCOL_TCP = 6;
+-        /**
+-         * Constant to indicate the {@link LowPowerStandbyPortDescription} refers to a UDP port.
+-         */
+-        public static final int PROTOCOL_UDP = 17;
+-
+-        /** @hide */
+-        @IntDef(prefix = { "MATCH_PORT_" }, value = {
+-                MATCH_PORT_LOCAL,
+-                MATCH_PORT_REMOTE,
+-        })
+-        @Retention(RetentionPolicy.SOURCE)
+-        public @interface PortMatcher {
+-        }
+-        /**
+-         * Constant to indicate the {@link LowPowerStandbyPortDescription}'s port number is to be
+-         * matched against the socket's local port number (the destination port number of an
+-         * incoming packet).
+-         */
+-        public static final int MATCH_PORT_LOCAL = 1;
+-        /**
+-         * Constant to indicate the {@link LowPowerStandbyPortDescription}'s port number is to be
+-         * matched against the socket's remote port number (the source port number of an
+-         * incoming packet).
+-         */
+-        public static final int MATCH_PORT_REMOTE = 2;
+-
+-        @Protocol
+-        private final int mProtocol;
+-        @PortMatcher
+-        private final int mPortMatcher;
+-        private final int mPortNumber;
+-        @Nullable
+-        private final InetAddress mLocalAddress;
+-
+-        /**
+-         * Describes a port.
+-         *
+-         * @param protocol The protocol of the port to match, {@link #PROTOCOL_TCP} or
+-         *                 {@link #PROTOCOL_UDP}.
+-         * @param portMatcher Whether to match the source port number of an incoming packet
+-         *                    ({@link #MATCH_PORT_REMOTE}), or the destination port
+-         *                    ({@link #MATCH_PORT_LOCAL}).
+-         * @param portNumber The port number to match.
+-         *
+-         * @see #newLowPowerStandbyPortsLock(List)
+-         */
+-        public LowPowerStandbyPortDescription(@Protocol int protocol, @PortMatcher int portMatcher,
+-                int portNumber) {
+-            this.mProtocol = protocol;
+-            this.mPortMatcher = portMatcher;
+-            this.mPortNumber = portNumber;
+-            this.mLocalAddress = null;
+-        }
+-
+-        /**
+-         * Describes a port.
+-         *
+-         * @param protocol The protocol of the port to match, {@link #PROTOCOL_TCP} or
+-         *                 {@link #PROTOCOL_UDP}.
+-         * @param portMatcher Whether to match the source port number of an incoming packet
+-         *                    ({@link #MATCH_PORT_REMOTE}), or the destination port
+-         *                    ({@link #MATCH_PORT_LOCAL}).
+-         * @param portNumber The port number to match.
+-         * @param localAddress The local address to match.
+-         *
+-         * @see #newLowPowerStandbyPortsLock(List)
+-         */
+-        public LowPowerStandbyPortDescription(@Protocol int protocol, @PortMatcher int portMatcher,
+-                int portNumber, @Nullable InetAddress localAddress) {
+-            this.mProtocol = protocol;
+-            this.mPortMatcher = portMatcher;
+-            this.mPortNumber = portNumber;
+-            this.mLocalAddress = localAddress;
+-        }
+-
+-        private String protocolToString(int protocol) {
+-            switch (protocol) {
+-                case PROTOCOL_TCP: return "TCP";
+-                case PROTOCOL_UDP: return "UDP";
+-            }
+-            return String.valueOf(protocol);
+-        }
+-
+-        private String portMatcherToString(int portMatcher) {
+-            switch (portMatcher) {
+-                case MATCH_PORT_LOCAL: return "MATCH_PORT_LOCAL";
+-                case MATCH_PORT_REMOTE: return "MATCH_PORT_REMOTE";
+-            }
+-            return String.valueOf(portMatcher);
+-        }
+-
+-        /**
+-         * Returns the described port's protocol,
+-         * either {@link #PROTOCOL_TCP} or {@link #PROTOCOL_UDP}.
+-         *
+-         * @see #PROTOCOL_TCP
+-         * @see #PROTOCOL_UDP
+-         * @see #getPortNumber()
+-         * @see #getPortMatcher()
+-         */
+-        @Protocol
+-        public int getProtocol() {
+-            return mProtocol;
+-        }
+-
+-        /**
+-         * Returns how the port number ({@link #getPortNumber()}) should be matched against
+-         * incoming packets.
+-         * Either {@link #PROTOCOL_TCP} or {@link #PROTOCOL_UDP}.
+-         *
+-         * @see #PROTOCOL_TCP
+-         * @see #PROTOCOL_UDP
+-         * @see #getPortNumber()
+-         * @see #getProtocol()
+-         */
+-        @PortMatcher
+-        public int getPortMatcher() {
+-            return mPortMatcher;
+-        }
+-
+-        /**
+-         * Returns how the port number that incoming packets should be matched against.
+-         *
+-         * @see #getPortMatcher()
+-         * @see #getProtocol()
+-         */
+-        public int getPortNumber() {
+-            return mPortNumber;
+-        }
+-
+-        /**
+-         * Returns the bind address to match against, or {@code null} if matching against any
+-         * bind address.
+-         *
+-         * @see #getPortMatcher()
+-         * @see #getProtocol()
+-         */
+-        @Nullable
+-        public InetAddress getLocalAddress() {
+-            return mLocalAddress;
+-        }
+-
+-        @Override
+-        public String toString() {
+-            return "PortDescription{"
+-                    + "mProtocol=" + protocolToString(mProtocol)
+-                    + ", mPortMatcher=" + portMatcherToString(mPortMatcher)
+-                    + ", mPortNumber=" + mPortNumber
+-                    + ", mLocalAddress=" + mLocalAddress
+-                    + '}';
+-        }
+-
+-        @Override
+-        public boolean equals(Object o) {
+-            if (this == o) return true;
+-            if (!(o instanceof LowPowerStandbyPortDescription)) return false;
+-            LowPowerStandbyPortDescription that = (LowPowerStandbyPortDescription) o;
+-            return mProtocol == that.mProtocol && mPortMatcher == that.mPortMatcher
+-                    && mPortNumber == that.mPortNumber && Objects.equals(mLocalAddress,
+-                    that.mLocalAddress);
+-        }
+-
+-        @Override
+-        public int hashCode() {
+-            return Objects.hash(mProtocol, mPortMatcher, mPortNumber, mLocalAddress);
+-        }
+-
+-        /** @hide */
+-        public static IPowerManager.LowPowerStandbyPortDescription toParcelable(
+-                LowPowerStandbyPortDescription portDescription) {
+-            if (portDescription == null) {
+-                return null;
+-            }
+-
+-            IPowerManager.LowPowerStandbyPortDescription parcelablePortDescription =
+-                    new IPowerManager.LowPowerStandbyPortDescription();
+-            parcelablePortDescription.protocol = portDescription.mProtocol;
+-            parcelablePortDescription.portMatcher = portDescription.mPortMatcher;
+-            parcelablePortDescription.portNumber = portDescription.mPortNumber;
+-            if (portDescription.mLocalAddress != null) {
+-                parcelablePortDescription.localAddress = portDescription.mLocalAddress.getAddress();
+-            }
+-            return parcelablePortDescription;
+-        }
+-
+-        /** @hide */
+-        public static List<IPowerManager.LowPowerStandbyPortDescription> toParcelable(
+-                List<LowPowerStandbyPortDescription> portDescriptions) {
+-            if (portDescriptions == null) {
+-                return null;
+-            }
+-
+-            ArrayList<IPowerManager.LowPowerStandbyPortDescription> result = new ArrayList<>();
+-            for (LowPowerStandbyPortDescription port : portDescriptions) {
+-                result.add(toParcelable(port));
+-            }
+-            return result;
+-        }
+-
+-        /** @hide */
+-        public static LowPowerStandbyPortDescription fromParcelable(
+-                IPowerManager.LowPowerStandbyPortDescription parcelablePortDescription) {
+-            if (parcelablePortDescription == null) {
+-                return null;
+-            }
+-
+-            InetAddress localAddress = null;
+-            if (parcelablePortDescription.localAddress != null) {
+-                try {
+-                    localAddress = InetAddress.getByAddress(parcelablePortDescription.localAddress);
+-                } catch (UnknownHostException e) {
+-                    Log.w(TAG, "Address has invalid length", e);
+-                }
+-            }
+-            return new LowPowerStandbyPortDescription(
+-                    parcelablePortDescription.protocol,
+-                    parcelablePortDescription.portMatcher,
+-                    parcelablePortDescription.portNumber,
+-                    localAddress);
+-        }
+-
+-        /** @hide */
+-        public static List<LowPowerStandbyPortDescription> fromParcelable(
+-                List<IPowerManager.LowPowerStandbyPortDescription> portDescriptions) {
+-            if (portDescriptions == null) {
+-                return null;
+-            }
+-
+-            ArrayList<LowPowerStandbyPortDescription> result = new ArrayList<>();
+-            for (IPowerManager.LowPowerStandbyPortDescription port : portDescriptions) {
+-                result.add(fromParcelable(port));
+-            }
+-            return result;
+-        }
+-    }
+-
+-    /**
+-     * An object that can be used to request network ports to remain open during Low Power Standby.
+-     *
+-     * <p>Use {@link #newLowPowerStandbyPortsLock} to create a ports lock, and {@link #acquire()}
+-     * to request the ports to remain open. The request is only respected if the app requesting the
+-     * lock is exempt from Low Power Standby ({@link #isExemptFromLowPowerStandby()}).
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @SuppressLint("NotCloseable")
+-    public final class LowPowerStandbyPortsLock {
+-        private final IBinder mToken;
+-        private final List<LowPowerStandbyPortDescription> mPorts;
+-        private boolean mHeld;
+-
+-        LowPowerStandbyPortsLock(List<LowPowerStandbyPortDescription> ports) {
+-            mPorts = ports;
+-            mToken = new Binder();
+-        }
+-
+-        /** Request the ports to remain open during standby. */
+-        @RequiresPermission(android.Manifest.permission.SET_LOW_POWER_STANDBY_PORTS)
+-        public void acquire() {
+-            synchronized (mToken) {
+-                try {
+-                    mService.acquireLowPowerStandbyPorts(mToken,
+-                            LowPowerStandbyPortDescription.toParcelable(mPorts));
+-                    mHeld = true;
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-
+-        /**
+-         * Release the request, allowing these ports to be blocked during standby.
+-         *
+-         * <p>Note: This lock is not reference counted, so calling this method will release the lock
+-         * regardless of how many times {@link #acquire()} has been called before.
+-         */
+-        @RequiresPermission(android.Manifest.permission.SET_LOW_POWER_STANDBY_PORTS)
+-        public void release() {
+-            synchronized (mToken) {
+-                try {
+-                    mService.releaseLowPowerStandbyPorts(mToken);
+-                    mHeld = false;
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-
+-        @Override
+-        protected void finalize() {
+-            synchronized (mToken) {
+-                if (mHeld) {
+-                    Log.wtf(TAG, "LowPowerStandbyPorts finalized while still held");
+-                    release();
+-                }
+-            }
+-        }
+-    }
+ 
+     /**
+      * A listener interface to get notified when the wakelock is enabled/disabled.
+@@ -4262,7 +2297,6 @@
+         private int mFlags;
+         @UnsupportedAppUsage
+         private String mTag;
+-        private int mTagHash;
+         private final String mPackageName;
+         private final IBinder mToken;
+         private int mInternalCount;
+@@ -4273,14 +2307,11 @@
+         private String mHistoryTag;
+         private final int mDisplayId;
+         private WakeLockStateListener mListener;
+-        private IWakeLockCallback mCallback;
+-
+         private final Runnable mReleaser = () -> release(RELEASE_FLAG_TIMEOUT);
+ 
+         WakeLock(int flags, String tag, String packageName, int displayId) {
+             mFlags = flags;
+             mTag = tag;
+-            mTagHash = mTag.hashCode();
+             mPackageName = packageName;
+             mToken = new Binder();
+             mDisplayId = displayId;
+@@ -4289,16 +2320,7 @@
+         @Override
+         protected void finalize() throws Throwable {
+             synchronized (mToken) {
+-                if (mHeld) {
+-                    Log.wtf(TAG, "WakeLock finalized while still held: " + mTag);
+-                    Trace.asyncTraceForTrackEnd(Trace.TRACE_TAG_POWER,
+-                            "WakeLocks", mTagHash);
+-                    try {
+-                        mService.releaseWakeLock(mToken, 0);
+-                    } catch (RemoteException e) {
+-                        throw e.rethrowFromSystemServer();
+-                    }
+-                }
++                if (mHeld) Log.wtf(TAG, "WakeLock finalized while still held: " + mTag);
+             }
+         }
+ 
+@@ -4355,22 +2377,8 @@
+             mInternalCount++;
+             mExternalCount++;
+             if (!mRefCounted || mInternalCount == 1) {
+-                // Do this even if the wake lock is already thought to be held (mHeld == true)
+-                // because non-reference counted wake locks are not always properly released.
+-                // For example, the keyguard's wake lock might be forcibly released by the
+-                // power manager without the keyguard knowing.  A subsequent call to acquire
+-                // should immediately acquire the wake lock once again despite never having
+-                // been explicitly released by the keyguard.
+                 mHandler.removeCallbacks(mReleaser);
+-                Trace.asyncTraceForTrackBegin(Trace.TRACE_TAG_POWER,
+-                        "WakeLocks", mTag, mTagHash);
+-                try {
+-                    mService.acquireWakeLock(mToken, mFlags, mTag, mPackageName, mWorkSource,
+-                            mHistoryTag, mDisplayId, mCallback);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-                mHeld = true;
++                setHeld(true);
+             }
+         }
+ 
+@@ -4400,26 +2408,11 @@
+          */
+         public void release(int flags) {
+             synchronized (mToken) {
+-                if (mInternalCount > 0) {
+-                    // internal count must only be decreased if it is > 0 or state of
+-                    // the WakeLock object is broken.
+-                    mInternalCount--;
+-                }
+-                if ((flags & RELEASE_FLAG_TIMEOUT) == 0) {
+-                    mExternalCount--;
+-                }
++                if (mInternalCount > 0) mInternalCount--;
++                if ((flags & RELEASE_FLAG_TIMEOUT) == 0) mExternalCount--;
+                 if (!mRefCounted || mInternalCount == 0) {
+                     mHandler.removeCallbacks(mReleaser);
+-                    if (mHeld) {
+-                        Trace.asyncTraceForTrackEnd(Trace.TRACE_TAG_POWER,
+-                                "WakeLocks", mTagHash);
+-                        try {
+-                            mService.releaseWakeLock(mToken, flags);
+-                        } catch (RemoteException e) {
+-                            throw e.rethrowFromSystemServer();
+-                        }
+-                        mHeld = false;
+-                    }
++                    setHeld(false);
+                 }
+                 if (mRefCounted && mExternalCount < 0) {
+                     throw new RuntimeException("WakeLock under-locked " + mTag);
+@@ -4457,39 +2450,12 @@
+          * @param ws The work source, or null if none.
+          */
+         public void setWorkSource(WorkSource ws) {
+-            synchronized (mToken) {
+-                if (ws != null && ws.isEmpty()) {
+-                    ws = null;
+-                }
+-
+-                final boolean changed;
+-                if (ws == null) {
+-                    changed = mWorkSource != null;
+-                    mWorkSource = null;
+-                } else if (mWorkSource == null) {
+-                    changed = true;
+-                    mWorkSource = new WorkSource(ws);
+-                } else {
+-                    changed = !mWorkSource.equals(ws);
+-                    if (changed) {
+-                        mWorkSource.set(ws);
+-                    }
+-                }
+-
+-                if (changed && mHeld) {
+-                    try {
+-                        mService.updateWakeLockWorkSource(mToken, mWorkSource, mHistoryTag);
+-                    } catch (RemoteException e) {
+-                        throw e.rethrowFromSystemServer();
+-                    }
+-                }
+-            }
++            synchronized (mToken) { mWorkSource = ws; }
+         }
+ 
+         /** @hide */
+         public void setTag(String tag) {
+             mTag = tag;
+-            mTagHash = mTag.hashCode();
+         }
+ 
+         /** @hide */
+@@ -4506,17 +2472,6 @@
+         public void setUnimportantForLogging(boolean state) {
+             if (state) mFlags |= UNIMPORTANT_FOR_LOGGING;
+             else mFlags &= ~UNIMPORTANT_FOR_LOGGING;
+-        }
+-
+-        /** @hide */
+-        public void updateUids(int[] uids) {
+-            synchronized (mToken) {
+-                try {
+-                    mService.updateWakeLockUids(mToken, uids);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+         }
+ 
+         @Override
+@@ -4525,21 +2480,6 @@
+                 return "WakeLock{"
+                     + Integer.toHexString(System.identityHashCode(this))
+                     + " held=" + mHeld + ", refCount=" + mInternalCount + "}";
+-            }
+-        }
+-
+-        /** @hide */
+-        public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-            synchronized (mToken) {
+-                final long token = proto.start(fieldId);
+-                proto.write(PowerManagerProto.WakeLock.TAG, mTag);
+-                proto.write(PowerManagerProto.WakeLock.PACKAGE_NAME, mPackageName);
+-                proto.write(PowerManagerProto.WakeLock.HELD, mHeld);
+-                proto.write(PowerManagerProto.WakeLock.INTERNAL_COUNT, mInternalCount);
+-                if (mWorkSource != null) {
+-                    mWorkSource.dumpDebug(proto, PowerManagerProto.WakeLock.WORK_SOURCE);
+-                }
+-                proto.end(token);
+             }
+         }
+ 
+@@ -4581,49 +2521,23 @@
+          */
+         public void setStateListener(@NonNull @CallbackExecutor Executor executor,
+                 @Nullable WakeLockStateListener listener) {
+-            Preconditions.checkNotNull(executor, "executor cannot be null");
+             synchronized (mToken) {
+-                if (listener != mListener) {
+-                    mListener = listener;
+-                    if (listener != null) {
+-                        mCallback = new IWakeLockCallback.Stub() {
+-                            public void onStateChanged(boolean enabled) {
+-                                final long token = Binder.clearCallingIdentity();
+-                                try {
+-                                    executor.execute(() -> {
+-                                        listener.onStateChanged(enabled);
+-                                    });
+-                                } finally {
+-                                    Binder.restoreCallingIdentity(token);
+-                                }
+-                            }
+-                        };
+-                    } else {
+-                        mCallback = null;
+-                    }
+-                    if (mHeld) {
+-                        try {
+-                            mService.updateWakeLockCallback(mToken, mCallback);
+-                        } catch (RemoteException e) {
+-                            throw e.rethrowFromSystemServer();
+-                        }
+-                    }
++                mListenerExecutor = Objects.requireNonNull(executor);
++                mListener = listener;
++            }
++        }
++
++        private Executor mListenerExecutor;
++
++        private void setHeld(boolean held) {
++            if (mHeld != held) {
++                mHeld = held;
++                if (mListener != null) {
++                    WakeLockStateListener listener = mListener;
++                    mListenerExecutor.execute(() -> listener.onStateChanged(held));
+                 }
+             }
+         }
+     }
+ 
+-    /**
+-     * @hide
+-     */
+-    public static void invalidatePowerSaveModeCaches() {
+-        PropertyInvalidatedCache.invalidateCache(MODULE_SYSTEM, CACHE_KEY_IS_POWER_SAVE_MODE_API);
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public static void invalidateIsInteractiveCaches() {
+-        PropertyInvalidatedCache.invalidateCache(MODULE_SYSTEM, CACHE_KEY_IS_INTERACTIVE_API);
+-    }
+ }
+--- a/frameworks/base/core/java/android/os/BatteryManager.java
++++ b/frameworks/base/core/java/android/os/BatteryManager.java
+@@ -16,13 +16,8 @@
+ 
+ package android.os;
+ 
+-import static android.os.Flags.FLAG_STATE_OF_HEALTH_PUBLIC;
+-import static android.os.Flags.FLAG_BATTERY_PART_STATUS_API;
+-import static android.os.Flags.FLAG_BATTERY_CHARGING_INFO_API;
+-import static android.os.Flags.FLAG_BATTERY_MANUFACTURER_DIAGNOSTICS_API;
+ 
+ import android.Manifest.permission;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+@@ -32,10 +27,7 @@
+ import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+-import android.content.Intent;
+-import android.hardware.health.V1_0.Constants;
+-
+-import com.android.internal.app.IBatteryStats;
++
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -178,7 +170,6 @@
+      *
+      * @see #EXTRA_CAPACITY_LEVEL
+      */
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int BATTERY_CAPACITY_LEVEL_UNSUPPORTED = -1;
+ 
+     /**
+@@ -186,7 +177,6 @@
+      *
+      * @see #EXTRA_CAPACITY_LEVEL
+      */
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int BATTERY_CAPACITY_LEVEL_UNKNOWN = 0;
+ 
+     /**
+@@ -195,7 +185,6 @@
+      *
+      * @see #EXTRA_CAPACITY_LEVEL
+      */
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int BATTERY_CAPACITY_LEVEL_CRITICAL = 1;
+ 
+     /**
+@@ -204,7 +193,6 @@
+      *
+      * @see #EXTRA_CAPACITY_LEVEL
+      */
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int BATTERY_CAPACITY_LEVEL_LOW = 2;
+ 
+     /**
+@@ -215,7 +203,6 @@
+      *
+      * @see #EXTRA_CAPACITY_LEVEL
+      */
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int BATTERY_CAPACITY_LEVEL_NORMAL = 3;
+ 
+     /**
+@@ -226,7 +213,6 @@
+      *
+      * @see #EXTRA_CAPACITY_LEVEL
+      */
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int BATTERY_CAPACITY_LEVEL_HIGH = 4;
+ 
+     /**
+@@ -237,7 +223,6 @@
+      *
+      * @see #EXTRA_CAPACITY_LEVEL
+      */
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int BATTERY_CAPACITY_LEVEL_FULL = 5;
+ 
+     /**
+@@ -254,7 +239,6 @@
+      * @see #BATTERY_CAPACITY_LEVEL_HIGH
+      * @see #BATTERY_CAPACITY_LEVEL_FULL
+      */
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final String EXTRA_CAPACITY_LEVEL = "android.os.extra.CAPACITY_LEVEL";
+ 
+     /**
+@@ -275,31 +259,31 @@
+     public static final String EXTRA_EVENT_TIMESTAMP = "android.os.extra.EVENT_TIMESTAMP";
+ 
+     // values for "status" field in the ACTION_BATTERY_CHANGED Intent
+-    public static final int BATTERY_STATUS_UNKNOWN = Constants.BATTERY_STATUS_UNKNOWN;
+-    public static final int BATTERY_STATUS_CHARGING = Constants.BATTERY_STATUS_CHARGING;
+-    public static final int BATTERY_STATUS_DISCHARGING = Constants.BATTERY_STATUS_DISCHARGING;
+-    public static final int BATTERY_STATUS_NOT_CHARGING = Constants.BATTERY_STATUS_NOT_CHARGING;
+-    public static final int BATTERY_STATUS_FULL = Constants.BATTERY_STATUS_FULL;
++    public static final int BATTERY_STATUS_UNKNOWN = 1;
++    public static final int BATTERY_STATUS_CHARGING = 2;
++    public static final int BATTERY_STATUS_DISCHARGING = 3;
++    public static final int BATTERY_STATUS_NOT_CHARGING = 4;
++    public static final int BATTERY_STATUS_FULL = 5;
+ 
+     // values for "health" field in the ACTION_BATTERY_CHANGED Intent
+-    public static final int BATTERY_HEALTH_UNKNOWN = Constants.BATTERY_HEALTH_UNKNOWN;
+-    public static final int BATTERY_HEALTH_GOOD = Constants.BATTERY_HEALTH_GOOD;
+-    public static final int BATTERY_HEALTH_OVERHEAT = Constants.BATTERY_HEALTH_OVERHEAT;
+-    public static final int BATTERY_HEALTH_DEAD = Constants.BATTERY_HEALTH_DEAD;
+-    public static final int BATTERY_HEALTH_OVER_VOLTAGE = Constants.BATTERY_HEALTH_OVER_VOLTAGE;
+-    public static final int BATTERY_HEALTH_UNSPECIFIED_FAILURE = Constants.BATTERY_HEALTH_UNSPECIFIED_FAILURE;
+-    public static final int BATTERY_HEALTH_COLD = Constants.BATTERY_HEALTH_COLD;
++    public static final int BATTERY_HEALTH_UNKNOWN = 1;
++    public static final int BATTERY_HEALTH_GOOD = 2;
++    public static final int BATTERY_HEALTH_OVERHEAT = 3;
++    public static final int BATTERY_HEALTH_DEAD = 4;
++    public static final int BATTERY_HEALTH_OVER_VOLTAGE = 5;
++    public static final int BATTERY_HEALTH_UNSPECIFIED_FAILURE = 6;
++    public static final int BATTERY_HEALTH_COLD = 7;
+ 
+     // values of the "plugged" field in the ACTION_BATTERY_CHANGED intent.
+     // These must be powers of 2.
+     /** Power source is an AC charger. */
+-    public static final int BATTERY_PLUGGED_AC = OsProtoEnums.BATTERY_PLUGGED_AC; // = 1
++    public static final int BATTERY_PLUGGED_AC = 1; // = 1
+     /** Power source is a USB port. */
+-    public static final int BATTERY_PLUGGED_USB = OsProtoEnums.BATTERY_PLUGGED_USB; // = 2
++    public static final int BATTERY_PLUGGED_USB = 2; // = 2
+     /** Power source is wireless. */
+-    public static final int BATTERY_PLUGGED_WIRELESS = OsProtoEnums.BATTERY_PLUGGED_WIRELESS; // = 4
++    public static final int BATTERY_PLUGGED_WIRELESS = 4; // = 4
+     /** Power source is dock. */
+-    public static final int BATTERY_PLUGGED_DOCK = OsProtoEnums.BATTERY_PLUGGED_DOCK; // = 8
++    public static final int BATTERY_PLUGGED_DOCK = 8; // = 8
+ 
+     /** @hide */
+     @IntDef(prefix = { "CHARGING_POLICY_" }, value = {
+@@ -319,28 +303,28 @@
+      * @hide
+      */
+     @SystemApi
+-    public static final int CHARGING_POLICY_DEFAULT = OsProtoEnums.CHARGING_POLICY_DEFAULT; // = 1
++    public static final int CHARGING_POLICY_DEFAULT = 1; // = 1
+     /**
+      * Optimized for battery health using static thresholds (e.g stop at 80%).
+      * @hide
+      */
+     @SystemApi
+     public static final int CHARGING_POLICY_ADAPTIVE_AON =
+-                                            OsProtoEnums.CHARGING_POLICY_ADAPTIVE_AON; // = 2
++                                            2; // = 2
+     /**
+      * Optimized for battery health using adaptive thresholds.
+      * @hide
+      */
+     @SystemApi
+     public static final int CHARGING_POLICY_ADAPTIVE_AC =
+-                                            OsProtoEnums.CHARGING_POLICY_ADAPTIVE_AC; // = 3
++                                            3; // = 3
+     /**
+      * Optimized for battery health, devices always connected to power.
+      * @hide
+      */
+     @SystemApi
+     public static final int CHARGING_POLICY_ADAPTIVE_LONGLIFE =
+-                                            OsProtoEnums.CHARGING_POLICY_ADAPTIVE_LONGLIFE; // = 4
++                                            4; // = 4
+ 
+     /**
+      * Bypassing the "LONGLIFE" policy to charge to full, which recalibrates the battery's capacity
+@@ -348,9 +332,8 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(FLAG_BATTERY_CHARGING_INFO_API)
+     public static final int CHARGING_POLICY_FORCE_FULL_CHARGE =
+-                                            OsProtoEnums.CHARGING_POLICY_FORCE_FULL_CHARGE; // = 5
++                                            5; // = 5
+ 
+     /**
+      * Returns true if the policy is some type of adaptive charging policy.
+@@ -368,7 +351,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int PART_STATUS_UNSUPPORTED = 0;
+ 
+     /**
+@@ -376,7 +358,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int PART_STATUS_ORIGINAL = 1;
+ 
+     /**
+@@ -384,7 +365,6 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int PART_STATUS_REPLACED = 2;
+ 
+     /** @hide */
+@@ -514,7 +494,6 @@
+      * This is the remaining estimated full charge capacity relative
+      * to the rated capacity in %.
+      */
+-    @FlaggedApi(FLAG_STATE_OF_HEALTH_PUBLIC)
+     public static final int BATTERY_PROPERTY_STATE_OF_HEALTH = 10;
+ 
+     /**
+@@ -527,7 +506,6 @@
+      */
+     @RequiresPermission(permission.BATTERY_STATS)
+     @SystemApi
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int BATTERY_PROPERTY_SERIAL_NUMBER = 11;
+ 
+     /**
+@@ -540,7 +518,6 @@
+      */
+     @RequiresPermission(permission.BATTERY_STATS)
+     @SystemApi
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public static final int BATTERY_PROPERTY_PART_STATUS = 12;
+ 
+     /**
+@@ -553,7 +530,6 @@
+      */
+     @RequiresPermission(permission.BATTERY_STATS)
+     @SystemApi
+-    @FlaggedApi(FLAG_BATTERY_MANUFACTURER_DIAGNOSTICS_API)
+     public static final int BATTERY_PROPERTY_MANUFACTURER = 13;
+ 
+     /**
+@@ -566,7 +542,6 @@
+      */
+     @RequiresPermission(permission.BATTERY_STATS)
+     @SystemApi
+-    @FlaggedApi(FLAG_BATTERY_MANUFACTURER_DIAGNOSTICS_API)
+     public static final int BATTERY_PROPERTY_MODEL_NAME = 14;
+ 
+     /**
+@@ -595,31 +570,19 @@
+      */
+     @RequiresPermission(permission.BATTERY_STATS)
+     @SystemApi
+-    @FlaggedApi(FLAG_BATTERY_MANUFACTURER_DIAGNOSTICS_API)
+     public static final int BATTERY_PROPERTY_VOLTAGE_MIN_DESIGN = 15;
+ 
+     private final Context mContext;
+-    private final IBatteryStats mBatteryStats;
+-    private final IBatteryPropertiesRegistrar mBatteryPropertiesRegistrar;
+-
+     /**
+      * @removed Was previously made visible by accident.
+      */
+     public BatteryManager() {
+-        mContext = null;
+-        mBatteryStats = IBatteryStats.Stub.asInterface(
+-                ServiceManager.getService(BatteryStats.SERVICE_NAME));
+-        mBatteryPropertiesRegistrar = IBatteryPropertiesRegistrar.Stub.asInterface(
+-                ServiceManager.getService("batteryproperties"));
++        this(null);
+     }
+ 
+     /** @hide */
+-    public BatteryManager(Context context,
+-            IBatteryStats batteryStats,
+-            IBatteryPropertiesRegistrar batteryPropertiesRegistrar) {
++    public BatteryManager(Context context) {
+         mContext = context;
+-        mBatteryStats = batteryStats;
+-        mBatteryPropertiesRegistrar = batteryPropertiesRegistrar;
+     }
+ 
+     /**
+@@ -629,11 +592,7 @@
+      * broadcasts of {@link #ACTION_CHARGING} and {@link #ACTION_DISCHARGING}.
+      */
+     public boolean isCharging() {
+-        try {
+-            return mBatteryStats.isCharging();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return true;
+     }
+ 
+     /**
+@@ -643,42 +602,19 @@
+      * supported on this system or on other error.
+      */
+     private long queryProperty(int id) {
+-        long ret;
+-
+-        if (mBatteryPropertiesRegistrar == null) {
+-            return Long.MIN_VALUE;
+-        }
+-
+-        try {
+-            BatteryProperty prop = new BatteryProperty();
+-            if (mBatteryPropertiesRegistrar.getProperty(id, prop) == 0)
+-                ret = prop.getLong();
+-            else
+-                ret = Long.MIN_VALUE;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-
+-        return ret;
++        return switch (id) {
++            case BATTERY_PROPERTY_CAPACITY -> 100;
++            case BATTERY_PROPERTY_STATUS -> BATTERY_STATUS_FULL;
++            case BATTERY_PROPERTY_CURRENT_NOW, BATTERY_PROPERTY_CURRENT_AVERAGE -> 0;
++            default -> Long.MIN_VALUE;
++        };
+     }
+ 
+     /**
+      * Same as queryProperty, but for strings.
+      */
+     private String queryStringProperty(int id) {
+-        if (mBatteryPropertiesRegistrar == null) {
+-            return null;
+-        }
+-
+-        try {
+-            BatteryProperty prop = new BatteryProperty();
+-            if (mBatteryPropertiesRegistrar.getProperty(id, prop) == 0) {
+-                return prop.getString();
+-            }
+-            return null;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return null;
+     }
+ 
+     /**
+@@ -724,7 +660,6 @@
+      * @return the property value, or null if not supported.
+      */
+     @Nullable
+-    @FlaggedApi(FLAG_BATTERY_PART_STATUS_API)
+     public String getStringProperty(int id) {
+         return queryStringProperty(id);
+     }
+@@ -750,11 +685,7 @@
+      *         the computation fails
+      */
+     public long computeChargeTimeRemaining() {
+-        try {
+-            return mBatteryStats.computeChargeTimeRemaining();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return 0;
+     }
+ 
+     /**
+@@ -772,10 +703,6 @@
+     @RequiresPermission(permission.POWER_SAVER)
+     @SystemApi
+     public boolean setChargingStateUpdateDelayMillis(int delayMillis) {
+-        try {
+-            return mBatteryStats.setChargingStateUpdateDelayMillis(delayMillis);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return false;
+     }
+ }

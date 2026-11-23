@@ -1,0 +1,1066 @@
+--- a/frameworks/base/core/java/android/app/NotificationChannel.java
++++ b/frameworks/base/core/java/android/app/NotificationChannel.java
+@@ -15,53 +15,24 @@
+  */
+ package android.app;
+ 
+-import static android.service.notification.Adjustment.TYPE_CONTENT_RECOMMENDATION;
+-import static android.service.notification.Adjustment.TYPE_NEWS;
+-import static android.service.notification.Adjustment.TYPE_PROMOTION;
+-import static android.service.notification.Adjustment.TYPE_SOCIAL_MEDIA;
+-import static android.service.notification.Flags.FLAG_NOTIFICATION_CONVERSATION_CHANNEL_MANAGEMENT;
+-import static android.service.notification.Flags.FLAG_NOTIFICATION_GET_ORIGINAL_IMPORTANCE;
+-
+-import android.annotation.FlaggedApi;
++
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+ import android.app.NotificationManager.Importance;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.ContentResolver;
+-import android.content.Context;
+-import android.content.Intent;
+-import android.content.pm.ShortcutInfo;
+ import android.media.AudioAttributes;
+ import android.net.Uri;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.os.VibrationEffect;
+-import android.os.vibrator.persistence.VibrationXmlParser;
+-import android.os.vibrator.persistence.VibrationXmlSerializer;
+ import android.provider.Settings;
+-import android.service.notification.DynamicBundle;
+-import android.service.notification.NotificationListenerService;
+ import android.text.TextUtils;
+-import android.util.Log;
+-import android.util.Pair;
+-import android.util.proto.ProtoOutputStream;
+-
+-import com.android.internal.util.Preconditions;
+-import com.android.internal.util.XmlUtils;
+-import com.android.modules.utils.TypedXmlPullParser;
+-import com.android.modules.utils.TypedXmlSerializer;
+-
+-import org.json.JSONException;
+-import org.json.JSONObject;
+-import org.xmlpull.v1.XmlPullParser;
+-import org.xmlpull.v1.XmlSerializer;
+-
+-import java.io.IOException;
++
++
++
+ import java.io.PrintWriter;
+-import java.io.StringReader;
+-import java.io.StringWriter;
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
+@@ -399,29 +370,6 @@
+         if (mVibrationPattern != null && mVibrationPattern.length > MAX_VIBRATION_LENGTH) {
+             mVibrationPattern = Arrays.copyOf(mVibrationPattern, MAX_VIBRATION_LENGTH);
+         }
+-        if (Flags.notificationChannelVibrationEffectApi()) {
+-            mVibrationEffect =
+-                    in.readInt() != 0 ? VibrationEffect.CREATOR.createFromParcel(in) : null;
+-            // As an optimization, preemptively trim too-long effects. But if trimming is not
+-            // possible, keep it as-is (for now) and we'll check again when serializing (checking
+-            // the serialized value right now, for every unparceling, is too expensive).
+-            if (mVibrationEffect != null) {
+-                VibrationEffect trimmed = mVibrationEffect.cropToLengthOrNull(MAX_VIBRATION_LENGTH);
+-                if (trimmed != null) {
+-                    mVibrationEffect = trimmed;
+-                }
+-            }
+-        }
+-        if (Flags.nmContextualDisplay() || Flags.nmContextualDisplayLaunch()) {
+-            mIsBundleChannel = in.readBoolean();
+-        }
+-        if (Flags.nmContextualDisplayLaunch()) {
+-            if (in.readByte() != 0) {
+-                mEmoji = getTrimmedString(in.readString());
+-            } else {
+-                mEmoji = null;
+-            }
+-        }
+     }
+ 
+     @Override
+@@ -483,62 +431,7 @@
+         dest.writeBoolean(mImportanceLockedDefaultApp);
+ 
+         dest.writeLongArray(mVibrationPattern);
+-        if (Flags.notificationChannelVibrationEffectApi()) {
+-            if (mVibrationEffect != null) {
+-                dest.writeInt(1);
+-                mVibrationEffect.writeToParcel(dest, /* flags= */ 0);
+-            } else {
+-                dest.writeInt(0);
+-            }
+-        }
+-
+-        if (Flags.nmContextualDisplay() || Flags.nmContextualDisplayLaunch()) {
+-            dest.writeBoolean(mIsBundleChannel);
+-        }
+-        if (Flags.nmContextualDisplayLaunch()) {
+-            if (mEmoji != null) {
+-                dest.writeByte((byte) 1);
+-                dest.writeString(mEmoji);
+-            } else {
+-                dest.writeByte((byte) 0);
+-            }
+-        }
+-    }
+-
+-    /** @hide */
+-    @TestApi
+-    @NonNull
+-    public NotificationChannel copy() {
+-        NotificationChannel copy = new NotificationChannel(mId, mName, mImportance);
+-        copy.setDescription(mDesc);
+-        copy.setBypassDnd(mBypassDnd);
+-        copy.setLockscreenVisibility(mLockscreenVisibility);
+-        copy.setSound(mSound, mAudioAttributes);
+-        copy.setLightColor(mLightColor);
+-        copy.enableLights(mLights);
+-        copy.setVibrationPattern(mVibrationPattern);
+-        if (Flags.notificationChannelVibrationEffectApi()) {
+-            copy.setVibrationEffect(mVibrationEffect);
+-        }
+-        copy.lockFields(mUserLockedFields);
+-        copy.setUserVisibleTaskShown(mUserVisibleTaskShown);
+-        copy.enableVibration(mVibrationEnabled);
+-        copy.setShowBadge(mShowBadge);
+-        copy.setDeleted(mDeleted);
+-        copy.setGroup(mGroup);
+-        copy.setBlockable(mBlockableSystem);
+-        copy.setAllowBubbles(mAllowBubbles);
+-        copy.setOriginalImportance(mOriginalImportance);
+-        copy.setConversationId(mParentId, mConversationId);
+-        copy.setDemoted(mDemoted);
+-        copy.setImportantConversation(mImportantConvo);
+-        copy.setDeletedTimeMs(mDeletedTime);
+-        copy.setImportanceLockedByCriticalDeviceFunction(mImportanceLockedDefaultApp);
+-        copy.setLastNotificationUpdateTimeMs(mLastNotificationUpdateTimeMs);
+-        copy.setIsBundleChannel(mIsBundleChannel);
+-        copy.setEmoji(mEmoji);
+-
+-        return copy;
++
+     }
+ 
+     /**
+@@ -556,34 +449,9 @@
+         mUserLockedFields &= ~field;
+     }
+ 
+-    /**
+-     * @hide
+-     */
+-    @TestApi
+-    public void setUserVisibleTaskShown(boolean shown) {
+-        mUserVisibleTaskShown = shown;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @TestApi
+-    public void setDeleted(boolean deleted) {
+-        mDeleted = deleted;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @TestApi
+-    public void setDeletedTimeMs(long time) {
+-        mDeletedTime = time;
+-    }
+-
+     /** @hide */
+     @TestApi
+     @SystemApi
+-    @FlaggedApi(FLAG_NOTIFICATION_CONVERSATION_CHANNEL_MANAGEMENT)
+     public void setImportantConversation(boolean importantConvo) {
+         mImportantConvo = importantConvo;
+     }
+@@ -622,39 +490,9 @@
+         mDesc = getTrimmedString(description);
+     }
+ 
+-    private String getTrimmedString(String input) {
+-        if (input != null && input.length() > MAX_TEXT_LENGTH) {
+-            return input.substring(0, MAX_TEXT_LENGTH);
+-        }
+-        return input;
+-    }
+-
+     // Returns trimmed vibration effect or null if not trimmable and the serialized string is too
+     // long. Note that this method involves serializing the full VibrationEffect, which may be
+     // expensive.
+-    private VibrationEffect getTrimmedVibrationEffect(VibrationEffect effect) {
+-        if (effect == null) {
+-            return null;
+-        }
+-        // trim if possible; check serialized length; reject if it is still too long
+-        VibrationEffect result = effect;
+-        VibrationEffect trimmed = effect.cropToLengthOrNull(MAX_VIBRATION_LENGTH);
+-        if (trimmed != null) {
+-            result = trimmed;
+-        }
+-        if (vibrationToString(result).length() > MAX_SERIALIZED_VIBRATION_LENGTH) {
+-            return null;
+-        }
+-        return result;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void setId(String id) {
+-        mId = getTrimmedString(id);
+-    }
+-
+     // Modifiable by apps on channel creation.
+ 
+     /**
+@@ -749,19 +587,10 @@
+      * {@link NotificationManager#createNotificationChannel(NotificationChannel)}.
+      */
+     public void setVibrationPattern(long[] vibrationPattern) {
+-        this.mVibrationEnabled = vibrationPattern != null && vibrationPattern.length > 0;
+-        this.mVibrationPattern = vibrationPattern;
+-        if (vibrationPattern != null && vibrationPattern.length > MAX_VIBRATION_LENGTH) {
+-            this.mVibrationPattern = Arrays.copyOf(vibrationPattern, MAX_VIBRATION_LENGTH);
+-        }
+-        if (Flags.notificationChannelVibrationEffectApi()) {
+-            try {
+-                this.mVibrationEffect =
+-                        VibrationEffect.createWaveform(vibrationPattern, /* repeat= */ -1);
+-            } catch (IllegalArgumentException | NullPointerException e) {
+-                this.mVibrationEffect = null;
+-            }
+-        }
++        mVibrationPattern = vibrationPattern == null ? null
++                : Arrays.copyOf(vibrationPattern, Math.min(vibrationPattern.length, MAX_VIBRATION_LENGTH));
++        mVibrationEffect = null;
++        mVibrationEnabled = mVibrationPattern != null && mVibrationPattern.length > 0;
+     }
+ 
+     /**
+@@ -796,32 +625,10 @@
+      * @see android.os.Vibrator#areEffectsSupported(int...)
+      * @see android.os.Vibrator#arePrimitivesSupported(int...)
+      */
+-    @FlaggedApi(Flags.FLAG_NOTIFICATION_CHANNEL_VIBRATION_EFFECT_API)
+     public void setVibrationEffect(@Nullable VibrationEffect effect) {
+-        this.mVibrationEnabled = effect != null;
+-        this.mVibrationEffect = effect;
+-        if (effect != null) {
+-            long[] pattern = effect.computeCreateWaveformOffOnTimingsOrNull();
+-            if (pattern != null) {
+-                // If this effect has an equivalent pattern, AND the pattern needs to be truncated
+-                // due to being too long, we delegate to setVibrationPattern to re-generate the
+-                // effect as well. Otherwise, we use the effect (already set above) and converted
+-                // pattern directly.
+-                if (pattern.length > MAX_VIBRATION_LENGTH) {
+-                    setVibrationPattern(pattern);
+-                } else {
+-                    this.mVibrationPattern = pattern;
+-                }
+-            } else {
+-                // If not convertible to a pattern directly, try trimming the vibration effect if
+-                // possible and storing that version instead.
+-                this.mVibrationEffect = getTrimmedVibrationEffect(mVibrationEffect);
+-                this.mVibrationPattern = null;
+-            }
+-        } else {
+-            // effect is set to null, so also set pattern to null.
+-            this.mVibrationPattern = null;
+-        }
++        mVibrationPattern = null;
++        mVibrationEffect = effect;
++        mVibrationEnabled = effect != null;
+     }
+ 
+     /**
+@@ -895,16 +702,6 @@
+             @NonNull String conversationId) {
+         mParentId = getTrimmedString(parentChannelId);
+         mConversationId = getTrimmedString(conversationId);
+-    }
+-
+-    /**
+-     * Sets whether this channel is a reserved notification channel for bundling (silencing
+-     * and minimizing).
+-     *
+-     * @hide
+-     */
+-    public void setIsBundleChannel(boolean isBundleChannel) {
+-        mIsBundleChannel = isBundleChannel;
+     }
+ 
+     /**
+@@ -1035,7 +832,6 @@
+      *
+      *  @see VibrationEffect#createWaveform(long[], int)
+      */
+-    @FlaggedApi(Flags.FLAG_NOTIFICATION_CHANNEL_VIBRATION_EFFECT_API)
+     @Nullable
+     public VibrationEffect getVibrationEffect() {
+         return mVibrationEffect;
+@@ -1102,34 +898,6 @@
+     }
+ 
+     /**
+-     * Returns whether this channel backs a bundle.
+-     *
+-     * @hide
+-     */
+-    @TestApi
+-    @FlaggedApi(Flags.FLAG_NM_CONTEXTUAL_DISPLAY)
+-    public boolean isBundleChannel() {
+-        return SYSTEM_RESERVED_IDS.contains(mId)
+-                || (Flags.nmContextualDisplay() && mIsBundleChannel)
+-                || (Flags.nmContextualDisplayLaunch() && mIsBundleChannel);
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @SystemApi
+-    public boolean isDeleted() {
+-        return mDeleted;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public long getDeletedTimeMs() {
+-        return mDeletedTime;
+-    }
+-
+-    /**
+      * @hide
+      */
+     @SystemApi
+@@ -1138,34 +906,11 @@
+     }
+ 
+     /**
+-     * @hide
+-     */
+-    public boolean isUserVisibleTaskShown() {
+-        return mUserVisibleTaskShown;
+-    }
+-
+-    /**
+      * Returns whether this channel is always blockable, even if the app is 'fixed' as
+      * non-blockable.
+      */
+     public boolean isBlockable() {
+         return mBlockableSystem;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @TestApi
+-    public void setImportanceLockedByCriticalDeviceFunction(boolean locked) {
+-        mImportanceLockedDefaultApp = locked;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @TestApi
+-    public boolean isImportanceLockedByCriticalDeviceFunction() {
+-        return mImportanceLockedDefaultApp;
+     }
+ 
+     /**
+@@ -1176,7 +921,6 @@
+      * @return The original importance as set by the app.
+      * @see #getImportance()
+      */
+-    @FlaggedApi(FLAG_NOTIFICATION_GET_ORIGINAL_IMPORTANCE)
+     public @Importance int getOriginalImportance() {
+         return mOriginalImportance;
+     }
+@@ -1224,23 +968,6 @@
+     }
+ 
+     /**
+-     * Returns the time of the notification post or last update for this channel.
+-     * @return time of post / last update
+-     * @hide
+-     */
+-    public long getLastNotificationUpdateTimeMs() {
+-        return mLastNotificationUpdateTimeMs;
+-    }
+-
+-    /**
+-     * Sets the time of the notification post or last update for this channel.
+-     * @hide
+-     */
+-    public void setLastNotificationUpdateTimeMs(long updateTimeMs) {
+-        mLastNotificationUpdateTimeMs = updateTimeMs;
+-    }
+-
+-    /**
+      * @hide
+      */
+     public void setEmoji(String emoji) {
+@@ -1252,379 +979,6 @@
+      */
+     public String getEmoji() {
+         return mEmoji;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void populateFromXmlForRestore(XmlPullParser parser, boolean pkgInstalled,
+-            Context context) {
+-        populateFromXml(XmlUtils.makeTyped(parser), true, pkgInstalled, context);
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @SystemApi
+-    public void populateFromXml(XmlPullParser parser) {
+-        populateFromXml(XmlUtils.makeTyped(parser), false, true, null);
+-    }
+-
+-    /**
+-     * If {@code forRestore} is true, {@code Context} MUST be non-null.
+-     */
+-    private void populateFromXml(TypedXmlPullParser parser, boolean forRestore,
+-            boolean pkgInstalled, @Nullable Context context) {
+-        Preconditions.checkArgument(!forRestore || context != null,
+-                "forRestore is true but got null context");
+-
+-        // Name, id, and importance are set in the constructor.
+-        setDescription(parser.getAttributeValue(null, ATT_DESC));
+-        setBypassDnd(Notification.PRIORITY_DEFAULT
+-                != safeInt(parser, ATT_PRIORITY, Notification.PRIORITY_DEFAULT));
+-        setLockscreenVisibility(safeInt(parser, ATT_VISIBILITY, DEFAULT_VISIBILITY));
+-
+-        Uri sound = safeUri(parser, ATT_SOUND);
+-
+-        final AudioAttributes audioAttributes = safeAudioAttributes(parser);
+-        if (forRestore) {
+-            final int usage = audioAttributes.getUsage();
+-            Pair<Uri, Boolean> restorationResult = NotificationSoundCanonicalizer.restoreSoundUri(
+-                    context, sound, pkgInstalled, usage, mSoundRestored);
+-            setSoundRestored(restorationResult.second);
+-            setSound(restorationResult.first, audioAttributes);
+-        } else {
+-            setSound(sound, audioAttributes);
+-        }
+-
+-        enableLights(safeBool(parser, ATT_LIGHTS, false));
+-        setLightColor(safeInt(parser, ATT_LIGHT_COLOR, DEFAULT_LIGHT_COLOR));
+-        // Set the pattern before the effect, so that we can properly handle cases where the pattern
+-        // is null, but the effect is not null (i.e. for non-waveform VibrationEffects - the ones
+-        // which cannot be represented as a vibration pattern).
+-        setVibrationPattern(safeLongArray(parser, ATT_VIBRATION, null));
+-        if (Flags.notificationChannelVibrationEffectApi()) {
+-            VibrationEffect vibrationEffect = safeVibrationEffect(parser, ATT_VIBRATION_EFFECT);
+-            if (vibrationEffect != null) {
+-                // Restore the effect only if it is not null. This allows to avoid undoing a
+-                // `setVibrationPattern` call above, if that was done with a non-null pattern
+-                // (e.g. back up from a version that did not support `setVibrationEffect`), or
+-                // if there is an equivalent vibration pattern available.
+-                setVibrationEffect(vibrationEffect);
+-            }
+-        }
+-        enableVibration(safeBool(parser, ATT_VIBRATION_ENABLED, false));
+-        setShowBadge(safeBool(parser, ATT_SHOW_BADGE, false));
+-        setDeleted(safeBool(parser, ATT_DELETED, false));
+-        setDeletedTimeMs(XmlUtils.readLongAttribute(
+-                parser, ATT_DELETED_TIME_MS, DEFAULT_DELETION_TIME_MS));
+-        setGroup(parser.getAttributeValue(null, ATT_GROUP));
+-        lockFields(safeInt(parser, ATT_USER_LOCKED, 0));
+-        setUserVisibleTaskShown(safeBool(parser, ATT_FG_SERVICE_SHOWN, false));
+-        setBlockable(safeBool(parser, ATT_BLOCKABLE_SYSTEM, false));
+-        setAllowBubbles(safeInt(parser, ATT_ALLOW_BUBBLE, DEFAULT_ALLOW_BUBBLE));
+-        setOriginalImportance(safeInt(parser, ATT_ORIG_IMP, DEFAULT_IMPORTANCE));
+-        setConversationId(parser.getAttributeValue(null, ATT_PARENT_CHANNEL),
+-                parser.getAttributeValue(null, ATT_CONVERSATION_ID));
+-        setDemoted(safeBool(parser, ATT_DEMOTE, false));
+-        setImportantConversation(safeBool(parser, ATT_IMP_CONVERSATION, false));
+-        if (Flags.nmContextualDisplay() || Flags.nmContextualDisplayLaunch()) {
+-            setIsBundleChannel(safeBool(parser, ATT_BUNDLE, false));
+-        }
+-        if (Flags.nmContextualDisplayLaunch() && isBundleChannel()) {
+-            setEmoji(parser.getAttributeValue(null, ATT_EMOJI));
+-        }
+-    }
+-
+-    /**
+-     * Returns whether the sound for this channel was successfully restored
+-     *  from backup.
+-     * @return false if the sound was not restored successfully. true otherwise (default value)
+-     * @hide
+-     */
+-    public boolean isSoundRestored() {
+-        return mSoundRestored;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void setSoundRestored(boolean soundRestored) {
+-        mSoundRestored = soundRestored;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @SystemApi
+-    public void writeXml(XmlSerializer out) throws IOException {
+-        writeXml(XmlUtils.makeTyped(out), false, null);
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void writeXmlForBackup(XmlSerializer out, Context context) throws IOException {
+-        writeXml(XmlUtils.makeTyped(out), true, context);
+-    }
+-
+-    /**
+-     * If {@code forBackup} is true, {@code Context} MUST be non-null.
+-     */
+-    private void writeXml(TypedXmlSerializer out, boolean forBackup, @Nullable Context context)
+-            throws IOException {
+-        Preconditions.checkArgument(!forBackup || context != null,
+-                "forBackup is true but got null context");
+-        out.startTag(null, TAG_CHANNEL);
+-        out.attribute(null, ATT_ID, getId());
+-        if (getName() != null) {
+-            out.attribute(null, ATT_NAME, getName().toString());
+-        }
+-        if (getDescription() != null) {
+-            out.attribute(null, ATT_DESC, getDescription());
+-        }
+-        if (getImportance() != DEFAULT_IMPORTANCE) {
+-            out.attributeInt(null, ATT_IMPORTANCE, getImportance());
+-        }
+-        if (canBypassDnd()) {
+-            out.attributeInt(null, ATT_PRIORITY, Notification.PRIORITY_MAX);
+-        }
+-        if (getLockscreenVisibility() != DEFAULT_VISIBILITY) {
+-            out.attributeInt(null, ATT_VISIBILITY, getLockscreenVisibility());
+-        }
+-        Uri sound = forBackup
+-                ? NotificationSoundCanonicalizer.getSoundForBackup(context, getSound())
+-                : getSound();
+-        if (sound != null) {
+-            out.attribute(null, ATT_SOUND, sound.toString());
+-        }
+-        if (getAudioAttributes() != null) {
+-            out.attributeInt(null, ATT_USAGE, getAudioAttributes().getUsage());
+-            out.attributeInt(null, ATT_CONTENT_TYPE, getAudioAttributes().getContentType());
+-            out.attributeInt(null, ATT_FLAGS, getAudioAttributes().getFlags());
+-        }
+-        if (shouldShowLights()) {
+-            out.attributeBoolean(null, ATT_LIGHTS, shouldShowLights());
+-        }
+-        if (getLightColor() != DEFAULT_LIGHT_COLOR) {
+-            out.attributeInt(null, ATT_LIGHT_COLOR, getLightColor());
+-        }
+-        if (shouldVibrate()) {
+-            out.attributeBoolean(null, ATT_VIBRATION_ENABLED, shouldVibrate());
+-        }
+-        if (getVibrationPattern() != null) {
+-            out.attribute(null, ATT_VIBRATION, longArrayToString(getVibrationPattern()));
+-        }
+-        if (getVibrationEffect() != null && getVibrationPattern() == null) {
+-            // Only serialize the vibration effect if we do not already have an equivalent
+-            // vibration pattern AND if it's not "too long". Note that "too long" should be fairly
+-            // rare here since setVibrationEffect() fixes most cases.
+-            String serializedVibrationEffect = vibrationToString(getVibrationEffect());
+-            if (serializedVibrationEffect.length() <= MAX_SERIALIZED_VIBRATION_LENGTH) {
+-                out.attribute(null, ATT_VIBRATION_EFFECT, serializedVibrationEffect);
+-            }
+-        }
+-        if (getUserLockedFields() != 0) {
+-            out.attributeInt(null, ATT_USER_LOCKED, getUserLockedFields());
+-        }
+-        if (isUserVisibleTaskShown()) {
+-            out.attributeBoolean(null, ATT_FG_SERVICE_SHOWN, isUserVisibleTaskShown());
+-        }
+-        if (canShowBadge()) {
+-            out.attributeBoolean(null, ATT_SHOW_BADGE, canShowBadge());
+-        }
+-        if (isDeleted()) {
+-            out.attributeBoolean(null, ATT_DELETED, isDeleted());
+-        }
+-        if (getDeletedTimeMs() >= 0) {
+-            out.attributeLong(null, ATT_DELETED_TIME_MS, getDeletedTimeMs());
+-        }
+-        if (getGroup() != null) {
+-            out.attribute(null, ATT_GROUP, getGroup());
+-        }
+-        if (isBlockable()) {
+-            out.attributeBoolean(null, ATT_BLOCKABLE_SYSTEM, isBlockable());
+-        }
+-        if (getAllowBubbles() != DEFAULT_ALLOW_BUBBLE) {
+-            out.attributeInt(null, ATT_ALLOW_BUBBLE, getAllowBubbles());
+-        }
+-        if (getOriginalImportance() != DEFAULT_IMPORTANCE) {
+-            out.attributeInt(null, ATT_ORIG_IMP, getOriginalImportance());
+-        }
+-        if (getParentChannelId() != null) {
+-            out.attribute(null, ATT_PARENT_CHANNEL, getParentChannelId());
+-        }
+-        if (getConversationId() != null) {
+-            out.attribute(null, ATT_CONVERSATION_ID, getConversationId());
+-        }
+-        if (isDemoted()) {
+-            out.attributeBoolean(null, ATT_DEMOTE, isDemoted());
+-        }
+-        if (isImportantConversation()) {
+-            out.attributeBoolean(null, ATT_IMP_CONVERSATION, isImportantConversation());
+-        }
+-
+-        if ((Flags.nmContextualDisplay() || Flags.nmContextualDisplayLaunch())
+-                && isBundleChannel()) {
+-            out.attributeBoolean(null, ATT_BUNDLE, isBundleChannel());
+-        }
+-
+-        if (Flags.nmContextualDisplayLaunch() && isBundleChannel() && getEmoji() != null) {
+-            out.attribute(null, ATT_EMOJI, getEmoji());
+-        }
+-
+-        // mImportanceLockedDefaultApp has a different source of truth and so isn't written to
+-        // this xml file
+-
+-        out.endTag(null, TAG_CHANNEL);
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @SystemApi
+-    public JSONObject toJson() throws JSONException {
+-        JSONObject record = new JSONObject();
+-        record.put(ATT_ID, getId());
+-        record.put(ATT_NAME, getName());
+-        record.put(ATT_DESC, getDescription());
+-        if (getImportance() != DEFAULT_IMPORTANCE) {
+-            record.put(ATT_IMPORTANCE,
+-                    NotificationListenerService.Ranking.importanceToString(getImportance()));
+-        }
+-        if (canBypassDnd()) {
+-            record.put(ATT_PRIORITY, Notification.PRIORITY_MAX);
+-        }
+-        if (getLockscreenVisibility() != DEFAULT_VISIBILITY) {
+-            record.put(ATT_VISIBILITY, Notification.visibilityToString(getLockscreenVisibility()));
+-        }
+-        if (getSound() != null) {
+-            record.put(ATT_SOUND, getSound().toString());
+-        }
+-        if (getAudioAttributes() != null) {
+-            record.put(ATT_USAGE, Integer.toString(getAudioAttributes().getUsage()));
+-            record.put(ATT_CONTENT_TYPE,
+-                    Integer.toString(getAudioAttributes().getContentType()));
+-            record.put(ATT_FLAGS, Integer.toString(getAudioAttributes().getFlags()));
+-        }
+-        record.put(ATT_LIGHTS, Boolean.toString(shouldShowLights()));
+-        record.put(ATT_LIGHT_COLOR, Integer.toString(getLightColor()));
+-        record.put(ATT_VIBRATION_ENABLED, Boolean.toString(shouldVibrate()));
+-        record.put(ATT_USER_LOCKED, Integer.toString(getUserLockedFields()));
+-        record.put(ATT_FG_SERVICE_SHOWN, Boolean.toString(isUserVisibleTaskShown()));
+-        record.put(ATT_VIBRATION, longArrayToString(getVibrationPattern()));
+-        if (getVibrationEffect() != null) {
+-            record.put(ATT_VIBRATION_EFFECT, vibrationToString(getVibrationEffect()));
+-        }
+-        record.put(ATT_SHOW_BADGE, Boolean.toString(canShowBadge()));
+-        record.put(ATT_DELETED, Boolean.toString(isDeleted()));
+-        record.put(ATT_DELETED_TIME_MS, Long.toString(getDeletedTimeMs()));
+-        record.put(ATT_GROUP, getGroup());
+-        record.put(ATT_BLOCKABLE_SYSTEM, isBlockable());
+-        record.put(ATT_ALLOW_BUBBLE, getAllowBubbles());
+-        // TODO: original importance
+-        return record;
+-    }
+-
+-    private static AudioAttributes safeAudioAttributes(TypedXmlPullParser parser) {
+-        int usage = safeInt(parser, ATT_USAGE, AudioAttributes.USAGE_NOTIFICATION);
+-        int contentType = safeInt(parser, ATT_CONTENT_TYPE,
+-                AudioAttributes.CONTENT_TYPE_SONIFICATION);
+-        int flags = safeInt(parser, ATT_FLAGS, 0);
+-        return new AudioAttributes.Builder()
+-                .setUsage(usage)
+-                .setContentType(contentType)
+-                .setFlags(flags)
+-                .build();
+-    }
+-
+-    private static Uri safeUri(TypedXmlPullParser parser, String att) {
+-        final String val = parser.getAttributeValue(null, att);
+-        return val == null ? null : Uri.parse(val);
+-    }
+-
+-    @NonNull
+-    private static String vibrationToString(VibrationEffect effect) {
+-        StringWriter writer = new StringWriter();
+-        try {
+-            VibrationXmlSerializer.serialize(
+-                    effect, writer, VibrationXmlSerializer.FLAG_ALLOW_HIDDEN_APIS);
+-        } catch (IOException e) {
+-            Log.e(TAG, "Unable to serialize vibration: " + effect, e);
+-        }
+-        return writer.toString();
+-    }
+-
+-    private static VibrationEffect safeVibrationEffect(TypedXmlPullParser parser, String att) {
+-        final String val = parser.getAttributeValue(null, att);
+-        if (val != null) {
+-            try {
+-                return VibrationXmlParser.parseVibrationEffect(
+-                        new StringReader(val), VibrationXmlParser.FLAG_ALLOW_HIDDEN_APIS);
+-            } catch (IOException e) {
+-                Log.e(TAG, "Unable to read serialized vibration effect", e);
+-            }
+-        }
+-        return null;
+-    }
+-
+-    private static int safeInt(TypedXmlPullParser parser, String att, int defValue) {
+-        return parser.getAttributeInt(null, att, defValue);
+-    }
+-
+-    private static boolean safeBool(TypedXmlPullParser parser, String att, boolean defValue) {
+-        return parser.getAttributeBoolean(null, att, defValue);
+-    }
+-
+-    private static long[] safeLongArray(TypedXmlPullParser parser, String att, long[] defValue) {
+-        final String attributeValue = parser.getAttributeValue(null, att);
+-        if (TextUtils.isEmpty(attributeValue)) return defValue;
+-        String[] values = attributeValue.split(DELIMITER);
+-        long[] longValues = new long[values.length];
+-        for (int i = 0; i < values.length; i++) {
+-            try {
+-                longValues[i] = Long.parseLong(values[i]);
+-            } catch (NumberFormatException e) {
+-                longValues[i] = 0;
+-            }
+-        }
+-        return longValues;
+-    }
+-
+-    private static String longArrayToString(long[] values) {
+-        StringBuilder sb = new StringBuilder();
+-        if (values != null && values.length > 0) {
+-            for (int i = 0; i < values.length - 1; i++) {
+-                sb.append(values[i]).append(DELIMITER);
+-            }
+-            sb.append(values[values.length - 1]);
+-        }
+-        return sb.toString();
+-    }
+-
+-    /**
+-     * Get the reserved bundle channel ID for an Adjustment type
+-     * @param type the Adjustment type
+-     * @return the channel ID, or null if type is invalid
+-     * @hide
+-     */
+-    public static @Nullable String getChannelIdForBundleType(int type) {
+-        switch (type) {
+-            case TYPE_CONTENT_RECOMMENDATION:
+-                return RECS_ID;
+-            case TYPE_NEWS:
+-                return NEWS_ID;
+-            case TYPE_PROMOTION:
+-                return PROMOTIONS_ID;
+-            case TYPE_SOCIAL_MEDIA:
+-                return SOCIAL_MEDIA_ID;
+-        }
+-        if ((Flags.nmContextualDisplayLaunch() || Flags.nmContextualDisplay() )
+-                && type >= DynamicBundle.DYNAMIC_RANGE_START
+-                && type <= DynamicBundle.DYNAMIC_RANGE_END) {
+-            return DYNAMIC_BUNDLE_PREFIX + type;
+-        }
+-        return null;
+     }
+ 
+     public static final @android.annotation.NonNull Creator<NotificationChannel> CREATOR =
+@@ -1678,11 +1032,6 @@
+                 && Objects.equals(getConversationId(), that.getConversationId())
+                 && isDemoted() == that.isDemoted()
+                 && isImportantConversation() == that.isImportantConversation();
+-        if (Flags.nmContextualDisplayLaunch()) {
+-                isEqual = isEqual
+-                        && (isBundleChannel() == that.isBundleChannel())
+-                        && Objects.equals(getEmoji(), that.getEmoji());
+-        }
+ 
+         return isEqual;
+     }
+@@ -1752,38 +1101,89 @@
+                 + ", emoji=" + getEmoji();
+     }
+ 
+-    /** @hide */
+-    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-
+-        proto.write(NotificationChannelProto.ID, mId);
+-        proto.write(NotificationChannelProto.NAME, mName);
+-        proto.write(NotificationChannelProto.DESCRIPTION, mDesc);
+-        proto.write(NotificationChannelProto.IMPORTANCE, mImportance);
+-        proto.write(NotificationChannelProto.CAN_BYPASS_DND, mBypassDnd);
+-        proto.write(NotificationChannelProto.LOCKSCREEN_VISIBILITY, mLockscreenVisibility);
+-        if (mSound != null) {
+-            proto.write(NotificationChannelProto.SOUND, mSound.toString());
+-        }
+-        proto.write(NotificationChannelProto.USE_LIGHTS, mLights);
+-        proto.write(NotificationChannelProto.LIGHT_COLOR, mLightColor);
+-        if (mVibrationPattern != null) {
+-            for (long v : mVibrationPattern) {
+-                proto.write(NotificationChannelProto.VIBRATION, v);
+-            }
+-        }
+-        proto.write(NotificationChannelProto.USER_LOCKED_FIELDS, mUserLockedFields);
+-        proto.write(NotificationChannelProto.USER_VISIBLE_TASK_SHOWN, mUserVisibleTaskShown);
+-        proto.write(NotificationChannelProto.IS_VIBRATION_ENABLED, mVibrationEnabled);
+-        proto.write(NotificationChannelProto.SHOW_BADGE, mShowBadge);
+-        proto.write(NotificationChannelProto.IS_DELETED, mDeleted);
+-        proto.write(NotificationChannelProto.GROUP, mGroup);
+-        if (mAudioAttributes != null) {
+-            mAudioAttributes.dumpDebug(proto, NotificationChannelProto.AUDIO_ATTRIBUTES);
+-        }
+-        proto.write(NotificationChannelProto.IS_BLOCKABLE_SYSTEM, mBlockableSystem);
+-        proto.write(NotificationChannelProto.ALLOW_APP_OVERLAY, mAllowBubbles);
+-
+-        proto.end(token);
+-    }
++    @SystemApi
++    public boolean isDeleted() {
++        return mDeleted;
++    }
++
++    @TestApi
++    public boolean isBundleChannel() {
++        return mIsBundleChannel;
++    }
++
++    @TestApi
++    @NonNull
++    public NotificationChannel copy() {
++        NotificationChannel copy = new NotificationChannel(mId, mName, mImportance);
++        copy.setDescription(mDesc);
++        copy.setBypassDnd(mBypassDnd);
++        copy.setLockscreenVisibility(mLockscreenVisibility);
++        copy.setSound(mSound, mAudioAttributes);
++        copy.setLightColor(mLightColor);
++        copy.enableLights(mLights);
++        copy.setVibrationPattern(mVibrationPattern);
++        copy.lockFields(mUserLockedFields);
++        copy.setUserVisibleTaskShown(mUserVisibleTaskShown);
++        copy.enableVibration(mVibrationEnabled);
++        copy.setShowBadge(mShowBadge);
++        copy.setDeleted(mDeleted);
++        copy.setGroup(mGroup);
++        copy.setBlockable(mBlockableSystem);
++        copy.setAllowBubbles(mAllowBubbles);
++        copy.setOriginalImportance(mOriginalImportance);
++        copy.setConversationId(mParentId, mConversationId);
++        copy.setDemoted(mDemoted);
++        copy.setImportantConversation(mImportantConvo);
++        copy.setDeletedTimeMs(mDeletedTime);
++        copy.setImportanceLockedByCriticalDeviceFunction(mImportanceLockedDefaultApp);
++        copy.setLastNotificationUpdateTimeMs(mLastNotificationUpdateTimeMs);
++        copy.setIsBundleChannel(mIsBundleChannel);
++        copy.setEmoji(mEmoji);
++
++        return copy;
++    }
++
++    private String getTrimmedString(String input) {
++        if (input != null && input.length() > MAX_TEXT_LENGTH) {
++            return input.substring(0, MAX_TEXT_LENGTH);
++        }
++        return input;
++    }
++
++    public boolean isUserVisibleTaskShown() {
++        return mUserVisibleTaskShown;
++    }
++
++    public long getDeletedTimeMs() {
++        return mDeletedTime;
++    }
++
++    @TestApi
++    public void setDeleted(boolean deleted) {
++        mDeleted = deleted;
++    }
++
++    @TestApi
++    public void setDeletedTimeMs(long time) {
++        mDeletedTime = time;
++    }
++
++    @TestApi
++    public void setImportanceLockedByCriticalDeviceFunction(boolean locked) {
++        mImportanceLockedDefaultApp = locked;
++    }
++
++    @TestApi
++    public void setUserVisibleTaskShown(boolean shown) {
++        mUserVisibleTaskShown = shown;
++    }
++
++    public void setIsBundleChannel(boolean isBundleChannel) {
++        mIsBundleChannel = isBundleChannel;
++    }
++
++    public void setLastNotificationUpdateTimeMs(long updateTimeMs) {
++        mLastNotificationUpdateTimeMs = updateTimeMs;
++    }
++
+ }
+--- a/frameworks/base/core/java/android/app/NotificationChannelGroup.java
++++ b/frameworks/base/core/java/android/app/NotificationChannelGroup.java
+@@ -16,23 +16,14 @@
+ package android.app;
+ 
+ import android.annotation.Nullable;
+-import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.Intent;
+-import android.content.pm.ParceledListSlice;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.text.TextUtils;
+-import android.util.proto.ProtoOutputStream;
+-
+-import com.android.modules.utils.TypedXmlPullParser;
+-import com.android.modules.utils.TypedXmlSerializer;
+-
+-import org.json.JSONException;
+-import org.json.JSONObject;
+-
+-import java.io.IOException;
++
++
++
+ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.Objects;
+@@ -108,20 +99,12 @@
+             mDescription = null;
+         }
+         if (in.readByte() != 0) {
+-            mChannels = in.readParcelable(NotificationChannelGroup.class.getClassLoader(),
+-                    ParceledListSlice.class).getList();
++            mChannels = in.createTypedArrayList(NotificationChannel.CREATOR);
+         } else {
+             mChannels = new ArrayList<>();
+         }
+         mBlocked = in.readBoolean();
+         mUserLockedFields = in.readInt();
+-    }
+-
+-    private String getTrimmedString(String input) {
+-        if (input != null && input.length() > MAX_TEXT_LENGTH) {
+-            return input.substring(0, MAX_TEXT_LENGTH);
+-        }
+-        return input;
+     }
+ 
+     @Override
+@@ -146,7 +129,7 @@
+         }
+         if (mChannels != null) {
+             dest.writeByte((byte) 1);
+-            dest.writeParcelable(new ParceledListSlice<>(mChannels), flags);
++            dest.writeTypedList(mChannels);
+         } else {
+             dest.writeByte((byte) 0);
+         }
+@@ -248,48 +231,6 @@
+     @TestApi
+     public int getUserLockedFields() {
+         return mUserLockedFields;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void populateFromXml(TypedXmlPullParser parser) {
+-        // Name, id, and importance are set in the constructor.
+-        setDescription(parser.getAttributeValue(null, ATT_DESC));
+-        setBlocked(parser.getAttributeBoolean(null, ATT_BLOCKED, false));
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void writeXml(TypedXmlSerializer out) throws IOException {
+-        out.startTag(null, TAG_GROUP);
+-
+-        out.attribute(null, ATT_ID, getId());
+-        if (getName() != null) {
+-            out.attribute(null, ATT_NAME, getName().toString());
+-        }
+-        if (getDescription() != null) {
+-            out.attribute(null, ATT_DESC, getDescription().toString());
+-        }
+-        out.attributeBoolean(null, ATT_BLOCKED, isBlocked());
+-        out.attributeInt(null, ATT_USER_LOCKED, mUserLockedFields);
+-
+-        out.endTag(null, TAG_GROUP);
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @SystemApi
+-    public JSONObject toJson() throws JSONException {
+-        JSONObject record = new JSONObject();
+-        record.put(ATT_ID, getId());
+-        record.put(ATT_NAME, getName());
+-        record.put(ATT_DESC, getDescription());
+-        record.put(ATT_BLOCKED, isBlocked());
+-        record.put(ATT_USER_LOCKED, mUserLockedFields);
+-        return record;
+     }
+ 
+     public static final @android.annotation.NonNull Creator<NotificationChannelGroup> CREATOR =
+@@ -353,17 +294,11 @@
+                 + '}';
+     }
+ 
+-    /** @hide */
+-    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-
+-        proto.write(NotificationChannelGroupProto.ID, mId);
+-        proto.write(NotificationChannelGroupProto.NAME, mName.toString());
+-        proto.write(NotificationChannelGroupProto.DESCRIPTION, mDescription);
+-        proto.write(NotificationChannelGroupProto.IS_BLOCKED, mBlocked);
+-        for (NotificationChannel channel : mChannels) {
+-            channel.dumpDebug(proto, NotificationChannelGroupProto.CHANNELS);
+-        }
+-        proto.end(token);
+-    }
++    private String getTrimmedString(String input) {
++        if (input != null && input.length() > MAX_TEXT_LENGTH) {
++            return input.substring(0, MAX_TEXT_LENGTH);
++        }
++        return input;
++    }
++
+ }

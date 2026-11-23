@@ -23,7 +23,6 @@ frameworks/base/core/java/android/content/ComponentCallbacks2.java
 frameworks/base/core/java/android/os/HandlerThread.java
 frameworks/base/core/java/android/os/Trace.java
 frameworks/base/core/java/android/content/BroadcastReceiver.java
-frameworks/base/core/java/android/app/Person.java
 libcore/ojluni/src/main/java/java/util/AbstractMap.java
 libcore/ojluni/src/main/java/java/util/AbstractCollection.java
 libcore/ojluni/src/main/java/java/util/AbstractSet.java
@@ -112,7 +111,6 @@ frameworks/base/core/java/android/animation/ValueAnimator.java
 
 # Component identity, intent matching, and URI handling.
 frameworks/base/core/java/android/content/ActivityNotFoundException.java
-frameworks/base/core/java/android/content/ContextWrapper.java
 frameworks/base/core/java/android/content/Intent.java
 frameworks/base/core/java/android/net/Uri.java
 frameworks/base/core/java/android/net/UriCodec.java
@@ -129,7 +127,6 @@ frameworks/base/core/java/android/util/AndroidRuntimeException.java
 frameworks/base/core/java/android/util/NoSuchPropertyException.java
 
 # Patches for the embedded platform and SDK boundaries.
-@patch 0307-embedded-context-wrapper.patch
 @patch 0308-local-uri-platform-edges.patch
 @patch 0309-embedded-animation-scheduling.patch
 @patch 0310-reflective-animation-properties.patch

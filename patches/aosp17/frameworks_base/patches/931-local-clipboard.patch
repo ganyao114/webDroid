@@ -1,0 +1,669 @@
+--- a/frameworks/base/core/java/android/content/ClipboardManager.java
++++ b/frameworks/base/core/java/android/content/ClipboardManager.java
+@@ -25,9 +25,6 @@
+ import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.os.Handler;
+-import android.os.RemoteException;
+-import android.os.ServiceManager;
+-import android.os.ServiceManager.ServiceNotFoundException;
+ 
+ import java.util.ArrayList;
+ import java.util.Objects;
+@@ -90,20 +87,13 @@
+ 
+     private final Context mContext;
+     private final Handler mHandler;
+-    private final IClipboard mService;
++    private static ClipData sPrimaryClip;
++    private static String sSourcePackage;
++    private static boolean sAccessNotifications = DEVICE_CONFIG_DEFAULT_SHOW_ACCESS_NOTIFICATIONS;
++    private static final ArrayList<ClipboardManager> sListeningManagers = new ArrayList<>();
+ 
+     private final ArrayList<OnPrimaryClipChangedListener> mPrimaryClipChangedListeners
+              = new ArrayList<OnPrimaryClipChangedListener>();
+-
+-    private final IOnPrimaryClipChangedListener.Stub mPrimaryClipChangedServiceListener
+-            = new IOnPrimaryClipChangedListener.Stub() {
+-        @Override
+-        public void dispatchPrimaryClipChanged() {
+-            mHandler.post(() -> {
+-                reportPrimaryClipChanged();
+-            });
+-        }
+-    };
+ 
+     /**
+      * Defines a listener callback that is invoked when the primary clip on the clipboard changes.
+@@ -128,11 +118,9 @@
+ 
+     /** @hide */
+     @UnsupportedAppUsage
+-    public ClipboardManager(Context context, Handler handler) throws ServiceNotFoundException {
++    public ClipboardManager(Context context, Handler handler) {
+         mContext = context;
+         mHandler = handler;
+-        mService = IClipboard.Stub.asInterface(
+-                ServiceManager.getServiceOrThrow(Context.CLIPBOARD_SERVICE));
+     }
+ 
+     /**
+@@ -144,13 +132,8 @@
+      */
+     @SystemApi
+     @RequiresPermission(Manifest.permission.MANAGE_CLIPBOARD_ACCESS_NOTIFICATION)
+-    @android.ravenwood.annotation.RavenwoodThrow
+     public boolean areClipboardAccessNotificationsEnabled() {
+-        try {
+-            return mService.areClipboardAccessNotificationsEnabledForUser(mContext.getUserId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return sAccessNotifications;
+     }
+ 
+     /**
+@@ -161,13 +144,8 @@
+      */
+     @SystemApi
+     @RequiresPermission(Manifest.permission.MANAGE_CLIPBOARD_ACCESS_NOTIFICATION)
+-    @android.ravenwood.annotation.RavenwoodThrow
+     public void setClipboardAccessNotificationsEnabled(boolean enable) {
+-        try {
+-            mService.setClipboardAccessNotificationsEnabledForUser(enable, mContext.getUserId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        sAccessNotifications = enable;
+     }
+ 
+     /**
+@@ -179,18 +157,7 @@
+      * @see #clearPrimaryClip()
+      */
+     public void setPrimaryClip(@NonNull ClipData clip) {
+-        try {
+-            Objects.requireNonNull(clip);
+-            clip.prepareToLeaveProcess(true);
+-            mService.setPrimaryClip(
+-                    clip,
+-                    mContext.getOpPackageName(),
+-                    mContext.getAttributionTag(),
+-                    mContext.getUserId(),
+-                    mContext.getDeviceId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        setPrimaryClipAsPackage(clip, mContext.getPackageName());
+     }
+ 
+     /**
+@@ -207,20 +174,11 @@
+     @SystemApi
+     @RequiresPermission(Manifest.permission.SET_CLIP_SOURCE)
+     public void setPrimaryClipAsPackage(@NonNull ClipData clip, @NonNull String sourcePackage) {
+-        try {
+-            Objects.requireNonNull(clip);
+-            Objects.requireNonNull(sourcePackage);
+-            clip.prepareToLeaveProcess(true);
+-            mService.setPrimaryClipAsPackage(
+-                    clip,
+-                    mContext.getOpPackageName(),
+-                    mContext.getAttributionTag(),
+-                    mContext.getUserId(),
+-                    mContext.getDeviceId(),
+-                    sourcePackage);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        Objects.requireNonNull(clip);
++        Objects.requireNonNull(sourcePackage);
++        ClipData copy = copy(clip, ClipData.CREATOR);
++        copy.getDescription().setTimestamp(System.currentTimeMillis());
++        replacePrimaryClip(copy, sourcePackage);
+     }
+ 
+     /**
+@@ -229,15 +187,7 @@
+      * @see #setPrimaryClip(ClipData)
+      */
+     public void clearPrimaryClip() {
+-        try {
+-            mService.clearPrimaryClip(
+-                    mContext.getOpPackageName(),
+-                    mContext.getAttributionTag(),
+-                    mContext.getUserId(),
+-                    mContext.getDeviceId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        replacePrimaryClip(null, null);
+     }
+ 
+     /**
+@@ -249,15 +199,7 @@
+      * @see #setPrimaryClip(ClipData)
+      */
+     public @Nullable ClipData getPrimaryClip() {
+-        try {
+-            return mService.getPrimaryClip(
+-                    mContext.getOpPackageName(),
+-                    mContext.getAttributionTag(),
+-                    mContext.getUserId(),
+-                    mContext.getDeviceId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return sPrimaryClip == null ? null : copy(sPrimaryClip, ClipData.CREATOR);
+     }
+ 
+     /**
+@@ -270,15 +212,7 @@
+      * @see #setPrimaryClip(ClipData)
+      */
+     public @Nullable ClipDescription getPrimaryClipDescription() {
+-        try {
+-            return mService.getPrimaryClipDescription(
+-                    mContext.getOpPackageName(),
+-                    mContext.getAttributionTag(),
+-                    mContext.getUserId(),
+-                    mContext.getDeviceId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return sPrimaryClip == null ? null : copy(sPrimaryClip.getDescription(), ClipDescription.CREATOR);
+     }
+ 
+     /**
+@@ -288,31 +222,13 @@
+      * return {@code false}.</em>
+      */
+     public boolean hasPrimaryClip() {
+-        try {
+-            return mService.hasPrimaryClip(
+-                    mContext.getOpPackageName(),
+-                    mContext.getAttributionTag(),
+-                    mContext.getUserId(),
+-                    mContext.getDeviceId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return sPrimaryClip != null;
+     }
+ 
+     public void addPrimaryClipChangedListener(OnPrimaryClipChangedListener what) {
++        Objects.requireNonNull(what);
+         synchronized (mPrimaryClipChangedListeners) {
+-            if (mPrimaryClipChangedListeners.isEmpty()) {
+-                try {
+-                    mService.addPrimaryClipChangedListener(
+-                            mPrimaryClipChangedServiceListener,
+-                            mContext.getOpPackageName(),
+-                            mContext.getAttributionTag(),
+-                            mContext.getUserId(),
+-                            mContext.getDeviceId());
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
++            if (mPrimaryClipChangedListeners.isEmpty()) sListeningManagers.add(this);
+             mPrimaryClipChangedListeners.add(what);
+         }
+     }
+@@ -320,18 +236,7 @@
+     public void removePrimaryClipChangedListener(OnPrimaryClipChangedListener what) {
+         synchronized (mPrimaryClipChangedListeners) {
+             mPrimaryClipChangedListeners.remove(what);
+-            if (mPrimaryClipChangedListeners.isEmpty()) {
+-                try {
+-                    mService.removePrimaryClipChangedListener(
+-                            mPrimaryClipChangedServiceListener,
+-                            mContext.getOpPackageName(),
+-                            mContext.getAttributionTag(),
+-                            mContext.getUserId(),
+-                            mContext.getDeviceId());
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
++            if (mPrimaryClipChangedListeners.isEmpty()) sListeningManagers.remove(this);
+         }
+     }
+ 
+@@ -363,15 +268,7 @@
+      */
+     @Deprecated
+     public boolean hasText() {
+-        try {
+-            return mService.hasClipboardText(
+-                    mContext.getOpPackageName(),
+-                    mContext.getAttributionTag(),
+-                    mContext.getUserId(),
+-                    mContext.getDeviceId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return sPrimaryClip != null && !android.text.TextUtils.isEmpty(sPrimaryClip.getItemAt(0).getText());
+     }
+ 
+     /**
+@@ -384,15 +281,7 @@
+     @Nullable
+     @RequiresPermission(Manifest.permission.SET_CLIP_SOURCE)
+     public String getPrimaryClipSource() {
+-        try {
+-            return mService.getPrimaryClipSource(
+-                    mContext.getOpPackageName(),
+-                    mContext.getAttributionTag(),
+-                    mContext.getUserId(),
+-                    mContext.getDeviceId());
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        return sSourcePackage;
+     }
+ 
+     @UnsupportedAppUsage
+@@ -411,4 +300,32 @@
+             ((OnPrimaryClipChangedListener)listeners[i]).onPrimaryClipChanged();
+         }
+     }
++
++    /** @hide */
++    public void detachEmbedded() {
++        sListeningManagers.remove(this);
++        synchronized (mPrimaryClipChangedListeners) {
++            mPrimaryClipChangedListeners.clear();
++        }
++    }
++
++    private static <T extends android.os.Parcelable> T copy(T value,
++            android.os.Parcelable.Creator<T> creator) {
++        android.os.Parcel parcel = android.os.Parcel.obtain();
++        try {
++            value.writeToParcel(parcel, 0);
++            parcel.setDataPosition(0);
++            return creator.createFromParcel(parcel);
++        } finally {
++            parcel.recycle();
++        }
++    }
++
++    private static void replacePrimaryClip(ClipData clip, String source) {
++        sPrimaryClip = clip;
++        sSourcePackage = source;
++        for (ClipboardManager manager : sListeningManagers) {
++            manager.mHandler.post(manager::reportPrimaryClipChanged);
++        }
++    }
+ }
+--- a/frameworks/base/core/java/android/content/ClipData.java
++++ b/frameworks/base/core/java/android/content/ClipData.java
+@@ -16,12 +16,8 @@
+ 
+ package android.content;
+ 
+-import static android.content.ContentProvider.maybeAddUserId;
+-import static android.content.ContentResolver.SCHEME_ANDROID_RESOURCE;
+ import static android.content.ContentResolver.SCHEME_CONTENT;
+-import static android.content.ContentResolver.SCHEME_FILE;
+-
+-import android.annotation.FlaggedApi;
++
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+@@ -32,24 +28,23 @@
+ import android.os.Build;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.os.StrictMode;
+ import android.text.Html;
++import android.text.Spanned;
++import android.text.TextUtils;
++import android.util.Log;
++import android.view.textclassifier.TextLinks;
++
++
++
++import static android.content.ContentResolver.SCHEME_ANDROID_RESOURCE;
++import static android.content.ContentResolver.SCHEME_FILE;
++
+ import android.text.Spannable;
+ import android.text.SpannableStringBuilder;
+-import android.text.Spanned;
+-import android.text.TextUtils;
+ import android.text.style.URLSpan;
+-import android.util.Log;
+-import android.util.proto.ProtoOutputStream;
+-import android.view.textclassifier.TextLinks;
+-
+-import com.android.internal.util.ArrayUtils;
+-
+-import libcore.io.IoUtils;
+-
+-import java.io.FileInputStream;
+ import java.io.FileNotFoundException;
+ import java.io.IOException;
++import java.io.FileInputStream;
+ import java.io.InputStreamReader;
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -165,9 +160,16 @@
+  * into an editor), then {@link Item#coerceToText(Context)} will ask the content
+  * provider for the clip URI as text and successfully paste the entire note.
+  */
+-@android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class ClipData implements Parcelable {
+     private static final String TAG = "ClipData";
++
++    private static void closeQuietly(java.io.Closeable stream) {
++        if (stream == null) return;
++        try {
++            stream.close();
++        } catch (IOException ignored) {
++        }
++    }
+ 
+     static final String[] MIMETYPES_TEXT_PLAIN = new String[] {
+         ClipDescription.MIMETYPE_TEXT_PLAIN };
+@@ -219,12 +221,6 @@
+         // if the data is obtained from {@link #copyForTransferWithActivityInfo}
+         private ActivityInfo mActivityInfo;
+ 
+-        private boolean mTokenVerificationEnabled;
+-
+-        void setTokenVerificationEnabled() {
+-            mTokenVerificationEnabled = true;
+-        }
+-
+         /**
+          * A builder for a ClipData Item.
+          */
+@@ -395,9 +391,6 @@
+          * Retrieve the raw Intent contained in this Item.
+          */
+         public Intent getIntent() {
+-            if (mTokenVerificationEnabled) {
+-                Intent.maybeMarkAsMissingCreatorToken(mIntent);
+-            }
+             return mIntent;
+         }
+ 
+@@ -531,9 +524,9 @@
+                         }
+                     }
+                 } finally {
+-                    IoUtils.closeQuietly(descr);
+-                    IoUtils.closeQuietly(stream);
+-                    IoUtils.closeQuietly(reader);
++                    closeQuietly(descr);
++                    closeQuietly(stream);
++                    closeQuietly(reader);
+                 }
+             }
+             if (uri != null) {
+@@ -568,7 +561,6 @@
+          * and other things can be retrieved.
+          * @return Returns the item's textual representation.
+          */
+-        @android.ravenwood.annotation.RavenwoodThrow
+         public CharSequence coerceToStyledText(Context context) {
+             CharSequence text = getText();
+             if (text instanceof Spanned) {
+@@ -619,7 +611,6 @@
+          * and other things can be retrieved.
+          * @return Returns the item's representation as HTML text.
+          */
+-        @android.ravenwood.annotation.RavenwoodThrow
+         public String coerceToHtmlText(Context context) {
+             // If the item has an explicit HTML value, simply return that.
+             String htmlText = getHtmlText();
+@@ -640,7 +631,6 @@
+             return text != null ? text.toString() : null;
+         }
+ 
+-        @android.ravenwood.annotation.RavenwoodThrow
+         private CharSequence coerceToHtmlOrStyledText(Context context, boolean styled) {
+             // If this Item has a URI value, try using that.
+             if (mUri != null) {
+@@ -836,28 +826,10 @@
+                 }
+                 first = false;
+                 b.append("I:");
+-                mIntent.toShortString(b, redactContent, true, true, true);
+-            }
+-        }
+-
+-        /** @hide */
+-        public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-            final long token = proto.start(fieldId);
+-
+-            if (mHtmlText != null) {
+-                proto.write(ClipDataProto.Item.HTML_TEXT, mHtmlText);
+-            } else if (mText != null) {
+-                proto.write(ClipDataProto.Item.TEXT, mText.toString());
+-            } else if (mUri != null) {
+-                proto.write(ClipDataProto.Item.URI, mUri.toString());
+-            } else if (mIntent != null) {
+-                mIntent.dumpDebug(proto, ClipDataProto.Item.INTENT, true, true, true, true);
+-            } else {
+-                proto.write(ClipDataProto.Item.NOTHING, true);
+-            }
+-
+-            proto.end(token);
+-        }
++                b.append(mIntent);
++            }
++        }
++
+     }
+ 
+     /**
+@@ -964,7 +936,7 @@
+                 if (items == null) {
+                     items = new ArrayList<>(N);
+                 }
+-                items.add(new Item(item.getIntent().cloneForCreatorToken()));
++                items.add(new Item(new Intent(item.getIntent())));
+             }
+         }
+         if (items == null || items.isEmpty()) return null;
+@@ -1046,7 +1018,7 @@
+             if (realType != null) {
+                 if (mimeTypes == null) {
+                     mimeTypes = new String[] { realType };
+-                } else if (!ArrayUtils.contains(mimeTypes, realType)) {
++                } else if (!java.util.Arrays.asList(mimeTypes).contains(realType)) {
+                     String[] tmp = new String[mimeTypes.length + 1];
+                     tmp[0] = realType;
+                     System.arraycopy(mimeTypes, 0, tmp, 1, mimeTypes.length);
+@@ -1159,7 +1131,6 @@
+      *
+      * @hide
+      */
+-    @android.ravenwood.annotation.RavenwoodKeep
+     public void prepareToLeaveProcess(boolean leavingPackage) {
+         // Assume that callers are going to be granting permissions
+         prepareToLeaveProcess(leavingPackage, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+@@ -1170,79 +1141,8 @@
+      *
+      * @hide
+      */
+-    @android.ravenwood.annotation.RavenwoodReplace
+     public void prepareToLeaveProcess(boolean leavingPackage, int intentFlags) {
+-        final int size = mItems.size();
+-        for (int i = 0; i < size; i++) {
+-            final Item item = mItems.get(i);
+-            if (item.mIntent != null) {
+-                item.mIntent.prepareToLeaveProcess(leavingPackage, false);
+-            }
+-            if (item.mUri != null && leavingPackage) {
+-                if (StrictMode.vmFileUriExposureEnabled()) {
+-                    item.mUri.checkFileUriExposed("ClipData.Item.getUri()");
+-                }
+-                if (StrictMode.vmContentUriWithoutPermissionEnabled()) {
+-                    item.mUri.checkContentUriWithoutPermission("ClipData.Item.getUri()",
+-                            intentFlags);
+-                }
+-            }
+-        }
+-    }
+-
+-    /** @hide */
+-    public void prepareToLeaveProcess$ravenwood(boolean leavingPackage, int intentFlags) {
+-        // No process boundaries on Ravenwood; ignored
+-    }
+-
+-    /** @hide */
+-    @android.ravenwood.annotation.RavenwoodThrow
+-    public void prepareToEnterProcess(AttributionSource source) {
+-        final int size = mItems.size();
+-        for (int i = 0; i < size; i++) {
+-            final Item item = mItems.get(i);
+-            if (item.mIntent != null) {
+-                // We can't recursively claim that this data is from a protected
+-                // component, since it may have been filled in by a malicious app
+-                item.mIntent.prepareToEnterProcess(false, source);
+-            }
+-        }
+-    }
+-
+-    /** @hide */
+-    @android.ravenwood.annotation.RavenwoodThrow
+-    public void fixUris(int contentUserHint) {
+-        final int size = mItems.size();
+-        for (int i = 0; i < size; i++) {
+-            final Item item = mItems.get(i);
+-            if (item.mIntent != null) {
+-                item.mIntent.fixUris(contentUserHint);
+-            }
+-            if (item.mUri != null) {
+-                item.mUri = maybeAddUserId(item.mUri, contentUserHint);
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Only fixing the data field of the intents
+-     * @hide
+-     */
+-    @android.ravenwood.annotation.RavenwoodThrow
+-    public void fixUrisLight(int contentUserHint) {
+-        final int size = mItems.size();
+-        for (int i = 0; i < size; i++) {
+-            final Item item = mItems.get(i);
+-            if (item.mIntent != null) {
+-                Uri data = item.mIntent.getData();
+-                if (data != null) {
+-                    item.mIntent.setData(maybeAddUserId(data, contentUserHint));
+-                }
+-            }
+-            if (item.mUri != null) {
+-                item.mUri = maybeAddUserId(item.mUri, contentUserHint);
+-            }
+-        }
++        // Clips and intents stay in the embedded Android process.
+     }
+ 
+     private boolean isStyledText() {
+@@ -1311,26 +1211,6 @@
+     }
+ 
+     /** @hide */
+-    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-
+-        if (mClipDescription != null) {
+-            mClipDescription.dumpDebug(proto, ClipDataProto.DESCRIPTION);
+-        }
+-        if (mIcon != null) {
+-            final long iToken = proto.start(ClipDataProto.ICON);
+-            proto.write(ClipDataProto.Icon.WIDTH, mIcon.getWidth());
+-            proto.write(ClipDataProto.Icon.HEIGHT, mIcon.getHeight());
+-            proto.end(iToken);
+-        }
+-        for (int i = 0; i < mItems.size(); i++) {
+-            mItems.get(i).dumpDebug(proto, ClipDataProto.ITEMS);
+-        }
+-
+-        proto.end(token);
+-    }
+-
+-    /** @hide */
+     public void collectUris(List<Uri> out) {
+         for (int i = 0; i < mItems.size(); ++i) {
+             ClipData.Item item = getItemAt(i);
+@@ -1348,12 +1228,6 @@
+                     intent.getClipData().collectUris(out);
+                 }
+             }
+-        }
+-    }
+-
+-    void setTokenVerificationEnabled() {
+-        for (int i = 0; i < mItems.size(); ++i) {
+-            mItems.get(i).setTokenVerificationEnabled();
+         }
+     }
+ 
+--- a/frameworks/base/core/java/android/content/ClipDescription.java
++++ b/frameworks/base/core/java/android/content/ClipDescription.java
+@@ -25,10 +25,6 @@
+ import android.os.PersistableBundle;
+ import android.text.TextUtils;
+ import android.util.ArrayMap;
+-import android.util.TimeUtils;
+-import android.util.proto.ProtoOutputStream;
+-import android.view.textclassifier.TextClassifier;
+-import android.view.textclassifier.TextLinks;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -455,7 +451,7 @@
+      * {@link #CLASSIFICATION_COMPLETE}
+      */
+     @FloatRange(from = 0.0, to = 1.0)
+-    public float getConfidenceScore(@NonNull @TextClassifier.EntityType String entity) {
++    public float getConfidenceScore(@NonNull String entity) {
+         if (mClassificationStatus != CLASSIFICATION_COMPLETE) {
+             throw new IllegalStateException("Classification not complete");
+         }
+@@ -534,7 +530,7 @@
+             }
+             first = false;
+             b.append('<');
+-            b.append(TimeUtils.logTimeOfDay(mTimeStamp));
++            b.append(mTimeStamp);
+             b.append('>');
+         }
+         return !first;
+@@ -552,28 +548,6 @@
+             b.append(mMimeTypes.get(i));
+         }
+         return !first;
+-    }
+-
+-    /** @hide */
+-    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-
+-        final int size = mMimeTypes.size();
+-        for (int i = 0; i < size; i++) {
+-            proto.write(ClipDescriptionProto.MIME_TYPES, mMimeTypes.get(i));
+-        }
+-
+-        if (mLabel != null) {
+-            proto.write(ClipDescriptionProto.LABEL, mLabel.toString());
+-        }
+-        if (mExtras != null) {
+-            mExtras.dumpDebug(proto, ClipDescriptionProto.EXTRAS);
+-        }
+-        if (mTimeStamp > 0) {
+-            proto.write(ClipDescriptionProto.TIMESTAMP_MS, mTimeStamp);
+-        }
+-
+-        proto.end(token);
+     }
+ 
+     @Override

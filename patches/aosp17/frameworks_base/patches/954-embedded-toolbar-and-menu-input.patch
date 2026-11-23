@@ -1,0 +1,79 @@
+--- a/frameworks/base/core/java/android/widget/Toolbar.java
++++ b/frameworks/base/core/java/android/widget/Toolbar.java
+@@ -53,8 +53,6 @@
+ import com.android.internal.view.menu.MenuPresenter;
+ import com.android.internal.view.menu.MenuView;
+ import com.android.internal.view.menu.SubMenuBuilder;
+-import com.android.internal.widget.DecorToolbar;
+-import com.android.internal.widget.ToolbarWidgetWrapper;
+ 
+ import java.util.ArrayList;
+ import java.util.List;
+@@ -206,7 +204,6 @@
+                 }
+             };
+ 
+-    private ToolbarWidgetWrapper mWrapper;
+     private ActionMenuPresenter mOuterActionMenuPresenter;
+     private ExpandedActionViewMenuPresenter mExpandedMenuPresenter;
+     private MenuPresenter.Callback mActionMenuPresenterCallback;
+@@ -2219,14 +2216,6 @@
+         return ((LayoutParams) child.getLayoutParams()).mViewType == LayoutParams.CUSTOM;
+     }
+ 
+-    /** @hide */
+-    public DecorToolbar getWrapper() {
+-        if (mWrapper == null) {
+-            mWrapper = new ToolbarWidgetWrapper(this, true);
+-        }
+-        return mWrapper;
+-    }
+-
+     void removeChildrenForExpandedActionView() {
+         final int childCount = getChildCount();
+         // Go backwards since we're removing from the list
+--- a/frameworks/base/core/java/android/widget/ForwardingListener.java
++++ b/frameworks/base/core/java/android/widget/ForwardingListener.java
+@@ -16,7 +16,6 @@
+ 
+ package android.widget;
+ 
+-import android.companion.virtualdevice.flags.Flags;
+ import android.os.SystemClock;
+ import android.view.MotionEvent;
+ import android.view.View;
+@@ -65,12 +64,12 @@
+         final ViewConfiguration viewConfiguration = ViewConfiguration.get(src.getContext());
+         mScaledTouchSlop = viewConfiguration.getScaledTouchSlop();
+         final int longPressTimeout;
+-        if (Flags.viewconfigurationApis()) {
+-            mTapTimeout = Flags.viewconfigurationApis()
++        if (false) {
++            mTapTimeout = false
+                     ? viewConfiguration.getTapTimeoutMillis() : ViewConfiguration.getTapTimeout();
+             longPressTimeout = viewConfiguration.getLongPressTimeoutMillis();
+         } else {
+-            mTapTimeout = Flags.viewconfigurationApis()
++            mTapTimeout = false
+                     ? viewConfiguration.getTapTimeoutMillis() : ViewConfiguration.getTapTimeout();
+             longPressTimeout = ViewConfiguration.getLongPressTimeout();
+         }
+--- a/frameworks/base/core/java/com/android/internal/widget/AutoScrollHelper.java
++++ b/frameworks/base/core/java/com/android/internal/widget/AutoScrollHelper.java
+@@ -16,7 +16,6 @@
+ 
+ package com.android.internal.widget;
+ 
+-import android.companion.virtualdevice.flags.Flags;
+ import android.content.res.Resources;
+ import android.os.SystemClock;
+ import android.util.DisplayMetrics;
+@@ -218,7 +217,7 @@
+         setMaximumEdges(DEFAULT_MAXIMUM_EDGE, DEFAULT_MAXIMUM_EDGE);
+         setRelativeEdges(DEFAULT_RELATIVE_EDGE, DEFAULT_RELATIVE_EDGE);
+         setRelativeVelocity(DEFAULT_RELATIVE_VELOCITY, DEFAULT_RELATIVE_VELOCITY);
+-        setActivationDelay(Flags.viewconfigurationApis()
++        setActivationDelay(false
+                 ? ViewConfiguration.get(mTarget.getContext()).getTapTimeoutMillis()
+                 : ViewConfiguration.getTapTimeout());
+         setRampUpDuration(DEFAULT_RAMP_UP_DURATION);

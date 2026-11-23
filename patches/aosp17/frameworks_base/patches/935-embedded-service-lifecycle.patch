@@ -1,0 +1,389 @@
+--- a/frameworks/base/core/java/android/app/Service.java
++++ b/frameworks/base/core/java/android/app/Service.java
+@@ -16,9 +16,6 @@
+ 
+ package android.app;
+ 
+-import static android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MANIFEST;
+-import static android.os.Trace.TRACE_TAG_ACTIVITY_MANAGER;
+-import static android.text.TextUtils.formatSimple;
+ 
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+@@ -26,22 +23,14 @@
+ import android.annotation.RequiresPermission;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.ComponentCallbacks2;
+-import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.ContextWrapper;
+ import android.content.Intent;
+-import android.content.pm.ServiceInfo;
+-import android.content.pm.ServiceInfo.ForegroundServiceType;
+ import android.content.res.Configuration;
+ import android.os.Build;
+ import android.os.IBinder;
+-import android.os.RemoteException;
+-import android.os.Trace;
+-import android.util.ArrayMap;
+ import android.util.Log;
+-import android.view.contentcapture.ContentCaptureManager;
+-
+-import com.android.internal.annotations.GuardedBy;
++
+ 
+ import java.io.FileDescriptor;
+ import java.io.PrintWriter;
+@@ -314,8 +303,7 @@
+  * {@sample development/samples/ApiDemos/src/com/example/android/apis/app/MessengerServiceActivities.java
+  *      bind}
+  */
+-public abstract class Service extends ContextWrapper implements ComponentCallbacks2,
+-        ContentCaptureManager.ContentCaptureClient {
++public abstract class Service extends ContextWrapper implements ComponentCallbacks2 {
+     private static final String TAG = "Service";
+ 
+     /**
+@@ -629,14 +617,7 @@
+      * @see #stopSelfResult
+      */
+     public final void stopSelf(int startId) {
+-        if (mActivityManager == null) {
+-            return;
+-        }
+-        try {
+-            mActivityManager.stopServiceToken(
+-                    new ComponentName(this, mClassName), mToken, startId);
+-        } catch (RemoteException ex) {
+-        }
++        stopSelfResult(startId);
+     }
+     
+     /**
+@@ -661,15 +642,7 @@
+      * @see #stopSelf()
+      */
+     public final boolean stopSelfResult(int startId) {
+-        if (mActivityManager == null) {
+-            return false;
+-        }
+-        try {
+-            return mActivityManager.stopServiceToken(
+-                    new ComponentName(this, mClassName), mToken, startId);
+-        } catch (RemoteException ex) {
+-        }
+-        return false;
++        return mStop != null && mStop.test(startId);
+     }
+     
+     /**
+@@ -770,15 +743,7 @@
+      * @see #stopForeground(boolean)
+      */
+     public final void startForeground(int id, Notification notification) {
+-        try {
+-            final ComponentName comp = new ComponentName(this, mClassName);
+-            mActivityManager.setServiceForeground(
+-                    comp, mToken, id,
+-                    notification, 0, FOREGROUND_SERVICE_TYPE_MANIFEST);
+-            clearStartForegroundServiceStackTrace();
+-            logForegroundServiceStart(comp, FOREGROUND_SERVICE_TYPE_MANIFEST);
+-        } catch (RemoteException ex) {
+-        }
++        startForeground(id, notification, -1);
+     }
+ 
+     /**
+@@ -856,16 +821,17 @@
+      * @see android.content.pm.ServiceInfo#FOREGROUND_SERVICE_TYPE_MANIFEST
+      */
+     public final void startForeground(int id, @NonNull Notification notification,
+-            @RequiresPermission @ForegroundServiceType int foregroundServiceType) {
+-        try {
+-            final ComponentName comp = new ComponentName(this, mClassName);
+-            mActivityManager.setServiceForeground(
+-                    comp, mToken, id,
+-                    notification, 0, foregroundServiceType);
+-            clearStartForegroundServiceStackTrace();
+-            logForegroundServiceStart(comp, foregroundServiceType);
+-        } catch (RemoteException ex) {
++            @RequiresPermission int foregroundServiceType) {
++        if (id == 0) throw new IllegalArgumentException("Foreground service notification ID is zero");
++        if (foregroundServiceType == -1) {
++            foregroundServiceType = mManifestForegroundType;
+         }
++        NotificationManager manager = getSystemService(NotificationManager.class);
++        notification.flags |= Notification.FLAG_FOREGROUND_SERVICE;
++        manager.notify(id, notification);
++        if (mForegroundId != 0 && mForegroundId != id) manager.cancel(mForegroundId);
++        mForegroundId = id;
++        mForegroundType = foregroundServiceType;
+     }
+ 
+     /**
+@@ -910,13 +876,13 @@
+      * @see #STOP_FOREGROUND_REMOVE
+      */
+     public final void stopForeground(@StopForegroundSelector int notificationBehavior) {
+-        try {
+-            mActivityManager.setServiceForeground(
+-                    new ComponentName(this, mClassName), mToken, 0, null,
+-                    notificationBehavior, 0);
+-            logForegroundServiceStopIfNecessary();
+-        } catch (RemoteException ex) {
++        if (mForegroundId != 0 && (notificationBehavior & STOP_FOREGROUND_REMOVE) != 0) {
++            getSystemService(NotificationManager.class).cancel(mForegroundId);
+         }
++        if ((notificationBehavior & (STOP_FOREGROUND_REMOVE | STOP_FOREGROUND_DETACH)) != 0) {
++            mForegroundId = 0;
++        }
++        mForegroundType = 0;
+     }
+ 
+     /**
+@@ -933,14 +899,8 @@
+      *
+      * @return current foreground service type flags.
+      */
+-    public final @ForegroundServiceType int getForegroundServiceType() {
+-        int ret = ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE;
+-        try {
+-            ret = mActivityManager.getForegroundServiceType(
+-                    new ComponentName(this, mClassName), mToken);
+-        } catch (RemoteException ex) {
+-        }
+-        return ret;
++    public final int getForegroundServiceType() {
++        return mForegroundType;
+     }
+ 
+     /**
+@@ -961,47 +921,20 @@
+         writer.println("nothing to dump");
+     }
+ 
+-    @Override
+-    protected void attachBaseContext(Context newBase) {
+-        super.attachBaseContext(newBase);
+-        if (newBase != null) {
+-            newBase.setContentCaptureOptions(getContentCaptureOptions());
+-        }
+-    }
+-
+     // ------------------ Internal API ------------------
+     
+     /**
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    public final void attach(
+-            Context context,
+-            ActivityThread thread, String className, IBinder token,
+-            Application application, Object activityManager) {
++    public final void attachEmbedded(Context context, String className, Application application,
++            int foregroundType, java.util.function.IntPredicate stop) {
+         attachBaseContext(context);
+-        mThread = thread;           // NOTE:  unused - remove?
+         mClassName = className;
+-        mToken = token;
+         mApplication = application;
+-        mActivityManager = (IActivityManager)activityManager;
+-        mStartCompatibility = getApplicationInfo().targetSdkVersion
+-                < Build.VERSION_CODES.ECLAIR;
+-
+-        setContentCaptureOptions(application.getContentCaptureOptions());
+-    }
+-
+-    /**
+-     * Creates the base {@link Context} of this {@link Service}.
+-     * Users may override this API to create customized base context.
+-     *
+-     * @see android.window.WindowProviderService WindowProviderService class for example
+-     * @see ContextWrapper#attachBaseContext(Context)
+-     *
+-     * @hide
+-     */
+-    public Context createServiceBaseContext(ActivityThread mainThread, LoadedApk packageInfo) {
+-        return ContextImpl.createAppContext(mainThread, packageInfo);
++        mStop = stop;
++        mManifestForegroundType = foregroundType;
++        mStartCompatibility = getApplicationInfo().targetSdkVersion < Build.VERSION_CODES.ECLAIR;
+     }
+ 
+     /**
+@@ -1009,133 +942,26 @@
+      * Clean up any references to avoid leaks.
+      */
+     public final void detachAndCleanUp() {
+-        mToken = null;
+-        logForegroundServiceStopIfNecessary();
++        stopForeground(STOP_FOREGROUND_REMOVE);
++        mStop = null;
+     }
+ 
+     final String getClassName() {
+         return mClassName;
+     }
+ 
+-    /** @hide */
+-    @Override
+-    public final ContentCaptureManager.ContentCaptureClient getContentCaptureClient() {
+-        return this;
+-    }
+-
+-    /** @hide */
+-    @Override
+-    public final ComponentName contentCaptureClientGetComponentName() {
+-        return new ComponentName(this, mClassName);
+-    }
+-
+     // set by the thread after the constructor and before onCreate(Bundle icicle) is called.
+     @UnsupportedAppUsage
+-    private ActivityThread mThread = null;
+-    @UnsupportedAppUsage
+     private String mClassName = null;
+-    @UnsupportedAppUsage
+-    private IBinder mToken = null;
++    private java.util.function.IntPredicate mStop;
++    private int mManifestForegroundType;
++    private int mForegroundType;
++    private int mForegroundId;
++
+     @UnsupportedAppUsage
+     private Application mApplication = null;
+     @UnsupportedAppUsage
+-    private IActivityManager mActivityManager = null;
+-    @UnsupportedAppUsage
+     private boolean mStartCompatibility = false;
+-
+-    /**
+-     * This will be set to the title of the system trace when this service is started as
+-     * a foreground service, and will be set to null when it's no longer in foreground
+-     * service state.
+-     */
+-    @GuardedBy("mForegroundServiceTraceTitleLock")
+-    private @Nullable String mForegroundServiceTraceTitle = null;
+-
+-    private final Object mForegroundServiceTraceTitleLock = new Object();
+-
+-    private static final String TRACE_TRACK_NAME_FOREGROUND_SERVICE = "FGS";
+-
+-    private void logForegroundServiceStart(ComponentName comp,
+-            @ForegroundServiceType int foregroundServiceType) {
+-        synchronized (mForegroundServiceTraceTitleLock) {
+-            if (mForegroundServiceTraceTitle == null) {
+-                mForegroundServiceTraceTitle = formatSimple("comp=%s type=%s",
+-                        comp.toShortString(), Integer.toHexString(foregroundServiceType));
+-                // The service is not in foreground state, emit a start event.
+-                Trace.asyncTraceForTrackBegin(TRACE_TAG_ACTIVITY_MANAGER,
+-                        TRACE_TRACK_NAME_FOREGROUND_SERVICE,
+-                        mForegroundServiceTraceTitle,
+-                        System.identityHashCode(this));
+-            } else {
+-                // The service is already in foreground state, emit an one-off event.
+-                Trace.instantForTrack(TRACE_TAG_ACTIVITY_MANAGER,
+-                        TRACE_TRACK_NAME_FOREGROUND_SERVICE,
+-                        mForegroundServiceTraceTitle);
+-            }
+-        }
+-    }
+-
+-    private void logForegroundServiceStopIfNecessary() {
+-        synchronized (mForegroundServiceTraceTitleLock) {
+-            if (mForegroundServiceTraceTitle != null) {
+-                Trace.asyncTraceForTrackEnd(TRACE_TAG_ACTIVITY_MANAGER,
+-                        TRACE_TRACK_NAME_FOREGROUND_SERVICE,
+-                        System.identityHashCode(this));
+-                mForegroundServiceTraceTitle = null;
+-            }
+-        }
+-    }
+-
+-    /**
+-     * This keeps track of the stacktrace where Context.startForegroundService() was called
+-     * for each service class. We use that when we crash the app for not calling
+-     * {@link #startForeground} in time, in {@link ActivityThread#throwRemoteServiceException}.
+-     */
+-    @GuardedBy("sStartForegroundServiceStackTraces")
+-    private static final ArrayMap<String, StackTrace> sStartForegroundServiceStackTraces =
+-            new ArrayMap<>();
+-
+-    /** @hide */
+-    public static void setStartForegroundServiceStackTrace(
+-            @NonNull String className, @NonNull StackTrace stacktrace) {
+-        synchronized (sStartForegroundServiceStackTraces) {
+-            sStartForegroundServiceStackTraces.put(className, stacktrace);
+-        }
+-    }
+-
+-    private void clearStartForegroundServiceStackTrace() {
+-        synchronized (sStartForegroundServiceStackTraces) {
+-            sStartForegroundServiceStackTraces.remove(this.getClassName());
+-        }
+-    }
+-
+-    /** @hide */
+-    public static StackTrace getStartForegroundServiceStackTrace(@NonNull String className) {
+-        synchronized (sStartForegroundServiceStackTraces) {
+-            return sStartForegroundServiceStackTraces.get(className);
+-        }
+-    }
+-
+-    /** @hide */
+-    public final void callOnTimeout(int startId) {
+-        // Note, because all the service callbacks (and other similar callbacks, e.g. activity
+-        // callbacks) are delivered using the main handler, it's possible the service is already
+-        // stopped when before this method is called, so we do a double check here.
+-        if (mToken == null) {
+-            Log.w(TAG, "Service already destroyed, skipping onTimeout()");
+-            return;
+-        }
+-        try {
+-            if (!mActivityManager.shouldServiceTimeOut(
+-                    new ComponentName(this, mClassName), mToken)) {
+-                Log.w(TAG, "Service no longer relevant, skipping onTimeout()");
+-                return;
+-            }
+-        } catch (RemoteException ex) {
+-        }
+-        onTimeout(startId);
+-        onTimeout(startId, ServiceInfo.FOREGROUND_SERVICE_TYPE_SHORT_SERVICE);
+-    }
+ 
+     /**
+      * Callback called on timeout for {@link ServiceInfo#FOREGROUND_SERVICE_TYPE_SHORT_SERVICE}.
+@@ -1169,26 +995,6 @@
+     public void onTimeout(int startId) {
+     }
+ 
+-    /** @hide */
+-    public final void callOnTimeLimitExceeded(int startId, @ForegroundServiceType int fgsType) {
+-        // Note, because all the service callbacks (and other similar callbacks, e.g. activity
+-        // callbacks) are delivered using the main handler, it's possible the service is already
+-        // stopped when before this method is called, so we do a double check here.
+-        if (mToken == null) {
+-            Log.w(TAG, "Service already destroyed, skipping onTimeLimitExceeded()");
+-            return;
+-        }
+-        try {
+-            if (!mActivityManager.hasServiceTimeLimitExceeded(
+-                    new ComponentName(this, mClassName), mToken)) {
+-                Log.w(TAG, "Service no longer relevant, skipping onTimeLimitExceeded()");
+-                return;
+-            }
+-        } catch (RemoteException ex) {
+-        }
+-        onTimeout(startId, fgsType);
+-    }
+-
+     /**
+      * Callback called when a particular foreground service type has timed out.
+      *
+@@ -1215,6 +1021,6 @@
+      * @param fgsType the {@link ServiceInfo.ForegroundServiceType foreground service type} which
+      *                caused the timeout.
+      */
+-    public void onTimeout(int startId, @ForegroundServiceType int fgsType) {
++    public void onTimeout(int startId, int fgsType) {
+     }
+ }

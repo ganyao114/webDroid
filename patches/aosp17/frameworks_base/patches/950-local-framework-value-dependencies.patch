@@ -1,0 +1,743 @@
+--- a/frameworks/base/core/java/com/android/internal/app/AlertController.java
++++ b/frameworks/base/core/java/com/android/internal/app/AlertController.java
+@@ -20,7 +20,6 @@
+ 
+ import android.annotation.Nullable;
+ import android.app.AlertDialog;
+-import android.app.compat.CompatChanges;
+ import android.compat.annotation.ChangeId;
+ import android.compat.annotation.EnabledSince;
+ import android.compat.annotation.UnsupportedAppUsage;
+@@ -199,18 +198,7 @@
+     }
+ 
+     public static final AlertController create(Context context, DialogInterface di, Window window) {
+-        final TypedArray a = context.obtainStyledAttributes(
+-                null, R.styleable.AlertDialog, R.attr.alertDialogStyle,
+-                R.style.Theme_DeviceDefault_Settings);
+-        int controllerType = a.getInt(R.styleable.AlertDialog_controllerType, 0);
+-        a.recycle();
+-
+-        switch (controllerType) {
+-            case MICRO:
+-                return new MicroAlertController(context, di, window);
+-            default:
+-                return new AlertController(context, di, window);
+-        }
++        return new AlertController(context, di, window);
+     }
+ 
+     @UnsupportedAppUsage
+@@ -265,7 +253,7 @@
+ 
+     private static boolean useWearMaterial3Style(Context context) {
+         return Flags.useWearMaterial3Ui()
+-                && CompatChanges.isChangeEnabled(WEAR_MATERIAL3_ALERTDIALOG)
++                && false
+                 && context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_WATCH)
+                 && (context.getThemeResId() == com.android.internal.R.style.Theme_DeviceDefault
+                     || context.getThemeResId()
+--- a/frameworks/base/core/java/android/os/PersistableBundle.java
++++ b/frameworks/base/core/java/android/os/PersistableBundle.java
+@@ -16,29 +16,14 @@
+ 
+ package android.os;
+ 
+-import static java.nio.charset.StandardCharsets.UTF_8;
+ import static android.app.privatecompute.flags.Flags.enablePccFrameworkSupport;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.util.ArrayMap;
+-import android.util.Slog;
+-import android.util.Xml;
+-import android.util.proto.ProtoOutputStream;
+-
+-import com.android.internal.util.XmlUtils;
+-import com.android.modules.utils.TypedXmlPullParser;
+-import com.android.modules.utils.TypedXmlSerializer;
+-
+-import org.xmlpull.v1.XmlPullParser;
+-import org.xmlpull.v1.XmlPullParserException;
+-import org.xmlpull.v1.XmlSerializer;
+-
+-import java.io.IOException;
+-import java.io.InputStream;
+-import java.io.OutputStream;
+-import java.io.Serializable;
+-import java.util.ArrayList;
++
++
++
+ 
+ /**
+  * A mapping from String keys to values of various types. The set of types
+@@ -51,8 +36,7 @@
+  * @see Bundle
+  */
+ @android.ravenwood.annotation.RavenwoodKeepWholeClass
+-public final class PersistableBundle extends BaseBundle implements Cloneable, Parcelable,
+-        XmlUtils.WriteMapCallback {
++public final class PersistableBundle extends BaseBundle implements Cloneable, Parcelable {
+     private static final String TAG = "PersistableBundle";
+ 
+     private static final String TAG_PERSISTABLEMAP = "pbundle_as_map";
+@@ -62,7 +46,7 @@
+ 
+     static {
+         EMPTY = new PersistableBundle();
+-        EMPTY.mMap = ArrayMap.EMPTY;
++        EMPTY.mMap = new ArrayMap<>();
+     }
+ 
+     /** @hide */
+@@ -171,7 +155,7 @@
+                 if (throwException) {
+                     throw new IllegalArgumentException(errorMsg);
+                 } else {
+-                    Slog.wtfStack(TAG, errorMsg);
++                    android.util.Log.w(TAG, errorMsg);
+                     mMap.removeAt(i);
+                 }
+             }
+@@ -273,89 +257,6 @@
+                     return new PersistableBundle[size];
+                 }
+             };
+-
+-    /** @hide */
+-    @Override
+-    public void writeUnknownObject(Object v, String name, TypedXmlSerializer out)
+-            throws XmlPullParserException, IOException {
+-        if (v instanceof PersistableBundle) {
+-            out.startTag(null, TAG_PERSISTABLEMAP);
+-            out.attribute(null, "name", name);
+-            ((PersistableBundle) v).saveToXml(out);
+-            out.endTag(null, TAG_PERSISTABLEMAP);
+-        } else {
+-            throw new XmlPullParserException("Unknown Object o=" + v);
+-        }
+-    }
+-
+-    /** @hide */
+-    public void saveToXml(XmlSerializer out) throws IOException, XmlPullParserException {
+-        saveToXml(XmlUtils.makeTyped(out));
+-    }
+-
+-    /** @hide */
+-    public void saveToXml(TypedXmlSerializer out) throws IOException, XmlPullParserException {
+-        unparcel();
+-        // Explicitly drop invalid types an attacker may have added before persisting.
+-        for (int i = mMap.size() - 1; i >= 0; --i) {
+-            final Object value = mMap.valueAt(i);
+-            if (!isValidType(value)) {
+-                Slog.e(TAG, "Dropping bad data before persisting: "
+-                        + mMap.keyAt(i) + "=" + value);
+-                mMap.removeAt(i);
+-            }
+-        }
+-        XmlUtils.writeMapXml(mMap, out, this);
+-    }
+-
+-    /**
+-     * Checks whether all keys and values are within the given character limit.
+-     * Note: Maximum character limit of String that can be saved to XML as part of bundle is 65535.
+-     * Otherwise IOException is thrown.
+-     * @param limit length of String keys and values in the PersistableBundle, including nested
+-     *                    PersistableBundles to check against.
+-     *
+-     * @hide
+-     */
+-    public boolean isBundleContentsWithinLengthLimit(int limit) {
+-        unparcel();
+-        if (mMap == null) {
+-            return true;
+-        }
+-        for (int i = 0; i < mMap.size(); i++) {
+-            if (mMap.keyAt(i) != null && mMap.keyAt(i).length() > limit) {
+-                return false;
+-            }
+-            final Object value = mMap.valueAt(i);
+-            if (value instanceof String && ((String) value).length() > limit) {
+-                return false;
+-            } else if (value instanceof String[]) {
+-                String[] stringArray =  (String[]) value;
+-                for (int j = 0; j < stringArray.length; j++) {
+-                    if (stringArray[j] != null
+-                            && stringArray[j].length() > limit) {
+-                        return false;
+-                    }
+-                }
+-            } else if (value instanceof PersistableBundle
+-                    && !((PersistableBundle) value).isBundleContentsWithinLengthLimit(limit)) {
+-                return false;
+-            }
+-        }
+-        return true;
+-    }
+-
+-    /** @hide */
+-    static class MyReadMapCallback implements  XmlUtils.ReadMapCallback {
+-        @Override
+-        public Object readThisUnknownObjectXml(TypedXmlPullParser in, String tag)
+-                throws XmlPullParserException, IOException {
+-            if (TAG_PERSISTABLEMAP.equals(tag)) {
+-                return restoreFromXml(in);
+-            }
+-            throw new XmlPullParserException("Unknown tag=" + tag);
+-        }
+-    }
+ 
+     /**
+      * Report the nature of this Parcelable's contents
+@@ -378,33 +279,6 @@
+         } finally {
+             parcel.restoreAllowFds(oldAllowFds);
+         }
+-    }
+-
+-    /** @hide */
+-    public static PersistableBundle restoreFromXml(XmlPullParser in) throws IOException,
+-            XmlPullParserException {
+-        return restoreFromXml(XmlUtils.makeTyped(in));
+-    }
+-
+-    /** @hide */
+-    public static PersistableBundle restoreFromXml(TypedXmlPullParser in) throws IOException,
+-            XmlPullParserException {
+-        final int outerDepth = in.getDepth();
+-        final String startTag = in.getName();
+-        final String[] tagName = new String[1];
+-        int event;
+-        while (((event = in.next()) != XmlPullParser.END_DOCUMENT) &&
+-                (event != XmlPullParser.END_TAG || in.getDepth() < outerDepth)) {
+-            if (event == XmlPullParser.START_TAG) {
+-                // Don't throw an exception when restoring from XML since an attacker could try to
+-                // input invalid data in the persisted file.
+-                return new PersistableBundle((ArrayMap<String, Object>)
+-                        XmlUtils.readThisArrayMapXml(in, startTag, tagName,
+-                        new MyReadMapCallback()),
+-                        /* throwException */ false);
+-            }
+-        }
+-        return new PersistableBundle();  // An empty mutable PersistableBundle
+     }
+ 
+     /**
+@@ -436,60 +310,4 @@
+         return mMap.toString();
+     }
+ 
+-    /** @hide */
+-    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-
+-        if (mParcelledData != null) {
+-            if (isEmptyParcel()) {
+-                proto.write(PersistableBundleProto.PARCELLED_DATA_SIZE, 0);
+-            } else {
+-                proto.write(PersistableBundleProto.PARCELLED_DATA_SIZE, mParcelledData.dataSize());
+-            }
+-        } else {
+-            proto.write(PersistableBundleProto.MAP_DATA, mMap.toString());
+-        }
+-
+-        proto.end(token);
+-    }
+-
+-    /**
+-     * Writes the content of the {@link PersistableBundle} to a {@link OutputStream}.
+-     *
+-     * <p>The content can be read by a {@link #readFromStream}.
+-     *
+-     * @see #readFromStream
+-     */
+-    public void writeToStream(@NonNull OutputStream outputStream) throws IOException {
+-        TypedXmlSerializer serializer = Xml.newFastSerializer();
+-        serializer.setOutput(outputStream, UTF_8.name());
+-        serializer.startTag(null, "bundle");
+-        try {
+-            saveToXml(serializer);
+-        } catch (XmlPullParserException e) {
+-            throw new IOException(e);
+-        }
+-        serializer.endTag(null, "bundle");
+-        serializer.flush();
+-    }
+-
+-    /**
+-     * Reads a {@link PersistableBundle} from an {@link InputStream}.
+-     *
+-     * <p>The stream must be generated by {@link #writeToStream}.
+-     *
+-     * @see #writeToStream
+-     */
+-    @NonNull
+-    public static PersistableBundle readFromStream(@NonNull InputStream inputStream)
+-            throws IOException {
+-        try {
+-            TypedXmlPullParser parser = Xml.newFastPullParser();
+-            parser.setInput(inputStream, UTF_8.name());
+-            parser.next();
+-            return PersistableBundle.restoreFromXml(parser);
+-        } catch (XmlPullParserException e) {
+-            throw new IOException(e);
+-        }
+-    }
+ }
+--- a/frameworks/base/media/java/android/media/AudioAttributes.java
++++ b/frameworks/base/media/java/android/media/AudioAttributes.java
+@@ -16,19 +16,14 @@
+ 
+ package android.media;
+ 
+-import static android.media.audio.Flags.FLAG_SPEAKER_CLEANUP_USAGE;
+-import static android.media.audio.Flags.FLAG_VIBRATION_SOUND_USAGE;
+-
+-import android.annotation.FlaggedApi;
++
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.RequiresPermission;
+ import android.annotation.SuppressLint;
+ import android.annotation.SystemApi;
+ import android.annotation.TestApi;
+-import android.audio.policy.configuration.V7_0.AudioUsage;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.media.audiopolicy.AudioProductStrategy;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Parcel;
+@@ -39,16 +34,12 @@
+ import android.util.Log;
+ import android.util.SparseArray;
+ import android.util.SparseIntArray;
+-import android.util.proto.ProtoOutputStream;
+-
+-import androidx.annotation.IntRange;
++
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+ import java.util.Collections;
+-import java.util.HashMap;
+ import java.util.HashSet;
+-import java.util.Map;
+ import java.util.Objects;
+ import java.util.Set;
+ 
+@@ -261,7 +252,6 @@
+      * Usage value to use when a system application plays a signal intended to clean up the
+      * speaker transducers and free them of deposits of dust or water.
+      */
+-    @FlaggedApi(FLAG_SPEAKER_CLEANUP_USAGE)
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.MODIFY_AUDIO_ROUTING)
+     public static final int USAGE_SPEAKER_CLEANUP = SYSTEM_USAGE_OFFSET + 4;
+@@ -271,7 +261,6 @@
+      * Usage value to use when a system application plays a notification
+      * vibration where the physical vibration is augmented with an auditory cue.
+      */
+-    @FlaggedApi(FLAG_VIBRATION_SOUND_USAGE)
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.MODIFY_AUDIO_ROUTING)
+     public static final int USAGE_NOTIFICATION_VIBRATION = SYSTEM_USAGE_OFFSET + 5;
+@@ -281,7 +270,6 @@
+      * Usage value to use when a system application plays a ringtone
+      * vibration where the physical vibration is augmented with an auditory cue.
+      */
+-    @FlaggedApi(FLAG_VIBRATION_SOUND_USAGE)
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.MODIFY_AUDIO_ROUTING)
+     public static final int USAGE_RINGTONE_VIBRATION = SYSTEM_USAGE_OFFSET + 6;
+@@ -444,7 +432,7 @@
+     /**
+      * @hide
+      * Flag requesting capture from the source used for hardware hotword detection.
+-     * To be used with capture preset MediaRecorder.AudioSource.HOTWORD or
++     * To be used with capture preset 1999 or
+      * MediaRecorder.AudioSource.VOICE_RECOGNITION.
+      */
+     @SystemApi
+@@ -607,7 +595,7 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+     private int mContentType = CONTENT_TYPE_UNKNOWN;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+-    private int mSource = MediaRecorder.AudioSource.AUDIO_SOURCE_INVALID;
++    private int mSource = -1;
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+     private int mFlags = 0x0;
+     private HashSet<String> mTags;
+@@ -827,7 +815,7 @@
+         private int mUsage = USAGE_INVALID;
+         private int mSystemUsage = USAGE_INVALID;
+         private int mContentType = CONTENT_TYPE_UNKNOWN;
+-        private int mSource = MediaRecorder.AudioSource.AUDIO_SOURCE_INVALID;
++        private int mSource = -1;
+         private int mFlags = 0x0;
+         private boolean mMuteHapticChannels = true;
+         private boolean mIsContentSpatialized = false;
+@@ -1224,59 +1212,42 @@
+         public Builder setInternalLegacyStreamType(int streamType) {
+             mContentType = CONTENT_TYPE_UNKNOWN;
+             mUsage = USAGE_UNKNOWN;
+-            AudioAttributes attributes =
+-                    AudioProductStrategy.getAudioAttributesForStrategyWithLegacyStreamType(
+-                            streamType);
+-            if (attributes != null) {
+-                mUsage = attributes.mUsage;
+-                // on purpose ignoring the content type: stream types are deprecated for
+-                // playback, making assumptions about the content type is prone to
+-                // interpretation errors for ambiguous types such as STREAM_TTS and STREAM_MUSIC
+-                //mContentType = attributes.mContentType;
+-                mFlags = attributes.getAllFlags();
+-                mMuteHapticChannels = attributes.areHapticChannelsMuted();
+-                mIsContentSpatialized = attributes.isContentSpatialized();
+-                mSpatializationBehavior = attributes.getSpatializationBehavior();
+-                mTags = attributes.mTags;
+-                mBundle = attributes.mBundle;
+-                mSource = attributes.mSource;
+-            }
+             switch (streamType) {
+-                case AudioSystem.STREAM_VOICE_CALL:
++                case 0:
+                     mContentType = CONTENT_TYPE_SPEECH;
+                     break;
+-                case AudioSystem.STREAM_SYSTEM_ENFORCED:
++                case 7:
+                     mFlags |= FLAG_AUDIBILITY_ENFORCED;
+                     // intended fall through, attributes in common with STREAM_SYSTEM
+-                case AudioSystem.STREAM_SYSTEM:
++                case 1:
+                     mContentType = CONTENT_TYPE_SONIFICATION;
+                     break;
+-                case AudioSystem.STREAM_RING:
++                case 2:
+                     mContentType = CONTENT_TYPE_SONIFICATION;
+                     break;
+-                case AudioSystem.STREAM_ALARM:
++                case 4:
+                     mContentType = CONTENT_TYPE_SONIFICATION;
+                     break;
+-                case AudioSystem.STREAM_NOTIFICATION:
++                case 5:
+                     mContentType = CONTENT_TYPE_SONIFICATION;
+                     break;
+-                case AudioSystem.STREAM_BLUETOOTH_SCO:
++                case 6:
+                     mContentType = CONTENT_TYPE_SPEECH;
+                     break;
+-                case AudioSystem.STREAM_DTMF:
++                case 8:
+                     mContentType = CONTENT_TYPE_SONIFICATION;
+                     break;
+-                case AudioSystem.STREAM_TTS:
++                case 9:
+                     mContentType = CONTENT_TYPE_SONIFICATION;
+                     mFlags |= FLAG_BEACON;
+                     break;
+-                case AudioSystem.STREAM_ACCESSIBILITY:
++                case 10:
+                     mContentType = CONTENT_TYPE_SPEECH;
+                     break;
+-                case AudioSystem.STREAM_ASSISTANT:
++                case 11:
+                     mContentType = CONTENT_TYPE_SPEECH;
+                     break;
+-                case AudioSystem.STREAM_MUSIC:
++                case 3:
+                     // leaving as CONTENT_TYPE_UNKNOWN
+                     break;
+                 default:
+@@ -1329,17 +1300,17 @@
+          */
+         @SystemApi
+         public Builder setInternalCapturePreset(int preset) {
+-            if ((preset == MediaRecorder.AudioSource.HOTWORD)
++            if ((preset == 1999)
+                     || (preset == MediaRecorder.AudioSource.REMOTE_SUBMIX)
+-                    || (preset == MediaRecorder.AudioSource.RADIO_TUNER)
++                    || (preset == 1998)
+                     || (preset == MediaRecorder.AudioSource.VOICE_DOWNLINK)
+                     || (preset == MediaRecorder.AudioSource.VOICE_UPLINK)
+                     || (preset == MediaRecorder.AudioSource.VOICE_CALL)
+-                    || (preset == MediaRecorder.AudioSource.ECHO_REFERENCE)
+-                    || (preset == MediaRecorder.AudioSource.ULTRASOUND)
++                    || (preset == 1997)
++                    || (preset == 2000)
+                     // AUDIO_SOURCE_INVALID is used by convention on default initialized
+                     // audio attributes
+-                    || (preset == MediaRecorder.AudioSource.AUDIO_SOURCE_INVALID)) {
++                    || (preset == -1)) {
+                 mSource = preset;
+             } else {
+                 setCapturePreset(preset);
+@@ -1392,7 +1363,7 @@
+          */
+         @TestApi
+         @SuppressLint("UnflaggedApi") // @TestApi without associated feature
+-        public @NonNull Builder setTestId(@IntRange(from = 0L) long testId) {
++        public @NonNull Builder setTestId(@android.annotation.IntRange(from = 0L) long testId) {
+             if (testId < 0) {
+                 throw new IllegalArgumentException("Test ID value must be 0 or greater");
+             }
+@@ -1529,8 +1500,8 @@
+         return new String("AudioAttributes:"
+                 + " usage=" + usageToString()
+                 + " content=" + contentTypeToString()
+-                + (mSource != MediaRecorder.AudioSource.AUDIO_SOURCE_INVALID
+-                    ? " source=" + MediaRecorder.toLogFriendlyAudioSource(mSource) : "")
++                + (mSource != -1
++                    ? " source=" + mSource : "")
+                 + " flags=0x" + Integer.toHexString(mFlags).toUpperCase() + flagsToString()
+                 + " tags=" + mFormattedTags
+                 + " bundle=" + (mBundle == null ? "null" : mBundle.toString()));
+@@ -1577,25 +1548,6 @@
+         }
+         sb.append(") ");
+         return sb.toString();
+-    }
+-
+-    /** @hide */
+-    public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-        final long token = proto.start(fieldId);
+-
+-        proto.write(AudioAttributesProto.USAGE, mUsage);
+-        proto.write(AudioAttributesProto.CONTENT_TYPE, mContentType);
+-        proto.write(AudioAttributesProto.FLAGS, mFlags);
+-        // mFormattedTags is never null due to assignment in Builder or unmarshalling.
+-        for (String t : mFormattedTags.split(";")) {
+-            t = t.trim();
+-            if (t != "") {
+-                proto.write(AudioAttributesProto.TAGS, t);
+-            }
+-        }
+-        // TODO: is the data in mBundle useful for debugging?
+-
+-        proto.end(token);
+     }
+ 
+     /** @hide */
+@@ -1667,99 +1619,6 @@
+         }
+     }
+ 
+-    /** @hide **/
+-    @TestApi
+-    @NonNull
+-    public static String usageToXsdString(@AttributeUsage int usage) {
+-        switch (usage) {
+-            case AudioAttributes.USAGE_UNKNOWN:
+-                return AudioUsage.AUDIO_USAGE_UNKNOWN.toString();
+-            case AudioAttributes.USAGE_MEDIA:
+-                return AudioUsage.AUDIO_USAGE_MEDIA.toString();
+-            case AudioAttributes.USAGE_VOICE_COMMUNICATION:
+-                return AudioUsage.AUDIO_USAGE_VOICE_COMMUNICATION.toString();
+-            case AudioAttributes.USAGE_VOICE_COMMUNICATION_SIGNALLING:
+-                return AudioUsage.AUDIO_USAGE_VOICE_COMMUNICATION_SIGNALLING.toString();
+-            case AudioAttributes.USAGE_ALARM:
+-                return AudioUsage.AUDIO_USAGE_ALARM.toString();
+-            case AudioAttributes.USAGE_NOTIFICATION:
+-                return AudioUsage.AUDIO_USAGE_NOTIFICATION.toString();
+-            case AudioAttributes.USAGE_NOTIFICATION_RINGTONE:
+-                return AudioUsage.AUDIO_USAGE_NOTIFICATION_TELEPHONY_RINGTONE.toString();
+-            case AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY:
+-                return AudioUsage.AUDIO_USAGE_ASSISTANCE_ACCESSIBILITY.toString();
+-            case AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE:
+-                return AudioUsage.AUDIO_USAGE_ASSISTANCE_NAVIGATION_GUIDANCE.toString();
+-            case AudioAttributes.USAGE_ASSISTANCE_SONIFICATION:
+-                return AudioUsage.AUDIO_USAGE_ASSISTANCE_SONIFICATION.toString();
+-            case AudioAttributes.USAGE_GAME:
+-                return AudioUsage.AUDIO_USAGE_GAME.toString();
+-            case AudioAttributes.USAGE_VIRTUAL_SOURCE:
+-                return AudioUsage.AUDIO_USAGE_VIRTUAL_SOURCE.toString();
+-            case AudioAttributes.USAGE_ASSISTANT:
+-                return AudioUsage.AUDIO_USAGE_ASSISTANT.toString();
+-            case AudioAttributes.USAGE_CALL_ASSISTANT:
+-                return AudioUsage.AUDIO_USAGE_CALL_ASSISTANT.toString();
+-            case AudioAttributes.USAGE_EMERGENCY:
+-                return AudioUsage.AUDIO_USAGE_EMERGENCY.toString();
+-            case AudioAttributes.USAGE_SAFETY:
+-                return AudioUsage.AUDIO_USAGE_SAFETY.toString();
+-            case AudioAttributes.USAGE_VEHICLE_STATUS:
+-                return AudioUsage.AUDIO_USAGE_VEHICLE_STATUS.toString();
+-            case AudioAttributes.USAGE_ANNOUNCEMENT:
+-                return AudioUsage.AUDIO_USAGE_ANNOUNCEMENT.toString();
+-            default:
+-                Log.w(TAG, "Unknown usage value " + usage);
+-                return AudioUsage.AUDIO_USAGE_UNKNOWN.toString();
+-        }
+-    }
+-
+-    private static final class XsdHolder {
+-        static final Map<String, Integer> sInstance;
+-        static {
+-            sInstance = new HashMap<>();
+-            sInstance.put(AudioUsage.AUDIO_USAGE_UNKNOWN.toString(), USAGE_UNKNOWN);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_UNKNOWN.toString(), USAGE_UNKNOWN);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_MEDIA.toString(), USAGE_MEDIA);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_VOICE_COMMUNICATION.toString(),
+-                    USAGE_VOICE_COMMUNICATION);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_VOICE_COMMUNICATION_SIGNALLING.toString(),
+-                    USAGE_VOICE_COMMUNICATION_SIGNALLING);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_ALARM.toString(), USAGE_ALARM);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_NOTIFICATION.toString(), USAGE_NOTIFICATION);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_NOTIFICATION_TELEPHONY_RINGTONE.toString(),
+-                    USAGE_NOTIFICATION_RINGTONE);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_ASSISTANCE_ACCESSIBILITY.toString(),
+-                    USAGE_ASSISTANCE_ACCESSIBILITY);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_ASSISTANCE_NAVIGATION_GUIDANCE.toString(),
+-                    USAGE_ASSISTANCE_NAVIGATION_GUIDANCE);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_ASSISTANCE_SONIFICATION.toString(),
+-                    USAGE_ASSISTANCE_SONIFICATION);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_GAME.toString(), USAGE_GAME);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_VIRTUAL_SOURCE.toString(),
+-                    USAGE_VIRTUAL_SOURCE);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_ASSISTANT.toString(), USAGE_ASSISTANT);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_CALL_ASSISTANT.toString(),
+-                    USAGE_CALL_ASSISTANT);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_EMERGENCY.toString(), USAGE_EMERGENCY);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_SAFETY.toString(), USAGE_SAFETY);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_VEHICLE_STATUS.toString(),
+-                    USAGE_VEHICLE_STATUS);
+-            sInstance.put(AudioUsage.AUDIO_USAGE_ANNOUNCEMENT.toString(), USAGE_ANNOUNCEMENT);
+-        }
+-    }
+-
+-
+-    /** @hide **/
+-    @TestApi
+-    public static @AttributeUsage int xsdStringToUsage(@NonNull String xsdUsage) {
+-        if (XsdHolder.sInstance.containsKey(xsdUsage)) {
+-            return XsdHolder.sInstance.get(xsdUsage);
+-        } else {
+-            Log.w(TAG, "Usage name not found in AudioUsage enum: " + xsdUsage);
+-            return USAGE_UNKNOWN;
+-        }
+-    }
+ 
+     /** @hide */
+     public String contentTypeToString() {
+@@ -1777,28 +1636,28 @@
+ 
+     private static int usageForStreamType(int streamType) {
+         switch(streamType) {
+-            case AudioSystem.STREAM_VOICE_CALL:
++            case 0:
+                 return USAGE_VOICE_COMMUNICATION;
+-            case AudioSystem.STREAM_SYSTEM_ENFORCED:
+-            case AudioSystem.STREAM_SYSTEM:
++            case 7:
++            case 1:
+                 return USAGE_ASSISTANCE_SONIFICATION;
+-            case AudioSystem.STREAM_RING:
++            case 2:
+                 return USAGE_NOTIFICATION_RINGTONE;
+-            case AudioSystem.STREAM_MUSIC:
++            case 3:
+                 return USAGE_MEDIA;
+-            case AudioSystem.STREAM_ALARM:
++            case 4:
+                 return USAGE_ALARM;
+-            case AudioSystem.STREAM_NOTIFICATION:
++            case 5:
+                 return USAGE_NOTIFICATION;
+-            case AudioSystem.STREAM_BLUETOOTH_SCO:
++            case 6:
+                 return USAGE_VOICE_COMMUNICATION;
+-            case AudioSystem.STREAM_DTMF:
++            case 8:
+                 return USAGE_VOICE_COMMUNICATION_SIGNALLING;
+-            case AudioSystem.STREAM_ACCESSIBILITY:
++            case 10:
+                 return USAGE_ASSISTANCE_ACCESSIBILITY;
+-            case AudioSystem.STREAM_ASSISTANT:
++            case 11:
+                 return USAGE_ASSISTANT;
+-            case AudioSystem.STREAM_TTS:
++            case 9:
+             default:
+                 return USAGE_UNKNOWN;
+         }
+@@ -1889,18 +1748,18 @@
+         // flags to stream type mapping
+         if ((aa.getFlags() & FLAG_AUDIBILITY_ENFORCED) == FLAG_AUDIBILITY_ENFORCED) {
+             return fromGetVolumeControlStream ?
+-                    AudioSystem.STREAM_SYSTEM : AudioSystem.STREAM_SYSTEM_ENFORCED;
++                    1 : 7;
+         }
+         if ((aa.getAllFlags() & FLAG_SCO) == FLAG_SCO) {
+-            return AudioSystem.STREAM_VOICE_CALL;
++            return 0;
+         }
+         if ((aa.getAllFlags() & FLAG_BEACON) == FLAG_BEACON) {
+             return fromGetVolumeControlStream ?
+-                    AudioSystem.STREAM_MUSIC : AudioSystem.STREAM_TTS;
+-        }
+-
+-        int stream = AudioProductStrategy.getLegacyStreamTypeForStrategyWithAudioAttributes(aa);
+-        if (stream != AudioSystem.STREAM_DEFAULT) {
++                    3 : 9;
++        }
++
++        int stream = -1;
++        if (stream != -1) {
+             return stream;
+         }
+         // usage to stream type mapping
+@@ -1908,44 +1767,44 @@
+             case USAGE_MEDIA:
+             case USAGE_GAME:
+             case USAGE_ASSISTANCE_NAVIGATION_GUIDANCE:
+-                return AudioSystem.STREAM_MUSIC;
++                return 3;
+             case USAGE_ASSISTANT:
+-                return AudioSystem.STREAM_ASSISTANT;
++                return 11;
+             case USAGE_ASSISTANCE_SONIFICATION:
+-                return AudioSystem.STREAM_SYSTEM;
++                return 1;
+             case USAGE_VOICE_COMMUNICATION:
+             case USAGE_CALL_ASSISTANT:
+-                return AudioSystem.STREAM_VOICE_CALL;
++                return 0;
+             case USAGE_VOICE_COMMUNICATION_SIGNALLING:
+                 return fromGetVolumeControlStream ?
+-                        AudioSystem.STREAM_VOICE_CALL : AudioSystem.STREAM_DTMF;
++                        0 : 8;
+             case USAGE_ALARM:
+-                return AudioSystem.STREAM_ALARM;
++                return 4;
+             case USAGE_NOTIFICATION_RINGTONE:
+             case USAGE_RINGTONE_VIBRATION:
+-                return AudioSystem.STREAM_RING;
++                return 2;
+             case USAGE_NOTIFICATION:
+             case USAGE_NOTIFICATION_COMMUNICATION_REQUEST:
+             case USAGE_NOTIFICATION_COMMUNICATION_INSTANT:
+             case USAGE_NOTIFICATION_COMMUNICATION_DELAYED:
+             case USAGE_NOTIFICATION_EVENT:
+             case USAGE_NOTIFICATION_VIBRATION:
+-                return AudioSystem.STREAM_NOTIFICATION;
++                return 5;
+             case USAGE_ASSISTANCE_ACCESSIBILITY:
+-                return AudioSystem.STREAM_ACCESSIBILITY;
++                return 10;
+             case USAGE_EMERGENCY:
+             case USAGE_SAFETY:
+             case USAGE_VEHICLE_STATUS:
+             case USAGE_ANNOUNCEMENT:
+             case USAGE_SPEAKER_CLEANUP:
+             case USAGE_UNKNOWN:
+-                return AudioSystem.STREAM_MUSIC;
++                return 3;
+             default:
+                 if (fromGetVolumeControlStream) {
+                     throw new IllegalArgumentException("Unknown usage value " + aa.getUsage() +
+                             " in audio attributes");
+                 } else {
+-                    return AudioSystem.STREAM_MUSIC;
++                    return 3;
+                 }
+         }
+     }

@@ -1,0 +1,134 @@
+--- a/frameworks/base/core/java/android/service/notification/StatusBarNotification.java
++++ b/frameworks/base/core/java/android/service/notification/StatusBarNotification.java
+@@ -20,13 +20,10 @@
+ 
+ import android.annotation.NonNull;
+ import android.app.Notification;
+-import android.app.NotificationManager;
+-import android.app.Person;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.content.pm.ApplicationInfo;
+ import android.content.pm.PackageManager;
+-import android.metrics.LogMaker;
+ import android.os.Build;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+@@ -34,12 +31,7 @@
+ import android.os.UserHandle;
+ import android.util.ArrayMap;
+ 
+-import com.android.internal.logging.InstanceId;
+-import com.android.internal.logging.nano.MetricsProto;
+-import com.android.internal.logging.nano.MetricsProto.MetricsEvent;
+-
+-import java.util.ArrayList;
+-import java.util.Collections;
++
+ import java.util.Map;
+ 
+ /**
+@@ -71,10 +63,10 @@
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+     private final long postTime;
+     // A small per-notification ID, used for statsd logging.
+-    private InstanceId mInstanceId;  // Not final, see setInstanceId()
++  // Not final, see setInstanceId()
+     // Maps display id to context used for remote view content inflation and status bar icon.
+     private final Map<Integer, Context> mContextForDisplayId =
+-            Collections.synchronizedMap(new ArrayMap<>());
++            new ArrayMap<>();
+ 
+     /** @hide */
+     public StatusBarNotification(String pkg, String opPkg, int id,
+@@ -137,9 +129,6 @@
+         if (in.readInt() != 0) {
+             this.overrideGroupKey = in.readString();
+         }
+-        if (in.readInt() != 0) {
+-            this.mInstanceId = InstanceId.CREATOR.createFromParcel(in);
+-        }
+         this.key = key();
+         this.groupKey = groupKey();
+     }
+@@ -236,12 +225,6 @@
+         } else {
+             out.writeInt(0);
+         }
+-        if (this.mInstanceId != null) {
+-            out.writeInt(1);
+-            mInstanceId.writeToParcel(out, flags);
+-        } else {
+-            out.writeInt(0);
+-        }
+     }
+ 
+     public int describeContents() {
+@@ -284,7 +267,6 @@
+         StatusBarNotification result = new StatusBarNotification(this.pkg, this.opPkg,
+                 this.id, this.tag, this.uid, this.initialPid,
+                 notification, this.user, this.overrideGroupKey, this.postTime);
+-        result.setInstanceId(this.mInstanceId);
+         return result;
+     }
+ 
+@@ -455,20 +437,6 @@
+      */
+     public void clearPackageContext() {
+         mContextForDisplayId.clear();
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public InstanceId getInstanceId() {
+-        return mInstanceId;
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    public void setInstanceId(InstanceId instanceId) {
+-        mInstanceId = instanceId;
+     }
+ 
+     /**
+@@ -520,38 +488,6 @@
+     }
+ 
+     /**
+-     * Returns a LogMaker that contains all basic information of the notification.
+-     *
+-     * @hide
+-     */
+-    public LogMaker getLogMaker() {
+-        LogMaker logMaker = new LogMaker(MetricsEvent.VIEW_UNKNOWN).setPackageName(getPackageName())
+-                .addTaggedData(MetricsEvent.NOTIFICATION_ID, getId())
+-                .addTaggedData(MetricsEvent.NOTIFICATION_TAG, getTag())
+-                .addTaggedData(MetricsEvent.FIELD_NOTIFICATION_CHANNEL_ID, getChannelIdLogTag())
+-                .addTaggedData(MetricsEvent.FIELD_NOTIFICATION_GROUP_ID, getGroupLogTag())
+-                .addTaggedData(MetricsEvent.FIELD_NOTIFICATION_GROUP_SUMMARY,
+-                        getNotification().isGroupSummary() ? 1 : 0)
+-                .addTaggedData(MetricsProto.MetricsEvent.FIELD_NOTIFICATION_CATEGORY,
+-                        getNotification().category);
+-        if (getNotification().extras != null) {
+-            // Log the style used, if present.  We only log the hash here, as notification log
+-            // events are frequent, while there are few styles (hence low chance of collisions).
+-            String template = getNotification().extras.getString(Notification.EXTRA_TEMPLATE);
+-            if (template != null && !template.isEmpty()) {
+-                logMaker.addTaggedData(MetricsEvent.FIELD_NOTIFICATION_STYLE,
+-                        template.hashCode());
+-            }
+-            ArrayList<Person> people = getNotification().extras.getParcelableArrayList(
+-                    Notification.EXTRA_PEOPLE_LIST, android.app.Person.class);
+-            if (people != null && !people.isEmpty()) {
+-                logMaker.addTaggedData(MetricsEvent.FIELD_NOTIFICATION_PEOPLE, people.size());
+-            }
+-        }
+-        return logMaker;
+-    }
+-
+-    /**
+      * @hide
+      */
+     public String getShortcutId() {

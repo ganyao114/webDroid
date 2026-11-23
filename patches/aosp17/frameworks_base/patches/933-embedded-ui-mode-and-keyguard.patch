@@ -1,0 +1,2161 @@
+--- a/frameworks/base/core/java/android/app/UiModeManager.java
++++ b/frameworks/base/core/java/android/app/UiModeManager.java
+@@ -17,7 +17,6 @@
+ package android.app;
+ 
+ import android.annotation.CallbackExecutor;
+-import android.annotation.FlaggedApi;
+ import android.annotation.FloatRange;
+ import android.annotation.IntDef;
+ import android.annotation.IntRange;
+@@ -27,33 +26,14 @@
+ import android.annotation.SystemApi;
+ import android.annotation.SystemService;
+ import android.annotation.TestApi;
+-import android.annotation.UserIdInt;
+-import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.Context;
+ import android.content.res.Configuration;
+-import android.os.Binder;
+-import android.os.IpcDataCache;
+-import android.os.RemoteException;
+-import android.os.ServiceManager;
+-import android.os.ServiceManager.ServiceNotFoundException;
+-import android.os.UserHandle;
+ import android.util.ArrayMap;
+-import android.util.ArraySet;
+-import android.util.Log;
+-import android.util.Slog;
+-import android.util.SparseArray;
+-import android.view.Display;
+-
+-import com.android.internal.annotations.GuardedBy;
+-import com.android.internal.util.function.pooled.PooledLambda;
++
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+-import java.lang.ref.WeakReference;
+-import java.time.LocalTime;
+ import java.util.Comparator;
+-import java.util.List;
+-import java.util.Map;
+ import java.util.Objects;
+ import java.util.Set;
+ import java.util.concurrent.Executor;
+@@ -409,7 +389,6 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(android.view.accessibility.Flags.FLAG_FORCE_INVERT_COLOR)
+     @TestApi
+     public static final int FORCE_INVERT_TYPE_DARK = 1;
+ 
+@@ -455,8 +434,6 @@
+      */
+     public static final int FORCE_INVERT_PACKAGE_ALWAYS_DISABLE = 2;
+ 
+-    private static Globals sGlobals;
+-
+     /**
+      * Context required for getting the opPackageName of API caller; maybe be {@code null} if the
+      * old constructor marked with UnSupportedAppUsage is used.
+@@ -464,258 +441,6 @@
+     private final @Nullable Context mContext;
+ 
+     private final Object mLock = new Object();
+-    /**
+-     * Map that stores internally created {@link InnerListener} objects keyed by their corresponding
+-     * externally provided callback objects.
+-     */
+-    @GuardedBy("mLock")
+-    private final Map<OnProjectionStateChangedListener, InnerListener>
+-            mProjectionStateListenerMap = new ArrayMap<>();
+-
+-    /**
+-     * Resource manager that prevents memory leakage of Contexts via binder objects if clients
+-     * fail to remove listeners.
+-     */
+-    @GuardedBy("mLock")
+-    private final OnProjectionStateChangedListenerResourceManager
+-            mOnProjectionStateChangedListenerResourceManager =
+-            new OnProjectionStateChangedListenerResourceManager();
+-
+-    private static class Globals {
+-
+-        private final IUiModeManager mService;
+-        private final Object mGlobalsLock = new Object();
+-
+-        /**
+-         * Map of {@link UserCallback} per user id. This will only contain one value for the current
+-         * user, unless the process using this service interacts across users.
+-         */
+-        private final SparseArray<UserCallback> mUserCallbacks = new SparseArray<>();
+-
+-        Globals(IUiModeManager service) {
+-            mService = service;
+-        }
+-
+-        private UserCallback getUserCallbackOrCreate(int userId) {
+-            UserCallback userCallback = mUserCallbacks.get(userId);
+-            if (userCallback == null) {
+-                try {
+-                    userCallback = new UserCallback(userId);
+-                    mService.addCallback(userCallback, userId);
+-                    mUserCallbacks.put(userId, userCallback);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-            return userCallback;
+-        }
+-
+-        private void removeCallbackIfUnusedLocked(int userId) {
+-            UserCallback userCallback = mUserCallbacks.get(userId);
+-            if (userCallback == null
+-                    || !userCallback.mContrastChangeListeners.isEmpty()
+-                    || !userCallback.mForceInvertStateChangeListeners.isEmpty()) {
+-                return;
+-            }
+-            try {
+-                mService.removeCallback(userCallback, userId);
+-                mUserCallbacks.remove(userId);
+-            } catch (RemoteException e) {
+-                Log.e(TAG, "Failed to remove UiModeManagerCallback", e);
+-            }
+-        }
+-
+-        @ForceInvertType
+-        private int getForceInvertState(int userId) {
+-            synchronized (mGlobalsLock) {
+-                UserCallback userCallback = mUserCallbacks.get(userId);
+-                if (userCallback != null) {
+-                    return userCallback.mForceInvertState;
+-                }
+-                try {
+-                    return mService.getForceInvertState(userId);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-
+-        private void addForceInvertStateChangeListener(ForceInvertStateChangeListener listener,
+-                Executor executor, int userId) {
+-            synchronized (mGlobalsLock) {
+-                UserCallback userCallback = getUserCallbackOrCreate(userId);
+-                userCallback.mForceInvertStateChangeListeners.put(listener, executor);
+-            }
+-        }
+-
+-        private void removeForceInvertStateChangeListener(ForceInvertStateChangeListener listener,
+-                int userId) {
+-            synchronized (mGlobalsLock) {
+-                UserCallback userCallback = mUserCallbacks.get(userId);
+-                if (userCallback != null) {
+-                    userCallback.mForceInvertStateChangeListeners.remove(listener);
+-                    removeCallbackIfUnusedLocked(userId);
+-                }
+-            }
+-        }
+-
+-        private float getContrast(int userId) {
+-            synchronized (mGlobalsLock) {
+-                UserCallback userCallback = mUserCallbacks.get(userId);
+-                if (userCallback != null) {
+-                    return userCallback.mContrast;
+-                }
+-                try {
+-                    return mService.getContrast(userId);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-
+-        private void addContrastChangeListener(ContrastChangeListener listener, Executor executor,
+-                int userId) {
+-            synchronized (mGlobalsLock) {
+-                UserCallback userCallback = getUserCallbackOrCreate(userId);
+-                userCallback.mContrastChangeListeners.put(listener, executor);
+-            }
+-        }
+-
+-        private void removeContrastChangeListener(ContrastChangeListener listener, int userId) {
+-            synchronized (mGlobalsLock) {
+-                UserCallback userCallback = mUserCallbacks.get(userId);
+-                if (userCallback != null) {
+-                    userCallback.mContrastChangeListeners.remove(listener);
+-                    removeCallbackIfUnusedLocked(userId);
+-                }
+-            }
+-        }
+-
+-        @ForceInvertPackageOverrideState
+-        private int getForceInvertOverrideState(int userId, String packageName) {
+-            synchronized (mGlobalsLock) {
+-                // This is such an infrequent operation, we don't worry about caching.
+-                try {
+-                    return mService.getForceInvertOverrideState(userId, packageName);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-
+-        private List<String> getAllForceInvertAlwaysDisableApps(@UserIdInt int userId) {
+-            synchronized (mGlobalsLock) {
+-                // This is such an infrequent operation, we don't worry about caching.
+-                try {
+-                    return mService.getAllForceInvertAlwaysDisableApps(userId);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-
+-        @RequiresPermission(android.Manifest.permission.WRITE_SETTINGS)
+-        private boolean setForceInvertOverrideState(@UserIdInt int userId, String packageName,
+-                @ForceInvertPackageOverrideState int newState) {
+-            synchronized (mGlobalsLock) {
+-                try {
+-                    return mService.setForceInvertOverrideState(userId, packageName, newState);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-    }
+-
+-    /** Global class storing all listeners and cached values for a specific user id. */
+-    private static class UserCallback extends IUiModeManagerCallback.Stub {
+-
+-        private UserCallback(int userId) {
+-            try {
+-                sGlobals.mService.addCallback(this, userId);
+-                mContrast = sGlobals.mService.getContrast(userId);
+-                mForceInvertState = sGlobals.mService.getForceInvertState(userId);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-
+-        /** Cached contrast value */
+-        private float mContrast = ContrastUtils.CONTRAST_DEFAULT_VALUE;
+-
+-        /** Cached force invert state value */
+-        @ForceInvertType
+-        private int mForceInvertState = FORCE_INVERT_TYPE_OFF;
+-
+-        /**
+-         * Map that stores user provided {@link ContrastChangeListener} callbacks,
+-         * and the executors on which these callbacks should be called.
+-         */
+-        private final ArrayMap<ContrastChangeListener, Executor>
+-                mContrastChangeListeners = new ArrayMap<>();
+-
+-        private final ArrayMap<ForceInvertStateChangeListener, Executor>
+-                mForceInvertStateChangeListeners = new ArrayMap<>();
+-
+-        @Override
+-        public void notifyContrastChanged(float contrast) throws RemoteException {
+-            synchronized (sGlobals.mGlobalsLock) {
+-                // if value changed in the settings, update the cached value and notify listeners
+-                Float previousContrast = mContrast;
+-                if (Math.abs(previousContrast - contrast) < 1e-10) {
+-                    return;
+-                }
+-                mContrast = contrast;
+-
+-                // TODO(b/438028125): why doesn't this clear calling identity like the others?
+-                mContrastChangeListeners.forEach((listener, executor) ->
+-                        executor.execute(() -> listener.onContrastChanged(contrast)));
+-            }
+-        }
+-
+-        @Override
+-        public void notifyForceInvertStateChanged(@ForceInvertType int forceInvertState)
+-                throws RemoteException {
+-            notifyForceInvertStateChanged(forceInvertState, /* forceUpdate= */ false);
+-        }
+-
+-        private void notifyForceInvertStateChanged(
+-                @ForceInvertType int forceInvertState, boolean forceUpdate)
+-                throws RemoteException {
+-            final Map<ForceInvertStateChangeListener, Executor> listeners = new ArrayMap<>();
+-            synchronized (sGlobals.mGlobalsLock) {
+-                // if value changed in the settings, update the cached value and notify listeners
+-                if (mForceInvertState == forceInvertState && !forceUpdate) {
+-                    return;
+-                }
+-
+-                mForceInvertState = forceInvertState;
+-                listeners.putAll(mForceInvertStateChangeListeners);
+-            }
+-
+-            listeners.forEach((listener, executor) -> {
+-                final long token = Binder.clearCallingIdentity();
+-                try {
+-                    executor.execute(() -> listener.onForceInvertStateChanged(forceInvertState));
+-                } finally {
+-                    Binder.restoreCallingIdentity(token);
+-                }
+-            });
+-        }
+-
+-        @Override
+-        public void notifyForceInvertOverrideStateChanged() throws RemoteException {
+-            final int forceInvertState;
+-            synchronized (sGlobals.mGlobalsLock) {
+-                forceInvertState = mForceInvertState;
+-            }
+-
+-            // We just re-use the main state listener. End clients don't need the granularity of
+-            // listening to the blocklist changes separately.
+-            notifyForceInvertStateChanged(forceInvertState, /* forceUpdate= */ true);
+-        }
+-    }
+-
+     /**
+      * Define constants and conversions between {@link ContrastLevel}s and contrast values.
+      * <p>
+@@ -782,19 +507,15 @@
+         }
+     }
+ 
+-    @UnsupportedAppUsage
+-        /*package*/ UiModeManager() throws ServiceNotFoundException {
+-        this(null /* context */);
+-    }
+-
+-    /*package*/ UiModeManager(Context context) throws ServiceNotFoundException {
+-        IUiModeManager service = IUiModeManager.Stub.asInterface(
+-                ServiceManager.getServiceOrThrow(Context.UI_MODE_SERVICE));
+-        mContext = context;
+-        if (service == null) return;
+-        synchronized (mLock) {
+-            if (sGlobals == null) sGlobals = new Globals(service);
+-        }
++    private final int mDefaultNightUiMode;
++    private final ArrayMap<ContrastChangeListener, Executor> mContrastListeners = new ArrayMap<>();
++    private int mNightMode = MODE_NIGHT_AUTO;
++    private float mContrast;
++
++    public UiModeManager(Context context) {
++        mContext = Objects.requireNonNull(context);
++        mDefaultNightUiMode = context.getResources().getConfiguration().uiMode
++                & Configuration.UI_MODE_NIGHT_MASK;
+     }
+ 
+     /**
+@@ -883,13 +604,10 @@
+     @SystemApi
+     @RequiresPermission(android.Manifest.permission.ENTER_CAR_MODE_PRIORITIZED)
+     public void enableCarMode(@IntRange(from = 0) int priority, @EnableCarMode int flags) {
+-        if (sGlobals != null) {
+-            try {
+-                sGlobals.mService.enableCarMode(flags, priority,
+-                        mContext == null ? null : mContext.getOpPackageName());
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++        if (getCurrentModeType() != Configuration.UI_MODE_TYPE_CAR) {
++            mContext.applyEmbeddedUiMode((getUiMode() & ~Configuration.UI_MODE_TYPE_MASK)
++                    | Configuration.UI_MODE_TYPE_CAR);
++            mContext.sendBroadcast(new android.content.Intent(ACTION_ENTER_CAR_MODE));
+         }
+     }
+ 
+@@ -935,60 +653,15 @@
+      * @param flags One of the disable car mode flags.
+      */
+     public void disableCarMode(@DisableCarMode int flags) {
+-        if (sGlobals != null) {
+-            try {
+-                sGlobals.mService.disableCarModeByCallingPackage(flags,
+-                        mContext == null ? null : mContext.getOpPackageName());
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
++        if (getCurrentModeType() == Configuration.UI_MODE_TYPE_CAR) {
++            mContext.applyEmbeddedUiMode((getUiMode() & ~Configuration.UI_MODE_TYPE_MASK)
++                    | Configuration.UI_MODE_TYPE_NORMAL);
++            mContext.sendBroadcast(new android.content.Intent(ACTION_EXIT_CAR_MODE));
+         }
+     }
+ 
+-    private Integer getCurrentModeTypeFromServer(int displayId) {
+-        try {
+-            if (sGlobals != null) {
+-                return sGlobals.mService.getCurrentModeType(displayId);
+-            }
+-            return Configuration.UI_MODE_TYPE_NORMAL;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-
+-    /**
+-     * Retrieve the current running mode type for the user.
+-     */
+-    private final IpcDataCache.QueryHandler<Integer, Integer> mCurrentModeTypeQuery =
+-            new IpcDataCache.QueryHandler<>() {
+-
+-                @Override
+-                @NonNull
+-                public Integer apply(Integer displayId) {
+-                    return getCurrentModeTypeFromServer(displayId);
+-                }
+-            };
+ 
+     private static final String CURRENT_MODE_TYPE_API = "getCurrentModeType";
+-
+-    /**
+-     * Cache the current running mode type for a user.
+-     */
+-    private final IpcDataCache<Integer, Integer> mCurrentModeTypeCache =
+-            new IpcDataCache<>(1, IpcDataCache.MODULE_SYSTEM,
+-                    CURRENT_MODE_TYPE_API, /* cacheName= */ "CurrentModeTypeCache",
+-                    mCurrentModeTypeQuery);
+-
+-    /**
+-     * Invalidate the current mode type cache.
+-     *
+-     * @hide
+-     */
+-    public static void invalidateCurrentModeTypeCache() {
+-        IpcDataCache.invalidateCache(IpcDataCache.MODULE_SYSTEM,
+-                CURRENT_MODE_TYPE_API);
+-    }
+ 
+ 
+     /**
+@@ -1002,7 +675,7 @@
+      * {@link Configuration#UI_MODE_TYPE_VR_HEADSET Configuration.UI_MODE_TYPE_VR_HEADSET}.
+      */
+     public int getCurrentModeType() {
+-        return mCurrentModeTypeCache.query(getDisplayId());
++        return getUiMode() & Configuration.UI_MODE_TYPE_MASK;
+     }
+ 
+     /**
+@@ -1042,101 +715,14 @@
+      * @see #setApplicationNightMode(int)
+      */
+     public void setNightMode(@NightMode int mode) {
+-        if (sGlobals != null) {
+-            try {
+-                sGlobals.mService.setNightMode(mode);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Sets the current night mode to {@link #MODE_NIGHT_CUSTOM} with the custom night mode type
+-     * {@code nightModeCustomType}.
+-     *
+-     * @param nightModeCustomType
+-     * @throws IllegalArgumentException if passed an unsupported type to
+-     *         {@code nightModeCustomType}.
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.MODIFY_DAY_NIGHT_MODE)
+-    public void setNightModeCustomType(@NightModeCustomType int nightModeCustomType) {
+-        if (sGlobals != null) {
+-            try {
+-                sGlobals.mService.setNightModeCustomType(nightModeCustomType);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Returns the custom night mode type.
+-     * <p>
+-     * If the current night mode is not {@link #MODE_NIGHT_CUSTOM}, returns
+-     * {@link #MODE_NIGHT_CUSTOM_TYPE_UNKNOWN}.
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.MODIFY_DAY_NIGHT_MODE)
+-    public @NightModeCustomReturnType int getNightModeCustomType() {
+-        if (sGlobals != null) {
+-            try {
+-                return sGlobals.mService.getNightModeCustomType();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return MODE_NIGHT_CUSTOM_TYPE_UNKNOWN;
+-    }
+-
+-    /**
+-     * Overlays current Attention mode Night Mode overlay.
+-     * {@code attentionModeThemeOverlayType}.
+-     *
+-     * @throws IllegalArgumentException if passed an unsupported type to
+-     *                                  {@code AttentionModeThemeOverlayType}.
+-     * @hide
+-     */
+-    @RequiresPermission(android.Manifest.permission.MODIFY_DAY_NIGHT_MODE)
+-    public void setAttentionModeThemeOverlay(
+-            @AttentionModeThemeOverlayType int attentionModeThemeOverlayType) {
+-        if (sGlobals != null) {
+-            try {
+-                sGlobals.mService.setAttentionModeThemeOverlay(attentionModeThemeOverlayType);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Returns the currently configured Attention Mode theme overlay.
+-     * <p>
+-     * May be one of:
+-     *   <ul>
+-     *     <li>{@link #MODE_ATTENTION_THEME_OVERLAY_OFF}</li>
+-     *     <li>{@link #MODE_ATTENTION_THEME_OVERLAY_NIGHT}</li>
+-     *     <li>{@link #MODE_ATTENTION_THEME_OVERLAY_DAY}</li>
+-     *     <li>{@link #MODE_ATTENTION_THEME_OVERLAY_UNKNOWN}</li>
+-     *   </ul>
+-     * </p>
+-     *
+-     * @hide
+-     */
+-    @TestApi
+-    @RequiresPermission(android.Manifest.permission.MODIFY_DAY_NIGHT_MODE)
+-    public @AttentionModeThemeOverlayReturnType int getAttentionModeThemeOverlay() {
+-        if (sGlobals != null) {
+-            try {
+-                return sGlobals.mService.getAttentionModeThemeOverlay();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return MODE_ATTENTION_THEME_OVERLAY_UNKNOWN;
++        int night = switch (mode) {
++            case MODE_NIGHT_NO -> Configuration.UI_MODE_NIGHT_NO;
++            case MODE_NIGHT_YES -> Configuration.UI_MODE_NIGHT_YES;
++            case MODE_NIGHT_AUTO, MODE_NIGHT_CUSTOM -> mDefaultNightUiMode;
++            default -> throw new IllegalArgumentException("Invalid night mode: " + mode);
++        };
++        mNightMode = mode;
++        mContext.applyEmbeddedUiMode((getUiMode() & ~Configuration.UI_MODE_NIGHT_MASK) | night);
+     }
+ 
+     /**
+@@ -1168,58 +754,11 @@
+      * @see #setNightMode(int)
+      */
+     public void setApplicationNightMode(@NightMode int mode) {
+-        if (sGlobals != null) {
+-            try {
+-                sGlobals.mService.setApplicationNightMode(mode);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    private Integer getNightModeFromServer(int displayId) {
+-        try {
+-            if (sGlobals != null) {
+-                return sGlobals.mService.getNightMode(displayId);
+-            }
+-            return -1;
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-
+-    /**
+-     * Retrieve the night mode for the user.
+-     */
+-    private final IpcDataCache.QueryHandler<Integer, Integer> mNightModeQuery =
+-            new IpcDataCache.QueryHandler<>() {
+-
+-                @Override
+-                @NonNull
+-                public Integer apply(Integer displayId) {
+-                    return getNightModeFromServer(displayId);
+-                }
+-            };
++        setNightMode(mode);
++    }
++
+ 
+     private static final String NIGHT_MODE_API = "getNightMode";
+-
+-    /**
+-     * Cache the night mode for a user.
+-     */
+-    private final IpcDataCache<Integer, Integer> mNightModeCache =
+-            new IpcDataCache<>(1, IpcDataCache.MODULE_SYSTEM,
+-                    NIGHT_MODE_API, /* cacheName= */ "NightModeCache", mNightModeQuery);
+-
+-    /**
+-     * Invalidate the night mode cache.
+-     *
+-     * @hide
+-     */
+-    public static void invalidateNightModeCache() {
+-        IpcDataCache.invalidateCache(IpcDataCache.MODULE_SYSTEM,
+-                NIGHT_MODE_API);
+-    }
+ 
+     /**
+      * Returns the currently configured night mode.
+@@ -1237,7 +776,7 @@
+      * @see #setNightMode(int)
+      */
+     public @NightMode int getNightMode() {
+-        return mNightModeCache.query(getDisplayId());
++        return mNightMode;
+     }
+ 
+     /**
+@@ -1247,14 +786,7 @@
+      */
+     @TestApi
+     public boolean isUiModeLocked() {
+-        if (sGlobals != null) {
+-            try {
+-                return sGlobals.mService.isUiModeLocked();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return true;
++        return false;
+     }
+ 
+     /**
+@@ -1269,38 +801,6 @@
+      */
+     @TestApi
+     public boolean isNightModeLocked() {
+-        if (sGlobals != null) {
+-            try {
+-                return sGlobals.mService.isNightModeLocked();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return true;
+-    }
+-
+-    /**
+-     * [De]activating night mode for the current user if the current night mode is custom and the
+-     * custom type matches {@code nightModeCustomType}.
+-     *
+-     * @param nightModeCustomType the specify type of custom mode
+-     * @param active {@code true} to activate night mode. Otherwise, deactivate night mode
+-     * @return {@code true} if night mode has successfully activated for the requested
+-     *         {@code nightModeCustomType}.
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.MODIFY_DAY_NIGHT_MODE)
+-    public boolean setNightModeActivatedForCustomMode(@NightModeCustomType int nightModeCustomType,
+-            boolean active) {
+-        if (sGlobals != null) {
+-            try {
+-                return sGlobals.mService.setNightModeActivatedForCustomMode(
+-                        nightModeCustomType, active);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+         return false;
+     }
+ 
+@@ -1312,84 +812,10 @@
+      */
+     @RequiresPermission(android.Manifest.permission.MODIFY_DAY_NIGHT_MODE)
+     public boolean setNightModeActivated(boolean active) {
+-        if (sGlobals != null) {
+-            try {
+-                return sGlobals.mService.setNightModeActivated(active);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return false;
+-    }
+-
+-    /**
+-     * Returns the time of the day Dark theme activates
+-     * <p>
+-     * When night mode is {@link #MODE_NIGHT_CUSTOM}, the system uses
+-     * this time set to activate it automatically.
+-     */
+-    @NonNull
+-    public LocalTime getCustomNightModeStart() {
+-        if (sGlobals != null) {
+-            try {
+-                return LocalTime.ofNanoOfDay(sGlobals.mService.getCustomNightModeStart() * 1000);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return LocalTime.MIDNIGHT;
+-    }
+-
+-    /**
+-     * Sets the time of the day Dark theme activates
+-     * <p>
+-     * When night mode is {@link #MODE_NIGHT_CUSTOM}, the system uses
+-     * this time set to activate it automatically
+-     * @param time The time of the day Dark theme should activate
+-     */
+-    public void setCustomNightModeStart(@NonNull LocalTime time) {
+-        if (sGlobals != null) {
+-            try {
+-                sGlobals.mService.setCustomNightModeStart(time.toNanoOfDay() / 1000);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Returns the time of the day Dark theme deactivates
+-     * <p>
+-     * When night mode is {@link #MODE_NIGHT_CUSTOM}, the system uses
+-     * this time set to deactivate it automatically.
+-     */
+-    @NonNull
+-    public LocalTime getCustomNightModeEnd() {
+-        if (sGlobals != null) {
+-            try {
+-                return LocalTime.ofNanoOfDay(sGlobals.mService.getCustomNightModeEnd() * 1000);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return LocalTime.MIDNIGHT;
+-    }
+-
+-    /**
+-     * Sets the time of the day Dark theme deactivates
+-     * <p>
+-     * When night mode is {@link #MODE_NIGHT_CUSTOM}, the system uses
+-     * this time set to deactivate it automatically.
+-     * @param time The time of the day Dark theme should deactivate
+-     */
+-    public void setCustomNightModeEnd(@NonNull LocalTime time) {
+-        if (sGlobals != null) {
+-            try {
+-                sGlobals.mService.setCustomNightModeEnd(time.toNanoOfDay() / 1000);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        if (mNightMode != MODE_NIGHT_AUTO && mNightMode != MODE_NIGHT_CUSTOM) return false;
++        int night = active ? Configuration.UI_MODE_NIGHT_YES : Configuration.UI_MODE_NIGHT_NO;
++        mContext.applyEmbeddedUiMode((getUiMode() & ~Configuration.UI_MODE_NIGHT_MASK) | night);
++        return true;
+     }
+ 
+     /**
+@@ -1430,235 +856,6 @@
+     })
+     @Retention(RetentionPolicy.SOURCE)
+     public @interface ProjectionType {
+-    }
+-
+-    /**
+-     * Sets the given {@link ProjectionType}.
+-     *
+-     * Caller must have {@link android.Manifest.permission#TOGGLE_AUTOMOTIVE_PROJECTION} if
+-     * argument is {@link #PROJECTION_TYPE_AUTOMOTIVE}.
+-     * @param projectionType the type of projection to request. This must be a single
+-     * {@link ProjectionType} and cannot be a bitmask.
+-     * @return true if the projection was successfully set
+-     * @throws IllegalArgumentException if passed {@link #PROJECTION_TYPE_NONE},
+-     * {@link #PROJECTION_TYPE_ALL}, or any combination of more than one {@link ProjectionType}.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @TestApi
+-    @RequiresPermission(value = android.Manifest.permission.TOGGLE_AUTOMOTIVE_PROJECTION,
+-            conditional = true)
+-    public boolean requestProjection(@ProjectionType int projectionType) {
+-        if (sGlobals != null) {
+-            try {
+-                return sGlobals.mService.requestProjection(new Binder(), projectionType,
+-                        mContext.getOpPackageName());
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return false;
+-    }
+-
+-    /**
+-     * Releases the given {@link ProjectionType}.
+-     *
+-     * Caller must have {@link android.Manifest.permission#TOGGLE_AUTOMOTIVE_PROJECTION} if
+-     * argument is {@link #PROJECTION_TYPE_AUTOMOTIVE}.
+-     * @param projectionType the type of projection to release. This must be a single
+-     * {@link ProjectionType} and cannot be a bitmask.
+-     * @return true if the package had set projection and it was successfully released
+-     * @throws IllegalArgumentException if passed {@link #PROJECTION_TYPE_NONE},
+-     * {@link #PROJECTION_TYPE_ALL}, or any combination of more than one {@link ProjectionType}.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @TestApi
+-    @RequiresPermission(value = android.Manifest.permission.TOGGLE_AUTOMOTIVE_PROJECTION,
+-            conditional = true)
+-    public boolean releaseProjection(@ProjectionType int projectionType) {
+-        if (sGlobals != null) {
+-            try {
+-                return sGlobals.mService.releaseProjection(
+-                        projectionType, mContext.getOpPackageName());
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return false;
+-    }
+-
+-    /**
+-     * Gets the packages that are currently projecting.
+-     *
+-     * @param projectionType the {@link ProjectionType}s to consider when computing which packages
+-     *                       are projecting. Use {@link #PROJECTION_TYPE_ALL} to get all projecting
+-     *                       packages.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.READ_PROJECTION_STATE)
+-    @NonNull
+-    public Set<String> getProjectingPackages(@ProjectionType int projectionType) {
+-        if (sGlobals != null) {
+-            try {
+-                return new ArraySet<>(sGlobals.mService.getProjectingPackages(projectionType));
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return Set.of();
+-    }
+-
+-    /**
+-     * Gets the {@link ProjectionType}s that are currently active.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.READ_PROJECTION_STATE)
+-    public @ProjectionType int getActiveProjectionTypes() {
+-        if (sGlobals != null) {
+-            try {
+-                return sGlobals.mService.getActiveProjectionTypes();
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
+-        return PROJECTION_TYPE_NONE;
+-    }
+-
+-    /**
+-     * Configures the listener to receive callbacks when the packages projecting using the given
+-     * {@link ProjectionType}s change.
+-     *
+-     * @param projectionType one or more {@link ProjectionType}s to listen for changes regarding
+-     * @param executor an {@link Executor} on which to invoke the callbacks
+-     * @param listener the {@link OnProjectionStateChangedListener} to add
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.READ_PROJECTION_STATE)
+-    public void addOnProjectionStateChangedListener(@ProjectionType int projectionType,
+-            @NonNull @CallbackExecutor Executor executor,
+-            @NonNull OnProjectionStateChangedListener listener) {
+-        synchronized (mLock) {
+-            if (mProjectionStateListenerMap.containsKey(listener)) {
+-                Slog.i(TAG, "Attempted to add listener that was already added.");
+-                return;
+-            }
+-            if (sGlobals != null) {
+-                InnerListener innerListener = new InnerListener(executor, listener,
+-                        mOnProjectionStateChangedListenerResourceManager);
+-                try {
+-                    sGlobals.mService.addOnProjectionStateChangedListener(
+-                            innerListener, projectionType);
+-                    mProjectionStateListenerMap.put(listener, innerListener);
+-                } catch (RemoteException e) {
+-                    mOnProjectionStateChangedListenerResourceManager.remove(innerListener);
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Removes the listener so it stops receiving updates for all {@link ProjectionType}s.
+-     *
+-     * @param listener the {@link OnProjectionStateChangedListener} to remove
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(android.Manifest.permission.READ_PROJECTION_STATE)
+-    public void removeOnProjectionStateChangedListener(
+-            @NonNull OnProjectionStateChangedListener listener) {
+-        synchronized (mLock) {
+-            InnerListener innerListener = mProjectionStateListenerMap.get(listener);
+-            if (innerListener == null) {
+-                Slog.i(TAG, "Attempted to remove listener that was not added.");
+-                return;
+-            }
+-            if (sGlobals != null) {
+-                try {
+-                    sGlobals.mService.removeOnProjectionStateChangedListener(innerListener);
+-                } catch (RemoteException e) {
+-                    throw e.rethrowFromSystemServer();
+-                }
+-            }
+-            mProjectionStateListenerMap.remove(listener);
+-            mOnProjectionStateChangedListenerResourceManager.remove(innerListener);
+-        }
+-    }
+-
+-    private static class InnerListener extends IOnProjectionStateChangedListener.Stub {
+-        private final WeakReference<OnProjectionStateChangedListenerResourceManager>
+-                mResourceManager;
+-
+-        private InnerListener(@NonNull Executor executor,
+-                @NonNull OnProjectionStateChangedListener outerListener,
+-                @NonNull OnProjectionStateChangedListenerResourceManager resourceManager) {
+-            resourceManager.put(this, executor, outerListener);
+-            mResourceManager = new WeakReference<>(resourceManager);
+-        }
+-
+-        @Override
+-        public void onProjectionStateChanged(int activeProjectionTypes,
+-                List<String> projectingPackages) {
+-            OnProjectionStateChangedListenerResourceManager resourceManager =
+-                    mResourceManager.get();
+-            if (resourceManager == null) {
+-                Slog.w(TAG, "Can't execute onProjectionStateChanged, resource manager is gone.");
+-                return;
+-            }
+-
+-            OnProjectionStateChangedListener outerListener = resourceManager.getOuterListener(this);
+-            Executor executor = resourceManager.getExecutor(this);
+-            if (outerListener == null || executor == null) {
+-                Slog.w(TAG, "Can't execute onProjectionStatechanged, references are null.");
+-                return;
+-            }
+-
+-            executor.execute(PooledLambda.obtainRunnable(
+-                    OnProjectionStateChangedListener::onProjectionStateChanged,
+-                    outerListener,
+-                    activeProjectionTypes,
+-                    new ArraySet<>(projectingPackages)).recycleOnUse());
+-        }
+-    }
+-
+-    /**
+-     * Wrapper class that ensures we don't leak {@link Activity} or other large {@link Context} in
+-     * which this {@link UiModeManager} resides if/when it ends without unregistering associated
+-     * callback objects.
+-     */
+-    private static class OnProjectionStateChangedListenerResourceManager {
+-        private final Map<InnerListener, OnProjectionStateChangedListener> mOuterListenerMap =
+-                new ArrayMap<>(1);
+-        private final Map<InnerListener, Executor> mExecutorMap = new ArrayMap<>(1);
+-
+-        void put(@NonNull InnerListener innerListener, @NonNull Executor executor,
+-                OnProjectionStateChangedListener outerListener) {
+-            mOuterListenerMap.put(innerListener, outerListener);
+-            mExecutorMap.put(innerListener, executor);
+-        }
+-
+-        void remove(InnerListener innerListener) {
+-            mOuterListenerMap.remove(innerListener);
+-            mExecutorMap.remove(innerListener);
+-        }
+-
+-        OnProjectionStateChangedListener getOuterListener(@NonNull InnerListener innerListener) {
+-            return mOuterListenerMap.get(innerListener);
+-        }
+-
+-        Executor getExecutor(@NonNull InnerListener innerListener) {
+-            return mExecutorMap.get(innerListener);
+-        }
+     }
+ 
+     /**
+@@ -1676,7 +873,7 @@
+      */
+     @FloatRange(from = -1.0f, to = 1.0f)
+     public float getContrast() {
+-        return sGlobals.getContrast(getUserId());
++        return mContrast;
+     }
+ 
+     /**
+@@ -1688,9 +885,7 @@
+     public void addContrastChangeListener(
+             @NonNull @CallbackExecutor Executor executor,
+             @NonNull ContrastChangeListener listener) {
+-        Objects.requireNonNull(executor);
+-        Objects.requireNonNull(listener);
+-        sGlobals.addContrastChangeListener(listener, executor, getUserId());
++        mContrastListeners.put(Objects.requireNonNull(listener), Objects.requireNonNull(executor));
+     }
+ 
+     /**
+@@ -1700,106 +895,22 @@
+      * @param listener The listener to unregister.
+      */
+     public void removeContrastChangeListener(@NonNull ContrastChangeListener listener) {
+-        Objects.requireNonNull(listener);
+-        sGlobals.removeContrastChangeListener(listener, getUserId());
+-    }
+-
+-    /**
+-     * Returns the force invert state for the user.
+-     *
+-     * @hide
+-     */
+-    @TestApi
+-    @FlaggedApi(android.view.accessibility.Flags.FLAG_FORCE_INVERT_COLOR)
+-    @ForceInvertType
+-    public int getForceInvertState() {
+-        return sGlobals.getForceInvertState(getUserId());
+-    }
+-
+-    /**
+-     * Registers a {@link ForceInvertStateChangeListener} for the user.
+-     *
+-     * @param executor The executor on which the listener should be called back.
+-     * @param listener The listener.
+-     *
+-     * @hide
+-     */
+-    public void addForceInvertStateChangeListener(
+-            @NonNull @CallbackExecutor Executor executor,
+-            @NonNull ForceInvertStateChangeListener listener) {
+-        Objects.requireNonNull(executor);
+-        Objects.requireNonNull(listener);
+-        sGlobals.addForceInvertStateChangeListener(listener, executor, getUserId());
+-    }
+-
+-    /**
+-     * Unregisters a {@link ForceInvertStateChangeListener} for the user.
+-     * If the listener was not registered, does nothing and returns.
+-     *
+-     * @param listener The listener to unregister.
+-     *
+-     * @hide
+-     */
+-    public void removeForceInvertStateChangeListener(
+-            @NonNull ForceInvertStateChangeListener listener) {
+-        Objects.requireNonNull(listener);
+-        sGlobals.removeForceInvertStateChangeListener(listener, getUserId());
+-    }
+-
+-    /**
+-     * Returns the force invert override state for the current package.
+-     *
+-     * @hide
+-     */
+-    @ForceInvertPackageOverrideState
+-    public int getForceInvertOverrideState() {
+-        if (mContext == null) {
+-            // This shouldn't really happen in practice because ViewRootImpl uses the
+-            // proper constructor that fills out the context.
+-            return FORCE_INVERT_PACKAGE_ALLOWED;
++        mContrastListeners.remove(listener);
++    }
++
++
++    private int getUiMode() {
++        return mContext.getResources().getConfiguration().uiMode;
++    }
++
++    /** @hide */
++    public void setEmbeddedContrast(float contrast) {
++        if (mContrast == contrast) return;
++        mContrast = contrast;
++        ArrayMap<ContrastChangeListener, Executor> listeners = new ArrayMap<>(mContrastListeners);
++        for (int i = 0; i < listeners.size(); i++) {
++            ContrastChangeListener listener = listeners.keyAt(i);
++            listeners.valueAt(i).execute(() -> listener.onContrastChanged(contrast));
+         }
+-        return sGlobals.getForceInvertOverrideState(getUserId(), mContext.getOpPackageName());
+-    }
+-
+-    /**
+-     * Returns the list of force invert always disable apps.
+-     *
+-     * @hide
+-     */
+-    public List<String> getAllForceInvertAlwaysDisableApps(@UserIdInt int userId) {
+-        return sGlobals.getAllForceInvertAlwaysDisableApps(userId);
+-    }
+-
+-    /**
+-     * Sets the ForceInvertOverrideState for a specific package..
+-     *
+-     * @hide
+-     */
+-    @RequiresPermission(android.Manifest.permission.WRITE_SETTINGS)
+-    public boolean setForceInvertOverrideStateForApp(
+-            String packageName,
+-            @ForceInvertPackageOverrideState int newState,
+-            @UserIdInt int userId) {
+-        if (mContext == null) {
+-            // This shouldn't really happen in practice because ViewRootImpl uses the
+-            // proper constructor that fills out the context.
+-            return false;
+-        }
+-        return sGlobals.setForceInvertOverrideState(userId, packageName, newState);
+-    }
+-
+-    /**
+-     * Return the context user id. If this class was built with the UnsupportedAppUsage constructor
+-     * and the context is null, return the user id of this process instead.
+-     */
+-    private int getUserId() {
+-        return mContext != null ? mContext.getUserId() : UserHandle.myUserId();
+-    }
+-
+-    private int getDisplayId() {
+-        if (!android.companion.virtualdevice.flags.Flags.deviceAwareUiMode()) {
+-            return Display.DEFAULT_DISPLAY;
+-        }
+-        return mContext == null ? Display.DEFAULT_DISPLAY : mContext.getDisplayId();
+     }
+ }
+--- a/frameworks/base/core/java/android/app/KeyguardManager.java
++++ b/frameworks/base/core/java/android/app/KeyguardManager.java
+@@ -18,60 +18,23 @@
+ 
+ import android.Manifest;
+ import android.annotation.CallbackExecutor;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.annotation.RequiresFeature;
+ import android.annotation.RequiresPermission;
+ import android.annotation.SystemApi;
+ import android.annotation.SystemService;
+-import android.annotation.TestApi;
+ import android.annotation.UserIdInt;
+-import android.app.admin.DevicePolicyManager;
+-import android.app.admin.DevicePolicyManager.PasswordComplexity;
+-import android.app.admin.PasswordMetrics;
+-import android.app.trust.ITrustManager;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.ComponentName;
+ import android.content.Context;
+ import android.content.Intent;
+-import android.content.pm.PackageManager;
+-import android.content.pm.ResolveInfo;
+-import android.os.Binder;
+ import android.os.Build;
+-import android.os.IBinder;
+-import android.os.RemoteException;
+-import android.os.ServiceManager;
+-import android.os.ServiceManager.ServiceNotFoundException;
+ import android.os.UserHandle;
+-import android.provider.Settings;
+-import android.service.persistentdata.IPersistentDataBlockService;
+ import android.util.ArrayMap;
+-import android.util.Log;
+-import android.view.IOnKeyguardExitResult;
+-import android.view.IWindowManager;
+-import android.view.WindowManagerGlobal;
+-
+-import com.android.internal.annotations.GuardedBy;
+-import com.android.internal.annotations.VisibleForTesting;
+-import com.android.internal.policy.IDeviceLockedStateListener;
+-import com.android.internal.policy.IKeyguardDismissCallback;
+-import com.android.internal.policy.IKeyguardLockedStateListener;
+-import com.android.internal.util.ArrayUtils;
+-import com.android.internal.util.Preconditions;
+-import com.android.internal.widget.IWeakEscrowTokenActivatedListener;
+-import com.android.internal.widget.IWeakEscrowTokenRemovedListener;
+-import com.android.internal.widget.LockPatternUtils;
+-import com.android.internal.widget.LockPatternView;
+-import com.android.internal.widget.LockscreenCredential;
+-import com.android.internal.widget.PasswordValidationError;
+-import com.android.internal.widget.VerifyCredentialResponse;
++
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+-import java.nio.charset.Charset;
+-import java.util.List;
+ import java.util.Objects;
+ import java.util.concurrent.Executor;
+ 
+@@ -84,14 +47,6 @@
+     private static final String TAG = "KeyguardManager";
+ 
+     private final Context mContext;
+-    private final LockPatternUtils mLockPatternUtils;
+-    private final IWindowManager mWM;
+-    private final IActivityManager mAm;
+-    private final ITrustManager mTrustManager;
+-    private final INotificationManager mNotificationManager;
+-    private final ArrayMap<WeakEscrowTokenRemovedListener, IWeakEscrowTokenRemovedListener>
+-            mListeners = new ArrayMap<>();
+-
+     /**
+      * Intent used to prompt user for device credentials.
+      * @hide
+@@ -252,42 +207,9 @@
+     @Retention(RetentionPolicy.SOURCE)
+     @interface LockTypes {}
+ 
+-    private final IKeyguardLockedStateListener mIKeyguardLockedStateListener =
+-            new IKeyguardLockedStateListener.Stub() {
+-                @Override
+-                public void onKeyguardLockedStateChanged(boolean isKeyguardLocked) {
+-                    synchronized (mKeyguardLockedStateListeners) {
+-                        mKeyguardLockedStateListeners.forEach((listener, executor) -> {
+-                            executor.execute(
+-                                    () -> listener.onKeyguardLockedStateChanged(isKeyguardLocked));
+-                        });
+-                    }
+-                }
+-            };
+-
+-    @GuardedBy("itself")
+-    private final ArrayMap<KeyguardLockedStateListener, Executor>
+-            mKeyguardLockedStateListeners = new ArrayMap<>();
+-
+-    private final IDeviceLockedStateListener mIDeviceLockedStateListener =
+-            new IDeviceLockedStateListener.Stub() {
+-                @Override
+-                public void onDeviceLockedStateChanged(boolean isDeviceLocked) {
+-                    if (!Flags.deviceUnlockListener()) {
+-                        return;
+-                    }
+-                    synchronized (mDeviceLockedStateListeners) {
+-                        mDeviceLockedStateListeners.forEach((listener, executor) -> {
+-                            executor.execute(
+-                                    () -> listener.onDeviceLockedStateChanged(isDeviceLocked));
+-                        });
+-                    }
+-                }
+-            };
+-
+-    @GuardedBy("itself")
+-    private final ArrayMap<DeviceLockedStateListener, Executor>
+-            mDeviceLockedStateListeners = new ArrayMap<>();
++    private final ArrayMap<KeyguardLockedStateListener, Executor> mKeyguardLockedStateListeners = new ArrayMap<>();
++
++    private final ArrayMap<DeviceLockedStateListener, Executor> mDeviceLockedStateListeners = new ArrayMap<>();
+ 
+     /**
+      * Get an intent to prompt the user to confirm credentials (pin, pattern, password or biometrics
+@@ -301,17 +223,9 @@
+      *   android.hardware.biometrics.BiometricPrompt.Builder#setAllowedAuthenticators(int)}
+      */
+     @Deprecated
+-    @RequiresFeature(PackageManager.FEATURE_SECURE_LOCK_SCREEN)
+     public Intent createConfirmDeviceCredentialIntent(CharSequence title,
+             CharSequence description) {
+-        if (!isDeviceSecure()) return null;
+-        Intent intent = new Intent(ACTION_CONFIRM_DEVICE_CREDENTIAL);
+-        intent.putExtra(EXTRA_TITLE, title);
+-        intent.putExtra(EXTRA_DESCRIPTION, description);
+-
+-        // explicitly set the package for security
+-        intent.setPackage(getSettingsPackageForIntent(intent, mContext.getUserId()));
+-        return intent;
++        return null;
+     }
+ 
+     /**
+@@ -326,16 +240,7 @@
+      */
+     public Intent createConfirmDeviceCredentialIntent(
+             CharSequence title, CharSequence description, int userId) {
+-        if (!isDeviceSecure(userId)) return null;
+-        Intent intent = new Intent(ACTION_CONFIRM_DEVICE_CREDENTIAL_WITH_USER);
+-        intent.putExtra(EXTRA_TITLE, title);
+-        intent.putExtra(EXTRA_DESCRIPTION, description);
+-        intent.putExtra(Intent.EXTRA_USER_ID, userId);
+-
+-        // explicitly set the package for security
+-        intent.setPackage(getSettingsPackageForIntent(intent, userId));
+-
+-        return intent;
++        return null;
+     }
+ 
+     /**
+@@ -354,113 +259,7 @@
+     public Intent createConfirmDeviceCredentialIntent(
+             CharSequence title, CharSequence description, int userId,
+             boolean disallowBiometricsIfPolicyExists) {
+-        Intent intent = this.createConfirmDeviceCredentialIntent(title, description, userId);
+-        if (intent != null) {
+-            intent.putExtra(EXTRA_DISALLOW_BIOMETRICS_IF_POLICY_EXISTS,
+-                    disallowBiometricsIfPolicyExists);
+-        }
+-        return intent;
+-    }
+-
+-    /**
+-     * Get an intent to prompt the user to confirm credentials (pin, pattern or password)
+-     * for the previous owner of the device. The caller is expected to launch this activity using
+-     * {@link android.app.Activity#startActivityForResult(Intent, int)} and check for
+-     * {@link android.app.Activity#RESULT_OK} if the user successfully completes the challenge.
+-     *
+-     * @param alternateButtonLabel if not empty, a button is provided with the given label. Upon
+-     *                             clicking this button, the activity returns
+-     *                             {@link #RESULT_ALTERNATE}
+-     *
+-     * @return the intent for launching the activity or null if the previous owner of the device
+-     *         did not set a credential.
+-     * @throws UnsupportedOperationException if the device does not support factory reset
+-     *                                       credentials
+-     * @throws IllegalStateException if the device has already been provisioned
+-     * @hide
+-     */
+-    @RequiresFeature(PackageManager.FEATURE_SECURE_LOCK_SCREEN)
+-    @SystemApi
+-    public Intent createConfirmFactoryResetCredentialIntent(
+-            CharSequence title, CharSequence description, CharSequence alternateButtonLabel) {
+-        if (!LockPatternUtils.frpCredentialEnabled(mContext)) {
+-            Log.w(TAG, "Factory reset credentials not supported.");
+-            throw new UnsupportedOperationException("not supported on this device");
+-        }
+-
+-        // Cannot verify credential if the device is provisioned
+-        if (Settings.Global.getInt(mContext.getContentResolver(),
+-                Settings.Global.DEVICE_PROVISIONED, 0) != 0) {
+-            Log.e(TAG, "Factory reset credential cannot be verified after provisioning.");
+-            throw new IllegalStateException("must not be provisioned yet");
+-        }
+-
+-        // Make sure we have a credential
+-        try {
+-            IPersistentDataBlockService pdb = IPersistentDataBlockService.Stub.asInterface(
+-                    ServiceManager.getService(Context.PERSISTENT_DATA_BLOCK_SERVICE));
+-            if (pdb == null) {
+-                Log.e(TAG, "No persistent data block service");
+-                throw new UnsupportedOperationException("not supported on this device");
+-            }
+-            // The following will throw an UnsupportedOperationException if the device does not
+-            // support factory reset credentials (or something went wrong retrieving it).
+-            if (!pdb.hasFrpCredentialHandle()) {
+-                Log.i(TAG, "The persistent data block does not have a factory reset credential.");
+-                return null;
+-            }
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-
+-        Intent intent = new Intent(ACTION_CONFIRM_FRP_CREDENTIAL);
+-        intent.putExtra(EXTRA_TITLE, title);
+-        intent.putExtra(EXTRA_DESCRIPTION, description);
+-        intent.putExtra(EXTRA_ALTERNATE_BUTTON_LABEL, alternateButtonLabel);
+-
+-        // explicitly set the package for security
+-        intent.setPackage(getSettingsPackageForIntent(intent, mContext.getUserId()));
+-
+-        return intent;
+-    }
+-
+-    /**
+-     * Get an Intent to launch an activity to prompt the user to confirm the
+-     * credentials (pin, pattern or password) of a remote device.
+-     * @param session contains information necessary to start remote device credential validation.
+-     * @param remoteLockscreenValidationServiceComponent
+-     *          the {@link ComponentName} of the implementation of
+-     *          {@link android.service.remotelockscreenvalidation.RemoteLockscreenValidationService}
+-     * @param checkboxLabel if not empty, a checkbox is provided with the given label. When checked,
+-     *                      the validated remote device credential will be set as the device lock of
+-     *                      the current device.
+-     * @param alternateButtonLabel if not empty, a button is provided with the given label. Upon
+-     *                             clicking this button, the activity returns
+-     *                             {@link #RESULT_ALTERNATE}.
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(Manifest.permission.CHECK_REMOTE_LOCKSCREEN)
+-    @NonNull
+-    public Intent createConfirmDeviceCredentialForRemoteValidationIntent(
+-            @NonNull RemoteLockscreenValidationSession session,
+-            @NonNull ComponentName remoteLockscreenValidationServiceComponent,
+-            @Nullable CharSequence title,
+-            @Nullable CharSequence description,
+-            @Nullable CharSequence checkboxLabel,
+-            @Nullable CharSequence alternateButtonLabel) {
+-        Intent intent = new Intent(ACTION_CONFIRM_REMOTE_DEVICE_CREDENTIAL)
+-                .putExtra(EXTRA_REMOTE_LOCKSCREEN_VALIDATION_SESSION, session)
+-                .putExtra(Intent.EXTRA_COMPONENT_NAME, remoteLockscreenValidationServiceComponent)
+-                .putExtra(EXTRA_TITLE, title)
+-                .putExtra(EXTRA_DESCRIPTION, description)
+-                .putExtra(EXTRA_CHECKBOX_LABEL, checkboxLabel)
+-                .putExtra(EXTRA_ALTERNATE_BUTTON_LABEL, alternateButtonLabel);
+-
+-        // explicitly set the package for security
+-        intent.setPackage(getSettingsPackageForIntent(intent, mContext.getUserId()));
+-
+-        return intent;
++        return null;
+     }
+ 
+     /**
+@@ -474,15 +273,10 @@
+      * secure notifications cannot be shown if {@code false}
+      * @hide
+      */
+-    @RequiresFeature(PackageManager.FEATURE_SECURE_LOCK_SCREEN)
+     @RequiresPermission(Manifest.permission.CONTROL_KEYGUARD_SECURE_NOTIFICATIONS)
+     @SystemApi
+     public void setPrivateNotificationsAllowed(boolean allow) {
+-        try {
+-            mNotificationManager.setPrivateNotificationsAllowed(allow);
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
++        mPrivateNotificationsAllowed = allow;
+     }
+ 
+     /**
+@@ -493,25 +287,10 @@
+      * By default, private notifications are allowed.
+      * @hide
+      */
+-    @RequiresFeature(PackageManager.FEATURE_SECURE_LOCK_SCREEN)
+     @RequiresPermission(Manifest.permission.CONTROL_KEYGUARD_SECURE_NOTIFICATIONS)
+     @SystemApi
+     public boolean getPrivateNotificationsAllowed() {
+-        try {
+-            return mNotificationManager.getPrivateNotificationsAllowed();
+-        } catch (RemoteException e) {
+-            throw e.rethrowFromSystemServer();
+-        }
+-    }
+-
+-    private String getSettingsPackageForIntent(Intent intent, int userId) {
+-        List<ResolveInfo> resolveInfos = mContext.getPackageManager()
+-                .queryIntentActivitiesAsUser(intent, PackageManager.MATCH_SYSTEM_ONLY, userId);
+-        for (int i = 0; i < resolveInfos.size(); i++) {
+-            return resolveInfos.get(i).activityInfo.packageName;
+-        }
+-
+-        return "com.android.settings";
++        return mPrivateNotificationsAllowed;
+     }
+ 
+     /**
+@@ -525,7 +304,6 @@
+      */
+     @Deprecated
+     public class KeyguardLock {
+-        private final IBinder mToken = new Binder();
+         private final String mTag;
+ 
+         KeyguardLock(String tag) {
+@@ -546,10 +324,9 @@
+          */
+         @RequiresPermission(Manifest.permission.DISABLE_KEYGUARD)
+         public void disableKeyguard() {
+-            try {
+-                mWM.disableKeyguard(mToken, mTag, mContext.getUserId());
+-            } catch (RemoteException ex) {
+-            }
++            boolean wasLocked = isKeyguardLocked();
++            mDisabledLocks.add(this);
++            reportKeyguardLocked(wasLocked);
+         }
+ 
+         /**
+@@ -562,10 +339,9 @@
+          */
+         @RequiresPermission(Manifest.permission.DISABLE_KEYGUARD)
+         public void reenableKeyguard() {
+-            try {
+-                mWM.reenableKeyguard(mToken, mContext.getUserId());
+-            } catch (RemoteException ex) {
+-            }
++            boolean wasLocked = isKeyguardLocked();
++            mDisabledLocks.remove(this);
++            reportKeyguardLocked(wasLocked);
+         }
+     }
+ 
+@@ -644,15 +420,12 @@
+         void onWeakEscrowTokenRemoved(long handle, @NonNull UserHandle user);
+     }
+ 
+-    KeyguardManager(Context context) throws ServiceNotFoundException {
++    private boolean mLocked;
++    private boolean mPrivateNotificationsAllowed = true;
++    private final android.util.ArraySet<KeyguardLock> mDisabledLocks = new android.util.ArraySet<>();
++
++    public KeyguardManager(Context context) {
+         mContext = context;
+-        mLockPatternUtils = new LockPatternUtils(context);
+-        mWM = WindowManagerGlobal.getWindowManagerService();
+-        mAm = ActivityManager.getService();
+-        mTrustManager = ITrustManager.Stub.asInterface(
+-                ServiceManager.getServiceOrThrow(Context.TRUST_SERVICE));
+-        mNotificationManager = INotificationManager.Stub.asInterface(
+-                ServiceManager.getServiceOrThrow(Context.NOTIFICATION_SERVICE));
+     }
+ 
+     /**
+@@ -707,11 +480,7 @@
+      * @see #isDeviceLocked()
+      */
+     public boolean isKeyguardLocked() {
+-        try {
+-            return mWM.isKeyguardLocked();
+-        } catch (RemoteException ex) {
+-            return false;
+-        }
++        return mLocked && mDisabledLocks.isEmpty();
+     }
+ 
+     /**
+@@ -735,11 +504,7 @@
+      * @see #isDeviceSecure()
+      */
+     public boolean isKeyguardSecure() {
+-        try {
+-            return mWM.isKeyguardSecure(mContext.getUserId());
+-        } catch (RemoteException ex) {
+-            return false;
+-        }
++        return isDeviceSecure();
+     }
+ 
+     /**
+@@ -784,7 +549,7 @@
+      * @see #isKeyguardLocked()
+      */
+     public boolean isDeviceLocked() {
+-        return isDeviceLocked(mContext.getUserId(), mContext.getDeviceId());
++        return mLocked;
+     }
+ 
+     /**
+@@ -794,7 +559,7 @@
+      */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.P, trackingBug = 115609023)
+     public boolean isDeviceLocked(int userId) {
+-        return isDeviceLocked(userId, mContext.getDeviceId());
++        return isDeviceLocked();
+     }
+ 
+     /**
+@@ -803,11 +568,7 @@
+      * @hide
+      */
+     public boolean isDeviceLocked(@UserIdInt int userId, int deviceId) {
+-        try {
+-            return mTrustManager.isDeviceLocked(userId, deviceId);
+-        } catch (RemoteException e) {
+-            return false;
+-        }
++        return isDeviceLocked();
+     }
+ 
+     /**
+@@ -827,7 +588,7 @@
+      * @see #isKeyguardSecure()
+      */
+     public boolean isDeviceSecure() {
+-        return isDeviceSecure(mContext.getUserId(), mContext.getDeviceId());
++        return false;
+     }
+ 
+     /**
+@@ -837,7 +598,7 @@
+      */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     public boolean isDeviceSecure(int userId) {
+-        return isDeviceSecure(userId, mContext.getDeviceId());
++        return false;
+     }
+ 
+     /**
+@@ -846,11 +607,7 @@
+      * @hide
+      */
+     public boolean isDeviceSecure(@UserIdInt int userId, int deviceId) {
+-        try {
+-            return mTrustManager.isDeviceSecure(userId, deviceId);
+-        } catch (RemoteException e) {
+-            return false;
+-        }
++        return false;
+     }
+ 
+     /**
+@@ -911,29 +668,10 @@
+     @SystemApi
+     public void requestDismissKeyguard(@NonNull Activity activity, @Nullable CharSequence message,
+             @Nullable KeyguardDismissCallback callback) {
+-        ActivityClient.getInstance().dismissKeyguard(
+-                activity.getActivityToken(), new IKeyguardDismissCallback.Stub() {
+-            @Override
+-            public void onDismissError() throws RemoteException {
+-                if (callback != null && !activity.isDestroyed()) {
+-                    activity.mHandler.post(callback::onDismissError);
+-                }
+-            }
+-
+-            @Override
+-            public void onDismissSucceeded() throws RemoteException {
+-                if (callback != null && !activity.isDestroyed()) {
+-                    activity.mHandler.post(callback::onDismissSucceeded);
+-                }
+-            }
+-
+-            @Override
+-            public void onDismissCancelled() throws RemoteException {
+-                if (callback != null && !activity.isDestroyed()) {
+-                    activity.mHandler.post(callback::onDismissCancelled);
+-                }
+-            }
+-        }, message);
++        setEmbeddedLocked(false);
++        if (callback != null) {
++            new android.os.Handler(mContext.getMainLooper()).post(callback::onDismissSucceeded);
++        }
+     }
+ 
+     /**
+@@ -959,393 +697,9 @@
+     @Deprecated
+     @RequiresPermission(Manifest.permission.DISABLE_KEYGUARD)
+     public void exitKeyguardSecurely(final OnKeyguardExitResult callback) {
+-        try {
+-            mWM.exitKeyguardSecurely(new IOnKeyguardExitResult.Stub() {
+-                public void onKeyguardExitResult(boolean success) throws RemoteException {
+-                    if (callback != null) {
+-                        callback.onKeyguardExitResult(success);
+-                    }
+-                }
+-            });
+-        } catch (RemoteException e) {
+-
+-        }
+-    }
+-
+-    /** @hide */
+-    @VisibleForTesting
+-    public boolean checkInitialLockMethodUsage() {
+-        if (!hasPermission(Manifest.permission.SET_INITIAL_LOCK)) {
+-            throw new SecurityException("Requires SET_INITIAL_LOCK permission.");
+-        }
+-        return true;
+-    }
+-
+-    private boolean hasPermission(String permission) {
+-        return PackageManager.PERMISSION_GRANTED == mContext.checkCallingOrSelfPermission(
+-                permission);
+-    }
+-
+-    /**
+-    * Determine if a given password is valid based off its lock type and expected complexity level.
+-    *
+-    * @param lockType - type of lock as specified in {@link LockTypes}
+-    * @param password - password to validate; this has the same encoding
+-    *        as the output of String#getBytes
+-    * @param complexity - complexity level imposed by the requester
+-    *        as defined in {@code DevicePolicyManager.PasswordComplexity}
+-    * @return {@code true} if the password is valid, false otherwise
+-    * @hide
+-    */
+-    @RequiresPermission(Manifest.permission.SET_INITIAL_LOCK)
+-    @SystemApi
+-    public boolean isValidLockPasswordComplexity(@LockTypes int lockType, @NonNull byte[] password,
+-            @PasswordComplexity int complexity) {
+-        if (!checkInitialLockMethodUsage()) {
+-            return false;
+-        }
+-        Objects.requireNonNull(password, "Password cannot be null.");
+-        complexity = PasswordMetrics.sanitizeComplexityLevel(complexity);
+-        PasswordMetrics adminMetrics =
+-                mLockPatternUtils.getRequestedPasswordMetrics(mContext.getUserId());
+-        try (LockscreenCredential credential = createLockscreenCredential(lockType, password)) {
+-            return PasswordMetrics.validateCredential(adminMetrics, complexity,
+-                    credential).size() == 0;
+-        }
+-    }
+-
+-    /**
+-    * Determine the minimum allowable length for a lock type for a given complexity level.
+-    *
+-    * @param isPin - whether this is a PIN-type password (only digits)
+-    * @param complexity - complexity level imposed by the requester
+-    *        as defined in {@code DevicePolicyManager.PasswordComplexity}
+-    * @return minimum allowable password length
+-    * @hide
+-    */
+-    @RequiresPermission(Manifest.permission.SET_INITIAL_LOCK)
+-    @SystemApi
+-    public int getMinLockLength(boolean isPin, @PasswordComplexity int complexity) {
+-        if (!checkInitialLockMethodUsage()) {
+-            return -1;
+-        }
+-        complexity = PasswordMetrics.sanitizeComplexityLevel(complexity);
+-        PasswordMetrics adminMetrics =
+-                mLockPatternUtils.getRequestedPasswordMetrics(mContext.getUserId());
+-        PasswordMetrics minMetrics =
+-                PasswordMetrics.applyComplexity(adminMetrics, isPin, complexity);
+-        return minMetrics.length;
+-    }
+-
+-    /**
+-    * Set the lockscreen password after validating against its expected complexity level.
+-    *
+-    * Below {@link android.os.Build.VERSION_CODES#S_V2}, this API will only work
+-    * when {@link PackageManager#FEATURE_AUTOMOTIVE} is present.
+-    * @param lockType - type of lock as specified in {@link LockTypes}
+-    * @param password - password to validate; this has the same encoding
+-    *        as the output of String#getBytes
+-    * @param complexity - complexity level imposed by the requester
+-    *        as defined in {@code DevicePolicyManager.PasswordComplexity}
+-    * @return {@code true} if the lock is successfully set, false otherwise
+-    * @hide
+-    */
+-    @RequiresPermission(Manifest.permission.SET_INITIAL_LOCK)
+-    @SystemApi
+-    public boolean setLock(@LockTypes int lockType, @NonNull byte[] password,
+-            @PasswordComplexity int complexity) {
+-        if (!checkInitialLockMethodUsage()) {
+-            return false;
+-        }
+-
+-        int userId = mContext.getUserId();
+-        if (isDeviceSecure(userId)) {
+-            Log.e(TAG, "Password already set, rejecting call to setLock");
+-            return false;
+-        }
+-        if (!isValidLockPasswordComplexity(lockType, password, complexity)) {
+-            Log.e(TAG, "Password is not valid, rejecting call to setLock");
+-            return false;
+-        }
+-        boolean success;
+-        try (LockscreenCredential credential = createLockscreenCredential(lockType, password)) {
+-            success = mLockPatternUtils.setLockCredential(
+-                    credential,
+-                    /* savedPassword= */ LockscreenCredential.createNone(),
+-                    userId);
+-        } catch (Exception e) {
+-            Log.e(TAG, "Save lock exception", e);
+-            success = false;
+-        } finally {
+-            ArrayUtils.zeroize(password);
+-        }
+-        return success;
+-    }
+-
+-    /**
+-     * Create a weak escrow token for the current user, which can later be used to unlock FBE
+-     * or change user password.
+-     *
+-     * After adding, if the user currently  has a secure lockscreen, they will need to perform a
+-     * confirm credential operation in order to activate the token for future use. If the user
+-     * has no secure lockscreen, then the token is activated immediately.
+-     *
+-     * If the user changes or removes the lockscreen password, any activated weak escrow token will
+-     * be removed.
+-     *
+-     * @return a unique 64-bit token handle which is needed to refer to this token later.
+-     * @hide
+-     */
+-    @RequiresFeature(PackageManager.FEATURE_AUTOMOTIVE)
+-    @RequiresPermission(Manifest.permission.MANAGE_WEAK_ESCROW_TOKEN)
+-    @SystemApi
+-    public long addWeakEscrowToken(@NonNull byte[] token, @NonNull UserHandle user,
+-            @NonNull @CallbackExecutor Executor executor,
+-            @NonNull WeakEscrowTokenActivatedListener listener) {
+-        Objects.requireNonNull(token, "Token cannot be null.");
+-        Objects.requireNonNull(user, "User cannot be null.");
+-        Objects.requireNonNull(executor, "Executor cannot be null.");
+-        Objects.requireNonNull(listener, "Listener cannot be null.");
+-        int userId = user.getIdentifier();
+-        IWeakEscrowTokenActivatedListener internalListener =
+-                new IWeakEscrowTokenActivatedListener.Stub() {
+-            @Override
+-            public void onWeakEscrowTokenActivated(long handle, int userId) {
+-                UserHandle user = UserHandle.of(userId);
+-                final long restoreToken = Binder.clearCallingIdentity();
+-                try {
+-                    executor.execute(() -> listener.onWeakEscrowTokenActivated(handle, user));
+-                } finally {
+-                    Binder.restoreCallingIdentity(restoreToken);
+-                }
+-                Log.i(TAG, "Weak escrow token activated.");
+-            }
+-        };
+-        return mLockPatternUtils.addWeakEscrowToken(token, userId, internalListener);
+-    }
+-
+-    /**
+-     * Remove a weak escrow token.
+-     *
+-     * @return {@code true} if the given handle refers to a valid weak token previously returned
+-     * from {@link #addWeakEscrowToken}, whether it's active or not. return false otherwise.
+-     * @hide
+-     */
+-    @RequiresFeature(PackageManager.FEATURE_AUTOMOTIVE)
+-    @RequiresPermission(Manifest.permission.MANAGE_WEAK_ESCROW_TOKEN)
+-    @SystemApi
+-    public boolean removeWeakEscrowToken(long handle, @NonNull UserHandle user) {
+-        Objects.requireNonNull(user, "User cannot be null.");
+-        return mLockPatternUtils.removeWeakEscrowToken(handle, user.getIdentifier());
+-    }
+-
+-    /**
+-     * Check if the given weak escrow token is active or not.
+-     * @hide
+-     */
+-    @RequiresFeature(PackageManager.FEATURE_AUTOMOTIVE)
+-    @RequiresPermission(Manifest.permission.MANAGE_WEAK_ESCROW_TOKEN)
+-    @SystemApi
+-    public boolean isWeakEscrowTokenActive(long handle, @NonNull UserHandle user) {
+-        Objects.requireNonNull(user, "User cannot be null.");
+-        return mLockPatternUtils.isWeakEscrowTokenActive(handle, user.getIdentifier());
+-    }
+-
+-    /**
+-     * Check if the given weak escrow token is validate.
+-     * @hide
+-     */
+-    @RequiresFeature(PackageManager.FEATURE_AUTOMOTIVE)
+-    @RequiresPermission(Manifest.permission.MANAGE_WEAK_ESCROW_TOKEN)
+-    @SystemApi
+-    public boolean isWeakEscrowTokenValid(long handle, @NonNull byte[] token,
+-            @NonNull UserHandle user) {
+-        Objects.requireNonNull(token, "Token cannot be null.");
+-        Objects.requireNonNull(user, "User cannot be null.");
+-        return mLockPatternUtils.isWeakEscrowTokenValid(handle, token, user.getIdentifier());
+-    }
+-
+-    /**
+-     * Register the given WeakEscrowTokenRemovedListener.
+-     *
+-     * @return {@code true} if the listener is registered successfully, return false otherwise.
+-     * @hide
+-     */
+-    @RequiresFeature(PackageManager.FEATURE_AUTOMOTIVE)
+-    @RequiresPermission(Manifest.permission.MANAGE_WEAK_ESCROW_TOKEN)
+-    @SystemApi
+-    public boolean registerWeakEscrowTokenRemovedListener(
+-            @NonNull @CallbackExecutor Executor executor,
+-            @NonNull WeakEscrowTokenRemovedListener listener) {
+-        Objects.requireNonNull(listener, "Listener cannot be null.");
+-        Objects.requireNonNull(executor, "Executor cannot be null.");
+-        Preconditions.checkArgument(!mListeners.containsKey(listener),
+-                "Listener already registered: %s", listener);
+-        IWeakEscrowTokenRemovedListener internalListener =
+-                new IWeakEscrowTokenRemovedListener.Stub() {
+-            @Override
+-            public void onWeakEscrowTokenRemoved(long handle, int userId) {
+-                UserHandle user = UserHandle.of(userId);
+-                final long token = Binder.clearCallingIdentity();
+-                try {
+-                    executor.execute(() -> listener.onWeakEscrowTokenRemoved(handle, user));
+-                } finally {
+-                    Binder.restoreCallingIdentity(token);
+-                }
+-            }
+-        };
+-        if (mLockPatternUtils.registerWeakEscrowTokenRemovedListener(internalListener)) {
+-            mListeners.put(listener, internalListener);
+-            return true;
+-        } else {
+-            Log.e(TAG, "Listener failed to register");
+-            return false;
+-        }
+-    }
+-
+-    /**
+-     * Unregister the given WeakEscrowTokenRemovedListener.
+-     *
+-     * @return {@code true} if the listener is unregistered successfully, return false otherwise.
+-     * @hide
+-     */
+-    @RequiresFeature(PackageManager.FEATURE_AUTOMOTIVE)
+-    @RequiresPermission(Manifest.permission.MANAGE_WEAK_ESCROW_TOKEN)
+-    @SystemApi
+-    public boolean unregisterWeakEscrowTokenRemovedListener(
+-            @NonNull WeakEscrowTokenRemovedListener listener) {
+-        Objects.requireNonNull(listener, "Listener cannot be null.");
+-        IWeakEscrowTokenRemovedListener internalListener = mListeners.get(listener);
+-        Preconditions.checkArgument(internalListener != null, "Listener was not registered");
+-        if (mLockPatternUtils.unregisterWeakEscrowTokenRemovedListener(internalListener)) {
+-            mListeners.remove(listener);
+-            return true;
+-        } else {
+-            Log.e(TAG, "Listener failed to unregister.");
+-            return false;
+-        }
+-    }
+-
+-    /**
+-     * Set the lockscreen password to {@code newPassword} after validating the current password
+-     * against {@code currentPassword}.
+-     * <p>If no password is currently set, {@code currentPassword} should be set to {@code null}.
+-     * <p>To clear the current password, {@code newPassword} should be set to {@code null}.
+-     *
+-     * @return {@code true} if password successfully set.
+-     *
+-     * @throws IllegalArgumentException if {@code newLockType} or {@code currentLockType}
+-     * is invalid.
+-     *
+-     * @hide
+-     */
+-    @TestApi
+-    @RequiresPermission(anyOf = {
+-            Manifest.permission.SET_AND_VERIFY_LOCKSCREEN_CREDENTIALS,
+-            Manifest.permission.ACCESS_KEYGUARD_SECURE_STORAGE
+-    })
+-    public boolean setLock(@LockTypes int newLockType, @Nullable byte[] newPassword,
+-            @LockTypes int currentLockType, @Nullable byte[] currentPassword) {
+-        final int userId = mContext.getUserId();
+-        try (LockscreenCredential currentCredential = createLockscreenCredential(
+-                currentLockType, currentPassword);
+-                LockscreenCredential newCredential = createLockscreenCredential(
+-                        newLockType, newPassword)) {
+-            PasswordMetrics adminMetrics =
+-                    mLockPatternUtils.getRequestedPasswordMetrics(mContext.getUserId());
+-            List<PasswordValidationError> errors = PasswordMetrics.validateCredential(adminMetrics,
+-                    DevicePolicyManager.PASSWORD_COMPLEXITY_NONE, newCredential);
+-            if (!errors.isEmpty()) {
+-                Log.e(TAG, "New credential is not valid: " + errors.get(0));
+-                return false;
+-            }
+-            return mLockPatternUtils.setLockCredential(newCredential, currentCredential, userId);
+-        }
+-    }
+-
+-    /**
+-     * Verifies the current lock credentials against {@code password}.
+-     * <p>To check if no password is set, {@code password} should be set to {@code null}.
+-     *
+-     * @return {@code true} if credentials match
+-     *
+-     * @throws IllegalArgumentException if {@code lockType} is invalid.
+-     *
+-     * @hide
+-     */
+-    @TestApi
+-    @RequiresPermission(anyOf = {
+-            Manifest.permission.SET_AND_VERIFY_LOCKSCREEN_CREDENTIALS,
+-            Manifest.permission.ACCESS_KEYGUARD_SECURE_STORAGE
+-    })
+-    public boolean checkLock(@LockTypes int lockType, @Nullable byte[] password) {
+-        try (LockscreenCredential credential = createLockscreenCredential(lockType, password)) {
+-            final VerifyCredentialResponse response = mLockPatternUtils.verifyCredential(
+-                    credential, mContext.getUserId(), /* flags= */ 0);
+-            if (response == null) {
+-                return false;
+-            }
+-            return response.isMatched();
+-        }
+-    }
+-
+-    /** Starts a session to verify lockscreen credentials provided by a remote device.
+-     *
+-     * The session and corresponding public key will be removed when
+-     * {@code validateRemoteLockScreen} provides a correct guess or after 10 minutes of inactivity.
+-     *
+-     * @return information necessary to perform remote lock screen credentials check, including
+-
+-     * short lived public key used to send encrypted guess and lock screen type.
+-     *
+-     * @throws IllegalStateException if lock screen is not set
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(Manifest.permission.CHECK_REMOTE_LOCKSCREEN)
+-    @NonNull
+-    public RemoteLockscreenValidationSession startRemoteLockscreenValidation() {
+-        return mLockPatternUtils.startRemoteLockscreenValidation();
+-    }
+-
+-    /**
+-     * Verifies credentials guess from a remote device.
+-     *
+-     * <p>Secret must be encrypted using {@code SecureBox} library
+-     * with public key from {@code RemoteLockscreenValidationSession}
+-     * and header set to {@code "encrypted_remote_credentials"} in UTF-8 encoding.
+-     *
+-     * @throws IllegalStateException if there was a decryption error.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    @RequiresPermission(Manifest.permission.CHECK_REMOTE_LOCKSCREEN)
+-    @NonNull
+-    public RemoteLockscreenValidationResult validateRemoteLockscreen(
+-            @NonNull byte[] encryptedCredential) {
+-        return mLockPatternUtils.validateRemoteLockscreen(encryptedCredential);
+-    }
+-
+-    private LockscreenCredential createLockscreenCredential(
+-            @LockTypes int lockType, @Nullable byte[] password) {
+-        if (password == null) {
+-            return LockscreenCredential.createNone();
+-        }
+-        switch (lockType) {
+-            case PASSWORD:
+-                CharSequence passwordStr = new String(password, Charset.forName("UTF-8"));
+-                return LockscreenCredential.createPassword(passwordStr);
+-            case PIN:
+-                CharSequence pinStr = new String(password);
+-                return LockscreenCredential.createPin(pinStr);
+-            case PATTERN:
+-                List<LockPatternView.Cell> pattern =
+-                        LockPatternUtils.byteArrayToPattern(password);
+-                return LockscreenCredential.createPattern(pattern);
+-            default:
+-                throw new IllegalArgumentException("Unknown lock type " + lockType);
++        setEmbeddedLocked(false);
++        if (callback != null) {
++            new android.os.Handler(mContext.getMainLooper()).post(() -> callback.onKeyguardExitResult(true));
+         }
+     }
+ 
+@@ -1371,17 +725,7 @@
+     @RequiresPermission(Manifest.permission.SUBSCRIBE_TO_KEYGUARD_LOCKED_STATE)
+     public void addKeyguardLockedStateListener(@NonNull @CallbackExecutor Executor executor,
+             @NonNull KeyguardLockedStateListener listener) {
+-        synchronized (mKeyguardLockedStateListeners) {
+-            mKeyguardLockedStateListeners.put(listener, executor);
+-            if (mKeyguardLockedStateListeners.size() > 1) {
+-                return;
+-            }
+-            try {
+-                mWM.addKeyguardLockedStateListener(mIKeyguardLockedStateListener);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        mKeyguardLockedStateListeners.put(Objects.requireNonNull(listener), Objects.requireNonNull(executor));
+     }
+ 
+     /**
+@@ -1394,17 +738,7 @@
+      */
+     @RequiresPermission(Manifest.permission.SUBSCRIBE_TO_KEYGUARD_LOCKED_STATE)
+     public void removeKeyguardLockedStateListener(@NonNull KeyguardLockedStateListener listener) {
+-        synchronized (mKeyguardLockedStateListeners) {
+-            mKeyguardLockedStateListeners.remove(listener);
+-            if (!mKeyguardLockedStateListeners.isEmpty()) {
+-                return;
+-            }
+-            try {
+-                mWM.removeKeyguardLockedStateListener(mIKeyguardLockedStateListener);
+-            } catch (RemoteException e) {
+-                throw e.rethrowFromSystemServer();
+-            }
+-        }
++        mKeyguardLockedStateListeners.remove(listener);
+     }
+ 
+ 
+@@ -1412,7 +746,6 @@
+      * Listener for device locked state changes.
+      */
+     @FunctionalInterface
+-    @FlaggedApi(Flags.FLAG_DEVICE_UNLOCK_LISTENER)
+     public interface DeviceLockedStateListener {
+         /**
+          * Callback function that executes when the device locked state changes.
+@@ -1431,25 +764,9 @@
+      * @see #removeDeviceLockedStateListener(DeviceLockedStateListener)
+      */
+     @RequiresPermission(Manifest.permission.SUBSCRIBE_TO_KEYGUARD_LOCKED_STATE)
+-    @FlaggedApi(Flags.FLAG_DEVICE_UNLOCK_LISTENER)
+     public void addDeviceLockedStateListener(@NonNull @CallbackExecutor Executor executor,
+             @NonNull DeviceLockedStateListener listener) {
+-        if (!Flags.deviceUnlockListener()) {
+-            return;
+-        }
+-
+-        synchronized (mDeviceLockedStateListeners) {
+-            mDeviceLockedStateListeners.put(listener, executor);
+-            if (mDeviceLockedStateListeners.size() > 1) {
+-                return;
+-            }
+-            try {
+-                mTrustManager.registerDeviceLockedStateListener(mIDeviceLockedStateListener,
+-                        mContext.getDeviceId());
+-            } catch (RemoteException re) {
+-                Log.d(TAG, "TrustManager service died", re);
+-            }
+-        }
++        mDeviceLockedStateListeners.put(Objects.requireNonNull(listener), Objects.requireNonNull(executor));
+     }
+ 
+     /**
+@@ -1461,22 +778,30 @@
+      * @see #addDeviceLockedStateListener(Executor, DeviceLockedStateListener)
+      */
+     @RequiresPermission(Manifest.permission.SUBSCRIBE_TO_KEYGUARD_LOCKED_STATE)
+-    @FlaggedApi(Flags.FLAG_DEVICE_UNLOCK_LISTENER)
+     public void removeDeviceLockedStateListener(@NonNull DeviceLockedStateListener listener) {
+-        if (!Flags.deviceUnlockListener()) {
+-            return;
++        mDeviceLockedStateListeners.remove(listener);
++    }
++
++    /** @hide */
++    public void setEmbeddedLocked(boolean locked) {
++        if (mLocked == locked) return;
++        boolean wasLocked = isKeyguardLocked();
++        mLocked = locked;
++        reportKeyguardLocked(wasLocked);
++        ArrayMap<DeviceLockedStateListener, Executor> listeners = new ArrayMap<>(mDeviceLockedStateListeners);
++        for (int i = 0; i < listeners.size(); i++) {
++            DeviceLockedStateListener listener = listeners.keyAt(i);
++            listeners.valueAt(i).execute(() -> listener.onDeviceLockedStateChanged(locked));
+         }
+-
+-        synchronized (mDeviceLockedStateListeners) {
+-            mDeviceLockedStateListeners.remove(listener);
+-            if (!mDeviceLockedStateListeners.isEmpty()) {
+-                return;
+-            }
+-            try {
+-                mTrustManager.unregisterDeviceLockedStateListener(mIDeviceLockedStateListener);
+-            } catch (RemoteException re) {
+-                Log.d(TAG, "TrustManager service died", re);
+-            }
++    }
++
++    private void reportKeyguardLocked(boolean wasLocked) {
++        boolean locked = isKeyguardLocked();
++        if (wasLocked == locked) return;
++        ArrayMap<KeyguardLockedStateListener, Executor> listeners = new ArrayMap<>(mKeyguardLockedStateListeners);
++        for (int i = 0; i < listeners.size(); i++) {
++            KeyguardLockedStateListener listener = listeners.keyAt(i);
++            listeners.valueAt(i).execute(() -> listener.onKeyguardLockedStateChanged(locked));
+         }
+     }
+ }
