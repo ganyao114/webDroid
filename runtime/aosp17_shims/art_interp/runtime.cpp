@@ -372,6 +372,13 @@ std::string Vm::StringUtf8(const Object* string) const {
 std::string Vm::ExceptionSummary() const { return runtime_->ExceptionSummary(); }
 std::vector<std::string> Vm::ExceptionStackTrace() const { return runtime_->ExceptionStackTrace(); }
 void Vm::ClearException() { runtime_->exception = nullptr; }
+
+void Vm::RunShutdownHooks() {
+  auto& cls = runtime_->linker.Resolve("Ljava/lang/Runtime;");
+  if (cls.init_state != InitState::Initialized) return;
+  auto* runtime = runtime_->linker.FindField(cls, "currentRuntime", cls.descriptor, true).value.ref();
+  runtime_->Invoke(runtime_->linker.FindMethod(cls, "runShutdownHooks", "()V", false), runtime, {});
+}
 GcStats Vm::Collect() { return runtime_->heap.Collect(*runtime_); }
 void Vm::CollectIfNeeded() {
   if (!runtime_->gc_paused && runtime_->heap.ShouldCollect(runtime_->options.gc_interval))

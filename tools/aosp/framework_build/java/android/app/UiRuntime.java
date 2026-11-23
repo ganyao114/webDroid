@@ -13,6 +13,7 @@ import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.LauncherApps;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.content.res.AssetManager;
@@ -137,7 +138,7 @@ public final class UiRuntime {
             this.resources = resources; this.info = info;
             services = manifest.services;
             manifestReceivers = manifest.receivers;
-            packages = PackageManager.forHost(this, services);
+            packages = PackageManager.forHost(this, services, manifest.packageInfo);
             resolver = new ContentResolver(this) {};
             displays = new DisplayManager(new Display(resources));
             windows = new WindowManager() {
@@ -522,6 +523,7 @@ public final class UiRuntime {
     }
     private static final class Manifest {
         final ApplicationInfo info = new ApplicationInfo();
+        final PackageInfo packageInfo = new PackageInfo();
         final ArrayMap<String, ServiceInfo> services = new ArrayMap<>();
         final ArrayList<String> receivers = new ArrayList<>();
         String application;
@@ -593,6 +595,13 @@ public final class UiRuntime {
             if (!"manifest".equals(xml.getName())) throw new XmlPullParserException("APK has no manifest");
             result.info.packageName = xml.getAttributeValue(null, "package");
             if (result.info.packageName == null) throw new XmlPullParserException("Manifest has no package name");
+            int versionCode = xml.getAttributeIntValue(XmlValues.ANDROID, "versionCode", 0);
+            int versionCodeMajor = xml.getAttributeIntValue(XmlValues.ANDROID, "versionCodeMajor", 0);
+            result.packageInfo.setLongVersionCode(PackageInfo.composeLongVersionCode(versionCodeMajor, versionCode));
+            int versionName = xml.getAttributeResourceValue(XmlValues.ANDROID, "versionName", 0);
+            result.packageInfo.versionName = versionName == 0
+                    ? xml.getAttributeValue(XmlValues.ANDROID, "versionName") : res.getString(versionName);
+            result.info.setVersionCode(result.packageInfo.getLongVersionCode());
             result.info.sourceDir = result.info.publicSourceDir = path;
             String desired = requested == null || requested.length() == 0 ? null : fullName(result.info.packageName, requested);
             String fallback = null;
@@ -614,6 +623,10 @@ public final class UiRuntime {
                 } else if (xml.getDepth() == 3 && xml.getAttributeBooleanValue(XmlValues.ANDROID, "enabled", true)) {
                     String tag = xml.getName();
                     String name = xml.getAttributeValue(XmlValues.ANDROID, "name");
+                    if (name != null && "meta-data".equals(tag)) {
+                        result.info.metaData = readMetadata(res, xml, result.info.metaData);
+                        continue;
+                    }
                     if (name != null && "service".equals(tag)) {
                         ServiceInfo service = readService(res, xml, result.info, name);
                         result.services.put(service.name, service);
@@ -654,15 +667,20 @@ public final class UiRuntime {
             if (event != XmlPullParser.START_TAG || xml.getDepth() != depth + 1 || !"meta-data".equals(xml.getName())) {
                 continue;
             }
-            if (service.metaData == null) service.metaData = new Bundle();
-            int resource = xml.getAttributeResourceValue(XmlValues.ANDROID, "resource", 0);
-            if (resource != 0) {
-                service.metaData.putInt(xml.getAttributeValue(XmlValues.ANDROID, "name"), resource);
-            } else {
-                res.parseBundleExtra("meta-data", xml, service.metaData);
-            }
+            service.metaData = readMetadata(res, xml, service.metaData);
         }
         return service;
+    }
+    private static Bundle readMetadata(Resources res, XmlResourceParser xml, Bundle metadata)
+            throws XmlPullParserException {
+        if (metadata == null) metadata = new Bundle();
+        int resource = xml.getAttributeResourceValue(XmlValues.ANDROID, "resource", 0);
+        if (resource != 0) {
+            metadata.putInt(xml.getAttributeValue(XmlValues.ANDROID, "name"), resource);
+        } else {
+            res.parseBundleExtra("meta-data", xml, metadata);
+        }
+        return metadata;
     }
     private static boolean isLauncherActivity(XmlResourceParser xml) throws IOException, XmlPullParserException {
         int depth = xml.getDepth(), filterDepth = 0;

@@ -494,6 +494,10 @@ void wa_system_app_destroy() {
             session->ui.DestroyActivity(session->vm);
             return WA_OK;
         });
+        Api("Run foreground process shutdown hooks", [] {
+            session->vm.RunShutdownHooks();
+            return WA_OK;
+        });
     }
     session.reset();
     last_error.clear();
@@ -630,7 +634,12 @@ int32_t wa_system_app_tick(int64_t nanos) {
         if (nanos >= 0) s.last_time = std::max(s.last_time, static_cast<uint64_t>(nanos));
         wa_webview_event_t event{};
         while (wa_webview_poll(s.scene.get(), &event) == 1) {
-            // The iframe may load independently of the bridge's optional message handshake.
+            if (event.status != WA_WEBVIEW_PAGE_LOADED || event.text_len > sizeof(event.text)) continue;
+            const auto view = s.webviews.find(event.webview_id);
+            const std::string_view url(event.text, event.text_len);
+            if (view == s.webviews.end() || view->second.url != url || view->second.submitted_url != url) continue;
+            s.vm.CallStatic("Landroid/webkit/WebView;", "dispatchEmbeddedPageLoaded", "(ILjava/lang/String;)V",
+                std::array{Value::Int(event.webview_id), Value::Ref(s.vm.NewString(url))});
         }
         const int32_t status = s.Draw(s.last_time);
         if (status == WA_OK) {

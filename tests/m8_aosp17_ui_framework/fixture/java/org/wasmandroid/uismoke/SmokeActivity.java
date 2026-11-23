@@ -11,6 +11,8 @@ import java.io.PrintStream;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 
 import android.animation.ValueAnimator;
 import android.app.Activity;
@@ -54,7 +56,7 @@ import android.widget.TextView;
 import android.window.BackEvent;
 import android.window.BackMotionEvent;
 import com.android.launcher3.fixture.TileView;
-import java.io.IOException;
+import java.net.URL;
 import java.net.URISyntaxException;
 import java.util.HashSet;
 import java.util.List;
@@ -62,6 +64,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -71,12 +75,15 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 
 public final class SmokeActivity extends Activity {
     private static SmokeActivity active;
     private static int lifecycle;
+    private static boolean shutdownHookRan;
     private static final int REFLECTED_VALUE = 17;
     private TextView headline;
     private TileView tile;
@@ -401,6 +408,10 @@ public final class SmokeActivity extends Activity {
             if (input.read() != 42 || input.read() != -1 || atomic.getLastModifiedTime() == 0) return 0;
         }
         atomic.delete();
+        File temporary = File.createTempFile("sample", null, directory);
+        if (!temporary.isFile() || temporary.createNewFile() || !temporary.delete()) return 0;
+        File replacement = File.createTempFile("sample", null, directory);
+        if (temporary.getPath().equals(replacement.getPath()) || !replacement.delete()) return 0;
         try (FileOutputStream ignored = new FileOutputStream("/data/mounted.bin")) {
             return 0;
         } catch (FileNotFoundException expected) {
@@ -463,6 +474,9 @@ public final class SmokeActivity extends Activity {
         if (!placeholders.find() || !placeholders.group(1).equals("second") || placeholders.find()) return 0;
         String letters = Pattern.compile("(?<word>[a-z]+)").matcher("12abc34").replaceAll("[${word}]");
         String[] words = Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS).split("two\u00a0words");
+        Pattern absolute = Pattern.compile("\\A[a-z-]+\\z");
+        if (!absolute.matcher("ab-c").find() || absolute.matcher("ab-c\n").find()) return 0;
+        if (!Pattern.compile("[^\\p{Alnum}]").matcher("a1_b❤").replaceAll("").equals("a1b")) return 0;
         return letters.equals("12[abc]34") && words.length == 2 && words[1].equals("words") ? 1 : 0;
     }
     public static int verifyFieldReflection() throws ReflectiveOperationException {
@@ -478,6 +492,61 @@ public final class SmokeActivity extends Activity {
             return 1;
         }
     }
+    public static int verifyEmbeddedPackage() throws PackageManager.NameNotFoundException {
+        String name = active.getPackageName();
+        PackageManager manager = active.getPackageManager();
+        var info = manager.getPackageInfo(name, 0);
+        return name.equals(info.packageName) && "test-release".equals(info.versionName)
+                && info.getLongVersionCode() == 31 && manager.getInstallerPackageName(name) == null ? 1 : 0;
+    }
+    public static int verifyDigest() throws NoSuchAlgorithmException, CloneNotSupportedException {
+        MessageDigest digest = MessageDigest.getInstance("SHA1");
+        digest.update((byte) 'a');
+        MessageDigest clone = (MessageDigest) digest.clone();
+        byte[] data = "bcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".getBytes();
+        digest.update(data, 0, data.length);
+        byte[] expected = {(byte) 0x84, (byte) 0x98, 0x3e, 0x44, 0x1c, 0x3b, (byte) 0xd2, 0x6e,
+                (byte) 0xba, (byte) 0xae, 0x4a, (byte) 0xa1, (byte) 0xf9, 0x51, 0x29, (byte) 0xe5,
+                (byte) 0xe5, 0x46, 0x70, (byte) 0xf1};
+        if (!MessageDigest.isEqual(digest.digest(), expected) || digest.getDigestLength() != expected.length) return 0;
+        return MessageDigest.isEqual(clone.digest(data), expected) ? 1 : 0;
+    }
+    public static int verifyJson() throws JSONException {
+        JSONObject data = new JSONObject("{\"items\":[7,{\"name\":\"first\"}]}");
+        if (data.getJSONArray("items").getInt(0) != 7) return 0;
+        data.put("ready", true);
+        var copy = new JSONObject(data.toString());
+        return copy.getBoolean("ready") && "first".equals(copy.getJSONArray("items")
+                .getJSONObject(1).getString("name")) ? 1 : 0;
+    }
+    public static int verifyEmbeddedUrl() throws IOException {
+        URL base = new URL("https://example.test/alpha/beta");
+        URL resolved = new URL(base, "../page?q=1#fragment");
+        if (!"https://example.test/page?q=1#fragment".equals(resolved.toExternalForm())
+                || resolved.getDefaultPort() != 443) return 0;
+        try {
+            resolved.openConnection();
+            return 0;
+        } catch (IOException expected) {
+            return 1;
+        }
+    }
+    public static int verifyExecutorAndRegisterShutdownHook() throws InterruptedException {
+        var executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>(),
+                Executors.defaultThreadFactory(), new ThreadPoolExecutor.DiscardPolicy());
+        AtomicInteger ran = new AtomicInteger();
+        executor.execute(ran::incrementAndGet);
+        executor.shutdown();
+        executor.execute(ran::incrementAndGet);
+        Thread hook = new Thread(() -> shutdownHookRan = "smoke-hook".equals(Thread.currentThread().getName()),
+                "smoke-hook");
+        Runtime runtime = Runtime.getRuntime();
+        runtime.addShutdownHook(hook);
+        if (!runtime.removeShutdownHook(hook) || runtime.removeShutdownHook(hook)) return 0;
+        runtime.addShutdownHook(hook);
+        return ran.get() == 1 && executor.awaitTermination(0, TimeUnit.SECONDS) ? 1 : 0;
+    }
+    public static boolean shutdownHookRan() { return shutdownHookRan; }
     public static int lifecycle() { return lifecycle; }
     public static int clickCount() { return active.clicks; }
     public static int animationUpdates() { return active.animationUpdates; }

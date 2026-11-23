@@ -1336,10 +1336,13 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
   auto& keep_alive = cl.AddField(pool, "keepAliveTime", "J", false);
   auto& core_timeout = cl.AddField(pool, "allowCoreThreadTimeOut", "Z", false);
   auto& thread_factory = cl.AddField(pool, "threadFactory", factory.descriptor, false);
+  auto& handler = cl.AddField(pool, "handler", "Ljava/util/concurrent/RejectedExecutionHandler;", false);
   auto& running = cl.AddField(pool, "running", "Z", false);
+  auto& shutdown = cl.AddField(pool, "shutdown", "Z", false);
   // Executors create workers on demand. Initialization only needs the queue and configuration.
   const Builtin init_pool =
-      [&work_queue, &core_size, &max_size, &keep_alive, &thread_factory](Runtime& vm, Object* self, Values a) {
+      [&work_queue, &core_size, &max_size, &keep_alive, &thread_factory, &handler](
+          Runtime& vm, Object* self, Values a) {
         if (a[0].i() < 0 || a[1].i() <= 0 || a[1].i() < a[0].i() || a[2].j() < 0) {
           vm.Fail("Ljava/lang/IllegalArgumentException;", "Invalid executor size or keep-alive time");
         }
@@ -1348,19 +1351,29 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
         self->fields[core_size.slot] = a[0];
         self->fields[max_size.slot] = a[1];
         self->fields[work_queue.slot] = a[4];
-        if (a.size() == 6) self->fields[thread_factory.slot] = Value::Ref(&vm.NonNull(a[5].ref()));
+        if (a.size() >= 6) self->fields[thread_factory.slot] = Value::Ref(&vm.NonNull(a[5].ref()));
+        if (a.size() == 7) self->fields[handler.slot] = Value::Ref(&vm.NonNull(a[6].ref()));
         return Value{};
       };
   cl.AddMethod(pool, "<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V",
                0, init_pool);
   cl.AddMethod(pool, "<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;"
                "Ljava/util/concurrent/ThreadFactory;)V", 0, init_pool);
+  cl.AddMethod(pool, "<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;"
+               "Ljava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V", 0, init_pool);
   cl.AddMethod(pool, "execute", "(Ljava/lang/Runnable;)V", 0,
-      [&work_queue, &running](Runtime& vm, Object* self, Values a) {
+      [&work_queue, &running, &handler, &shutdown](Runtime& vm, Object* self, Values a) {
         vm.NonNull(a[0].ref());
         auto* queue = self->fields[work_queue.slot].ref();
-        if (!CallVirtual(vm, queue, "offer", "(Ljava/lang/Object;)Z", a).i()) {
-          vm.Fail("Ljava/util/concurrent/RejectedExecutionException;", "Executor queue is full");
+        const bool stopped = self->fields[shutdown.slot].i();
+        if (stopped || !CallVirtual(vm, queue, "offer", "(Ljava/lang/Object;)Z", a).i()) {
+          if (auto* reject = self->fields[handler.slot].ref()) {
+            return CallVirtual(vm, reject, "rejectedExecution",
+                               "(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V",
+                               std::array{a[0], Value::Ref(self)});
+          }
+          vm.Fail("Ljava/util/concurrent/RejectedExecutionException;",
+                  stopped ? "Executor is shut down" : "Executor queue is full");
         }
         if (self->fields[running.slot].i()) return Value{};
         self->fields[running.slot] = Value::Int(1);
@@ -1375,6 +1388,17 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
         self->fields[running.slot] = {};
         return Value{};
       });
+  cl.AddMethod(pool, "shutdown", "()V", 0, [&shutdown](Runtime&, Object* self, Values) {
+    self->fields[shutdown.slot] = Value::Int(1);
+    return Value{};
+  });
+  cl.AddMethod(pool, "isShutdown", "()Z", 0,
+      [&shutdown](Runtime&, Object* self, Values) { return self->fields[shutdown.slot]; });
+  const Builtin terminated = [&shutdown, &running](Runtime&, Object* self, Values) {
+    return Value::Int(self->fields[shutdown.slot].i() && !self->fields[running.slot].i());
+  };
+  cl.AddMethod(pool, "isTerminated", "()Z", 0, terminated);
+  cl.AddMethod(pool, "awaitTermination", "(JLjava/util/concurrent/TimeUnit;)Z", 0, terminated);
   cl.AddMethod(pool, "getQueue", "()Ljava/util/concurrent/BlockingQueue;", 0,
       [&work_queue](Runtime&, Object* self, Values) { return self->fields[work_queue.slot]; });
   cl.AddMethod(pool, "getCorePoolSize", "()I", 0,

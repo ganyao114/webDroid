@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <limits>
 #include <regex>
+#include <unordered_set>
 
 #include "base/leb128.h"
 #include "dex/dex_file-inl.h"
@@ -778,8 +779,11 @@ void InstallObject(Runtime& vm) {
 
 void InstallThrowable(Runtime& vm) {
   auto& cl = vm.linker;
+  constexpr std::string_view throwable = "Ljava/lang/Throwable;";
+  auto& base = cl.Define(throwable, kObject);
+  auto& cause_assigned = cl.AddField(base, "causeAssigned", "Z", false);
   const auto define = [&](std::string_view name, std::string_view parent) -> Class& {
-    Class& cls = cl.Define(name, parent);
+    Class& cls = name == throwable ? base : cl.Define(name, parent);
     cl.AddMethod(cls, "<init>", "()V", 0, [](Runtime& vm, Object* self, Values) {
       vm.CaptureThrowableStack(*self);
       return Value{};
@@ -791,22 +795,23 @@ void InstallThrowable(Runtime& vm) {
           return Value{};
         });
     cl.AddMethod(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V", 0,
-        [](Runtime& vm, Object* self, Values args) {
+        [&cause_assigned](Runtime& vm, Object* self, Values args) {
           if (args[0].ref()) self->text = args[0].ref()->text;
           self->payload = args[1];
+          self->fields[cause_assigned.slot] = Value::Int(1);
           vm.CaptureThrowableStack(*self);
           return Value{};
         });
     cl.AddMethod(cls, "<init>", "(Ljava/lang/Throwable;)V", 0,
-        [](Runtime& vm, Object* self, Values args) {
+        [&cause_assigned](Runtime& vm, Object* self, Values args) {
           if (args[0].ref()) self->text = JavaText(vm, args[0].ref());
           self->payload = args[0];
+          self->fields[cause_assigned.slot] = Value::Int(1);
           vm.CaptureThrowableStack(*self);
           return Value{};
         });
     return cls;
   };
-  constexpr std::string_view throwable = "Ljava/lang/Throwable;";
   constexpr std::string_view exception = "Ljava/lang/Exception;";
   constexpr std::string_view runtime = "Ljava/lang/RuntimeException;";
   constexpr std::string_view bad_argument = "Ljava/lang/IllegalArgumentException;";
@@ -814,11 +819,21 @@ void InstallThrowable(Runtime& vm) {
   constexpr std::string_view error = "Ljava/lang/Error;";
   constexpr std::string_view linkage = "Ljava/lang/LinkageError;";
   constexpr std::string_view incompatible = "Ljava/lang/IncompatibleClassChangeError;";
-  Class& base = define(throwable, kObject);
+  define(throwable, kObject);
   cl.AddMethod(base, "getMessage", "()Ljava/lang/String;", 0,
       [](Runtime& vm, Object* self, Values) { return self->text.empty() ? Value{} : StringValue(vm, self->text); });
   cl.AddMethod(base, "getCause", "()Ljava/lang/Throwable;", 0,
       [](Runtime&, Object* self, Values) { return self->payload; });
+  cl.AddMethod(base, "initCause", "(Ljava/lang/Throwable;)Ljava/lang/Throwable;", 0,
+      [&cause_assigned](Runtime& vm, Object* self, Values a) {
+        if (self->fields[cause_assigned.slot].i() || self->payload.ref()) {
+          vm.Fail("Ljava/lang/IllegalStateException;", "Cannot overwrite cause");
+        }
+        if (a[0].ref() == self) vm.Fail("Ljava/lang/IllegalArgumentException;", "Self-causation");
+        self->payload = a[0];
+        self->fields[cause_assigned.slot] = Value::Int(1);
+        return Value::Ref(self);
+      });
   cl.AddMethod(base, "toString", "()Ljava/lang/String;", 0,
       [](Runtime& vm, Object* self, Values) {
         const std::string name = ClassName(*self->type);
@@ -830,6 +845,36 @@ void InstallThrowable(Runtime& vm) {
         self->elements.push_back(args[0]);
         return Value{};
       });
+  const Builtin print_stack = [](Runtime& vm, Object* self, Values a) {
+    Object* stream = nullptr;
+    if (a.empty()) {
+      auto& system = vm.linker.Resolve("Ljava/lang/System;");
+      vm.linker.Initialize(system);
+      stream = vm.linker.FindField(system, "err", "Ljava/io/PrintStream;", true).value.ref();
+    } else {
+      stream = a[0].ref();
+    }
+    vm.NonNull(stream);
+    const auto print = [&](std::u16string line) {
+      CallVirtual(vm, stream, "println", "(Ljava/lang/String;)V", std::array{StringValue(vm, std::move(line))});
+    };
+    std::unordered_set<Object*> seen;
+    for (auto* current = self; current; current = current->payload.ref()) {
+      const auto message = JavaText(vm, current);
+      if (!seen.insert(current).second) {
+        print(u"[CIRCULAR REFERENCE: " + message + u"]");
+        break;
+      }
+      print(current == self ? message : u"Caused by: " + message);
+      if (!current->exception_stack) continue;
+      for (const auto& [method, pc] : *current->exception_stack) {
+        print(DecodeUtf8("\tat " + method->QualifiedName() + " @ dex pc " + std::to_string(pc)));
+      }
+    }
+    return Value{};
+  };
+  cl.AddMethod(base, "printStackTrace", "()V", 0, print_stack);
+  cl.AddMethod(base, "printStackTrace", "(Ljava/io/PrintStream;)V", 0, print_stack);
   define(exception, throwable);
   define(runtime, exception);
   define("Ljava/io/IOException;", exception);
@@ -1128,6 +1173,24 @@ struct RegexProgram {
   bool end_anchor = false;
 };
 
+std::wstring_view RegexProperty(std::u16string_view name, bool unicode_classes) {
+  if (name == u"Zs") return L" \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000";
+  if (name == u"javaWhitespace") return L"\t-\r\u001c-\u001f \u1680\u2000-\u2006"
+      L"\u2008-\u200a\u2028\u2029\u205f\u3000";
+  if (unicode_classes) return {};
+  constexpr std::pair<std::u16string_view, std::wstring_view> posix[]{
+      {u"Lower", L"a-z"}, {u"Upper", L"A-Z"}, {u"ASCII", L"\\x00-\\x7f"},
+      {u"Alpha", L"a-zA-Z"}, {u"Digit", L"0-9"}, {u"Alnum", L"a-zA-Z0-9"},
+      {u"Punct", L"\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e"},
+      {u"Graph", L"\\x21-\\x7e"}, {u"Print", L"\\x20-\\x7e"},
+      {u"Blank", L" \t"}, {u"Cntrl", L"\\x00-\\x1f\\x7f"},
+      {u"XDigit", L"0-9a-fA-F"}, {u"Space", L" \t-\r"}};
+  for (const auto& [property, ranges] : posix) {
+    if (property == name) return ranges;
+  }
+  return {};
+}
+
 std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern, int flags = 0,
                          RegexProgram* program = nullptr) {
   constexpr int kCaseInsensitive = 2, kComments = 4, kMultiline = 8, kLiteral = 16;
@@ -1164,6 +1227,21 @@ std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern, int flags = 0
       const char16_t escaped = pattern[++i];
       if (escaped == u'Q') {
         quoted = true;
+      } else if (!in_class && escaped == u'A' && !(flags & kMultiline)) {
+        translated += L'^';
+      } else if (!in_class && escaped == u'z') {
+        translated += L"$(?![\\s\\S])";
+        if (program) program->end_anchor = true;
+      } else if ((escaped == u'p' || (escaped == u'P' && !in_class)) &&
+                 pattern.substr(i + 1).starts_with(u"{")) {
+        const auto end = pattern.find(u'}', i + 2);
+        if (end == pattern.npos) invalid();
+        const auto property = RegexProperty(pattern.substr(i + 2, end - i - 2), flags & kUnicodeClasses);
+        if (property.empty()) invalid();
+        if (!in_class) translated += escaped == u'P' ? L"[^" : L"[";
+        translated += property;
+        if (!in_class) translated += L']';
+        i = end;
       } else if (escaped == u'h' || (escaped == u's' && (flags & kUnicodeClasses))) {
         if (!in_class) translated += L'[';
         translated += escaped == u'h' ? L" \t\u00a0\u1680\u180e\u2000-\u200a\u202f\u205f\u3000"
@@ -1313,6 +1391,58 @@ void InstallRegex(Runtime& vm) {
     return Value::Int(match == named.end() ? -1 : match->second);
   });
   cl.AddBootNative(owner, "matchNative", "(Ljava/lang/String;IIII[I)I", MatchRegex);
+}
+
+void InstallMessageDigest(Runtime& vm) {
+  vm.linker.AddBootNative("Ljava/security/MessageDigest$EmbeddedSha1;", "compress", "([I[BI)V",
+      [](Runtime& vm, Object*, Values a) {
+        auto& state = vm.NonNull(a[0].ref()).elements;
+        const auto& input = vm.NonNull(a[1].ref()).elements;
+        const auto offset = static_cast<size_t>(a[2].i());
+        if (state.size() != 5 || offset > input.size() || input.size() - offset < 64) {
+          vm.Fail("Ljava/lang/IndexOutOfBoundsException;", "Invalid SHA-1 block");
+        }
+        std::array<uint32_t, 80> words{};
+        for (size_t i = 0; i < 16; ++i) {
+          const size_t at = offset + i * 4;
+          for (size_t j = 0; j < 4; ++j) {
+            words[i] = (words[i] << 8) | static_cast<uint8_t>(input[at + j].i());
+          }
+        }
+        for (size_t i = 16; i < words.size(); ++i) {
+          words[i] = std::rotl(words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16], 1);
+        }
+        std::array<uint32_t, 5> hash{};
+        for (size_t i = 0; i < hash.size(); ++i) hash[i] = state[i].bits();
+        auto [w0, w1, w2, w3, w4] = hash;
+        for (size_t i = 0; i < words.size(); ++i) {
+          uint32_t mix, constant;
+          if (i < 20) {
+            mix = (w1 & w2) | (~w1 & w3);
+            constant = 0x5a827999;
+          } else if (i < 40) {
+            mix = w1 ^ w2 ^ w3;
+            constant = 0x6ed9eba1;
+          } else if (i < 60) {
+            mix = (w1 & w2) | (w1 & w3) | (w2 & w3);
+            constant = 0x8f1bbcdc;
+          } else {
+            mix = w1 ^ w2 ^ w3;
+            constant = 0xca62c1d6;
+          }
+          const uint32_t next = std::rotl(w0, 5) + mix + w4 + constant + words[i];
+          w4 = w3;
+          w3 = w2;
+          w2 = std::rotl(w1, 30);
+          w1 = w0;
+          w0 = next;
+        }
+        const std::array compressed{w0, w1, w2, w3, w4};
+        for (size_t i = 0; i < hash.size(); ++i) {
+          state[i] = Value::Int(std::bit_cast<int32_t>(hash[i] + compressed[i]));
+        }
+        return Value{};
+      });
 }
 
 Value ReplaceRegex(Runtime& vm, Object* self, Values args) {
@@ -2355,6 +2485,9 @@ void InstallNumbers(Runtime& vm) {
     }
   }
   auto& integer = *classes['I'];
+  cl.AddMethod(integer, "toUnsignedLong", "(I)J", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    return Value::Long(static_cast<uint32_t>(a[0].i()));
+  });
   cl.AddMethod(integer, "highestOneBit", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
     return Value::Int(std::bit_cast<int32_t>(std::bit_floor(static_cast<uint32_t>(a[0].i()))));
   });
@@ -2384,10 +2517,15 @@ void InstallNumbers(Runtime& vm) {
   const Builtin parse_long = [](Runtime& vm, Object*, Values a) {
     return Value::Long(ParseInteger<int64_t>(vm, a[0].ref(), a.size() > 1 ? a[1].i() : 10));
   };
+  const Builtin parse_byte = [](Runtime& vm, Object*, Values a) {
+    return Value::Int(ParseInteger<int8_t>(vm, a[0].ref(), a.size() > 1 ? a[1].i() : 10));
+  };
   cl.AddMethod(integer, "parseInt", "(Ljava/lang/String;)I", art::kAccStatic, parse_int);
   cl.AddMethod(integer, "parseInt", "(Ljava/lang/String;I)I", art::kAccStatic, parse_int);
   cl.AddMethod(lng, "parseLong", "(Ljava/lang/String;)J", art::kAccStatic, parse_long);
   cl.AddMethod(lng, "parseLong", "(Ljava/lang/String;I)J", art::kAccStatic, parse_long);
+  cl.AddMethod(*classes['B'], "parseByte", "(Ljava/lang/String;)B", art::kAccStatic, parse_byte);
+  cl.AddMethod(*classes['B'], "parseByte", "(Ljava/lang/String;I)B", art::kAccStatic, parse_byte);
   cl.AddMethod(integer, "getInteger", "(Ljava/lang/String;I)Ljava/lang/Integer;", art::kAccStatic,
       [&integer](Runtime& vm, Object*, Values a) {
         const Value value = Value::Int(IntegerProperty<int32_t>(vm, a[0].ref()).value_or(a[1].i()));
@@ -2664,6 +2802,7 @@ void Runtime::InstallBootClasses() {
   InstallThrowable(*this);
   InstallStrings(*this);
   InstallRegex(*this);
+  InstallMessageDigest(*this);
   InstallNumbers(*this);
   InstallEnumAndReferences(*this);
   InstallUnicodeScript(linker);

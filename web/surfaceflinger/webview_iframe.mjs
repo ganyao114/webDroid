@@ -52,6 +52,7 @@ export class BrowserIframeWebViewProvider {
     this.views.set(id, state);
     frame.addEventListener('load', () => {
       if (this.views.get(id) !== state) return;
+      this.report(id, WebViewStatus.PAGE_LOADED, 0, source);
       this.disconnect(state, 'WebView navigated');
       const { port1, port2 } = new MessageChannel();
       state.port = port1;

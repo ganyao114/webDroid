@@ -23,6 +23,8 @@ PROFILE = REPO / "patches/aosp17/frameworks_base"
 COMPATIBILITY = Path(__file__).with_name("framework_build")
 JAVA_BASE = Path("libcore/ojluni/src/main/java")
 LIBCORE_LUNI = Path("libcore/luni/src/main/java")
+LIBCORE_JSON = Path("libcore/json/src/main/java")
+SPARSE_LIBCORE_ROOTS = (JAVA_BASE, LIBCORE_LUNI, LIBCORE_JSON)
 SPARSE_FRAMEWORK_ROOTS = ("frameworks/base/core/java", "frameworks/base/media/java")
 SPARSE_SOURCE_MIRRORS = {
     "frameworks/base/core/java/android/service/notification/StatusBarNotification.java":
@@ -178,7 +180,8 @@ def read_sparse_source(args, name, inputs):
     """Read the pinned source from Git or a byte-identical SDK source mirror."""
     if name.startswith("libcore/"):
         project = "libcore"
-        relative = Path(name).relative_to(JAVA_BASE)
+        source_root = next(root for root in SPARSE_LIBCORE_ROOTS if name.startswith(f"{root}/"))
+        relative = Path(name).relative_to(source_root)
     else:
         project = "frameworks/base"
         source_root = next(root for root in SPARSE_FRAMEWORK_ROOTS if name.startswith(f"{root}/"))
@@ -652,7 +655,7 @@ def build(args, stage):
             if (not name.startswith(("frameworks/base/", "libcore/")) or path.suffix != ".java"):
                 raise ValueError(f"{manifest}: expected an upstream Java file in [{group}]: {name}")
             if not path.is_file() and any(name.startswith(f"{directory}/")
-                                          for directory in (JAVA_BASE, *SPARSE_FRAMEWORK_ROOTS)):
+                                          for directory in (*SPARSE_LIBCORE_ROOTS, *SPARSE_FRAMEWORK_ROOTS)):
                 java[name] = read_sparse_source(args, name, inputs)
             else:
                 inputs.add(path)

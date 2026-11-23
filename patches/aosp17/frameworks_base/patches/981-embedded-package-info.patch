@@ -1,0 +1,228 @@
+--- a/frameworks/base/core/java/android/content/pm/PackageInfo.java
++++ b/frameworks/base/core/java/android/content/pm/PackageInfo.java
+@@ -17,7 +17,6 @@
+ package android.content.pm;
+ 
+ import android.annotation.CurrentTimeMillisLong;
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.SystemApi;
+@@ -29,7 +28,7 @@
+ import android.os.Parcelable;
+ import android.util.Log;
+ 
+-import com.android.internal.util.CollectionUtils;
++import android.util.ArrayMap;
+ 
+ import java.util.Collections;
+ import java.util.Map;
+@@ -258,7 +257,6 @@
+      */
+     @NonNull
+     @SystemApi
+-    @FlaggedApi(android.permission.flags.Flags.FLAG_PPD_MANIFEST_ENABLED)
+     public Map<String, UsesPermissionPurposeInfo> requestedPermissionsPurposes = Collections.emptyMap();
+ 
+     /**
+@@ -309,7 +307,6 @@
+      * that permission through {@link Activity#requestPermissions(String[], int)}, and can only use
+      * location button to obtain it temporarily.
+      */
+-    @FlaggedApi(android.permission.flags.Flags.FLAG_LOCATION_BUTTON_ENABLED)
+     public static final int REQUESTED_PERMISSION_ONLY_FOR_LOCATION_BUTTON = 0x00020000;
+ 
+     /**
+@@ -568,7 +565,6 @@
+      * Returns the time at which the app was archived for the user.  Units are as
+      * per {@link System#currentTimeMillis()}.
+      */
+-    @FlaggedApi(Flags.FLAG_ARCHIVING)
+     public @CurrentTimeMillisLong long getArchiveTimeMillis() {
+         return mArchiveTimeMillis;
+     }
+@@ -588,7 +584,6 @@
+      * two cases, returns {@code null}.
+      */
+     @Nullable
+-    @FlaggedApi(android.content.pm.Flags.FLAG_PROVIDE_INFO_OF_APK_IN_APEX)
+     public String getApexPackageName() {
+         return mApexPackageName;
+     }
+@@ -604,7 +599,6 @@
+      * Returns the verification status of the App Metadata of the package. This status is set at the
+      * package installation time by the developer verification service provider.
+      */
+-    @FlaggedApi(android.content.pm.Flags.FLAG_VERIFICATION_SERVICE)
+     public boolean isAppMetadataVerified() {
+         return mIsAppMetadataVerified;
+     }
+@@ -844,13 +838,13 @@
+ 
+     private void readRequestedPermissionsPurposes(@NonNull Parcel in) {
+         final Bundle bundle = in.readBundle(UsesPermissionPurposeInfo.class.getClassLoader());
+-        Map<String, UsesPermissionPurposeInfo> purposeInfos = Collections.emptyMap();
++        Map<String, UsesPermissionPurposeInfo> purposeInfos = new ArrayMap<>();
+         if (bundle == null) {
+             requestedPermissionsPurposes = purposeInfos;
+             return;
+         }
+         for (String key : bundle.keySet()) {
+-            purposeInfos = CollectionUtils.add(purposeInfos, key, bundle.getParcelable(
++            purposeInfos.put(key, bundle.getParcelable(
+                     key, UsesPermissionPurposeInfo.class));
+         }
+         requestedPermissionsPurposes = purposeInfos;
+--- a/frameworks/base/core/java/android/content/pm/UsesPermissionPurposeInfo.java
++++ b/frameworks/base/core/java/android/content/pm/UsesPermissionPurposeInfo.java
+@@ -16,7 +16,6 @@
+ 
+ package android.content.pm;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.StringRes;
+@@ -41,7 +40,6 @@
+ // Fields are initialized so codegen can have default Builder constructor.
+ @DataClass(genParcelable = true, genEqualsHashCode = true, genConstructor = false, genSetters = false)
+ @SystemApi
+-@FlaggedApi(android.permission.flags.Flags.FLAG_PPD_MANIFEST_ENABLED)
+ public final class UsesPermissionPurposeInfo implements Parcelable {
+     /**
+      * The name of the permission that the purpose information in this class pertains to.
+@@ -88,7 +86,6 @@
+      * @hide
+      */
+     @TestApi
+-    @FlaggedApi(android.permission.flags.Flags.FLAG_PPD_MANIFEST_ENABLED)
+     public UsesPermissionPurposeInfo(
+             @NonNull String permissionName,
+             @NonNull Set<String> purposes,
+--- a/frameworks/base/core/java/android/content/pm/PackageManager.java
++++ b/frameworks/base/core/java/android/content/pm/PackageManager.java
+@@ -5840,7 +5840,7 @@
+      */
+     public PackageInfo getPackageInfo(@NonNull String packageName, int flags)
+             throws NameNotFoundException {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        return getPackageInfo(packageName, PackageInfoFlags.of(Integer.toUnsignedLong(flags)));
+     }
+ 
+     /**
+@@ -5849,8 +5849,24 @@
+     @NonNull
+     public PackageInfo getPackageInfo(@NonNull String packageName, @NonNull PackageInfoFlags flags)
+             throws NameNotFoundException {
+-        throw new UnsupportedOperationException(
+-                "getPackageInfo not implemented in subclass");
++        PackageInfo result = new PackageInfo();
++        result.applicationInfo = new ApplicationInfo(getApplicationInfo(packageName, 0));
++        result.packageName = packageName;
++        if ((flags.getValue() & GET_META_DATA) == 0) result.applicationInfo.metaData = null;
++        if (localVersion != null && packageName.equals(context.getPackageName())) {
++            result.setLongVersionCode(localVersion.getLongVersionCode());
++            result.versionName = localVersion.versionName;
++            if ((flags.getValue() & GET_SERVICES) != 0 && !localServices.isEmpty()) {
++                result.services = new ServiceInfo[localServices.size()];
++                int index = 0;
++                for (ServiceInfo service : localServices.values()) {
++                    ServiceInfo copy = new ServiceInfo(service);
++                    if ((flags.getValue() & GET_META_DATA) == 0) copy.metaData = null;
++                    result.services[index++] = copy;
++                }
++            }
++        }
++        return result;
+     }
+ 
+     /**
+@@ -9549,7 +9565,13 @@
+     @Deprecated
+     @Nullable
+     public String getInstallerPackageName(@NonNull String packageName) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        try {
++            getApplicationInfo(packageName, 0);
++            // APKs in the embedded catalog are mounted directly by the host.
++            return null;
++        } catch (NameNotFoundException error) {
++            throw new IllegalArgumentException(packageName, error);
++        }
+     }
+ 
+     /**
+@@ -11966,22 +11988,26 @@
+                                                String mime, String[] categories, int flags, int user);
+     /** Creates the package manager for the embedded APK catalog. @hide */
+     public static PackageManager forHost(Context context) {
+-        return forHost(context, java.util.Collections.emptyMap());
++        return forHost(context, java.util.Collections.emptyMap(), null);
+     }
+ 
+     /** Includes declared services of the APK hosting this process. @hide */
+-    public static PackageManager forHost(Context context, java.util.Map<String, ServiceInfo> services) {
+-        return new PackageManager(context, services) {};
++    public static PackageManager forHost(Context context, java.util.Map<String, ServiceInfo> services,
++                                         PackageInfo localVersion) {
++        return new PackageManager(context, services, localVersion) {};
+     }
+ 
+     private java.util.Map<String, ServiceInfo> localServices = java.util.Collections.emptyMap();
++    private PackageInfo localVersion;
+     private Context context;
+     private PackageInstaller installer;
+     private final HashMap<List<Object>, Resources> packageResources = new HashMap<>();
+ 
+-    private PackageManager(Context context, java.util.Map<String, ServiceInfo> services) {
++    private PackageManager(Context context, java.util.Map<String, ServiceInfo> services,
++                           PackageInfo localVersion) {
+         this.context = Objects.requireNonNull(context);
+         this.localServices = services;
++        this.localVersion = localVersion;
+         this.installer = new PackageInstaller();
+     }
+ 
+--- a/frameworks/base/core/java/com/android/internal/util/AnnotationValidations.java
++++ b/frameworks/base/core/java/com/android/internal/util/AnnotationValidations.java
+@@ -17,14 +17,12 @@
+ 
+ import static com.android.internal.util.BitUtils.flagsUpTo;
+ 
+-import android.annotation.AppIdInt;
+ import android.annotation.ColorInt;
+ import android.annotation.FloatRange;
+ import android.annotation.IntRange;
+ import android.annotation.NonNull;
+ import android.annotation.Size;
+ import android.annotation.UserIdInt;
+-import android.content.Intent;
+ import android.content.pm.PackageManager;
+ import android.content.pm.PackageManager.PackageInfoFlagsBits;
+ import android.content.pm.PackageManager.PermissionResult;
+@@ -56,12 +54,6 @@
+         }
+     }
+ 
+-    public static void validate(Class<AppIdInt> annotation, AppIdInt ignored, int value) {
+-        if (value / UserHandle.PER_USER_RANGE != 0 || value < 0) {
+-            invalid(annotation, value);
+-        }
+-    }
+-
+     public static void validate(Class<IntRange> annotation, IntRange ignored, int value,
+             String paramName1, long param1, String paramName2, long param2) {
+         validate(annotation, ignored, value, paramName1, param1);
+@@ -166,12 +158,6 @@
+         validateLongFlags(annotation, value,
+                 flagsUpTo(PackageManager.MATCH_HIDDEN_UNTIL_INSTALLED_COMPONENTS));
+     }
+-
+-    public static void validate(
+-            Class<Intent.Flags> annotation, Intent.Flags ignored, int value) {
+-        validateIntFlags(annotation, value, flagsUpTo(Intent.FLAG_RECEIVER_OFFLOAD));
+-    }
+-
+ 
+     @Deprecated
+     public static void validate(Class<? extends Annotation> annotation,

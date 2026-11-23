@@ -273,7 +273,7 @@ int32_t wa_codec_poll(wa_sf_t *sf, wa_codec_event_t *event);
 
 enum wa_webview_action { WA_WEBVIEW_OPEN = 1, WA_WEBVIEW_CLOSE, WA_WEBVIEW_EVAL, WA_WEBVIEW_REPLY };
 enum wa_webview_status { WA_WEBVIEW_READY = 1, WA_WEBVIEW_EVAL_RESULT,
-                         WA_WEBVIEW_INTERFACE, WA_WEBVIEW_ERROR };
+                         WA_WEBVIEW_INTERFACE, WA_WEBVIEW_ERROR, WA_WEBVIEW_PAGE_LOADED };
 typedef struct wa_webview_desc {
     uint32_t webview_id, layer_id;
     const char *url;

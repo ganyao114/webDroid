@@ -23,7 +23,7 @@ export const Ime = Object.freeze({ COMPOSING: 1, COMMIT: 2, MORE: 1, CONTINUATIO
 export const CodecAction = Object.freeze({ CONFIGURE: 1, AU: 2, FLUSH: 3, CLOSE: 4 });
 export const CodecStatus = Object.freeze({ CONFIGURED: 1, DECODED: 2, UNSUPPORTED: 3, ERROR: 4, FLUSHED: 5, CLOSED: 6 });
 export const WebViewAction = Object.freeze({ OPEN: 1, CLOSE: 2, EVAL: 3, REPLY: 4 });
-export const WebViewStatus = Object.freeze({ READY: 1, EVAL_RESULT: 2, INTERFACE: 3, ERROR: 4 });
+export const WebViewStatus = Object.freeze({ READY: 1, EVAL_RESULT: 2, INTERFACE: 3, ERROR: 4, PAGE_LOADED: 5 });
 
 export const recordSize = Uint16Array.of(0, 4, 4, 12, 12, 16, 20, 28, 8, 32, 40, 28, 32, 40, 32, 24, 52, 44);
 export const verbCoordinates = Uint8Array.of(0, 2, 2, 4, 6, 0);

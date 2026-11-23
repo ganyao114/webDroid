@@ -29,6 +29,7 @@ frameworks/base/core/java/android/view/accessibility/AccessibilityNodeInfo.java
 frameworks/base/core/java/android/view/accessibility/AccessibilityRecord.java
 frameworks/base/core/java/android/view/accessibility/WeakSparseArray.java
 frameworks/base/core/java/com/android/internal/util/BitUtils.java
+frameworks/base/core/java/com/android/internal/util/AnnotationValidations.java
 
 # Phase 2 W3: upstream android.widget
 frameworks/base/core/java/android/widget/AbsListView.java
@@ -140,8 +141,29 @@ frameworks/base/core/java/android/os/ParcelFormatException.java
 frameworks/base/core/java/android/os/Process.java
 frameworks/base/core/java/android/os/ServiceSpecificException.java
 frameworks/base/core/java/android/os/UserManager.java
+frameworks/base/core/java/android/os/StrictMode.java
+frameworks/base/core/java/android/os/strictmode/Violation.java
+frameworks/base/core/java/android/os/strictmode/CustomViolation.java
+frameworks/base/core/java/android/os/strictmode/DiskReadViolation.java
+frameworks/base/core/java/android/os/strictmode/DiskWriteViolation.java
 frameworks/base/core/java/android/os/Vibrator.java
 frameworks/base/core/java/android/provider/Settings.java
+frameworks/base/core/java/android/webkit/ConsoleMessage.java
+frameworks/base/core/java/android/webkit/DownloadListener.java
+frameworks/base/core/java/android/webkit/GeolocationPermissions.java
+frameworks/base/core/java/android/webkit/HttpAuthHandler.java
+frameworks/base/core/java/android/webkit/JavascriptInterface.java
+frameworks/base/core/java/android/webkit/JsPromptResult.java
+frameworks/base/core/java/android/webkit/JsResult.java
+frameworks/base/core/java/android/webkit/PermissionRequest.java
+frameworks/base/core/java/android/webkit/SslErrorHandler.java
+frameworks/base/core/java/android/webkit/ValueCallback.java
+frameworks/base/core/java/android/webkit/WebBackForwardList.java
+frameworks/base/core/java/android/webkit/WebChromeClient.java
+frameworks/base/core/java/android/webkit/WebHistoryItem.java
+frameworks/base/core/java/android/webkit/WebResourceError.java
+frameworks/base/core/java/android/webkit/WebResourceRequest.java
+frameworks/base/core/java/android/webkit/WebResourceResponse.java
 frameworks/base/core/java/android/webkit/WebSettings.java
 frameworks/base/core/java/android/webkit/WebView.java
 frameworks/base/core/java/android/webkit/WebViewClient.java
@@ -265,6 +287,9 @@ frameworks/base/core/java/android/content/DialogInterface.java
 frameworks/base/core/java/android/content/Loader.java
 frameworks/base/core/java/android/content/SharedPreferences.java
 frameworks/base/core/java/android/content/pm/ActivityInfo.java
+frameworks/base/core/java/android/content/pm/Attribution.java
+frameworks/base/core/java/android/content/pm/PackageInfo.java
+frameworks/base/core/java/android/content/pm/UsesPermissionPurposeInfo.java
 frameworks/base/core/java/android/content/pm/ApplicationInfo.java
 frameworks/base/core/java/android/content/pm/ComponentInfo.java
 frameworks/base/core/java/android/content/pm/IncrementalStatesInfo.java
@@ -337,6 +362,12 @@ libcore/luni/src/main/java/libcore/api/CorePlatformApi.java
 libcore/luni/src/main/java/libcore/api/IntraCoreApi.java
 libcore/luni/src/main/java/libcore/util/NonNull.java
 libcore/luni/src/main/java/libcore/util/Nullable.java
+libcore/json/src/main/java/org/json/JSON.java
+libcore/json/src/main/java/org/json/JSONArray.java
+libcore/json/src/main/java/org/json/JSONException.java
+libcore/json/src/main/java/org/json/JSONObject.java
+libcore/json/src/main/java/org/json/JSONStringer.java
+libcore/json/src/main/java/org/json/JSONTokener.java
 
 # Phase 3 W1: upstream Display and AccessibilityManager
 frameworks/base/core/java/android/view/Display.java
@@ -532,6 +563,7 @@ libcore/ojluni/src/main/java/java/io/InputStream.java
 libcore/ojluni/src/main/java/java/io/OutputStream.java
 libcore/ojluni/src/main/java/java/io/OutputStreamWriter.java
 libcore/ojluni/src/main/java/java/io/PrintStream.java
+libcore/ojluni/src/main/java/java/io/StringBufferInputStream.java
 libcore/ojluni/src/main/java/java/io/Writer.java
 libcore/ojluni/src/main/java/java/io/DataInput.java
 libcore/ojluni/src/main/java/java/io/DataInputStream.java
@@ -552,13 +584,26 @@ libcore/ojluni/src/main/java/java/lang/reflect/AnnotatedElement.java
 libcore/ojluni/src/main/java/java/lang/reflect/Field.java
 libcore/ojluni/src/main/java/java/lang/reflect/Member.java
 libcore/ojluni/src/main/java/java/lang/reflect/Type.java
+libcore/ojluni/src/main/java/java/security/DigestException.java
+libcore/ojluni/src/main/java/java/security/GeneralSecurityException.java
+libcore/ojluni/src/main/java/java/security/MessageDigest.java
+libcore/ojluni/src/main/java/java/security/MessageDigestSpi.java
+libcore/ojluni/src/main/java/java/security/NoSuchAlgorithmException.java
+libcore/ojluni/src/main/java/java/security/NoSuchProviderException.java
 libcore/luni/src/main/java/libcore/reflect/AnnotatedElements.java
+libcore/ojluni/src/main/java/java/net/MalformedURLException.java
+libcore/ojluni/src/main/java/java/net/UnknownHostException.java
 libcore/ojluni/src/main/java/java/net/URISyntaxException.java
+libcore/ojluni/src/main/java/java/net/URL.java
+libcore/ojluni/src/main/java/java/net/URLStreamHandler.java
+libcore/ojluni/src/main/java/java/net/URLStreamHandlerFactory.java
 libcore/ojluni/src/main/java/java/util/DoubleSummaryStatistics.java
+libcore/ojluni/src/main/java/java/util/Enumeration.java
 libcore/ojluni/src/main/java/java/util/IntSummaryStatistics.java
 libcore/ojluni/src/main/java/java/util/LongSummaryStatistics.java
 libcore/ojluni/src/main/java/java/util/OptionalDouble.java
 libcore/ojluni/src/main/java/java/util/OptionalLong.java
+libcore/ojluni/src/main/java/java/util/StringTokenizer.java
 libcore/ojluni/src/main/java/java/util/concurrent/CompletableFuture.java
 libcore/ojluni/src/main/java/java/util/concurrent/CompletionStage.java
 libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentMap.java
@@ -598,6 +643,13 @@ libcore/ojluni/src/main/java/java/util/function/ObjLongConsumer.java
 libcore/ojluni/src/main/java/java/util/function/ToDoubleFunction.java
 libcore/ojluni/src/main/java/java/util/function/ToLongFunction.java
 libcore/ojluni/src/main/java/java/util/function/UnaryOperator.java
+libcore/ojluni/src/main/java/java/util/logging/ErrorManager.java
+libcore/ojluni/src/main/java/java/util/logging/Filter.java
+libcore/ojluni/src/main/java/java/util/logging/Formatter.java
+libcore/ojluni/src/main/java/java/util/logging/Handler.java
+libcore/ojluni/src/main/java/java/util/logging/Level.java
+libcore/ojluni/src/main/java/java/util/logging/Logger.java
+libcore/ojluni/src/main/java/java/util/logging/LogRecord.java
 libcore/ojluni/src/main/java/java/util/regex/ASCII.java
 libcore/ojluni/src/main/java/java/util/regex/Matcher.java
 libcore/ojluni/src/main/java/java/util/regex/MatchResult.java
@@ -662,6 +714,7 @@ libcore/ojluni/src/main/java/java/util/concurrent/RunnableScheduledFuture.java
 libcore/ojluni/src/main/java/java/util/concurrent/ScheduledThreadPoolExecutor.java
 libcore/ojluni/src/main/java/java/util/concurrent/ScheduledExecutorService.java
 libcore/ojluni/src/main/java/java/util/concurrent/ScheduledFuture.java
+libcore/ojluni/src/main/java/java/util/concurrent/ThreadPoolExecutor.java
 libcore/ojluni/src/main/java/java/util/concurrent/ThreadLocalRandom.java
 libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicLong.java
 libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicReferenceArray.java
@@ -673,6 +726,7 @@ libcore/ojluni/src/main/java/java/util/concurrent/locks/LockSupport.java
 libcore/ojluni/src/main/java/java/util/concurrent/locks/ReadWriteLock.java
 libcore/ojluni/src/main/java/java/util/concurrent/locks/ReentrantReadWriteLock.java
 libcore/ojluni/src/main/java/sun/nio/cs/StreamEncoder.java
+libcore/ojluni/src/main/java/sun/net/util/IPAddressUtil.java
 
 [services]
 frameworks/base/services/core/java/com/android/server/IntentResolver.java
@@ -968,3 +1022,12 @@ patches/972-embedded-character-buffers.patch
 patches/973-embedded-regex-backend.patch
 patches/974-embedded-content-provider-metadata.patch
 patches/975-embedded-reflection-fields.patch
+patches/976-embedded-thread-policy.patch
+patches/977-embedded-single-scheduled-executors.patch
+patches/978-copy-pattern-split-result.patch
+patches/979-embedded-java-logging.patch
+patches/980-embedded-thread-pool-nesting.patch
+patches/981-embedded-package-info.patch
+patches/982-embedded-message-digest.patch
+patches/983-embedded-url-handlers.patch
+patches/984-embedded-webkit-history-and-callbacks.patch

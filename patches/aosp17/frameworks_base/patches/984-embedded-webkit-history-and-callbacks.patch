@@ -1,0 +1,330 @@
+--- a/frameworks/base/core/java/android/webkit/GeolocationPermissions.java
++++ b/frameworks/base/core/java/android/webkit/GeolocationPermissions.java
+@@ -17,6 +17,10 @@
+ package android.webkit;
+ 
+ import android.annotation.SystemApi;
++import android.os.Handler;
++import android.os.Looper;
++
++import java.util.HashSet;
+ 
+ import java.util.Set;
+ 
+@@ -44,6 +48,36 @@
+ // (for the duration of the page) or permanently. This class deals only with
+ // permanent permissions.
+ public class GeolocationPermissions {
++    private static final class EmbeddedPermissions extends GeolocationPermissions {
++        private final Set<String> allowed = new HashSet<>();
++
++        @Override public synchronized void allow(String origin) {
++            if (origin != null) allowed.add(origin);
++        }
++
++        @Override public synchronized void clear(String origin) { allowed.remove(origin); }
++        @Override public synchronized void clearAll() { allowed.clear(); }
++
++        @Override public void getOrigins(ValueCallback<Set<String>> callback) {
++            Set<String> origins;
++            synchronized (this) { origins = new HashSet<>(allowed); }
++            dispatch(callback, origins);
++        }
++
++        @Override public void getAllowed(String origin, ValueCallback<Boolean> callback) {
++            boolean granted;
++            synchronized (this) { granted = allowed.contains(origin); }
++            dispatch(callback, granted);
++        }
++
++        private static <T> void dispatch(ValueCallback<T> callback, T value) {
++            if (callback != null) new Handler(Looper.getMainLooper()).post(() -> callback.onReceiveValue(value));
++        }
++    }
++
++    private static final class InstanceHolder {
++        private static final GeolocationPermissions INSTANCE = new EmbeddedPermissions();
++    }
+     /**
+      * A callback interface used by the host application to set the Geolocation
+      * permission state for an origin.
+@@ -69,7 +103,7 @@
+      * @return the singleton {@link GeolocationPermissions} instance
+      */
+     public static GeolocationPermissions getInstance() {
+-      return WebViewFactory.getProvider().getGeolocationPermissions();
++        return InstanceHolder.INSTANCE;
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/webkit/WebChromeClient.java
++++ b/frameworks/base/core/java/android/webkit/WebChromeClient.java
+@@ -16,12 +16,12 @@
+ 
+ package android.webkit;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.Nullable;
+ import android.annotation.SystemApi;
+ import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledAfter;
++import android.app.Activity;
++import android.content.ClipData;
+ import android.content.Intent;
+ import android.content.pm.ActivityInfo;
+ import android.graphics.Bitmap;
+@@ -580,8 +580,6 @@
+          * @hide
+          */
+         @ChangeId
+-        @EnabledAfter(targetSdkVersion = android.os.Build.VERSION_CODES.BAKLAVA)
+-        @FlaggedApi(android.webkit.Flags.FLAG_FILE_SYSTEM_ACCESS)
+         @SystemApi
+         public static final long ENABLE_FILE_SYSTEM_ACCESS = 364980165L;
+ 
+@@ -600,7 +598,6 @@
+         /** Like Open but allows multiple files to be selected. */
+         public static final int MODE_OPEN_MULTIPLE = 1;
+         /** Like Open but allows a folder to be selected. */
+-        @FlaggedApi(android.webkit.Flags.FLAG_FILE_SYSTEM_ACCESS)
+         public static final int MODE_OPEN_FOLDER = 2;
+         /**  Allows picking a nonexistent file and saving it. */
+         public static final int MODE_SAVE = 3;
+@@ -614,10 +611,8 @@
+         public @interface PermissionMode {}
+ 
+         /** File or directory should be opened for reading only. */
+-        @FlaggedApi(android.webkit.Flags.FLAG_FILE_SYSTEM_ACCESS)
+         public static final int PERMISSION_MODE_READ = 0;
+         /** File or directory should be opened for read and write. */
+-        @FlaggedApi(android.webkit.Flags.FLAG_FILE_SYSTEM_ACCESS)
+         public static final int PERMISSION_MODE_READ_WRITE = 1;
+ 
+         /**
+@@ -640,7 +635,18 @@
+          */
+         @Nullable
+         public static Uri[] parseResult(int resultCode, Intent data) {
+-            return WebViewFactory.getProvider().getStatics().parseFileChooserResult(resultCode, data);
++            if (resultCode != Activity.RESULT_OK || data == null) return null;
++            ClipData clips = data.getClipData();
++            if (clips == null) {
++                Uri uri = data.getData();
++                return uri == null ? null : new Uri[] { uri };
++            }
++            java.util.ArrayList<Uri> selected = new java.util.ArrayList<>();
++            for (int i = 0; i < clips.getItemCount(); i++) {
++                Uri uri = clips.getItemAt(i).getUri();
++                if (uri != null) selected.add(uri);
++            }
++            return selected.isEmpty() ? null : selected.toArray(new Uri[0]);
+         }
+ 
+         /**
+@@ -686,7 +692,6 @@
+          * {@link android.content.Intent#ACTION_OPEN_DOCUMENT} should be used rather than
+          * {@link android.content.Intent#ACTION_GET_CONTENT} to choose files.
+          */
+-        @FlaggedApi(Flags.FLAG_FILE_SYSTEM_ACCESS)
+         @PermissionMode
+         public int getPermissionMode() {
+             return PERMISSION_MODE_READ;
+--- a/frameworks/base/core/java/android/webkit/WebView.java
++++ b/frameworks/base/core/java/android/webkit/WebView.java
+@@ -2446,6 +2446,18 @@
+         if (mProvider != null) ((IframeProvider) mProvider).place();
+     }
+ 
++    private static final android.util.SparseArray<java.lang.ref.WeakReference<IframeProvider>>
++            sActiveIframes =
++            new android.util.SparseArray<>();
++
++    /** Receive completion for the exact URL submitted through the host bridge. @hide */
++    public static void dispatchEmbeddedPageLoaded(int id, String url) {
++        var reference = sActiveIframes.get(id);
++        IframeProvider provider = reference == null ? null : reference.get();
++        if (provider == null) sActiveIframes.remove(id);
++        else provider.pageLoaded(url);
++    }
++
+     private static final class IframeProvider implements WebViewProvider {
+         private static final String BLANK = "about:blank";
+         private static int sNextId = 2;
+@@ -2455,6 +2467,10 @@
+         private final int[] mLocation = new int[2];
+         private final WebView mView;
+         private WebViewClient mClient;
++        private WebChromeClient mChromeClient;
++        private int mProgress;
++        private static final String HISTORY_KEY = "wasmandroid.webview.history";
++        private static final String POSITION_KEY = "wasmandroid.webview.position";
+         private int mPage = -1;
+         private boolean mDestroyed;
+ 
+@@ -2471,9 +2487,11 @@
+         @Override public WebSettings getSettings() { return mSettings; }
+         @Override public void setWebViewClient(WebViewClient client) { mClient = client; }
+         @Override public WebViewClient getWebViewClient() { return mClient; }
++        @Override public void setWebChromeClient(WebChromeClient client) { mChromeClient = client; }
++        @Override public WebChromeClient getWebChromeClient() { return mChromeClient; }
+         @Override public String getUrl() { return mPage < 0 ? null : mHistory.get(mPage); }
+         @Override public String getOriginalUrl() { return getUrl(); }
+-        @Override public int getProgress() { return BLANK.equals(getUrl()) ? 100 : 0; }
++        @Override public int getProgress() { return mProgress; }
+         @Override public boolean isPrivateBrowsingEnabled() { return false; }
+ 
+         @Override public void loadUrl(String url, Map<String, String> headers) {
+@@ -2488,6 +2506,7 @@
+             while (mHistory.size() > mPage + 1) mHistory.remove(mHistory.size() - 1);
+             mHistory.add(url);
+             mPage++;
++            beginPage(url);
+         }
+ 
+         @Override public boolean canGoBack() { return canGoBackOrForward(-1); }
+@@ -2501,11 +2520,17 @@
+         }
+ 
+         @Override public void goBackOrForward(int steps) {
+-            if (canGoBackOrForward(steps) && navigate(mHistory.get(mPage + steps))) mPage += steps;
++            if (!canGoBackOrForward(steps)) return;
++            String url = mHistory.get(mPage + steps);
++            if (navigate(url)) {
++                mPage += steps;
++                beginPage(url);
++            }
+         }
+ 
+         @Override public void reload() {
+-            if (mPage >= 0) navigate(mHistory.get(mPage));
++            String url = getUrl();
++            if (url != null && navigate(url)) beginPage(url);
+         }
+ 
+         @Override public void clearHistory() {
+@@ -2514,6 +2539,30 @@
+             mHistory.clear();
+             mHistory.add(url);
+             mPage = 0;
++        }
++
++        @Override public WebBackForwardList copyBackForwardList() {
++            return new HistorySnapshot(mHistory.toArray(new String[0]), mPage);
++        }
++
++        @Override public WebBackForwardList saveState(Bundle state) {
++            if (state == null || mPage < 0) return null;
++            state.putStringArrayList(HISTORY_KEY, new java.util.ArrayList<>(mHistory));
++            state.putInt(POSITION_KEY, mPage);
++            return copyBackForwardList();
++        }
++
++        @Override public WebBackForwardList restoreState(Bundle state) {
++            if (state == null || mPage >= 0) return null;
++            java.util.ArrayList<String> history = state.getStringArrayList(HISTORY_KEY);
++            int page = state.getInt(POSITION_KEY, -1);
++            if (history == null || page < 0 || page >= history.size()) return null;
++            String url = history.get(page);
++            if (!navigate(url)) return null;
++            mHistory.addAll(history);
++            mPage = page;
++            beginPage(url);
++            return copyBackForwardList();
+         }
+ 
+         private boolean navigate(String url) {
+@@ -2525,24 +2574,40 @@
+                         "The embedded WebView requires an HTTP(S) URL and JavaScript permission", url);
+                 return false;
+             }
+-            if (mClient != null) {
+-                mClient.onPageStarted(mView, url, null);
+-                if (BLANK.equals(url) && mClient != null) mClient.onPageFinished(mView, url);
+-            }
++            return true;
++        }
++
++        private void beginPage(String url) {
++            mProgress = 0;
+             mView.invalidate();
+-            return true;
++            if (mClient != null) mClient.onPageStarted(mView, url, null);
++            if (mDestroyed || !url.equals(getUrl())) return;
++            if (mChromeClient != null) mChromeClient.onProgressChanged(mView, mProgress);
++            if (BLANK.equals(url)) pageLoaded(url);
++        }
++
++        private void pageLoaded(String url) {
++            if (mDestroyed || !url.equals(getUrl()) || mProgress == 100) return;
++            mProgress = 100;
++            if (mChromeClient != null) mChromeClient.onProgressChanged(mView, mProgress);
++            if (mClient != null && mProgress == 100 && url.equals(getUrl())) mClient.onPageFinished(mView, url);
+         }
+ 
+         void attach() {
+-            if (!mDestroyed && mPage >= 0) nativeNavigate(mId, mHistory.get(mPage));
++            String url = getUrl();
++            if (!mDestroyed && url != null) nativeNavigate(mId, url);
+         }
+ 
+         void close() {
++            sActiveIframes.remove(mId);
+             if (!mDestroyed) nativeClose(mId);
+         }
+ 
+         void place() {
+             if (mDestroyed || mPage < 0) return;
++            if (sActiveIframes.get(mId) == null) {
++                sActiveIframes.put(mId, new java.lang.ref.WeakReference<>(this));
++            }
+             mView.getLocationInWindow(mLocation);
+             nativePlace(mId, mLocation[0], mLocation[1], mView.getWidth(), mView.getHeight());
+         }
+@@ -2552,10 +2617,46 @@
+             close();
+             mDestroyed = true;
+             mClient = null;
++            mChromeClient = null;
+             mHistory.clear();
+             mPage = -1;
+             mView.invalidate();
+         }
++    }
++
++    private static final class HistorySnapshot extends WebBackForwardList {
++        final String[] urls;
++        final int current;
++
++        HistorySnapshot(String[] urls, int current) {
++            this.urls = urls;
++            this.current = current;
++        }
++
++        @Override public int getSize() { return urls.length; }
++        @Override public int getCurrentIndex() { return current; }
++        @Override public WebHistoryItem getCurrentItem() { return getItemAtIndex(current); }
++        @Override public WebHistoryItem getItemAtIndex(int index) {
++            return index >= 0 && index < urls.length ? new HistoryItem(index, urls[index]) : null;
++        }
++        @Override protected WebBackForwardList clone() { return new HistorySnapshot(urls, current); }
++    }
++
++    private static final class HistoryItem extends WebHistoryItem {
++        final int index;
++        final String url;
++
++        HistoryItem(int index, String url) {
++            this.index = index;
++            this.url = url;
++        }
++
++        @Override public int getId() { return index; }
++        @Override public String getUrl() { return url; }
++        @Override public String getOriginalUrl() { return url; }
++        @Override public String getTitle() { return null; }
++        @Override public Bitmap getFavicon() { return null; }
++        @Override protected WebHistoryItem clone() { return new HistoryItem(index, url); }
+     }
+ 
+     private static final class IframeSettings extends WebSettings {

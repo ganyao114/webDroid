@@ -198,6 +198,7 @@ void InstallSystem(Runtime& vm) {
     if (key == "line.separator") return StringValue(vm, "\n");
     if (key == "file.separator") return StringValue(vm, "/");
     if (key == "path.separator") return StringValue(vm, ":");
+    if (key == "java.io.tmpdir") return StringValue(vm, "/tmp");
     return a.size() == 2 ? a[1] : Value{};
   };
   cl.AddMethod(sys, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic, property);
@@ -217,6 +218,7 @@ void InstallSystem(Runtime& vm) {
 
   Class& runtime = cl.Define("Ljava/lang/Runtime;", kObject);
   auto& singleton = cl.AddField(runtime, "currentRuntime", runtime.descriptor, true);
+  auto& shutting_down = cl.AddField(runtime, "shuttingDown", "Z", false);
   cl.AddMethod(runtime, "<clinit>", "()V", art::kAccStatic, [&runtime, &singleton](Runtime& vm, Object*, Values) {
     singleton.value = Value::Ref(vm.heap.Allocate(vm, runtime));
     return Value{};
@@ -225,6 +227,59 @@ void InstallSystem(Runtime& vm) {
       [&singleton](Runtime&, Object*, Values) { return singleton.value; });
   cl.AddMethod(runtime, "availableProcessors", "()I", 0,
       [](Runtime&, Object*, Values) { return Value::Int(1); });
+  const Builtin check_shutdown_hook = [&shutting_down](Runtime& vm, Object* self, Values a) {
+    vm.NonNull(a[0].ref());
+    if (self->fields[shutting_down.slot].i()) vm.Fail("Ljava/lang/IllegalStateException;", "VM already shutting down");
+    return a[0];
+  };
+  cl.AddMethod(runtime, "addShutdownHook", "(Ljava/lang/Thread;)V", 0,
+      [check_shutdown_hook](Runtime& vm, Object* self, Values a) {
+        const auto hook = check_shutdown_hook(vm, self, a);
+        auto& thread = vm.linker.Resolve("Ljava/lang/Thread;");
+        const auto& started = vm.linker.FindField(thread, "started", "Z", false);
+        if (hook.ref()->fields[started.slot].i() ||
+            std::ranges::find(self->elements, hook.ref(), &Value::ref) != self->elements.end()) {
+          vm.Fail("Ljava/lang/IllegalArgumentException;", "Hook is already registered or has started");
+        }
+        self->elements.push_back(hook);
+        return Value{};
+      });
+  cl.AddMethod(runtime, "removeShutdownHook", "(Ljava/lang/Thread;)Z", 0,
+      [check_shutdown_hook](Runtime& vm, Object* self, Values a) {
+        const auto hook = check_shutdown_hook(vm, self, a);
+        const auto index = std::ranges::find(self->elements, hook.ref(), &Value::ref);
+        if (index == self->elements.end()) return Value::Int(0);
+        self->elements.erase(index);
+        return Value::Int(1);
+      });
+  cl.AddMethod(runtime, "runShutdownHooks", "()V", art::kAccPrivate,
+      [&shutting_down](Runtime& vm, Object* self, Values) {
+        if (std::exchange(self->fields[shutting_down.slot], Value::Int(1)).i() ||
+            self->elements.empty()) return Value{};
+        auto& thread = vm.linker.Resolve("Ljava/lang/Thread;");
+        auto& current = vm.linker.FindField(thread, "currentThread", thread.descriptor, true);
+        const auto& started = vm.linker.FindField(thread, "started", "Z", false);
+        RootScope roots(vm, {}, current.value.ref());
+        roots.Hold(vm.exception);
+        auto* pending_exception = vm.exception;
+        for (const auto hook : self->elements) {
+          if (std::exchange(hook.ref()->fields[started.slot], Value::Int(1)).i()) continue;
+          const auto previous = std::exchange(current.value, hook);
+          struct RestoreThread {
+            Value& current;
+            Value previous;
+            ~RestoreThread() { current = previous; }
+          } restore{current.value, previous};
+          try {
+            CallVirtual(vm, hook.ref(), "run", "()V");
+          } catch (const ManagedException&) {
+            std::fprintf(stderr, "Exception in guest shutdown hook: %s\n", vm.ExceptionSummary().c_str());
+            vm.exception = pending_exception;
+          }
+        }
+        self->elements.clear();
+        return Value{};
+      });
   cl.AddMethod(runtime, "gc", "()V", 0, [](Runtime& vm, Object*, Values) {
     if (!vm.gc_paused) vm.heap.Collect(vm);
     return Value{};
@@ -315,15 +370,18 @@ const Field& InstallThread(Runtime& vm) {
   auto& park_permit = cl.AddField(thread, "parkPermit", "Z", false);
   auto& park_blocker = cl.AddField(thread, "parkBlocker", kObject, false);
   auto& target = cl.AddField(thread, "target", "Ljava/lang/Runnable;", false);
+  auto& started = cl.AddField(thread, "started", "Z", false);
   auto& exception_handler = cl.AddField(thread, "uncaughtExceptionHandler", kHandler, false);
   auto& default_handler = cl.AddField(thread, "defaultUncaughtExceptionHandler", kHandler, true);
   auto& loader = cl.AddField(thread, "contextClassLoader", "Ljava/lang/ClassLoader;", false);
-  cl.AddMethod(thread, "<clinit>", "()V", art::kAccStatic, [&thread, &main, &current, &name, &id, &priority](Runtime& vm, Object*, Values) {
+  cl.AddMethod(thread, "<clinit>", "()V", art::kAccStatic,
+      [&thread, &main, &current, &name, &id, &priority, &started](Runtime& vm, Object*, Values) {
     auto* object = vm.heap.Allocate(vm, thread);
     current.value = main.value = Value::Ref(object);
     object->fields[name.slot] = StringValue(vm, "main");
     object->fields[id.slot] = Value::Long(1);
     object->fields[priority.slot] = Value::Int(5);
+    object->fields[started.slot] = Value::Int(1);
     return Value{};
   });
   const auto ctor = [&name, &id, &target, &next_id, &priority, &daemon, &current](Runtime& vm, Object* self, Values a) {

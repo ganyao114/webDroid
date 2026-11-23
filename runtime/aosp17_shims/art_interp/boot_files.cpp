@@ -35,6 +35,17 @@ int64_t NowMillis() {
       std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+bool CreateGuestFile(Runtime& vm, std::string_view path) {
+  if (vm.guest_files.contains(path)) return false;
+  if (path.empty()) vm.Fail("Ljava/io/IOException;", "Invalid file path");
+  const auto parent = vm.guest_files.find(Parent(path));
+  if (parent == vm.guest_files.end() || parent->second || vm.read_only_paths.contains(path)) {
+    vm.Fail("Ljava/io/IOException;", std::string(path));
+  }
+  vm.guest_files.emplace(path, std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{{}, NowMillis()}));
+  return true;
+}
+
 bool MakeDirectory(Runtime& vm, std::string_view path, bool parents) {
   if (path.empty() || vm.guest_files.contains(path)) return false;
   std::vector<std::string_view> missing{path};
@@ -261,6 +272,7 @@ void Vm::MountReadOnlyFile(std::string_view name, std::span<const uint8_t> bytes
 }
 
 void InstallFiles(Runtime& vm) {
+  vm.guest_files.try_emplace("/tmp", nullptr);
   auto& cl = vm.linker;
   auto& file = cl.Define("Ljava/io/File;", kObject, 0, {"Ljava/io/Serializable;"});
   auto& separator = cl.AddField(file, "separator", kString, true);
@@ -336,6 +348,43 @@ void InstallFiles(Runtime& vm) {
   cl.AddMethod(file, "exists", "()Z", 0, [](Runtime& vm, Object* self, Values) {
     return Value::Int(FileType(vm, self) != Type::not_found);
   });
+  cl.AddMethod(file, "createNewFile", "()Z", 0, [](Runtime& vm, Object* self, Values) {
+    return Value::Int(CreateGuestFile(vm, GuestPath(self->text)));
+  });
+  auto& next_temp_file = cl.AddField(file, "tempFileSequence", "J", true);
+  const Builtin temp_file = [&file, &next_temp_file](Runtime& vm, Object*, Values a) {
+    const auto& prefix = vm.NonNull(a[0].ref()).text;
+    if (prefix.size() < 3) vm.Fail("Ljava/lang/IllegalArgumentException;", "Prefix string too short");
+    const auto suffix = a[1].ref() ? std::u16string_view(a[1].ref()->text) : u".tmp";
+    if (prefix.find_first_of(std::u16string_view(u"/\0", 2)) != prefix.npos ||
+        suffix.find_first_of(std::u16string_view(u"/\0", 2)) != suffix.npos) {
+      vm.Fail("Ljava/io/IOException;", "Invalid temporary file name");
+    }
+    const auto property = vm.options.system_properties.find("java.io.tmpdir");
+    const auto directory = a.size() == 3 && a[2].ref() ? GuestPath(a[2].ref()->text)
+        : property == vm.options.system_properties.end() ? "/tmp" : GuestPath(DecodeUtf8(property->second));
+    const auto parent = vm.guest_files.find(directory);
+    if (parent == vm.guest_files.end() || parent->second) {
+      vm.Fail("Ljava/io/IOException;", "Invalid temporary file directory");
+    }
+    const auto start = (directory == "/" ? directory : directory + '/') + EncodeUtf8(prefix, false);
+    const auto end = EncodeUtf8(suffix, false);
+    auto* result = vm.heap.Allocate(vm, file);
+    for (;;) {
+      const auto sequence = next_temp_file.value.j();
+      if (sequence == INT64_MAX) vm.Fail("Ljava/io/IOException;", "Temporary file names exhausted");
+      next_temp_file.value = Value::Long(sequence + 1);
+      const auto path = start + std::to_string(sequence + 1) + end;
+      if (CreateGuestFile(vm, path)) {
+        result->text = DecodeUtf8(path);
+        return Value::Ref(result);
+      }
+    }
+  };
+  cl.AddMethod(file, "createTempFile", "(Ljava/lang/String;Ljava/lang/String;)Ljava/io/File;",
+               art::kAccStatic, temp_file);
+  cl.AddMethod(file, "createTempFile", "(Ljava/lang/String;Ljava/lang/String;Ljava/io/File;)Ljava/io/File;",
+               art::kAccStatic, temp_file);
   cl.AddMethod(file, "mkdir", "()Z", 0, [](Runtime& vm, Object* self, Values) {
     return Value::Int(MakeDirectory(vm, GuestPath(self->text), false));
   });

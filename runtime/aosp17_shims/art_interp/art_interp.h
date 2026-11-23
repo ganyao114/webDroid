@@ -131,6 +131,7 @@ class Vm {
   std::string ExceptionSummary() const;
   std::vector<std::string> ExceptionStackTrace() const;
   void ClearException();
+  void RunShutdownHooks();
 
   GcStats Collect();
   void CollectIfNeeded();

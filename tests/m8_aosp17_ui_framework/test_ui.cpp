@@ -49,7 +49,7 @@ void AuditFrameworkNatives(Vm& vm) {
             const auto name = dex->GetTypeDescriptorView(definition.class_idx_);
             const bool art_boot = name == "Ljava/io/FileInputStream;" || name == "Ljava/io/FileOutputStream;" ||
                 name == "Ljava/io/RandomAccessFile;" || name == "Ljava/util/regex/Pattern;" ||
-                name == "Ljava/lang/reflect/Field;";
+                name == "Ljava/lang/reflect/Field;" || name == "Ljava/security/MessageDigest$EmbeddedSha1;";
             if (!art_boot && !name.starts_with("Landroid/graphics/") &&
                 !name.starts_with("Lcom/android/internal/util/") &&
                 name != "Landroid/text/AndroidCharacter;" && name != "Landroid/text/Hyphenator;" &&
@@ -370,6 +370,9 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     Require(ReadInt(vm, "verifyReadWriteLock") == 1, "Cooperative locks preserve hold counts and park permits");
     Require(ReadInt(vm, "verifyRegex") == 1, "Upstream regex captures and Unicode classes use the guest backend");
     Require(ReadInt(vm, "verifyFieldReflection") == 1, "Field reflection reads DEX metadata and respects final fields");
+    Require(ReadInt(vm, "verifyDigest") == 1, "Upstream digest API uses the guest SHA-1 implementation");
+    Require(ReadInt(vm, "verifyJson") == 1, "Upstream JSON serializes and reads nested values");
+    Require(ReadInt(vm, "verifyEmbeddedUrl") == 1, "URL resolves paths and reports unavailable transports as I/O errors");
 
     const auto icon = static_cast<uint32_t>(ReadInt(vm, "iconResource"));
     unsigned queried = 0, applications = 0, launches = 0;
@@ -604,7 +607,11 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     }
     Require(ReadInt(vm, "verifyScheduledExecutor") == 1, "Scheduled work runs through the guest Looper");
     Require(ReadInt(vm, "verifyNestedLooper") == 1, "Nested main Looper resumes into its original exception handlers");
+    Require(ReadInt(vm, "verifyEmbeddedPackage") == 1, "Embedded package exposes manifest version and mount source");
+    Require(ReadInt(vm, "verifyExecutorAndRegisterShutdownHook") == 1, "Executor honors its rejection policy");
     bridge.DestroyActivity(vm);
+    vm.RunShutdownHooks();
+    Require(ReadBool(vm, "shutdownHookRan"), "Guest shutdown hooks run with their registered thread");
     vm.Collect();
 
     const uint64_t apk_calls = vm.NativeCalls("Landroid/content/res/ApkAssets;");
