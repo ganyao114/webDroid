@@ -1,4 +1,5 @@
 #include "native_graphics.h"
+#include "region_data.h"
 #include "software_raster.h"
 
 #include <androidfw/Asset.h>

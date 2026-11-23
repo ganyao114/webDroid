@@ -238,7 +238,8 @@ void SetVectorGradient(JNIEnv* env, jclass, jlong id, jlong shader) {
         auto* path = GetVectorNode(env, id, VectorKind::FullPath);
         if (!path) return;
         if (shader) {
-            const auto* gradient = Peer<GradientData, &State::gradients>(env, shader);
+            const auto peer = GetShader(env, shader);
+            const auto* gradient = peer ? std::get_if<GradientData>(&peer->content) : nullptr;
             if (!gradient) return;
             path->*Field = *gradient;
         } else {
@@ -340,8 +341,8 @@ PathGeometry TrimVectorPath(const VectorNode& node) {
 
 // The display list can preserve solid paths directly. Complex paint and clip
 // paths use the same software path renderer as a Canvas backed by a Bitmap.
-void DrawVectorPath(JNIEnv* env, const CanvasTarget& canvas, const VectorNode& node, jlong filter,
-                    std::span<const jint> clip = {}) {
+void DrawVectorPath(const CanvasTarget& canvas, const VectorNode& node, jlong filter,
+                    std::span<const uint8_t> clip = {}) {
     if (!HasVectorFill(node) && !HasVectorStroke(node)) return;
     std::optional<PathGeometry> adjusted;
     if (node.style.trim_start != 0 || node.style.trim_end != 1) adjusted = TrimVectorPath(node);
@@ -351,8 +352,8 @@ void DrawVectorPath(JNIEnv* env, const CanvasTarget& canvas, const VectorNode& n
     paint.color_filter = filter;
     const auto draw = [&](uint32_t color, float alpha, const std::optional<GradientData>& gradient) {
         paint.color = Opacity(gradient ? 0xffffffffu : color, VectorOpacity(alpha));
-        if (canvas.bitmap) SoftwarePath(env, canvas, geometry, paint, clip, gradient ? &*gradient : nullptr);
-        else EmitPath(env, canvas, geometry, paint);
+        if (canvas.bitmap) RasterizePath(canvas, geometry, paint, gradient ? &*gradient : nullptr, clip);
+        else EmitPath(canvas, geometry, paint);
     };
     if (HasVectorFill(node)) draw(node.style.fill_color, node.style.fill_alpha, node.fill_gradient);
     if (HasVectorStroke(node)) {
@@ -398,33 +399,31 @@ void RecordVectorGroup(JNIEnv* env, const CanvasTarget& canvas, const VectorNode
     for (const auto& child : group.children) {
         if (canvas.state->result != WA_SF_OK) return;
         if (child->kind == VectorKind::Group) RecordVectorGroup(env, canvas, *child, filter);
-        else DrawVectorPath(env, canvas, *child, filter);
+        else DrawVectorPath(canvas, *child, filter);
     }
 }
 
-void RasterVectorGroup(JNIEnv* env, const CanvasTarget& canvas, const VectorNode& group,
-                       std::span<const jint> clip = {}) {
+void RasterVectorGroup(const CanvasTarget& canvas, const VectorNode& group,
+                       std::span<const uint8_t> clip = {}) {
     const auto previous = canvas.data->frame.matrix;
     canvas.data->frame.matrix = Multiply(previous, group.group_matrix);
-    BitmapData mask;
+    std::vector<uint8_t> mask;
     for (const auto& child : group.children) {
         if (child->kind == VectorKind::Group) {
-            RasterVectorGroup(env, canvas, *child, clip);
+            RasterVectorGroup(canvas, *child, clip);
         } else if (child->kind == VectorKind::ClipPath) {
-            BitmapData next;
-            next.width = canvas.bitmap->width;
-            next.height = canvas.bitmap->height;
-            next.pixels.resize(canvas.bitmap->pixels.size());
-            auto mask_canvas = canvas;
-            mask_canvas.bitmap = &next;
-            PaintData paint;
-            SoftwarePath(env, mask_canvas, child->path, paint, clip);
+            const auto transform = RasterTransform(canvas.data->frame);
+            auto next = RasterizeCoverage(child->path, PaintData{}, transform.elements,
+                                          {0, 0, canvas.bitmap->width, canvas.bitmap->height});
+            if (!clip.empty()) {
+                for (size_t i = 0; i < next.size(); ++i)
+                    next[i] = (unsigned(next[i]) * clip[i] + 127) / 255;
+            }
             mask = std::move(next);
-            clip = mask.pixels;
+            clip = mask;
         } else {
-            DrawVectorPath(env, canvas, *child, 0, clip);
+            DrawVectorPath(canvas, *child, 0, clip);
         }
-        if (env->ExceptionCheck()) break;
     }
     canvas.data->frame.matrix = previous;
 }
@@ -462,7 +461,7 @@ void RasterizeVector(JNIEnv* env, const CanvasTarget& destination, VectorTree& t
         data.height = height;
         data.Reset();
         data.frame.matrix = Scaling(width / tree.width, height / tree.height);
-        RasterVectorGroup(env, CanvasTarget{&state, &data, &cache}, *tree.root);
+        RasterVectorGroup(CanvasTarget{&state, &data, &cache}, *tree.root);
         if (env->ExceptionCheck()) return;
         if (filter) {
             PaintData paint;
@@ -478,7 +477,7 @@ void RasterizeVector(JNIEnv* env, const CanvasTarget& destination, VectorTree& t
     PaintData paint;
     paint.color = Opacity(0xffffffffu, tree.alpha);
     paint.flags = tree.antialias ? 2 : 0;
-    PaintBitmap(env, destination, cache, std::numeric_limits<jlong>::min() + id,
+    PaintBitmap(destination, cache, std::numeric_limits<jlong>::min() + id,
                 {0, 0, float(width), float(height)}, bounds, paint);
 }
 

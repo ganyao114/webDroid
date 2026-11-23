@@ -15,6 +15,7 @@ import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.widget.OverScroller;
+import org.wasmandroid.uismoke.NativeGraphicsProbe;
 import org.wasmandroid.uismoke.R;
 
 public final class TileView extends View {
@@ -82,6 +83,7 @@ public final class TileView extends View {
             canvas.drawRect(148, 10, 1400, 100, paint);
             paint.setColor(0xff10223c);
             for (int x = 168; x < 1400; x += 122) canvas.drawCircle(x, 48, 14, paint);
+            NativeGraphicsProbe.drawRecordedShaders(canvas);
         } finally {
             canvas.restoreToCount(save);
         }

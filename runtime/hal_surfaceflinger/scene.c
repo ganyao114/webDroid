@@ -21,6 +21,10 @@ wa_sf_t *wa_sf_create(void) {
 
 void wa_sf_destroy(wa_sf_t *sf) {
     if (sf) {
+        for (uint32_t i = 0; i < WA_SF_MAX_LAYERS; ++i) {
+            free(sf->lists[i][0]);
+            free(sf->lists[i][1]);
+        }
         for (uint32_t i = 0; i < WA_BITMAP_SLOTS; ++i)
             free(sf->bitmaps.entries[i]);
         free(sf);

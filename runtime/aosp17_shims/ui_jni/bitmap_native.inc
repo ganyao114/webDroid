@@ -40,8 +40,8 @@ jobject WrapBitmap(JNIEnv* env, BitmapData bitmap, jint density = -1, jbyteArray
     if (!ctor) return nullptr;
     const jint width = bitmap.width, height = bitmap.height;
     const jboolean premul = bitmap.premultiplied;
-    auto& store = Peers<BitmapData, &State::bitmaps>(*state);
-    const jlong handle = store.Insert(std::move(bitmap));
+    auto& store = Peers<std::shared_ptr<BitmapData>, &State::bitmaps>(*state);
+    const jlong handle = store.Insert(std::make_shared<BitmapData>(std::move(bitmap)));
     jvalue args[7]{};
     args[0].j = handle;
     args[1].i = width;
@@ -88,13 +88,14 @@ void CopyPixels(JNIEnv* env, BitmapData& bitmap, jintArray array, jint offset, j
 }
 
 jobject CreateBitmap(JNIEnv* env, jclass, jintArray colors, jint offset, jint stride,
-                     jint width, jint height, jint config, jboolean mutable_pixels, jlong) {
+                     jint width, jint height, jint config, jboolean mutable_pixels, jlong color_space) {
     return CallSafely(env, [&]() -> jobject {
         if (!ValidSize(width, height) || !ValidConfig(config)) {
             Throw(env, "java/lang/IllegalArgumentException", "Unsupported software bitmap size or config");
             return nullptr;
         }
         auto bitmap = NewBitmapData(width, height, config, mutable_pixels);
+        bitmap.color_space = color_space;
         if (colors) CopyPixels(env, bitmap, colors, offset, stride, 0, 0, width, height, true);
         return env->ExceptionCheck() ? nullptr : WrapBitmap(env, std::move(bitmap));
     });
@@ -136,10 +137,11 @@ void BitmapPixels(JNIEnv* env, jclass, jlong id, jintArray pixels, jint offset, 
     if (auto* bitmap = Bitmap(env, id)) CopyPixels(env, *bitmap, pixels, offset, stride, x, y, width, height, Write);
 }
 void BitmapRecycle(JNIEnv* env, jclass, jlong id) {
-    if (auto* bitmap = Bitmap(env, id)) {
+    if (const auto* peer = Peer<std::shared_ptr<BitmapData>, &State::bitmaps>(env, id)) {
+        const auto& bitmap = *peer;
         bitmap->recycled = true;
         bitmap->Changed();
-        std::vector<jint>{}.swap(bitmap->pixels);
+        if (bitmap.use_count() == 1) std::vector<jint>{}.swap(bitmap->pixels);
     }
 }
 void EraseBitmap(JNIEnv* env, jclass, jlong id, jint color) {
@@ -277,7 +279,11 @@ jboolean CompressBitmap(JNIEnv* env, jclass, jlong id, jint format, jint, jobjec
 jboolean BitmapFalse(JNIEnv*, jclass, jlong) { return false; }
 jboolean BitmapSrgb(JNIEnv* env, jclass, jlong id) {
     const auto* bitmap = Bitmap(env, id);
-    return bitmap && bitmap->config != 1;
+    return bitmap && bitmap->config != 1 && (bitmap->color_space == 0 || bitmap->color_space == 2);
+}
+jboolean BitmapLinearSrgb(JNIEnv* env, jclass, jlong id) {
+    const auto* bitmap = Bitmap(env, id);
+    return bitmap && bitmap->config != 1 && bitmap->color_space == 3;
 }
 void BitmapPrepare(JNIEnv*, jclass, jlong) {
     // Raster pixels are already CPU-accessible. The scene imports them on draw.
@@ -551,17 +557,58 @@ jlong CreateNinePatch(JNIEnv* env, jclass cls, jbyteArray chunk) {
     });
 }
 
-jlong NinePatchTransparentRegion(JNIEnv*, jclass, jlong, jlong, jobject) {
-    // Keep the whole drawable in the compositor's damage region.
-    return 0;
+jlong NinePatchTransparentRegion(JNIEnv* env, jclass, jlong bitmap, jlong chunk, jobject bounds) {
+    return CallSafely(env, [&]() -> jlong {
+        const auto* image = Bitmap(env, bitmap);
+        const auto* patch = Peer<NinePatchData, &State::nine_patches>(env, chunk);
+        const auto rect = ReadRegionRect(env, bounds);
+        if (env->ExceptionCheck() || !image || !patch || image->recycled || !image->has_alpha || !rect.HasArea())
+            return 0;
+        const auto x = PartitionPatch(patch->x_divisions, image->width, rect.left, rect.right, 1);
+        const auto y = PartitionPatch(patch->y_divisions, image->height, rect.top, rect.bottom, 1);
+        const auto round = [](float v) {
+            return static_cast<jint>(std::clamp(std::round(double(v)), double(INT32_MIN), double(INT32_MAX)));
+        };
+        RegionData transparent;
+        std::vector<RegionSpan> spans;
+        size_t previous = 0;
+        for (const auto& row : y) {
+            const auto top = round(row.dst_from), bottom = round(row.dst_to);
+            if (top >= bottom) continue;
+            spans.clear();
+            for (const auto& col : x) {
+                bool empty = true;
+                for (int sy = row.from; empty && sy < row.to; ++sy) {
+                    const auto begin = image->pixels.begin() + size_t(sy) * image->width + int(col.from);
+                    const auto end = begin + int(col.to - col.from);
+                    empty = std::none_of(begin, end, [](jint p) { return uint32_t(p) >> 24; });
+                }
+                const auto left = round(col.dst_from), right = round(col.dst_to);
+                if (!empty || left >= right) continue;
+                if (!spans.empty() && spans.back().second == left) spans.back().second = right;
+                else spans.emplace_back(left, right);
+            }
+            AddRegionBand(transparent, top, bottom, spans, previous);
+        }
+        return transparent.rects.empty() ? 0 : StoreRegion(env, std::move(transparent));
+    });
 }
+void FinalizeNinePatch(JNIEnv* env, jclass, jlong id) {
+    if (auto* state = GetState(env); state && state->nine_patches) state->nine_patches->Erase(id);
+}
+
+#include "bitmap_storage.inc"
 
 void RegisterModernBitmaps(interp::Vm& vm) {
     constexpr const char* bitmap = "android/graphics/Bitmap";
     Register(vm, bitmap,
-             Method<RetainPeer<BitmapData, &State::bitmaps>>(vm, "nRegisterNativeAllocation", "(Landroid/graphics/Bitmap;J)V"),
+             Method<RetainPeer<std::shared_ptr<BitmapData>, &State::bitmaps>>(vm, "nRegisterNativeAllocation", "(Landroid/graphics/Bitmap;J)V"),
              Method<CopyBitmap>(vm, "nativeCopy", "(JIZ)Landroid/graphics/Bitmap;"),
              Method<CopyInternalBitmap>(vm, "nativeCopyPreserveInternalConfig", "(J)Landroid/graphics/Bitmap;"),
+             Method<CopyInternalBitmap>(vm, "nativeCopyAshmem", "(J)Landroid/graphics/Bitmap;"),
+             Method<CopySharedBitmap>(vm, "nativeCopyAshmemConfig", "(JI)Landroid/graphics/Bitmap;"),
+             Method<CreateSharedBitmap>(vm, "nativeCreateEmptyAshmemBitmap", "(IIIJ)Landroid/graphics/Bitmap;"),
+             Method<BitmapSharedFd>(vm, "nativeGetAshmemFD", "(J)I"),
              Method<BitmapFinalizer>(vm, "nativeGetNativeFinalizer", "()J"),
              Method<BitmapFinalizer>(vm, "nativeGetNativeNoop", "()J"),
              Method<BitmapRecycle>(vm, "nativeRecycle", "(J)V"),
@@ -573,6 +620,10 @@ void RegisterModernBitmaps(interp::Vm& vm) {
              Method<PutBitmapPixel>(vm, "nativeSetPixel", "(JIII)V"),
              Method<BitmapPixels<false>>(vm, "nativeGetPixels", "(J[IIIIIII)V"),
              Method<BitmapPixels<true>>(vm, "nativeSetPixels", "(J[IIIIIII)V"),
+             Method<CopyBitmapBuffer<false>>(vm, "nativeCopyPixelsToBuffer", "(JLjava/nio/Buffer;)V"),
+             Method<CopyBitmapBuffer<true>>(vm, "nativeCopyPixelsFromBuffer", "(JLjava/nio/Buffer;)V"),
+             Method<WriteBitmapParcel>(vm, "nativeWriteToParcel", "(JILandroid/os/Parcel;)Z"),
+             Method<ReadBitmapParcel>(vm, "nativeCreateFromParcel", "(Landroid/os/Parcel;)Landroid/graphics/Bitmap;"),
              Method<BitmapRowBytes>(vm, "nativeRowBytes", "(J)I"),
              Method<BitmapAllocBytes>(vm, "nativeGetAllocationByteCount", "(J)I"),
              Method<BitmapGet<&BitmapData::config, jint>>(vm, "nativeConfig", "(J)I"),
@@ -589,13 +640,23 @@ void RegisterModernBitmaps(interp::Vm& vm) {
              Method<BitmapSet<&BitmapData::source, jlong>>(vm, "nativeSetSourceId", "(JJ)V"),
              Method<BitmapFalse>(vm, "nativeIsBackedByAshmem", "(J)Z"),
              Method<BitmapFalse>(vm, "nativeHasGainmap", "(J)Z"),
+             Method<BitmapPlatformBuffer>(vm, "nativeExtractGainmap", "(J)Landroid/graphics/Gainmap;"),
+             Method<BitmapPlatformBuffer>(vm, "nativeGetHardwareBuffer", "(J)Landroid/hardware/HardwareBuffer;"),
+             Method<WrapPlatformBuffer>(vm, "nativeWrapHardwareBufferBitmap",
+                 "(Landroid/hardware/HardwareBuffer;J)Landroid/graphics/Bitmap;"),
              Method<SetBitmapGainmap>(vm, "nativeSetGainmap", "(JJ)V"),
              Method<BitmapSrgb>(vm, "nativeIsSRGB", "(J)Z"),
-             Method<BitmapFalse>(vm, "nativeIsSRGBLinear", "(J)Z"),
+             Method<BitmapLinearSrgb>(vm, "nativeIsSRGBLinear", "(J)Z"),
+             Method<BitmapColorSpace>(vm, "nativeComputeColorSpace", "(J)Landroid/graphics/ColorSpace;"),
+             Method<SetBitmapColorSpace>(vm, "nativeSetColorSpace", "(JJ)V"),
              Method<BitmapPrepare>(vm, "nativePrepareToDraw", "(J)V"),
              Method<SameBitmaps>(vm, "nativeSameAs", "(JJ)Z"),
              Method<ExtractBitmapAlpha>(vm, "nativeExtractAlpha", "(JJ[I)Landroid/graphics/Bitmap;"),
              Method<CompressBitmap>(vm, "nativeCompress", "(JIILjava/io/OutputStream;[B)Z"));
+    if (vm.HasClass("Landroid/graphics/ColorSpace$Rgb$Native;"))
+        Register(vm, "android/graphics/ColorSpace$Rgb$Native",
+                 Method<BitmapFinalizer>(vm, "nativeGetNativeFinalizer", "()J"),
+                 Method<CreateRgbColorSpace>(vm, "nativeCreate", "(FFFFFFF[F)J"));
     Register(vm, "android/graphics/BitmapFactory",
              Method<DecodeByteArray>(vm, "nativeDecodeByteArray", "([BIILandroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;"),
              Method<DecodeStream>(vm, "nativeDecodeStream", "(Ljava/io/InputStream;[BLandroid/graphics/Rect;Landroid/graphics/BitmapFactory$Options;JJ)Landroid/graphics/Bitmap;"),
@@ -612,6 +673,7 @@ void RegisterModernBitmaps(interp::Vm& vm) {
         RegisterIfDeclared(vm, nine_patch,
             Method<RetainPeer<NinePatchData, &State::nine_patches>>(vm, "nRetainChunk",
                 "(Landroid/graphics/NinePatch;J)V"));
+        RegisterIfDeclared(vm, nine_patch, Method<FinalizeNinePatch>(vm, "nativeFinalize", "(J)V"));
     }
 }
 

@@ -186,7 +186,8 @@ function inspectFrame() {
         }
         if (op === Op.PATH && size >= 36 && memory.u32(at + 24) === 1 && memory.u32(at + 4) >>> 24) {
           const x = arg(6), y = arg(7);
-          info.paths.push({ x, y, windowY: translate(x, y)[5] });
+          const [,,,, windowX, windowY] = translate(x, y);
+          info.paths.push({ x, y, windowX, windowY });
           info.sheetOutline ||= memory.u32(at + 8) === 1 && arg(2) === 1 &&
             (memory.u32(at + 4) >>> 24) <= 0x99 && memory.u32(at + 20) >= 6;
         }
@@ -412,6 +413,45 @@ function verifySwipe(from, to, home) {
   assert(dotsMoved, 'Page indicator widths and opacity animate with the swipe');
 }
 
+function longPressWorkspaceIcon(window, home, label) {
+  const { width, height } = viewport;
+  const title = window.texts.find(entry => matchesDrawnLabel(entry.text, label));
+  assert(title, 'Workspace icon has a visible label');
+  const icon = window.bitmaps.find(({ bounds }) => bounds[3] < home.dots[0].bounds[1] &&
+    Math.abs(centerX(bounds) - title.x) < 1 && bounds[3] < title.y && title.y - bounds[3] < 36);
+  assert(icon, 'Workspace icon is visible for the long press');
+  const x = centerX(icon.bounds), y = (icon.bounds[1] + icon.bounds[3]) / 2;
+  const dx = width * (x < width / 2 ? .18 : -.18);
+  const dy = height * (y < home.hotseatTop / 2 ? .25 : -.25);
+  const launches = state().launchCount;
+
+  motion(Action.DOWN, x, y, 1);
+  tick(36);
+  const popup = inspectFrame().get(1);
+  const pickup = popup.bitmaps.some(({ id, bounds }) => Math.abs(centerX(bounds) - x) < 2 &&
+    Math.abs((bounds[1] + bounds[3]) / 2 - y) < 2 &&
+    !window.bitmaps.some(previous => previous.id === id));
+  assert(pickup && popup.texts.some(({ text }) => text === 'App info'),
+    'Launcher3 rendered App info and the lifted icon');
+  motion(Action.MOVE, x + dx / 2, y + dy / 2, 1);
+  tick();
+  motion(Action.MOVE, x + dx, y + dy, 1);
+  tick(12);
+  const dragging = inspectFrame().get(1);
+  const atDragLocation = ({ windowX, windowY }) => Math.abs(windowX - (x + dx)) < rectWidth(icon.bounds) / 3 &&
+    Math.abs(windowY - (y + dy)) < rectHeight(icon.bounds) / 3;
+  assert(dragging.paths.some(atDragLocation) && !window.paths.some(atDragLocation),
+    'Launcher3 rendered the moved icon preview');
+
+  motion(Action.CANCEL, x + dx, y + dy, 1);
+  tick(24);
+  const after = state();
+  assert.equal(after.launchCount, launches);
+  assert.equal(after.workspacePage, 0);
+  assert.equal(after.drawerOpen, false);
+  console.log('Launcher3 workspace icon long press opened App info and rendered a drag preview');
+}
+
 async function verifyDisplay(width, height, locale, query, cubeLabel) {
   const firstPageLabels = locale === 'en-US' ? ['Settings', 'Clock', cubeLabel] : ['设置', '时钟', cubeLabel];
   const secondPageLabels = locale === 'en-US' ? ['Gallery', 'Music', 'WebView Browser Tester'] :
@@ -576,6 +616,12 @@ async function verifyDisplay(width, height, locale, query, cubeLabel) {
     tick();
     verifySystemUiFrame(inspectFrame().get(1), viewport.height);
     tapSystemUi('home', 3, viewport.height);
+    if (locale === 'en-US') {
+      tick(36);
+      const window = inspectFrame().get(1);
+      const geometry = checkHome(window, 0, state().systemUiInsets.bottom, firstPageLabels);
+      longPressWorkspaceIcon(window, geometry, firstPageLabels[0]);
+    }
     console.log(JSON.stringify({ locale, width, height, phase: 'complete', ...state() }));
     return { home, final };
   } finally {

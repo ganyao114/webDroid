@@ -80,6 +80,61 @@ wa_text_metrics_t Measure(State& state, const PaintData& paint, std::u16string_v
 
 namespace {
 
+jlong SetPaintShader(JNIEnv* env, jclass, jlong paint, jlong handle);
+
+void SetRuntimeXfermode(JNIEnv* env, jclass, jlong id, jlong blender) {
+    if (auto* paint = Paint(env, id)) {
+        if (blender) {
+            Throw(env, "java/lang/UnsupportedOperationException", "Runtime shader blenders require Skia");
+        } else {
+            paint->blend = 3;
+        }
+    }
+}
+
+void AppendTextBounds(State& state, PathGeometry& path, const PaintData& paint, std::u16string_view text,
+                      float x, float y) {
+    if (text.empty()) return;
+    const auto metrics = Measure(state, paint, text);
+    if (paint.align == 1) x -= metrics.advance / 2;
+    if (paint.align == 2) x -= metrics.advance;
+    for (size_t index = 0; index < text.size();) {
+        const auto first = text[index];
+        const size_t length = first >= 0xd800 && first <= 0xdbff && index + 1 < text.size() &&
+                              text[index + 1] >= 0xdc00 && text[index + 1] <= 0xdfff ? 2 : 1;
+        const auto glyph = Measure(state, paint, text.substr(index, length));
+        if (first > u' ' && first != 0x00a0 && glyph.advance > 0) {
+            const auto top = y - glyph.ascent, bottom = y + glyph.descent;
+            const float dx = paint.text_skew * (top - y);
+            if (dx == 0) path.Rect({x, top, x + glyph.advance, bottom});
+            else {
+                path.Move(x + dx, top);
+                path.Line(x + glyph.advance + dx, top);
+                path.Line(x + glyph.advance, bottom);
+                path.Line(x, bottom);
+                path.Close();
+            }
+        }
+        x += glyph.advance;
+        index += length;
+    }
+}
+
+template <class Text>
+void GetPaintTextPath(JNIEnv* env, jclass, jlong id, jint, Text text, jint start, jint end,
+                      jfloat x, jfloat y, jlong path) {
+    CallSafely(env, [&] {
+        const auto* paint = Paint(env, id);
+        auto* target = Path(env, path);
+        const auto run = Chars(env, text, start, end);
+        if (!paint || !target || env->ExceptionCheck()) return;
+        PathGeometry result;
+        result.generation = target->generation + 1;
+        AppendTextBounds(*GetState(env), result, *paint, run, x, y);
+        *target = std::move(result);
+    });
+}
+
 jlong CopyPaint(JNIEnv* env, jclass, jlong id) {
     return CallSafely(env, [&]() -> jlong {
         auto* state = GetState(env);
@@ -461,7 +516,14 @@ jlong HostTypeface(JNIEnv* env, jclass, jstring family, jint weight, jboolean it
         return EncodeTypeface(face, weight, italic);
     });
 }
-jlong TypefaceWithFamilies(JNIEnv* env, jclass cls, jlongArray, jlong fallback, jint weight, jint italic) {
+jlong TypefaceWithFamilies(JNIEnv* env, jclass cls, jlongArray families, jlong fallback, jint weight, jint italic) {
+    if (auto* state = GetState(env); state && state->font_families && families &&
+        env->GetArrayLength(families) > 0) {
+        jlong first = 0;
+        env->GetLongArrayRegion(families, 0, 1, &first);
+        if (const auto* family = state->font_families->Find(first); family && !family->faces.empty())
+            fallback = family->faces.front();
+    }
     return TypefaceExact(env, cls, fallback, weight < 0 ? TypefaceWeight(env, cls, fallback) : weight,
                          italic < 0 ? (fallback & 1) : italic != 0);
 }
@@ -508,6 +570,66 @@ void TypefaceDefault(JNIEnv* env, jclass, jlong face) {
 }
 void RegisterGenericTypeface(JNIEnv*, jclass, jstring, jlong) {
     // Java owns the generic family map. The display list uses the face encoded in the value.
+}
+
+jint WriteTypefaces(JNIEnv* env, jclass, jobject buffer, jint offset, jlongArray faces) {
+    return CallSafely(env, [&]() -> jint {
+        const auto count = env->GetArrayLength(faces);
+        if (env->ExceptionCheck() || count > (INT32_MAX - 4) / 8) return 0;
+        const jint size = 4 + 8 * count;
+        if (!buffer) return size;
+        const auto type = env->GetObjectClass(buffer);
+        const auto limit = env->GetMethodID(type, "limit", "()I");
+        const auto put_int = env->GetMethodID(type, "putInt", "(II)Ljava/nio/ByteBuffer;");
+        const auto put_long = env->GetMethodID(type, "putLong", "(IJ)Ljava/nio/ByteBuffer;");
+        if (!limit || !put_int || !put_long || offset < 0 || offset > env->CallIntMethod(buffer, limit) - size)
+            return 0;
+        std::vector<jlong> data(count);
+        env->GetLongArrayRegion(faces, 0, count, data.data());
+        if (env->ExceptionCheck()) return 0;
+        env->DeleteLocalRef(env->CallObjectMethod(buffer, put_int, offset, count));
+        for (jint i = 0; i < count && !env->ExceptionCheck(); ++i)
+            env->DeleteLocalRef(env->CallObjectMethod(buffer, put_long, offset + 4 + i * 8, data[i]));
+        return env->ExceptionCheck() ? 0 : size;
+    });
+}
+jlongArray ReadTypefaces(JNIEnv* env, jclass, jobject buffer, jint offset) {
+    return CallSafely(env, [&]() -> jlongArray {
+        const auto type = env->GetObjectClass(buffer);
+        if (!type) return nullptr;
+        const auto limit_method = env->GetMethodID(type, "limit", "()I");
+        const auto get_int = env->GetMethodID(type, "getInt", "(I)I");
+        const auto get_long = env->GetMethodID(type, "getLong", "(I)J");
+        if (!limit_method || !get_int || !get_long) return nullptr;
+        const auto limit = env->CallIntMethod(buffer, limit_method);
+        if (offset < 0 || offset > limit - 4 || env->ExceptionCheck()) return nullptr;
+        const jint count = env->CallIntMethod(buffer, get_int, offset);
+        if (count < 0 || count > (limit - offset - 4) / 8 || env->ExceptionCheck()) return nullptr;
+        std::vector<jlong> faces(count);
+        for (jint i = 0; i < count && !env->ExceptionCheck(); ++i)
+            faces[i] = env->CallLongMethod(buffer, get_long, offset + 4 + i * 8);
+        if (env->ExceptionCheck()) return nullptr;
+        const auto result = env->NewLongArray(count);
+        if (result) env->SetLongArrayRegion(result, 0, count, faces.data());
+        return result;
+    });
+}
+void SetStaticTypeface(JNIEnv* env, jclass type, jstring name, jobject face) {
+    CallSafely(env, [&] {
+        const auto field = Utf8(env, name);
+        if (env->ExceptionCheck()) return;
+        const auto id = env->GetStaticFieldID(type, field.c_str(), "Landroid/graphics/Typeface;");
+        if (id) env->SetStaticObjectField(type, id, face);
+    });
+}
+void HostTypefaceCollection(JNIEnv*, jclass, jlong) {
+    // The browser owns font collections and resolves the encoded host family.
+}
+void PrepareHostFonts(JNIEnv*, jclass, jstring) {
+    // Font advances are calibrated by SurfaceFlinger when the browser loads its faces.
+}
+jboolean SelectHostFontBackend(JNIEnv*, jclass, jint backend) {
+    return backend == 0;
 }
 } // namespace
 
@@ -576,12 +698,15 @@ void RegisterPaint(interp::Vm& vm) {
              Method<PaintFeatures>(vm, "nSetFontFeatureSettings", "(JLjava/lang/String;)V"),
              Method<PaintShadow>(vm, "nSetShadowLayer", "(JFFFJJ)V"),
              Method<PaintHasShadow>(vm, "nHasShadowLayer", "(J)Z"),
-             Method<PaintExchange<&PaintData::shader>>(vm, "nSetShader", "(JJ)J"),
+             Method<SetPaintShader>(vm, "nSetShader", "(JJ)J"),
              Method<PaintExchange<&PaintData::color_filter>>(vm, "nSetColorFilter", "(JJ)J"),
              Method<PaintExchange<&PaintData::mask_filter>>(vm, "nSetMaskFilter", "(JJ)J"),
              Method<PaintExchange<&PaintData::path_effect>>(vm, "nSetPathEffect", "(JJ)J"),
              Method<PaintTypeface>(vm, "nSetTypeface", "(JJ)V"),
              Method<PaintSet<&PaintData::blend, jint>>(vm, "nSetXfermode", "(JI)V"),
+             Method<SetRuntimeXfermode>(vm, "nSetXfermode", "(JJ)V"),
+             Method<GetPaintTextPath<jstring>>(vm, "nGetTextPath", "(JILjava/lang/String;IIFFJ)V"),
+             Method<GetPaintTextPath<jcharArray>>(vm, "nGetTextPath", "(JI[CIIFFJ)V"),
              Method<PaintMetrics>(vm, "nGetFontMetrics", "(JLandroid/graphics/Paint$FontMetrics;Z)F"),
              Method<PaintMetricsInt>(vm, "nGetFontMetricsInt", "(JLandroid/graphics/Paint$FontMetricsInt;Z)I"),
              Method<PaintTextMetrics<jstring>>(vm, "nGetFontMetricsIntForText", "(JLjava/lang/String;IIIIZLandroid/graphics/Paint$FontMetricsInt;)V"),
@@ -628,5 +753,12 @@ void RegisterTypeface(interp::Vm& vm) {
              Method<TypefaceAxes>(vm, "nativeGetSupportedAxes", "(J)[I"),
              Method<TypefaceDefault>(vm, "nativeSetDefault", "(J)V"),
              Method<ManagedFinalizer>(vm, "nativeGetReleaseFunc", "()J"),
-             Method<RegisterGenericTypeface>(vm, "nativeRegisterGenericFamily", "(Ljava/lang/String;J)V"));
+             Method<RegisterGenericTypeface>(vm, "nativeRegisterGenericFamily", "(Ljava/lang/String;J)V"),
+             Method<WriteTypefaces>(vm, "nativeWriteTypefaces", "(Ljava/nio/ByteBuffer;I[J)I"),
+             Method<ReadTypefaces>(vm, "nativeReadTypefaces", "(Ljava/nio/ByteBuffer;I)[J"),
+             Method<SetStaticTypeface>(vm, "nativeForceSetStaticFinalField", "(Ljava/lang/String;Landroid/graphics/Typeface;)V"),
+             Method<HostTypefaceCollection>(vm, "nativeAddFontCollections", "(J)V"),
+             Method<PrepareHostFonts>(vm, "nativeRegisterLocaleList", "(Ljava/lang/String;)V"),
+             Method<PrepareHostFonts>(vm, "nativeWarmUpCache", "(Ljava/lang/String;)V"),
+             Method<SelectHostFontBackend>(vm, "nativeSetFontRenderingBackend", "(I)Z"));
 }

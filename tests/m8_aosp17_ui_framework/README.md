@@ -14,6 +14,11 @@ exact garbage collection. It also exercises a reader holding the previous
 packet across commits and reopens the APK using the Chinese resource
 configuration.
 
+The JNI audit checks every native declaration in the selected graphics, text,
+input, and utility classes. The graphics fixture checks shader samples and
+shape coverage on both the software bitmap and the recorded display list.
+[JNI audit and signatures](JNI_AUDIT.md)
+
 ## Build and run
 
 The standalone project uses the read-only `third_party/aosp17` checkout and the
@@ -62,7 +67,8 @@ its layer from the scene.
 
 The embedded port implements the listed UI APIs over one active window and a
 cooperative main Looper. The frozen display-list ABI supports screen recordings,
-circle and rounded-rectangle clips, and sampled bitmaps. Offscreen bitmap
-Canvas rendering, arbitrary clip paths, full font shaping and broader Android
-services require additional backends. The image loader supports non-interlaced
-PNG. Upstream Launcher3 execution belongs to the Wave 9 integration.
+circle and rounded-rectangle clips, and sampled bitmaps. The software Canvas
+uses the same shader sampler for offscreen rasters and recorded shapes, including
+arbitrary path clips. Text measurement uses host font metrics, and the image
+loader supports non-interlaced PNG. Upstream Launcher3 execution belongs to the
+Wave 9 integration.

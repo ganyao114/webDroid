@@ -1,4 +1,5 @@
 #include "native_graphics.h"
+#include "region_data.h"
 
 #include "jni_bridge.h"
 #include "software_raster.h"
@@ -431,7 +432,11 @@ void DrawGradient(JNIEnv* env, jclass, jfloat l, jfloat t, jfloat r, jfloat b, j
 } // namespace
 
 #include "paint.inc"
+#include "animated_image.inc"
+#include "graphics_compat.inc"
 #include "paint_effects.inc"
+#include "interpolator.inc"
+#include "region.inc"
 #include "recording_canvas.inc"
 #include "vector_drawable.inc"
 
@@ -444,6 +449,10 @@ void RegisterCanvas(interp::Vm& vm) {
     RegisterPaint(vm);
     RegisterTypeface(vm);
     RegisterPaintEffects(vm);
+    RegisterRegions(vm);
+    RegisterInterpolators(vm);
+    RegisterGraphicsCompatibility(vm);
+    RegisterAnimatedImages(vm);
 }
 
 void RegisterMatrix(interp::Vm& vm) {

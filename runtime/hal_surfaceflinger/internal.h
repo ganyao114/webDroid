@@ -39,7 +39,9 @@ struct wa_sf {
     int32_t txn_error;
     uint32_t in_transaction;
     wa_layer_state_t committed[WA_SF_MAX_LAYERS], staged[WA_SF_MAX_LAYERS];
-    uint8_t lists[WA_SF_MAX_LAYERS][2][WA_SF_LAYER_LIST_CAPACITY];
+    // Recording banks are allocated on first use. Published frame packets
+    // own copies and retain their fixed wire layout.
+    uint8_t *lists[WA_SF_MAX_LAYERS][2];
     wa_canvas_t canvas;
     wa_frame_storage_t frames[2];
     wa_bitmap_store_t bitmaps;

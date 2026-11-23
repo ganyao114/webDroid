@@ -8,6 +8,7 @@
 #include <cmath>
 #include <optional>
 #include <unordered_map>
+#include <variant>
 
 namespace wa::ui_jni::detail {
 
@@ -24,10 +25,14 @@ class GraphicsPeers : public std::enable_shared_from_this<GraphicsPeers<T>> {
     }
 
     T* Get(JNIEnv* env, jlong handle) {
-        const auto it = peers_.find(handle);
-        if (it != peers_.end()) return &it->second.data;
+        if (auto* data = Find(handle)) return data;
         Throw(env, "java/lang/IllegalStateException", "Invalid native graphics handle");
         return nullptr;
+    }
+
+    T* Find(jlong handle) {
+        const auto it = peers_.find(handle);
+        return it == peers_.end() ? nullptr : &it->second.data;
     }
 
     void Retain(JNIEnv* env, jobject peer, jlong handle) {
@@ -98,7 +103,8 @@ struct PaintData {
     float letter_spacing = 0.f, word_spacing = 0.f;
     float shadow_radius = 0.f, shadow_dx = 0.f, shadow_dy = 0.f;
     uint32_t shadow_color = 0;
-    jlong shader = 0, color_filter = 0, mask_filter = 0, path_effect = 0, typeface = 0;
+    jlong shader_handle = 0, color_filter = 0, mask_filter = 0, path_effect = 0, typeface = 0;
+    std::shared_ptr<const ShaderData> shader;
     std::string features;
     FontVariation variation;
 
@@ -135,6 +141,16 @@ struct PathGeometry {
     bool Empty() const;
 };
 
+inline std::vector<interp::Value> RasterPathValues(const PathGeometry& path) {
+    std::vector<interp::Value> values;
+    values.reserve(path.verbs.size() * 7);
+    for (const auto& verb : path.verbs) {
+        values.push_back(interp::Value::Float(verb.command));
+        for (float coordinate : verb.points) values.push_back(interp::Value::Float(coordinate));
+    }
+    return values;
+}
+
 std::optional<PathGeometry> ParseSvgPath(JNIEnv* env, jstring text);
 std::optional<PathGeometry> PathFromSvgData(JNIEnv* env, jlong handle);
 
@@ -143,6 +159,7 @@ struct BitmapData {
     bool has_alpha = true, premultiplied = true, immutable = false, mipmap = false, recycled = false;
     jint generation = 1;
     jlong source = -1;
+    jlong color_space = 0;
     std::vector<jint> pixels;
 
     void Changed() { generation = generation == INT32_MAX ? 1 : generation + 1; }
@@ -154,11 +171,82 @@ struct NinePatchData {
     std::vector<int32_t> y_divisions;
 };
 
+struct PatchSpan {
+    float from, to, dst_from, dst_to;
+};
+
+inline std::vector<PatchSpan> PartitionPatch(std::span<const int32_t> divisions, float size,
+                                      float start, float end, float density) {
+    float stretch = 0;
+    for (size_t i = 0; i < divisions.size(); i += 2)
+        stretch += std::min<float>(size, divisions[i + 1]) - std::min<float>(size, divisions[i]);
+    const float fixed = size - stretch, extent = end - start;
+    const float fixed_scale = fixed > 0 ? std::min(density, extent / fixed) : density;
+    const float stretch_scale = stretch > 0 ? std::max(0.f, extent - fixed * fixed_scale) / stretch : 0;
+    std::vector<PatchSpan> spans;
+    spans.reserve(divisions.size() + 1);
+    float from = 0, dst = start;
+    for (size_t i = 0; i <= divisions.size(); ++i) {
+        const float to = i == divisions.size() ? size : std::min<float>(size, divisions[i]);
+        const float next = i == divisions.size() ? end :
+            std::min(end, dst + (to - from) * (i % 2 ? stretch_scale : fixed_scale));
+        if (to > from && next > dst) spans.push_back({from, to, dst, next});
+        from = to;
+        dst = next;
+    }
+    return spans;
+}
+
 struct GradientData {
     jint type, tile;
     std::array<float, 4> geometry;
     std::vector<jfloat> positions;
     std::vector<jint> colors;
+};
+
+struct BitmapShaderData {
+    std::shared_ptr<const BitmapData> bitmap;
+    jint tile_x, tile_y;
+    bool filter;
+};
+
+struct ComposeShaderData {
+    std::shared_ptr<const ShaderData> destination, source;
+    jint mode;
+};
+
+struct ShaderData {
+    std::variant<GradientData, BitmapShaderData, ComposeShaderData> content;
+    std::optional<Matrix9> inverse = kIdentity;
+};
+
+struct ColorSpaceData {
+    std::array<jfloat, 7> transfer;
+    Matrix9 to_xyz;
+};
+
+struct FontFamilyData {
+    std::string languages;
+    jint variant = 0;
+    std::vector<std::pair<jint, jfloat>> axes;
+    std::vector<jlong> faces;
+};
+
+struct GlyphRunData {
+    struct Glyph {
+        jint codepoint;
+        jfloat x;
+    };
+    std::vector<Glyph> glyphs;
+    wa_text_metrics_t metrics{};
+    jlong face = 0;
+    FontVariation variation;
+    bool fake_bold = false;
+};
+
+enum HostFinalizer : jlong {
+    kFinalizeFontFamily = 1,
+    kFinalizeGlyphRun = 2,
 };
 
 struct CanvasData;
@@ -193,7 +281,8 @@ inline PathGeometry* Path(JNIEnv* env, jlong handle) {
     return Peer<PathGeometry, &State::paths>(env, handle);
 }
 inline BitmapData* Bitmap(JNIEnv* env, jlong handle) {
-    return Peer<BitmapData, &State::bitmaps>(env, handle);
+    const auto* bitmap = Peer<std::shared_ptr<BitmapData>, &State::bitmaps>(env, handle);
+    return bitmap ? bitmap->get() : nullptr;
 }
 
 std::u16string Chars(JNIEnv* env, jstring string, jint start, jint end);
