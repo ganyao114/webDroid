@@ -341,6 +341,7 @@ struct Session {
     std::map<std::string, Package, std::less<>> catalog;
     std::map<uint32_t, WebViewLayer> webviews;
     Vm vm{wa::interp::Options{.gc_interval = 4096, .verify_dex = true, .capture_exception_stack = true,
+        .sandboxed_files = true,
         .system_properties = {{"org.wasmandroid.foreground", "true"}}}};
     wa::ui_jni::UiBridge ui;
     std::string package_name, activity_class, activity_descriptor, application_class,
@@ -567,6 +568,7 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
         s.catalog.insert_or_assign(s.package_name, std::move(package));
         s.boot_attempted = true;
 
+        s.vm.MountReadOnlyFile(apk_path, {bytes, size});
         s.vm.LoadApkDexFiles(apk_path);
         const auto prefix = apk_path + '!';
         if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))

@@ -22,6 +22,7 @@ REPO = Path(__file__).resolve().parents[2]
 PROFILE = REPO / "patches/aosp17/frameworks_base"
 COMPATIBILITY = Path(__file__).with_name("framework_build")
 JAVA_BASE = Path("libcore/ojluni/src/main/java")
+LIBCORE_LUNI = Path("libcore/luni/src/main/java")
 SPARSE_FRAMEWORK_ROOTS = ("frameworks/base/core/java", "frameworks/base/media/java")
 SPARSE_SOURCE_MIRRORS = {
     "frameworks/base/core/java/android/service/notification/StatusBarNotification.java":
@@ -671,7 +672,9 @@ def build(args, stage):
         for name in sorted(groups[group]):
             data = java[name]
             if group == "java-base":
-                staged[group].append(stage_java(java_base, Path(name).relative_to(JAVA_BASE), data))
+                source = Path(name)
+                base = LIBCORE_LUNI if source.is_relative_to(LIBCORE_LUNI) else JAVA_BASE
+                staged[group].append(stage_java(java_base, source.relative_to(base), data))
             else:
                 staged[group].append(stage_java(stage / "upstream", name, data))
             applied = {patch: stat["files"][name] for patch, stat in patches.items()

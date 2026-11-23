@@ -37,7 +37,7 @@ target_include_directories(aosp17_core_jni PRIVATE "${_interp}")
 
 _wa_art_static(aosp17_art_interp "${_interp}"
     class_linker.cpp gc_heap.cpp interpreter.cpp runtime.cpp boot.cpp boot_collections.cpp
-    boot_platform.cpp jni.cpp tier1.cpp)
+    boot_platform.cpp boot_files.cpp jni.cpp tier1.cpp)
 target_include_directories(aosp17_art_interp PUBLIC "${_interp}"
     PRIVATE "${AOSP17_SOURCE_DIR}/art/runtime")
 target_link_libraries(aosp17_art_interp PUBLIC aosp17_libdexfile aosp17_libartbase

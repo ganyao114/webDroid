@@ -57,6 +57,7 @@ struct Options {
   InstallWasm install_wasm;
   bool verify_dex = true;  // Disable only for trusted, previously verified inputs.
   bool capture_exception_stack = false;
+  bool sandboxed_files = false;
   // Java's process state is supplied by the embedder.
   std::unordered_map<std::string, std::string> system_properties;
   std::unordered_map<std::string, std::string> environment;
@@ -103,6 +104,8 @@ class Vm {
   // Fills holes in the existing class path without replacing earlier definitions.
   void LoadFallbackDexFile(const std::string& path);
   void LoadFallbackDexFile(std::string location, std::vector<uint8_t> bytes);
+  // Copies an immutable file into this VM's guest filesystem.
+  void MountReadOnlyFile(std::string_view path, std::span<const uint8_t> bytes);
   // Adds the numbered DEX entries atomically, in DEX order. DEX files loaded
   // via LoadDexFile or LoadFallbackDexFile form the parent class path.
   // Keep the APK immutable while it is in use because entries can be file-backed.

@@ -57,6 +57,11 @@ GcStats GcHeap::Collect(Runtime& runtime) {
     for (Value value : scope->borrowed) mark(value.ref());
     for (Value value : scope->values) mark(value.ref());
   }
+  for (const auto& loop : runtime.suspended_loops) {
+    for (const auto& frame : loop) {
+      for (Value value : frame.slots) mark(value.ref());
+    }
+  }
   for (Object* string : runtime.dex_literals) mark(string);
   runtime.linker.VisitRoots(mark);
   runtime.jni->VisitRoots(mark);
@@ -82,6 +87,8 @@ GcStats GcHeap::Collect(Runtime& runtime) {
     }
   }
   runtime.jni->SweepNativePeers();
+  std::erase_if(runtime.file_handles, [](const auto& entry) { return !entry.first->marked; });
+  std::erase_if(runtime.regex_programs, [](const auto& entry) { return !entry.first->marked; });
   std::erase_if(runtime.interned, [](const auto& entry) { return !entry.second->marked; });
   for (const auto& slab : slabs_) {
     for (size_t i = 0; i < kSlabSize; ++i) {

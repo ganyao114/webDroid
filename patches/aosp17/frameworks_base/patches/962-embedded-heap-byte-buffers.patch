@@ -1,0 +1,624 @@
+--- a/libcore/ojluni/src/main/java/java/nio/Buffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/Buffer.java
+@@ -26,15 +26,10 @@
+ 
+ package java.nio;
+ 
+-import jdk.internal.misc.Unsafe;
+ import jdk.internal.vm.annotation.IntrinsicCandidate;
+ 
+-import java.io.FileDescriptor;
+ import java.util.Spliterator;
+-import jdk.internal.access.SharedSecrets;
+-import jdk.internal.access.JavaNioAccess;
+-
+-import jdk.internal.misc.Unsafe;
++
+ 
+ /**
+  * A container for data of a specific primitive type.
+@@ -189,9 +184,6 @@
+  */
+ 
+ public abstract class Buffer {
+-    // Cached unsafe-access object
+-    static final Unsafe UNSAFE = Unsafe.getUnsafe();
+-
+     // Android-removed: Remove unsupported scoped memory access.
+     // static final ScopedMemoryAccess SCOPED_MEMORY_ACCESS = ScopedMemoryAccess.getScopedMemoryAccess();
+ 
+@@ -816,102 +808,4 @@
+         return _elementSizeShift;
+     }
+ 
+-    static {
+-        // setup access to this package in SharedSecrets
+-        SharedSecrets.setJavaNioAccess(
+-            new JavaNioAccess() {
+-                // Android-removed: Remove unused methods in JavaNioAccess.
+-                /*
+-                @Override
+-                public BufferPool getDirectBufferPool() {
+-                    return Bits.BUFFER_POOL;
+-                }
+-
+-                @Override
+-                public ByteBuffer newDirectByteBuffer(long addr, int cap, Object obj, MemorySegmentProxy segment) {
+-                    return new DirectByteBuffer(addr, cap, obj, segment);
+-                }
+-
+-                @Override
+-                public ByteBuffer newMappedByteBuffer(UnmapperProxy unmapperProxy, long address, int cap, Object obj, MemorySegmentProxy segment) {
+-                    return new DirectByteBuffer(address, cap, obj, unmapperProxy.fileDescriptor(), unmapperProxy.isSync(), segment);
+-                }
+-
+-                @Override
+-                public ByteBuffer newHeapByteBuffer(byte[] hb, int offset, int capacity, MemorySegmentProxy segment) {
+-                    return new HeapByteBuffer(hb, -1, 0, capacity, capacity, offset, segment);
+-                }
+-
+-                @Override
+-                public Object getBufferBase(ByteBuffer bb) {
+-                    return bb.base();
+-                }
+-
+-                @Override
+-                public long getBufferAddress(ByteBuffer bb) {
+-                    return bb.address;
+-                }
+-
+-                @Override
+-                public UnmapperProxy unmapper(ByteBuffer bb) {
+-                    if (bb instanceof MappedByteBuffer) {
+-                        return ((MappedByteBuffer)bb).unmapper();
+-                    } else {
+-                        return null;
+-                    }
+-                }
+-
+-                @Override
+-                public MemorySegmentProxy bufferSegment(Buffer buffer) {
+-                    return buffer.segment;
+-                }
+-
+-                @Override
+-                public Scope.Handle acquireScope(Buffer buffer, boolean async) {
+-                    var scope = buffer.scope();
+-                    if (scope == null) {
+-                        return null;
+-                    }
+-                    if (async && scope.ownerThread() != null) {
+-                        throw new IllegalStateException("Confined scope not supported");
+-                    }
+-                    return scope.acquire();
+-                }
+-
+-                @Override
+-                public void force(FileDescriptor fd, long address, boolean isSync, long offset, long size) {
+-                    MappedMemoryUtils.force(fd, address, isSync, offset, size);
+-                }
+-
+-                @Override
+-                public void load(long address, boolean isSync, long size) {
+-                    MappedMemoryUtils.load(address, isSync, size);
+-                }
+-
+-                @Override
+-                public void unload(long address, boolean isSync, long size) {
+-                    MappedMemoryUtils.unload(address, isSync, size);
+-                }
+-
+-                @Override
+-                public boolean isLoaded(long address, boolean isSync, long size) {
+-                    return MappedMemoryUtils.isLoaded(address, isSync, size);
+-                }
+-
+-                @Override
+-                public void reserveMemory(long size, long cap) {
+-                    Bits.reserveMemory(size, cap);
+-                }
+-
+-                @Override
+-                public void unreserveMemory(long size, long cap) {
+-                    Bits.unreserveMemory(size, cap);
+-                }
+-                */
+-                @Override
+-                public int pageSize() {
+-                    return Bits.pageSize();
+-                }
+-            });
+-    }
+ }
+--- a/libcore/ojluni/src/main/java/java/nio/ByteBuffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/ByteBuffer.java
+@@ -40,10 +40,6 @@
+ 
+ 
+ import java.util.Objects;
+-import jdk.internal.misc.Unsafe;
+-import jdk.internal.util.ArraysSupport;
+-import libcore.io.Memory;
+-import dalvik.annotation.codegen.CovariantReturnType;
+ 
+ // Android-changed: Fix that if[byte] isn't processed by the SppTool. Upstream doc has the same bug.
+ /**
+@@ -274,7 +270,6 @@
+     implements Comparable<ByteBuffer>
+ {
+     // Cached array base offset
+-    private static final long ARRAY_BASE_OFFSET = Unsafe.ARRAY_BYTE_BASE_OFFSET;
+ 
+     // These fields are declared here rather than in Heap-X-Buffer in order to
+     // reduce the number of virtual method invocations needed to access these
+@@ -342,10 +337,7 @@
+      *          If the {@code capacity} is a negative integer
+      */
+     public static ByteBuffer allocateDirect(int capacity) {
+-        // Android-changed: Android's DirectByteBuffers carry a MemoryRef.
+-        // return new DirectByteBuffer(capacity);
+-        DirectByteBuffer.MemoryRef memoryRef = new DirectByteBuffer.MemoryRef(capacity);
+-        return new DirectByteBuffer(capacity, memoryRef);
++        throw new UnsupportedOperationException("Direct buffer memory is unavailable");
+     }
+ 
+ 
+@@ -1156,23 +1148,9 @@
+             // System.arraycopy is intrinsified by ART and therefore tiny bit faster than memmove
+             System.arraycopy(src.hb, srcPos + src.offset, hb, pos + offset, n);
+         } else {
+-            // Use the buffer object (and the raw memory address) if it's a direct buffer. Note that
+-            // isDirect() doesn't imply !hasArray(), ByteBuffer.allocateDirect allocated buffer will
+-            // have a backing, non-gc-movable byte array. JNI allocated direct byte buffers WILL NOT
+-            // have a backing array.
+-            final Object srcObject = src.isDirect() ? src : src.hb;
+-            int srcOffset = srcPos;
+-            if (!src.isDirect()) {
+-                srcOffset += src.offset;
+-            }
+-
+-            final ByteBuffer dst = this;
+-            final Object dstObject = dst.isDirect() ? dst : dst.hb;
+-            int dstOffset = pos;
+-            if (!dst.isDirect()) {
+-                dstOffset += dst.offset;
+-            }
+-            Memory.memmove(dstObject, dstOffset, srcObject, srcOffset, n);
++            byte[] copy = new byte[n];
++            for (int i = 0; i < n; i++) copy[i] = src.get(srcPos + i);
++            for (int i = 0; i < n; i++) put(pos + i, copy[i]);
+         }
+ 
+ 
+@@ -1644,7 +1622,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = ByteBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer position(int newPosition) {
+@@ -1656,7 +1633,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = ByteBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer limit(int newLimit) {
+@@ -1669,7 +1645,6 @@
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+     @Override
+-    @CovariantReturnType(returnType = ByteBuffer.class, presentAfter = 28)
+     public
+     Buffer mark() {
+         super.mark();
+@@ -1680,7 +1655,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = ByteBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer reset() {
+@@ -1692,7 +1666,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = ByteBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer clear() {
+@@ -1704,7 +1677,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = ByteBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer flip() {
+@@ -1717,7 +1689,6 @@
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+     @Override
+-    @CovariantReturnType(returnType = ByteBuffer.class, presentAfter = 28)
+     public
+     Buffer rewind() {
+         super.rewind();
+@@ -1877,7 +1848,7 @@
+         int thatRem = that.limit() - thatPos;
+         if (thisRem < 0 || thisRem != thatRem)
+             return false;
+-        return BufferMismatch.mismatch(this, thisPos,
++        return mismatchBytes(this, thisPos,
+                                        that, thatPos,
+                                        thisRem) < 0;
+     }
+@@ -1913,7 +1884,7 @@
+         int length = Math.min(thisRem, thatRem);
+         if (length < 0)
+             return -1;
+-        int i = BufferMismatch.mismatch(this, thisPos,
++        int i = mismatchBytes(this, thisPos,
+                                         that, thatPos,
+                                         length);
+         if (i >= 0) {
+@@ -1965,7 +1936,7 @@
+         int length = Math.min(thisRem, thatRem);
+         if (length < 0)
+             return -1;
+-        int r = BufferMismatch.mismatch(this, thisPos,
++        int r = mismatchBytes(this, thisPos,
+                                         that, thatPos,
+                                         length);
+         return (r == -1 && thisRem != thatRem) ? length : r;
+@@ -2263,6 +2234,13 @@
+         = true;
+     boolean nativeByteOrder                             // package-private
+         = (ByteOrder.nativeOrder() == ByteOrder.BIG_ENDIAN);
++
++    private static int mismatchBytes(ByteBuffer a, int aOffset, ByteBuffer b, int bOffset, int length) {
++        for (int i = 0; i < length; i++) {
++            if (a.get(aOffset + i) != b.get(bOffset + i)) return i;
++        }
++        return -1;
++    }
+ 
+     /**
+      * Retrieves this buffer's byte order.
+@@ -2370,7 +2348,7 @@
+ 
+         // BEGIN Android-changed: Android specific alignment calculation.
+         // return (int) ((address + index) & (unitSize - 1));
+-        final long baseAddress = isDirect() ? address : (ARRAY_BASE_OFFSET + offset);
++        final long baseAddress = isDirect() ? address : offset;
+ 
+         final long elementAddress = baseAddress + index;
+         return (int) (elementAddress & (unitSize - 1));
+--- a/libcore/ojluni/src/main/java/java/nio/HeapByteBuffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/HeapByteBuffer.java
+@@ -30,7 +30,6 @@
+ package java.nio;
+ 
+ import java.util.Objects;
+-import libcore.io.Memory;
+ 
+ /**
+ 
+@@ -49,10 +48,8 @@
+     // Android-removed: Removed unused constants.
+     /*
+     // Cached array base offset
+-    private static final long ARRAY_BASE_OFFSET = UNSAFE.arrayBaseOffset(byte[].class);
+ 
+     // Cached array index scale
+-    private static final long ARRAY_INDEX_SCALE = UNSAFE.arrayIndexScale(byte[].class);
+     */
+ 
+     // For speed these fields are actually declared in X-Buffer;
+@@ -485,7 +482,7 @@
+ 
+     @Override
+     void getUnchecked(int pos, char[] dst, int dstOffset, int length) {
+-        Memory.unsafeBulkGet(dst, dstOffset, length * 2, hb, ix(pos), 2, !nativeByteOrder);
++        for (int i = 0; i < length; i++) dst[dstOffset + i] = getCharUnchecked(pos + i * 2);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+@@ -520,39 +517,13 @@
+ 
+     @Override
+     void putUnchecked(int pos, char[] src, int srcOffset, int length) {
+-        Memory.unsafeBulkPut(hb, ix(pos), length * 2, src, srcOffset, 2, !nativeByteOrder);
++        for (int i = 0; i < length; i++) putCharUnchecked(pos + i * 2, src[srcOffset + i]);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+     @Override
+     public CharBuffer asCharBuffer() {
+-        int pos = position();
+-        int size = (limit() - pos) >> 1;
+-        // Android-removed: buffer.address is only used by Direct*Buffer.
+-        // long addr = address + pos;
+-        // Android-changed: Merge the big and little endian buffer class.
+-        /*
+-        return (bigEndian
+-                ? (CharBuffer)(new ByteBufferAsCharBufferB(this,
+-                                                               -1,
+-                                                               0,
+-                                                               size,
+-                                                               size,
+-                                                               addr, segment))
+-                : (CharBuffer)(new ByteBufferAsCharBufferL(this,
+-                                                               -1,
+-                                                               0,
+-                                                               size,
+-                                                               size,
+-                                                               addr, segment)));
+-        */
+-        return new ByteBufferAsCharBuffer(this,
+-                -1,
+-                0,
+-                size,
+-                size,
+-                pos,
+-                order());
++        throw new UnsupportedOperationException("Typed buffer view is unavailable");
+     }
+ 
+ 
+@@ -590,7 +561,7 @@
+ 
+     @Override
+     void getUnchecked(int pos, short[] dst, int dstOffset, int length) {
+-        Memory.unsafeBulkGet(dst, dstOffset, length * 2, hb, ix(pos), 2, !nativeByteOrder);
++        for (int i = 0; i < length; i++) dst[dstOffset + i] = getShortUnchecked(pos + i * 2);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+@@ -638,39 +609,13 @@
+ 
+     @Override
+     void putUnchecked(int pos, short[] src, int srcOffset, int length) {
+-        Memory.unsafeBulkPut(hb, ix(pos), length * 2, src, srcOffset, 2, !nativeByteOrder);
++        for (int i = 0; i < length; i++) putShortUnchecked(pos + i * 2, src[srcOffset + i]);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+     @Override
+     public ShortBuffer asShortBuffer() {
+-        int pos = position();
+-        int size = (limit() - pos) >> 1;
+-        // Android-removed: buffer.address is only used by Direct*Buffer.
+-        // long addr = address + pos;
+-        // Android-changed: Merge the big and little endian buffer class.
+-        /*
+-        return (bigEndian
+-                ? (ShortBuffer)(new ByteBufferAsShortBufferB(this,
+-                                                                 -1,
+-                                                                 0,
+-                                                                 size,
+-                                                                 size,
+-                                                                 addr, segment))
+-                : (ShortBuffer)(new ByteBufferAsShortBufferL(this,
+-                                                                 -1,
+-                                                                 0,
+-                                                                 size,
+-                                                                 size,
+-                                                                 addr, segment)));
+-        */
+-        return new ByteBufferAsShortBuffer(this,
+-                -1,
+-                0,
+-                size,
+-                size,
+-                pos,
+-                order());
++        throw new UnsupportedOperationException("Typed buffer view is unavailable");
+     }
+ 
+ 
+@@ -714,7 +659,7 @@
+ 
+     @Override
+     void getUnchecked(int pos, int[] dst, int dstOffset, int length) {
+-        Memory.unsafeBulkGet(dst, dstOffset, length * 4, hb, ix(pos), 4, !nativeByteOrder);
++        for (int i = 0; i < length; i++) dst[dstOffset + i] = getIntUnchecked(pos + i * 4);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+@@ -767,38 +712,13 @@
+ 
+     @Override
+     void putUnchecked(int pos, int[] src, int srcOffset, int length) {
+-        Memory.unsafeBulkPut(hb, ix(pos), length * 4, src, srcOffset, 4, !nativeByteOrder);
++        for (int i = 0; i < length; i++) putIntUnchecked(pos + i * 4, src[srcOffset + i]);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+     @Override
+     public IntBuffer asIntBuffer() {
+-        int pos = position();
+-        int size = (limit() - pos) >> 2;
+-        // Android-removed: buffer.address is only used by Direct*Buffer.
+-        // long addr = address + pos;
+-        // Android-changed: Merge the big and little endian buffer class.
+-        /*
+-        return (bigEndian
+-                ? (IntBuffer)(new ByteBufferAsIntBufferB(this,
+-                                                             -1,
+-                                                             0,
+-                                                             size,
+-                                                             size,
+-                                                             addr, segment))
+-                : (IntBuffer)(new ByteBufferAsIntBufferL(this,
+-                                                             -1,
+-                                                             0,
+-                                                             size,
+-                                                             addr, segment)));
+-        */
+-        return new ByteBufferAsIntBuffer(this,
+-                -1,
+-                0,
+-                size,
+-                size,
+-                pos,
+-                order());
++        throw new UnsupportedOperationException("Typed buffer view is unavailable");
+     }
+ 
+ 
+@@ -853,7 +773,7 @@
+ 
+     @Override
+     void getUnchecked(int pos, long[] dst, int dstOffset, int length) {
+-        Memory.unsafeBulkGet(dst, dstOffset, length * 8, hb, ix(pos), 8, !nativeByteOrder);
++        for (int i = 0; i < length; i++) dst[dstOffset + i] = getLongUnchecked(pos + i * 8);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+@@ -917,39 +837,13 @@
+ 
+     @Override
+     void putUnchecked(int pos, long[] src, int srcOffset, int length) {
+-        Memory.unsafeBulkPut(hb, ix(pos), length * 8, src, srcOffset, 8, !nativeByteOrder);
++        for (int i = 0; i < length; i++) putLongUnchecked(pos + i * 8, src[srcOffset + i]);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+     @Override
+     public LongBuffer asLongBuffer() {
+-        int pos = position();
+-        int size = (limit() - pos) >> 3;
+-        // Android-removed: buffer.address is only used by Direct*Buffer.
+-        // long addr = address + pos;
+-        // Android-changed: Merge the big and little endian buffer class.
+-        /*
+-        return (bigEndian
+-                ? (LongBuffer)(new ByteBufferAsLongBufferB(this,
+-                                                               -1,
+-                                                               0,
+-                                                               size,
+-                                                               size,
+-                                                               addr, segment))
+-                : (LongBuffer)(new ByteBufferAsLongBufferL(this,
+-                                                               -1,
+-                                                               0,
+-                                                               size,
+-                                                               size,
+-                                                               addr, segment)));
+-        */
+-        return new ByteBufferAsLongBuffer(this,
+-                -1,
+-                0,
+-                size,
+-                size,
+-                pos,
+-                order());
++        throw new UnsupportedOperationException("Typed buffer view is unavailable");
+     }
+ 
+ 
+@@ -983,7 +877,7 @@
+ 
+     @Override
+     void getUnchecked(int pos, float[] dst, int dstOffset, int length) {
+-        Memory.unsafeBulkGet(dst, dstOffset, length * 4, hb, ix(pos), 4, !nativeByteOrder);
++        for (int i = 0; i < length; i++) dst[dstOffset + i] = getFloatUnchecked(pos + i * 4);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+@@ -1025,39 +919,13 @@
+ 
+     @Override
+     void putUnchecked(int pos, float[] src, int srcOffset, int length) {
+-        Memory.unsafeBulkPut(hb, ix(pos), length * 4, src, srcOffset, 4, !nativeByteOrder);
++        for (int i = 0; i < length; i++) putFloatUnchecked(pos + i * 4, src[srcOffset + i]);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+     @Override
+     public FloatBuffer asFloatBuffer() {
+-        int pos = position();
+-        int size = (limit() - pos) >> 2;
+-        // Android-removed: buffer.address is only used by Direct*Buffer.
+-        // long addr = address + pos;
+-        // Android-changed: Merge the big and little endian buffer class.
+-        /*
+-        return (bigEndian
+-                ? (FloatBuffer)(new ByteBufferAsFloatBufferB(this,
+-                                                                 -1,
+-                                                                 0,
+-                                                                 size,
+-                                                                 size,
+-                                                                 addr, segment))
+-                : (FloatBuffer)(new ByteBufferAsFloatBufferL(this,
+-                                                                 -1,
+-                                                                 0,
+-                                                                 size,
+-                                                                 size,
+-                                                                 addr, segment)));
+-        */
+-        return new ByteBufferAsFloatBuffer(this,
+-                -1,
+-                0,
+-                size,
+-                size,
+-                pos,
+-                order());
++        throw new UnsupportedOperationException("Typed buffer view is unavailable");
+     }
+ 
+ 
+@@ -1091,7 +959,7 @@
+ 
+     @Override
+     void getUnchecked(int pos, double[] dst, int dstOffset, int length) {
+-        Memory.unsafeBulkGet(dst, dstOffset, length * 8, hb, ix(pos), 8, !nativeByteOrder);
++        for (int i = 0; i < length; i++) dst[dstOffset + i] = getDoubleUnchecked(pos + i * 8);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+@@ -1133,39 +1001,13 @@
+ 
+     @Override
+     void putUnchecked(int pos, double[] src, int srcOffset, int length) {
+-        Memory.unsafeBulkPut(hb, ix(pos), length * 8, src, srcOffset, 8, !nativeByteOrder);
++        for (int i = 0; i < length; i++) putDoubleUnchecked(pos + i * 8, src[srcOffset + i]);
+     }
+     // END Android-added: {get,put}*Unchecked() accessors.
+ 
+     @Override
+     public DoubleBuffer asDoubleBuffer() {
+-        int pos = position();
+-        int size = (limit() - pos) >> 3;
+-        // Android-removed: buffer.address is only used by Direct*Buffer.
+-        // long addr = address + pos;
+-        // Android-changed: Merge the big and little endian buffer class.
+-        /*
+-        return (bigEndian
+-                ? (DoubleBuffer)(new ByteBufferAsDoubleBufferB(this,
+-                                                                   -1,
+-                                                                   0,
+-                                                                   size,
+-                                                                   size,
+-                                                                   addr, segment))
+-                : (DoubleBuffer)(new ByteBufferAsDoubleBufferL(this,
+-                                                                   -1,
+-                                                                   0,
+-                                                                   size,
+-                                                                   size,
+-                                                                   addr, segment)));
+-        */
+-        return new ByteBufferAsDoubleBuffer(this,
+-                -1,
+-                0,
+-                size,
+-                size,
+-                pos,
+-                order());
++        throw new UnsupportedOperationException("Typed buffer view is unavailable");
+     }
+ 
+ 

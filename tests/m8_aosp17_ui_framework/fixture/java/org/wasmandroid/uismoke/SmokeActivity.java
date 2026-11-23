@@ -1,5 +1,17 @@
 package org.wasmandroid.uismoke;
 
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.io.RandomAccessFile;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.Intent;
@@ -18,6 +30,8 @@ import android.graphics.drawable.VectorDrawable;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.util.AtomicFile;
 import android.os.Parcel;
 import android.os.UserHandle;
 import android.text.Editable;
@@ -47,10 +61,14 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.xmlpull.v1.XmlPullParser;
@@ -59,6 +77,7 @@ import org.xmlpull.v1.XmlPullParserException;
 public final class SmokeActivity extends Activity {
     private static SmokeActivity active;
     private static int lifecycle;
+    private static final int REFLECTED_VALUE = 17;
     private TextView headline;
     private TileView tile;
     private int clicks, animationUpdates, handled;
@@ -341,6 +360,124 @@ public final class SmokeActivity extends Activity {
     }
 
     public static int iconResource() { return R.drawable.ic_star_vector; }
+    public static int verifyFileStreams() throws IOException {
+        File directory = new File("/data/user/0/org.wasmandroid.uismoke/cache");
+        if (!directory.mkdirs() || !directory.isDirectory()) return 0;
+        File file = new File(directory, "stream-test");
+        PrintStream stdout = System.out;
+        if (stdout == null || System.err == null || stdout == System.err) return 0;
+        try (PrintStream output = new PrintStream(new FileOutputStream(file), true, "UTF-8")) {
+            System.setOut(output);
+            System.out.print("caf\u00e9");
+            if (System.out.checkError()) return 0;
+        } finally {
+            System.setOut(stdout);
+        }
+        try (DataOutputStream output = new DataOutputStream(new FileOutputStream(file, true))) {
+            output.writeInt(0x12345678);
+        }
+        try (DataInputStream input = new DataInputStream(new FileInputStream(file))) {
+            byte[] text = new byte[5];
+            input.readFully(text);
+            if (!new String(text, "UTF-8").equals("caf\u00e9") || input.readInt() != 0x12345678 || input.read() != -1) {
+                return 0;
+            }
+        }
+        try (RandomAccessFile input = new RandomAccessFile("/data/mounted.bin", "r")) {
+            byte[] bytes = new byte[3];
+            input.seek(1);
+            input.readFully(bytes);
+            ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+            if (buffer.getShort() != 0x4523 || buffer.get() != 0x67 || input.getFilePointer() != 4) return 0;
+        }
+        AtomicFile atomic = new AtomicFile(new File(directory, "atomic-test"));
+        FileOutputStream committed = atomic.startWrite();
+        committed.write(42);
+        atomic.finishWrite(committed);
+        FileOutputStream discarded = atomic.startWrite();
+        discarded.write(17);
+        atomic.failWrite(discarded);
+        try (FileInputStream input = atomic.openRead()) {
+            if (input.read() != 42 || input.read() != -1 || atomic.getLastModifiedTime() == 0) return 0;
+        }
+        atomic.delete();
+        try (FileOutputStream ignored = new FileOutputStream("/data/mounted.bin")) {
+            return 0;
+        } catch (FileNotFoundException expected) {
+            return file.length() == 9 && directory.listFiles().length == 1 && file.delete() ? 1 : 0;
+        }
+    }
+    public static int verifyScheduledExecutor() throws Exception {
+        var executor = Executors.newScheduledThreadPool(1);
+        var value = executor.schedule(() -> 42, 0, TimeUnit.MILLISECONDS);
+        var cancelled = executor.schedule(() -> { throw new AssertionError("Cancelled task ran"); },
+                1, TimeUnit.SECONDS);
+        if (value.isDone() || !cancelled.cancel(false)) return 0;
+        executor.shutdown();
+        if (executor.isTerminated()) return 0;
+        Looper.getMainLooper().dispatchDueMessages(SystemClock.uptimeMillis() + 2000);
+        return value.isDone() && value.get() == 42 && cancelled.isCancelled() && executor.isTerminated() ? 1 : 0;
+    }
+    public static int verifyNestedLooper() {
+        Looper main = Looper.getMainLooper();
+        Handler handler = new Handler(main);
+        long now = SystemClock.uptimeMillis();
+        int[] caught = {0};
+        handler.post(() -> {
+            for (int attempt = 1; attempt <= 2; ++attempt) {
+                try {
+                    Looper.loop();
+                    throw new AssertionError("Main Looper returned before a message failed");
+                } catch (IllegalArgumentException expected) {
+                    caught[0] += attempt;
+                }
+            }
+        });
+        main.dispatchDueMessages(now);
+        if (caught[0] != 0) return 0;
+        Runnable failure = () -> { throw new IllegalArgumentException("Queued message failed"); };
+        handler.post(failure);
+        main.dispatchDueMessages(now);
+        if (caught[0] != 1) return 0;
+        handler.post(failure);
+        handler.post(() -> ++caught[0]);
+        main.dispatchDueMessages(now);
+        return caught[0] == 4 ? 1 : 0;
+    }
+    public static int verifyReadWriteLock() {
+        var lock = new ReentrantReadWriteLock();
+        lock.writeLock().lock();
+        lock.writeLock().lock();
+        if (!lock.readLock().tryLock() || lock.getReadHoldCount() != 1 || lock.getWriteHoldCount() != 2) return 0;
+        lock.readLock().unlock();
+        lock.writeLock().unlock();
+        lock.writeLock().unlock();
+        Thread thread = Thread.currentThread();
+        LockSupport.unpark(thread);
+        LockSupport.park(lock);
+        return !lock.isWriteLocked() && lock.getReadLockCount() == 0 && LockSupport.getBlocker(thread) == null ? 1 : 0;
+    }
+    public static int verifyRegex() {
+        var placeholders = Pattern.compile("\\$\\{(.*?)\\}").matcher("${first} and ${second}");
+        if (!placeholders.find() || !placeholders.group(1).equals("first") || placeholders.start(1) != 2) return 0;
+        if (!placeholders.find() || !placeholders.group(1).equals("second") || placeholders.find()) return 0;
+        String letters = Pattern.compile("(?<word>[a-z]+)").matcher("12abc34").replaceAll("[${word}]");
+        String[] words = Pattern.compile("\\s+", Pattern.UNICODE_CHARACTER_CLASS).split("two\u00a0words");
+        return letters.equals("12[abc]34") && words.length == 2 && words[1].equals("words") ? 1 : 0;
+    }
+    public static int verifyFieldReflection() throws ReflectiveOperationException {
+        var field = SmokeActivity.class.getDeclaredField("REFLECTED_VALUE");
+        field.setAccessible(true);
+        if (field.getType() != int.class || field.getLong(null) != 17 || !field.getName().equals("REFLECTED_VALUE")) {
+            return 0;
+        }
+        try {
+            field.setInt(null, 42);
+            return 0;
+        } catch (IllegalAccessException expected) {
+            return 1;
+        }
+    }
     public static int lifecycle() { return lifecycle; }
     public static int clickCount() { return active.clicks; }
     public static int animationUpdates() { return active.animationUpdates; }

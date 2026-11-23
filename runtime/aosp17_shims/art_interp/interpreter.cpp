@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 #include "dex/code_item_accessors-inl.h"
 #include "dex/dex_file-inl.h"
@@ -78,6 +79,8 @@ class ShadowFrame {
 
   Value& Result() { return slots_[registers_]; }
   Value& Caught() { return slots_[registers_ + 1]; }
+  const RootScope& Roots() const { return roots_; }
+  void Restore(std::span<const Value> saved) { std::copy(saved.begin(), saved.end(), slots_.begin()); }
 
   void EnterMonitor(Object& object) {
     roots_.Hold(&object);
@@ -516,7 +519,8 @@ void MethodCodeCache::PrepareSites() {
   sites_prepared = true;
 }
 
-Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value> args) {
+Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value> args,
+                         std::span<const SuspendedFrame> suspended) {
   const auto& dex = *method.owner->dex;
   if (!method.code_cache) {
     auto cache = std::make_unique<MethodCodeCache>(dex, method.code);
@@ -531,21 +535,26 @@ Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value
     if (!cache.site_indices.empty()) indices = cache.site_indices.data();
   }
   ShadowFrame f(*this, code.RegistersSize(), *method.owner);
-  size_t reg = code.RegistersSize() - code.InsSize();
-  if (!method.IsStatic()) f.Reg(reg++) = Value::Ref(receiver);
-  for (size_t i = 0; i < args.size(); ++i) {
-    const char type = method.shorty[i + 1];
-    f.Write(reg, args[i], type);
-    reg += IsWide(type) ? 2 : 1;
-  }
   uint32_t pc = 0;
-  ActiveTraceFrame trace{&method, &pc, active_trace};
+  if (suspended.empty()) {
+    size_t reg = code.RegistersSize() - code.InsSize();
+    if (!method.IsStatic()) f.Reg(reg++) = Value::Ref(receiver);
+    for (size_t i = 0; i < args.size(); ++i) {
+      const char type = method.shorty[i + 1];
+      f.Write(reg, args[i], type);
+      reg += IsWide(type) ? 2 : 1;
+    }
+  } else {
+    pc = suspended.front().dex_pc;
+    f.Restore(suspended.front().slots);
+  }
+  ActiveTraceFrame trace{&method, &pc, active_trace, f.Roots(), call_depth};
   struct RestoreTrace {
     ActiveTraceFrame*& active;
     ActiveTraceFrame* caller;
     ~RestoreTrace() { active = caller; }
   } restore_trace{active_trace, active_trace};
-  if (options.capture_exception_stack) active_trace = &trace;
+  if (options.capture_exception_stack || loop_dispatch) active_trace = &trace;
   const auto member = [&]() -> MemberCache* {
     if (!indices) return nullptr;
     if (indices[pc] == UINT32_MAX) Fail("Ljava/lang/VerifyError;", "Invalid member instruction");
@@ -577,6 +586,12 @@ Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value
   };
   for (;;) {
     try {
+      if (!suspended.empty()) {
+        const auto caller = std::exchange(suspended, {});
+        const auto result = ResumeSuspendedLoop(caller.subspan(1));
+        pc += widths[pc];
+        if (move_result_at(pc)) f.Result() = result;
+      }
       for (;;) {
         if (pc >= size || widths[pc] == 0) Fail("Ljava/lang/VerifyError;", "Invalid DEX instruction address");
         const uint16_t* address = insns + pc;

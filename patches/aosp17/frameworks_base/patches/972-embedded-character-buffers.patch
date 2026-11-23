@@ -1,0 +1,238 @@
+--- a/libcore/ojluni/src/main/java/java/nio/CharBuffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/CharBuffer.java
+@@ -40,10 +40,6 @@
+ 
+ 
+ import java.util.Objects;
+-import jdk.internal.misc.Unsafe;
+-import jdk.internal.util.ArraysSupport;
+-import libcore.io.Memory;
+-import dalvik.annotation.codegen.CovariantReturnType;
+ 
+ // Android-changed: Fix that if[byte] isn't processed by the SppTool. Upstream doc has the same bug.
+ /**
+@@ -273,9 +269,6 @@
+     extends Buffer
+     implements Comparable<CharBuffer>, Appendable, CharSequence, Readable
+ {
+-    // Cached array base offset
+-    private static final long ARRAY_BASE_OFFSET = Unsafe.ARRAY_CHAR_BASE_OFFSET;
+-
+     // These fields are declared here rather than in Heap-X-Buffer in order to
+     // reduce the number of virtual method invocations needed to access these
+     // values, which is especially costly when coding small buffers.
+@@ -1644,7 +1637,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = CharBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer position(int newPosition) {
+@@ -1656,7 +1648,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = CharBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer limit(int newLimit) {
+@@ -1669,7 +1660,6 @@
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+     @Override
+-    @CovariantReturnType(returnType = CharBuffer.class, presentAfter = 28)
+     public
+     Buffer mark() {
+         super.mark();
+@@ -1680,7 +1670,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = CharBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer reset() {
+@@ -1692,7 +1681,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = CharBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer clear() {
+@@ -1704,7 +1692,6 @@
+      * {@inheritDoc}
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+-    @CovariantReturnType(returnType = CharBuffer.class, presentAfter = 28)
+     @Override
+     public
+     Buffer flip() {
+@@ -1717,7 +1704,6 @@
+      */
+     // Android-changed: Un-final the method until confirmation of causing no app compat.
+     @Override
+-    @CovariantReturnType(returnType = CharBuffer.class, presentAfter = 28)
+     public
+     Buffer rewind() {
+         super.rewind();
+@@ -1774,6 +1760,13 @@
+      */
+     public abstract boolean isDirect();
+ 
++
++    static int mismatchChars(CharBuffer a, int apos, CharBuffer b, int bpos, int length) {
++        for (int i = 0; i < length; i++) {
++            if (a.get(apos + i) != b.get(bpos + i)) return i;
++        }
++        return -1;
++    }
+ 
+     /**
+      * Tells whether this buffer has addressable memory, e.g., a Java array or
+@@ -1877,7 +1870,7 @@
+         int thatRem = that.limit() - thatPos;
+         if (thisRem < 0 || thisRem != thatRem)
+             return false;
+-        return BufferMismatch.mismatch(this, thisPos,
++        return mismatchChars(this, thisPos,
+                                        that, thatPos,
+                                        thisRem) < 0;
+     }
+@@ -1913,7 +1906,7 @@
+         int length = Math.min(thisRem, thatRem);
+         if (length < 0)
+             return -1;
+-        int i = BufferMismatch.mismatch(this, thisPos,
++        int i = mismatchChars(this, thisPos,
+                                         that, thatPos,
+                                         length);
+         if (i >= 0) {
+@@ -1965,7 +1958,7 @@
+         int length = Math.min(thisRem, thatRem);
+         if (length < 0)
+             return -1;
+-        int r = BufferMismatch.mismatch(this, thisPos,
++        int r = mismatchChars(this, thisPos,
+                                         that, thatPos,
+                                         length);
+         return (r == -1 && thisRem != thatRem) ? length : r;
+@@ -2017,7 +2010,6 @@
+      *
+      * @since 25
+      */
+-    @Override
+     public void getChars(int srcBegin, int srcEnd, char[] dst, int dstBegin) {
+         // Check [srcBegin,srcEnd) is a subset of [0,limit()-position)
+         int pos = position();
+--- a/libcore/ojluni/src/main/java/java/nio/HeapCharBuffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/HeapCharBuffer.java
+@@ -30,7 +30,6 @@
+ package java.nio;
+ 
+ import java.util.Objects;
+-import libcore.io.Memory;
+ 
+ /**
+ 
+--- a/libcore/ojluni/src/main/java/java/nio/StringCharBuffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/StringCharBuffer.java
+@@ -164,7 +164,7 @@
+         int thatRem = that.limit() - thatPos;
+         if (thisRem < 0 || thisRem != thatRem)
+             return false;
+-        return BufferMismatch.mismatch(this, thisPos,
++        return mismatchChars(this, thisPos,
+                                        that, thatPos,
+                                        thisRem) < 0;
+     }
+@@ -177,7 +177,7 @@
+         int length = Math.min(thisRem, thatRem);
+         if (length < 0)
+             return -1;
+-        int i = BufferMismatch.mismatch(this, thisPos,
++        int i = mismatchChars(this, thisPos,
+                                         that, thatPos,
+                                         length);
+         if (i >= 0) {
+--- a/libcore/ojluni/src/main/java/java/nio/ByteBufferAsCharBuffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/ByteBufferAsCharBuffer.java
+@@ -30,7 +30,6 @@
+ 
+ import java.util.Objects;
+ 
+-import libcore.io.Memory;
+ 
+ class ByteBufferAsCharBuffer                  // package-private
+     extends CharBuffer
+@@ -64,16 +63,6 @@
+         super(mark, pos, lim, cap);
+         this.bb = bb.duplicate();
+         this.isReadOnly = bb.isReadOnly;
+-        // There are only two possibilities for the type of ByteBuffer "bb", viz, DirectByteBuffer and
+-        // HeapByteBuffer. We only have to initialize the field when bb is an instance of
+-        // DirectByteBuffer.
+-        // The address field is used by NIOAccess#getBasePointer and GetDirectBufferAddress method
+-        // in art which return the address of the first usable byte of the underlying memory, i.e,
+-        // the position of parent buffer. Therefore, value of "off" will be equal to parent buffer's
+-        // position when the method is called from either HeapByteBuffer or DirectByteBuffer.
+-        if (bb instanceof DirectByteBuffer) {
+-            this.address = bb.address + off;
+-        }
+         this.bb.order(order);
+         this.order = order;
+         byteOffset = off;
+@@ -297,13 +286,8 @@
+         sb.position(pos << 1);
+         sb.compact();
+         */
+-        if (!(bb instanceof DirectByteBuffer)) {
+-            System.arraycopy(bb.array(), ix(pos), bb.array(), ix(0), rem << 1);
+-        } else {
+-            // Use pos << 1 instead of ix(pos) to avoid double counting of the offset
+-            // because this.address == bb.address + offset;
+-            Memory.memmove(this, 0, this, pos << 1, rem << 1);
+-        }
++        int offset = bb.arrayOffset();
++        System.arraycopy(bb.array(), offset + ix(pos), bb.array(), offset + ix(0), rem << 1);
+         position(rem);
+         limit(capacity());
+         discardMark();
+--- a/libcore/ojluni/src/main/java/java/nio/HeapByteBuffer.java
++++ b/libcore/ojluni/src/main/java/java/nio/HeapByteBuffer.java
+@@ -523,7 +523,33 @@
+ 
+     @Override
+     public CharBuffer asCharBuffer() {
+-        throw new UnsupportedOperationException("Typed buffer view is unavailable");
++        int pos = position();
++        int size = (limit() - pos) >> 1;
++        // Android-removed: buffer.address is only used by Direct*Buffer.
++        // long addr = address + pos;
++        // Android-changed: Merge the big and little endian buffer class.
++        /*
++        return (bigEndian
++                ? (CharBuffer)(new ByteBufferAsCharBufferB(this,
++                                                               -1,
++                                                               0,
++                                                               size,
++                                                               size,
++                                                               addr, segment))
++                : (CharBuffer)(new ByteBufferAsCharBufferL(this,
++                                                               -1,
++                                                               0,
++                                                               size,
++                                                               size,
++                                                               addr, segment)));
++        */
++        return new ByteBufferAsCharBuffer(this,
++                -1,
++                0,
++                size,
++                size,
++                pos,
++                order());
+     }
+ 
+ 

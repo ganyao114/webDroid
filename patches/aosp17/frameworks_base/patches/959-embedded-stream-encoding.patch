@@ -1,0 +1,92 @@
+--- a/libcore/ojluni/src/main/java/sun/nio/cs/StreamEncoder.java
++++ b/libcore/ojluni/src/main/java/sun/nio/cs/StreamEncoder.java
+@@ -182,12 +182,12 @@
+     private boolean haveLeftoverChar = false;
+     private char leftoverChar;
+     private CharBuffer lcb = null;
++    private boolean wroteBytes;
+ 
+     private StreamEncoder(OutputStream out, Object lock, Charset cs) {
+-        this(out, lock,
+-         cs.newEncoder()
+-         .onMalformedInput(CodingErrorAction.REPLACE)
+-         .onUnmappableCharacter(CodingErrorAction.REPLACE));
++        super(lock);
++        this.out = out;
++        this.cs = cs;
+     }
+ 
+     private StreamEncoder(OutputStream out, Object lock, CharsetEncoder enc) {
+@@ -274,6 +274,17 @@
+     void implWrite(char[] cbuf, int off, int len)
+             throws IOException
+     {
++        if (encoder == null) {
++            // The embedded VM supplies the built-in charsets through String.getBytes.
++            String text = new String(cbuf, off, len);
++            if (haveLeftoverChar) text = leftoverChar + text;
++            int end = text.length();
++            leftoverChar = text.charAt(end - 1);
++            haveLeftoverChar = Character.isHighSurrogate(leftoverChar);
++            if (haveLeftoverChar) text = text.substring(0, end - 1);
++            if (!text.isEmpty()) writeEncoded(text);
++            return;
++        }
+         CharBuffer cb = CharBuffer.wrap(cbuf, off, len);
+         implWrite(cb);
+     }
+@@ -281,6 +292,12 @@
+     void implWrite(CharBuffer cb)
+             throws IOException
+     {
++        if (encoder == null) {
++            char[] chars = new char[cb.remaining()];
++            cb.get(chars);
++            if (chars.length != 0) implWrite(chars, 0, chars.length);
++            return;
++        }
+         if (haveLeftoverChar) {
+             flushLeftoverChar(cb, false);
+         }
+@@ -304,8 +321,16 @@
+         }
+     }
+ 
++    private void writeEncoded(String text) throws IOException {
++        Charset encoding = wroteBytes && cs == java.nio.charset.StandardCharsets.UTF_16
++                ? java.nio.charset.StandardCharsets.UTF_16BE : cs;
++        byte[] bytes = text.getBytes(encoding);
++        out.write(bytes, 0, bytes.length);
++        wroteBytes = true;
++    }
++
+     void implFlushBuffer() throws IOException {
+-        if (bb.position() > 0)
++        if (bb != null && bb.position() > 0)
+         writeBytes();
+     }
+ 
+@@ -316,6 +341,14 @@
+     }
+ 
+     void implClose() throws IOException {
++        if (encoder == null) {
++            try {
++                if (haveLeftoverChar) writeEncoded(String.valueOf(leftoverChar));
++            } finally {
++                out.close();
++            }
++            return;
++        }
+         flushLeftoverChar(null, true);
+         try {
+             for (;;) {
+@@ -343,7 +376,7 @@
+     }
+ 
+     String encodingName() {
+-        return ((cs instanceof HistoricallyNamedCharset)
++        return ((encoder != null && cs instanceof HistoricallyNamedCharset)
+             ? ((HistoricallyNamedCharset)cs).historicalName()
+             : cs.name());
+     }

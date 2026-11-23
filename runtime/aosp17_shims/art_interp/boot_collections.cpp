@@ -746,13 +746,16 @@ void InstallMaps(ClassLinker& cl) {
   InstallMapEntry(cl);
   InstallMapCursor(cl);
   InstallMapViews(cl);
-  auto& map = cl.Define(kHashMap, kObject, 0, {kMap, "Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
+  auto& map = cl.Define(kHashMap, "Ljava/util/AbstractMap;", 0, {kMap, "Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
+  // The standalone VM profiles can run with only the boot collections installed.
+  map.optional_boot_superclass = true;
   cl.AddMethod(map, "tableSizeFor", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
     const auto capacity = static_cast<uint32_t>(std::clamp(a[0].i(), 1, 1 << 30));
     return Value::Int(std::bit_ceil(capacity));
   });
   auto& ordered = cl.Define("Ljava/util/LinkedHashMap;", map.descriptor);
-  auto& set = cl.Define(kHashSet, kObject, 0, {kSet, "Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
+  auto& set = cl.Define(kHashSet, "Ljava/util/AbstractSet;", 0, {kSet, "Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
+  set.optional_boot_superclass = true;
   auto& ordered_set = cl.Define("Ljava/util/LinkedHashSet;", set.descriptor);
   for (Class* type : {&map, &ordered, &set, &ordered_set}) {
     cl.AddMethod(*type, "<init>", "()V", 0, NoOp);
@@ -1266,6 +1269,7 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
     else self->fields[first.slot] = Value::Ref(entry);
     self->fields[last.slot] = Value::Ref(entry);
     self->fields[count.slot] = Value::Int(size + 1);
+    ++self->modifications;
     return Value::Int(1);
   };
   cl.AddMethod(linked, "offer", "(Ljava/lang/Object;)Z", 0, offer);
@@ -1284,9 +1288,32 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
         self->fields[first.slot] = head->fields[next.slot];
         if (!self->fields[first.slot].ref()) self->fields[last.slot] = {};
         self->fields[count.slot] = Value::Int(self->fields[count.slot].i() - 1);
+        ++self->modifications;
         return head->fields[item.slot];
       });
+  cl.AddMethod(linked, "remove", "(Ljava/lang/Object;)Z", 0,
+      [&first, &last, &next, &item, &count](Runtime& vm, Object* self, Values args) {
+        auto* wanted = args[0].ref();
+        if (!wanted) return Value::Int(0);
+        const auto version = self->modifications;
+        Object* previous = nullptr;
+        for (auto* entry = self->fields[first.slot].ref(); entry; entry = entry->fields[next.slot].ref()) {
+          const bool match = JavaEquals(vm, wanted, entry->fields[item.slot].ref());
+          if (version != self->modifications) vm.Fail("Ljava/util/ConcurrentModificationException;");
+          if (match) {
+            auto& link = previous ? previous->fields[next.slot] : self->fields[first.slot];
+            link = entry->fields[next.slot];
+            if (self->fields[last.slot].ref() == entry) self->fields[last.slot] = Value::Ref(previous);
+            self->fields[count.slot] = Value::Int(self->fields[count.slot].i() - 1);
+            ++self->modifications;
+            return Value::Int(1);
+          }
+          previous = entry;
+        }
+        return Value::Int(0);
+      });
   cl.AddMethod(linked, "clear", "()V", 0, [&first, &last, &count](Runtime&, Object* self, Values) {
+    if (self->fields[count.slot].i()) ++self->modifications;
     self->fields[first.slot] = self->fields[last.slot] = self->fields[count.slot] = {};
     return Value{};
   });
@@ -1307,6 +1334,7 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
   auto& core_size = cl.AddField(pool, "corePoolSize", "I", false);
   auto& max_size = cl.AddField(pool, "maximumPoolSize", "I", false);
   auto& keep_alive = cl.AddField(pool, "keepAliveTime", "J", false);
+  auto& core_timeout = cl.AddField(pool, "allowCoreThreadTimeOut", "Z", false);
   auto& thread_factory = cl.AddField(pool, "threadFactory", factory.descriptor, false);
   auto& running = cl.AddField(pool, "running", "Z", false);
   // Executors create workers on demand. Initialization only needs the queue and configuration.
@@ -1353,6 +1381,16 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
       [&core_size](Runtime&, Object* self, Values) { return self->fields[core_size.slot]; });
   cl.AddMethod(pool, "getMaximumPoolSize", "()I", 0,
       [&max_size](Runtime&, Object* self, Values) { return self->fields[max_size.slot]; });
+  cl.AddMethod(pool, "allowsCoreThreadTimeOut", "()Z", 0,
+      [&core_timeout](Runtime&, Object* self, Values) { return self->fields[core_timeout.slot]; });
+  cl.AddMethod(pool, "allowCoreThreadTimeOut", "(Z)V", 0,
+      [&core_timeout, &keep_alive](Runtime& vm, Object* self, Values args) {
+        if (args[0].i() && self->fields[keep_alive.slot].j() <= 0) {
+          vm.Fail("Ljava/lang/IllegalArgumentException;", "Core threads must have nonzero keep alive times");
+        }
+        self->fields[core_timeout.slot] = args[0];
+        return Value{};
+      });
   cl.AddMethod(pool, "getKeepAliveTime", "(Ljava/util/concurrent/TimeUnit;)J", 0,
       [&keep_alive](Runtime& vm, Object* self, Values a) {
         auto& unit = vm.linker.Resolve("Ljava/util/concurrent/TimeUnit;");
@@ -1444,6 +1482,19 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
   });
   cl.AddMethod(collections, "singletonList", "(Ljava/lang/Object;)Ljava/util/List;", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) { return MakeList(vm, a, true); });
+  cl.AddMethod(collections, "singleton", "(Ljava/lang/Object;)Ljava/util/Set;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        RootScope roots(vm);
+        auto* set = roots.Hold(vm.heap.Allocate(vm, vm.linker.Resolve(kHashSet)));
+        InsertEntry(vm, *set, JavaHash(vm, a[0].ref()), a[0], {});
+        set->read_only = true;
+        return Value::Ref(set);
+      });
+  cl.AddMethod(collections, "synchronizedMap", "(Ljava/util/Map;)Ljava/util/Map;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        // The interpreter already serializes map access across cooperative guest threads.
+        return Value::Ref(&vm.NonNull(a[0].ref()));
+      });
   cl.AddMethod(collections, "singletonMap", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/util/Map;",
       art::kAccStatic, [](Runtime& vm, Object*, Values a) {
         RootScope roots(vm);

@@ -1,0 +1,239 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ThreadLocalRandom.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ThreadLocalRandom.java
+@@ -38,18 +38,13 @@
+ 
+ package java.util.concurrent;
+ 
+-import java.io.ObjectStreamField;
+ import java.util.Random;
+ import java.util.concurrent.atomic.AtomicInteger;
+ import java.util.concurrent.atomic.AtomicLong;
+ import java.util.stream.DoubleStream;
+ import java.util.stream.IntStream;
+ import java.util.stream.LongStream;
+-import jdk.internal.access.SharedSecrets;
+-import jdk.internal.util.random.RandomSupport;
+ import jdk.internal.util.random.RandomSupport.*;
+-import jdk.internal.misc.Unsafe;
+-import jdk.internal.misc.VM;
+ 
+ /**
+  * A random number generator (with period 2<sup>64</sup>) isolated
+@@ -157,20 +152,10 @@
+      * rely on (static) atomic generators to initialize the values.
+      */
+     static final void localInit() {
+-        long seed = RandomSupport.mixMurmur64(seeder.getAndAdd(SEEDER_INCREMENT));
+-        Thread t = Thread.currentThread(), carrier;
+-        U.putLong(t, SEED, seed);
+-        int probe = 0; // if virtual, share probe with carrier
+-        if ((carrier = JLA.currentCarrierThread()) != t &&
+-            (probe = U.getInt(carrier, PROBE)) == 0) {
+-            seed = RandomSupport.mixMurmur64(seeder.getAndAdd(SEEDER_INCREMENT));
+-            U.putLong(carrier, SEED, seed);
+-        }
+-        if (probe == 0 && (probe = probeGenerator.addAndGet(PROBE_INCREMENT)) == 0)
+-            probe = 1; // skip 0
+-        if (carrier != t)
+-            U.putInt(carrier, PROBE, probe);
+-        U.putInt(t, PROBE, probe);
++        State local = state.get();
++        local.seed = mixMurmur64(seeder.getAndAdd(SEEDER_INCREMENT));
++        local.probe = probeGenerator.addAndGet(PROBE_INCREMENT);
++        if (local.probe == 0) local.probe = 1;
+     }
+ 
+     /**
+@@ -181,7 +166,7 @@
+      * @return the current thread's {@code ThreadLocalRandom}
+      */
+     public static ThreadLocalRandom current() {
+-        if (U.getInt(Thread.currentThread(), PROBE) == 0)
++        if (getProbe() == 0)
+             localInit();
+         return instance;
+     }
+@@ -214,10 +199,9 @@
+      * applications likely to use {@code ThreadLocalRandom}.
+      */
+     final long nextSeed() {
+-        Thread t; long r; // read and update per-thread seed
+-        U.putLong(t = Thread.currentThread(), SEED,
+-                  r = U.getLong(t, SEED) + (t.threadId() << 1) + GOLDEN_GAMMA);
+-        return r;
++        State local = state.get();
++        local.seed += (Thread.currentThread().getId() << 1) + GOLDEN_GAMMA;
++        return local.seed;
+     }
+ 
+     /**
+@@ -260,7 +244,7 @@
+      * can be used to force initialization on zero return.
+      */
+     static final int getProbe() {
+-        return U.getInt(JLA.currentCarrierThread(), PROBE);
++        return state.get().probe;
+     }
+ 
+     /**
+@@ -271,7 +255,7 @@
+         probe ^= probe << 13;   // xorshift
+         probe ^= probe >>> 17;
+         probe ^= probe << 5;
+-        U.putInt(JLA.currentCarrierThread(), PROBE, probe);
++        state.get().probe = probe;
+         return probe;
+     }
+ 
+@@ -280,15 +264,15 @@
+      */
+     static final int nextSecondarySeed() {
+         int r;
+-        Thread t = Thread.currentThread();
+-        if ((r = U.getInt(t, SECONDARY)) != 0) {
++        State local = state.get();
++        if ((r = local.secondary) != 0) {
+             r ^= r << 13;   // xorshift
+             r ^= r >>> 17;
+             r ^= r << 5;
+         }
+         else if ((r = mix32(seeder.getAndAdd(SEEDER_INCREMENT))) == 0)
+             r = 1; // avoid zero
+-        U.putInt(t, SECONDARY, r);
++        local.secondary = r;
+         return r;
+     }
+ 
+@@ -298,46 +282,10 @@
+      * Erases ThreadLocals by nulling out Thread maps.
+      */
+     static final void eraseThreadLocals(Thread thread) {
+-        U.putReference(thread, THREADLOCALS, null);
+-        U.putReference(thread, INHERITABLETHREADLOCALS, null);
+-    }
+-
+-    // Serialization support
++        org.wasmandroid.ui.ThreadContext.clearThreadLocals(thread);
++    }
+ 
+     private static final long serialVersionUID = -5851777807851030925L;
+-
+-    /**
+-     * @serialField rnd long
+-     *              seed for random computations
+-     * @serialField initialized boolean
+-     *              always true
+-     */
+-    private static final ObjectStreamField[] serialPersistentFields = {
+-        new ObjectStreamField("rnd", long.class),
+-        new ObjectStreamField("initialized", boolean.class),
+-    };
+-
+-    /**
+-     * Saves the {@code ThreadLocalRandom} to a stream (that is, serializes it).
+-     * @param s the stream
+-     * @throws java.io.IOException if an I/O error occurs
+-     */
+-    private void writeObject(java.io.ObjectOutputStream s)
+-        throws java.io.IOException {
+-
+-        java.io.ObjectOutputStream.PutField fields = s.putFields();
+-        fields.put("rnd", U.getLong(Thread.currentThread(), SEED));
+-        fields.put("initialized", true);
+-        s.writeFields();
+-    }
+-
+-    /**
+-     * Returns the {@link #current() current} thread's {@code ThreadLocalRandom}.
+-     * @return the {@link #current() current} thread's {@code ThreadLocalRandom}
+-     */
+-    private Object readResolve() {
+-        return current();
+-    }
+ 
+     // Static initialization
+ 
+@@ -361,18 +309,20 @@
+      */
+     private static final long SEEDER_INCREMENT = 0xbb67ae8584caa73bL;
+ 
+-    // Unsafe mechanics
+-    private static final Unsafe U = Unsafe.getUnsafe();
+-    private static final long SEED
+-        = U.objectFieldOffset(Thread.class, "threadLocalRandomSeed");
+-    private static final long PROBE
+-        = U.objectFieldOffset(Thread.class, "threadLocalRandomProbe");
+-    private static final long SECONDARY
+-        = U.objectFieldOffset(Thread.class, "threadLocalRandomSecondarySeed");
+-    private static final long THREADLOCALS
+-        = U.objectFieldOffset(Thread.class, "threadLocals");
+-    private static final long INHERITABLETHREADLOCALS
+-        = U.objectFieldOffset(Thread.class, "inheritableThreadLocals");
++    private static final class State {
++        long seed;
++        int probe;
++        int secondary;
++    }
++
++    private static final ThreadLocal<State> state = ThreadLocal.withInitial(State::new);
++
++    // The MurmurHash3 finalizer used by libcore RandomSupport.
++    private static long mixMurmur64(long z) {
++        z = (z ^ (z >>> 33)) * 0xff51afd7ed558ccdL;
++        z = (z ^ (z >>> 33)) * 0xc4ceb9fe1a85ec53L;
++        return z ^ (z >>> 33);
++    }
+ 
+     /** Generates per-thread initialization/probe field */
+     private static final AtomicInteger probeGenerator = new AtomicInteger();
+@@ -384,38 +334,12 @@
+      * The next seed for default constructors.
+      */
+     private static final AtomicLong seeder
+-        = new AtomicLong(RandomSupport.mixMurmur64(System.currentTimeMillis()) ^
+-                         RandomSupport.mixMurmur64(System.nanoTime()));
+-
+-    private static final JavaLangAccess JLA = SharedSecrets.getJavaLangAccess();
+-
+-    // BEGIN Android-removed: ScopedValue not available, so this is not needed.
+-    /*
+-
+-    // used by ScopedValue
+-    private static class Access {
+-        static {
+-            SharedSecrets.setJavaUtilConcurrentTLRAccess(
+-                new JavaUtilConcurrentTLRAccess() {
+-                    public int nextSecondaryThreadLocalRandomSeed() {
+-                        return nextSecondarySeed();
+-                    }
+-                    public int getThreadLocalRandomProbe() {
+-                        return getProbe();
+-                    }
+-                    public int advanceThreadLocalRandomProbe(int r) {
+-                        return advanceProbe(r);
+-                    }
+-                }
+-            );
+-        }
+-    }
+-    */
+-    // END Android-removed: ScopedValue not available, so this is not needed.
++        = new AtomicLong(mixMurmur64(System.currentTimeMillis()) ^
++                         mixMurmur64(System.nanoTime()));
+ 
+     // at end of <clinit> to survive static initialization circularity
+     static {
+-        String sec = VM.getSavedProperty("java.util.secureRandomSeed");
++        String sec = System.getProperty("java.util.secureRandomSeed");
+         if (Boolean.parseBoolean(sec)) {
+             byte[] seedBytes = java.security.SecureRandom.getSeed(8);
+             long s = (long)seedBytes[0] & 0xffL;
+@@ -481,7 +405,7 @@
+      */
+     @Override
+     public long nextLong() {
+-        return RandomSupport.mixMurmur64(nextSeed());
++        return mixMurmur64(nextSeed());
+     }
+ 
+     /**

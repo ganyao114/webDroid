@@ -36,31 +36,39 @@ void Require(bool condition, std::string_view message) {
 
 void AuditFrameworkNatives(Vm& vm) {
     auto& linker = wa::interp::JniBridge::From(vm.JniEnv()).Vm().linker;
-    const auto* dex = linker.Resolve("Landroid/graphics/Bitmap;").dex;
-    Require(dex != nullptr, "The JNI audit requires the upstream framework DEX");
+    const auto* graphics_dex = linker.Resolve("Landroid/graphics/Bitmap;").dex;
+    Require(graphics_dex != nullptr, "The JNI audit requires the upstream framework DEX");
+    const auto archive = [](std::string_view name) { return name.substr(0, name.rfind('!')); };
+    const auto primary = archive(graphics_dex->GetLocation());
     size_t declarations = 0;
     std::string missing;
-    for (uint32_t i = 0; i < dex->NumClassDefs(); ++i) {
-        const auto& definition = dex->GetClassDef(i);
-        const auto name = dex->GetTypeDescriptorView(definition.class_idx_);
-        if (!name.starts_with("Landroid/graphics/") &&
-            !name.starts_with("Lcom/android/internal/util/") &&
-            name != "Landroid/text/AndroidCharacter;" && name != "Landroid/text/Hyphenator;" &&
-            name != "Landroid/view/MotionEvent;" && name != "Landroid/view/KeyEvent;")
-            continue;
-        const auto* type = linker.FindLinkedClass(name);
-        for (const auto& method : art::ClassAccessor(*dex, definition).GetMethods()) {
-            if (!(method.GetAccessFlags() & art::kAccNative)) continue;
-            ++declarations;
-            const auto& id = dex->GetMethodId(method.GetIndex());
-            const auto method_name = dex->GetMethodNameView(id);
-            const auto signature = dex->GetMethodSignature(id).ToString();
-            if (type) {
-                const auto found = type->methods.find(wa::interp::MemberKey(method_name, signature));
-                if (found != type->methods.end() && (found->second.native || found->second.builtin))
-                    continue;
+    for (const auto& dex : linker.LoadedDexFiles()) {
+        if (archive(dex->GetLocation()) != primary) continue;
+        for (uint32_t i = 0; i < dex->NumClassDefs(); ++i) {
+            const auto& definition = dex->GetClassDef(i);
+            const auto name = dex->GetTypeDescriptorView(definition.class_idx_);
+            const bool art_boot = name == "Ljava/io/FileInputStream;" || name == "Ljava/io/FileOutputStream;" ||
+                name == "Ljava/io/RandomAccessFile;" || name == "Ljava/util/regex/Pattern;" ||
+                name == "Ljava/lang/reflect/Field;";
+            if (!art_boot && !name.starts_with("Landroid/graphics/") &&
+                !name.starts_with("Lcom/android/internal/util/") &&
+                name != "Landroid/text/AndroidCharacter;" && name != "Landroid/text/Hyphenator;" &&
+                name != "Landroid/view/MotionEvent;" && name != "Landroid/view/KeyEvent;")
+                continue;
+            const auto* type = art_boot ? &linker.Resolve(name) : linker.FindLinkedClass(name);
+            for (const auto& method : art::ClassAccessor(*dex, definition).GetMethods()) {
+                if (!(method.GetAccessFlags() & art::kAccNative)) continue;
+                ++declarations;
+                const auto& id = dex->GetMethodId(method.GetIndex());
+                const auto method_name = dex->GetMethodNameView(id);
+                const auto signature = dex->GetMethodSignature(id).ToString();
+                if (type) {
+                    const auto found = type->methods.find(wa::interp::MemberKey(method_name, signature));
+                    if (found != type->methods.end() && (found->second.native || found->second.builtin))
+                        continue;
+                }
+                missing += std::string(name) + "->" + std::string(method_name) + signature + '\n';
             }
-            missing += std::string(name) + "->" + std::string(method_name) + signature + '\n';
         }
     }
     Require(declarations != 0, "The upstream DEX declares native methods");
@@ -356,6 +364,12 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     bridge.BindSurfaceFlinger(sf.get(), kLayer);
     bridge.RegisterNatives(vm);
     AuditFrameworkNatives(vm);
+    const std::array<uint8_t, 4> mounted{0x10, 0x23, 0x45, 0x67};
+    vm.MountReadOnlyFile("/data/mounted.bin", mounted);
+    Require(ReadInt(vm, "verifyFileStreams") == 1, "Guest stream and read-only file operations");
+    Require(ReadInt(vm, "verifyReadWriteLock") == 1, "Cooperative locks preserve hold counts and park permits");
+    Require(ReadInt(vm, "verifyRegex") == 1, "Upstream regex captures and Unicode classes use the guest backend");
+    Require(ReadInt(vm, "verifyFieldReflection") == 1, "Field reflection reads DEX metadata and respects final fields");
 
     const auto icon = static_cast<uint32_t>(ReadInt(vm, "iconResource"));
     unsigned queried = 0, applications = 0, launches = 0;
@@ -588,6 +602,8 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
                     localized.HasText("启动磁贴"),
                 "AOSP resource selection resolves zh-rCN and records UTF-8 text");
     }
+    Require(ReadInt(vm, "verifyScheduledExecutor") == 1, "Scheduled work runs through the guest Looper");
+    Require(ReadInt(vm, "verifyNestedLooper") == 1, "Nested main Looper resumes into its original exception handlers");
     bridge.DestroyActivity(vm);
     vm.Collect();
 
