@@ -148,7 +148,7 @@ void ApplyFontCalibration(interp::Vm& vm, State& state) {
             auto* window = roots.Hold(vm.CallVirtual(activity, "getWindow", "()Landroid/view/Window;").ref());
             if (window) {
                 auto* decor = roots.Hold(vm.CallVirtual(window, "peekDecorView", "()Landroid/view/View;").ref());
-                if (decor) vm.CallVirtual(decor, "requestLayout", "()V");
+                if (decor) vm.CallVirtual(decor, "requestLayoutForFontChange", "()V");
             }
         }
     }

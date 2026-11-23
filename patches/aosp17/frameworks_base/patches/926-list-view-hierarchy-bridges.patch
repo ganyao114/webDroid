@@ -1,0 +1,31 @@
+--- a/frameworks/base/core/java/android/widget/AbsListView.java
++++ b/frameworks/base/core/java/android/widget/AbsListView.java
+@@ -6464,12 +6464,6 @@
+     }
+ 
+     // These ViewGroup and KeyEvent helpers are hidden in the SDK 36 library.
+-    void offsetChildrenTopAndBottom(int offset) {
+-        for (int i = 0; i < getChildCount(); i++) {
+-            getChildAt(i).offsetTopAndBottom(offset);
+-        }
+-    }
+-
+     private int mWindowAttachCount;
+     private boolean mListTouchMode;
+ 
+@@ -6512,15 +6506,6 @@
+     static boolean isConfirmKey(int keyCode) {
+         return keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER
+                 || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER;
+-    }
+-
+-    private void transformPointToViewLocal(float[] point, View child) {
+-        point[0] += getScrollX() - child.getLeft();
+-        point[1] += getScrollY() - child.getTop();
+-        final android.graphics.Matrix inverse = new android.graphics.Matrix();
+-        if (child.getMatrix().invert(inverse)) {
+-            inverse.mapPoints(point);
+-        }
+     }
+ 
+     private void finishGlows() {

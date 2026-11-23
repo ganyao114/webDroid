@@ -1,0 +1,33 @@
+--- a/frameworks/base/core/java/android/widget/RemoteCollectionItemsAdapter.java
++++ b/frameworks/base/core/java/android/widget/RemoteCollectionItemsAdapter.java
+@@ -18,7 +18,6 @@
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.appwidget.AppWidgetHostView;
+ import android.util.SparseIntArray;
+ import android.view.View;
+ import android.view.ViewGroup;
+@@ -187,14 +186,13 @@
+         item.addFlags(RemoteViews.FLAG_WIDGET_IS_COLLECTION_CHILD);
+         item.setOriginalDensity(mOriginalDensity);
+ 
+-        AppWidgetHostView newView = convertView instanceof AppWidgetHostView.AdapterChildHostView
+-                widgetChildView
+-                ? widgetChildView
+-                : new AppWidgetHostView.AdapterChildHostView(parent.getContext());
+-        newView.setInteractionHandler(mInteractionHandler);
+-        newView.setColorResourcesNoReapply(mColorResources);
+-        newView.setOnLightBackground(mOnLightBackground);
+-        newView.updateAppWidget(item);
+-        return newView;
++        if (mOnLightBackground) item = item.getDarkTextViews();
++        RemoteViews.ActionApplyParams params = item.new ActionApplyParams()
++                .withInteractionHandler(mInteractionHandler).withColorResources(mColorResources);
++        if (item.canRecycleView(convertView)) {
++            item.reapply(parent.getContext(), convertView, null, params);
++            return convertView;
++        }
++        return item.apply(parent.getContext(), parent, null, params);
+     }
+ }

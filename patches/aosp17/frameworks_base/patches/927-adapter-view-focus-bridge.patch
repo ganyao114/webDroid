@@ -1,0 +1,47 @@
+--- a/frameworks/base/core/java/android/widget/AdapterView.java
++++ b/frameworks/base/core/java/android/widget/AdapterView.java
+@@ -261,10 +261,10 @@
+             setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
+         }
+ 
+-        mDesiredFocusableState = isFocusable() ? FOCUSABLE : FOCUSABLE_AUTO;
++        mDesiredFocusableState = getFocusable();
+         if (mDesiredFocusableState == FOCUSABLE_AUTO) {
+             // Starts off without an adapter, so NOT_FOCUSABLE by default.
+-            super.setFocusable(false);
++            super.setFocusable(NOT_FOCUSABLE);
+         }
+     }
+ 
+@@ -725,12 +725,7 @@
+     }
+ 
+     @Override
+-    public void setFocusable(boolean focusable) {
+-        setFocusable(focusable ? FOCUSABLE : NOT_FOCUSABLE);
+-    }
+-
+-    @Override
+-    public void setFocusable(int focusable) {
++    public void setFocusable(@Focusable int focusable) {
+         final T adapter = getAdapter();
+         final boolean empty = adapter == null || adapter.getCount() == 0;
+ 
+@@ -739,7 +734,7 @@
+             mDesiredFocusableInTouchModeState = false;
+         }
+ 
+-        super.setFocusable((!empty || isInFilterMode()) && focusable != NOT_FOCUSABLE);
++        super.setFocusable((!empty || isInFilterMode()) ? focusable : NOT_FOCUSABLE);
+     }
+ 
+     @Override
+@@ -763,7 +758,7 @@
+         // for the client, see View.setFocusableInTouchMode() comments for more
+         // details
+         super.setFocusableInTouchMode(focusable && mDesiredFocusableInTouchModeState);
+-        super.setFocusable(focusable && mDesiredFocusableState != NOT_FOCUSABLE);
++        super.setFocusable(focusable ? mDesiredFocusableState : NOT_FOCUSABLE);
+         if (mEmptyView != null) {
+             updateEmptyStatus((adapter == null) || adapter.isEmpty());
+         }

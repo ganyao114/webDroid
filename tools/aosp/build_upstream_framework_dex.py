@@ -19,6 +19,7 @@ from build_pm_dex import dex_profile, run, sdk_declarations, write_depfile, writ
 
 REPO = Path(__file__).resolve().parents[2]
 PROFILE = REPO / "patches/aosp17/frameworks_base"
+COMPATIBILITY = Path(__file__).with_name("framework_build")
 JAVA_BASE = Path("libcore/ojluni/src/main/java")
 FRAMEWORK_DEX = "aosp17_upstream_framework.dex"
 FRAMEWORK_JAR = "aosp17_upstream_framework_classes.jar"
@@ -43,8 +44,10 @@ METHODS_TO_AUDIT = (
     "android.view.MotionEvent",
     "android.view.View",
     "android.view.ViewGroup",
+    "android.view.inputmethod.InputMethodManager",
     "android.widget.FrameLayout",
     "android.widget.LinearLayout",
+    "android.widget.RemoteViews",
     "android.widget.TextView",
     "com.android.server.IntentResolver",
 )
@@ -142,14 +145,6 @@ HIDDEN_METHODS = {
     )),
     "android/text/TextUtils": ("frameworks/base/core/java/android/text/TextUtils.java", (
         ("nullIfEmpty", "(Ljava/lang/String;)Ljava/lang/String;", True),
-    )),
-    "android/view/View": ("frameworks/base/core/java/android/view/View.java", (
-        ("getAccessibilityViewId", "()I", False),
-        ("getAccessibilityWindowId", "()I", False),
-        ("includeForAccessibility", "()Z", False),
-    )),
-    "android/view/ViewGroup": ("frameworks/base/core/java/android/view/ViewGroup.java", (
-        ("generateLayoutParams", "(Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/ViewGroup$LayoutParams;", False),
     )),
     "android/view/MotionEvent": ("frameworks/base/core/java/android/view/MotionEvent.java", (
         ("scale", "(F)V", False),
@@ -421,15 +416,46 @@ def resource_flag_declarations(symbols, destination, program_sources):
                      "kind": "compile_only", "sha256": digest(file.read_bytes())}
 
 
-def javac(args, files, classes, classpath, *options):
+def javac(args, files, classes, classpath, *options, sourcepath=()):
     classes.mkdir()
     if files:
         sources = classes.with_suffix(".sources")
         sources.write_text("".join(json.dumps(str(file), ensure_ascii=False) + "\n"
                                    for file in sorted(files)), encoding="utf-8")
         run(args.javac, "--release", "17", *options, "-encoding", "UTF-8", "-proc:none", "-implicit:none",
-            "-g:source,lines", "-XDstringConcat=inline", "-sourcepath", "",
+            "-g:source,lines", "-XDstringConcat=inline", "-sourcepath", os.pathsep.join(map(str, sourcepath)),
             "-classpath", os.pathsep.join(map(str, classpath)), "-d", classes, "@" + str(sources))
+
+
+def compatibility_source_path(args, stage, inputs, primary_sources):
+    """Resolve guest host APIs without emitting their classes into the primary JAR."""
+    manifest = COMPATIBILITY / "upstream.txt"
+    inputs.add(manifest)
+    selections = [entry for line in manifest.read_text(encoding="utf-8").splitlines()
+                  if (entry := line.partition("#")[0].strip())]
+    sources = {}
+    for name in selections:
+        if not name.startswith("@patch "):
+            source = args.aosp_root / name
+            inputs.add(source)
+            sources[name] = source.read_bytes()
+    for entry in selections:
+        if entry.startswith("@patch "):
+            patch = COMPATIBILITY / "patches" / entry.removeprefix("@patch ")
+            inputs.add(patch)
+            apply_patch(patch, sources)
+    for relative in ("android/animation/LayoutTransition.java", "android/animation/StateListAnimator.java",
+                     "android/os/Trace.java", "android/os/CancellationSignal.java",
+                     "android/os/OperationCanceledException.java", "android/view/ViewTreeObserver.java",
+                     "android/view/accessibility/AccessibilityNodeProvider.java"):
+        name = f"frameworks/base/core/java/{relative}"
+        if name not in primary_sources:
+            stage_java(stage, relative, sources[name])
+    for relative in ("android/view/ViewRootImpl.java", "android/view/EmbeddedWindow.java"):
+        source = COMPATIBILITY / "java" / relative
+        inputs.add(source)
+        stage_java(stage, relative, source.read_bytes())
+    return (stage,)
 
 
 def jar_from_classes(path, *directories):
@@ -693,7 +719,9 @@ def build(args, stage):
         inputs.add(path)
         staged["framework"].append(path)
         sdk_runtime_sources.append({"path": name, "sha256": digest(path.read_bytes())})
-    javac(args, staged["framework"], framework, sdk_classpath)
+    guest_api = compatibility_source_path(args, stage / "compatibility-api", inputs, java)
+    javac(args, staged["framework"], framework, sdk_classpath, "-Xprefer:source",
+          sourcepath=guest_api)
     javac(args, staged["java-base"], core_library, sdk_classpath,
           "--patch-module", f"java.base={java_base}")
     javac(args, staged["services"], services, [framework, *sdk_classpath])

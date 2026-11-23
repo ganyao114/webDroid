@@ -65,6 +65,30 @@ frameworks/base/core/java/android/widget/Switch.java
 frameworks/base/core/java/android/widget/Toast.java
 frameworks/base/core/java/android/widget/WrapperListAdapter.java
 
+# Embedded widgets and input method client
+frameworks/base/core/java/android/view/inputmethod/InputMethodManager.java
+frameworks/base/core/java/android/widget/RemoteCollectionItemsAdapter.java
+frameworks/base/core/java/android/widget/RemoteViews.java
+
+# View hierarchy and its in-process helpers
+frameworks/base/core/java/android/view/AbsSavedState.java
+frameworks/base/core/java/android/view/AccessibilityIterators.java
+frameworks/base/core/java/android/view/ActionMode.java
+frameworks/base/core/java/android/view/DragEvent.java
+frameworks/base/core/java/android/view/FocusFinder.java
+frameworks/base/core/java/android/view/HandlerActionQueue.java
+frameworks/base/core/java/android/view/RoundScrollbarRenderer.java
+frameworks/base/core/java/android/view/TouchDelegate.java
+frameworks/base/core/java/android/view/View.java
+frameworks/base/core/java/android/view/ViewGroup.java
+frameworks/base/core/java/android/view/ViewGroupOverlay.java
+frameworks/base/core/java/android/view/ViewOverlay.java
+frameworks/base/core/java/android/view/ViewPropertyAnimator.java
+frameworks/base/core/java/android/view/accessibility/AccessibilityEventSource.java
+frameworks/base/core/java/android/view/autofill/AutofillId.java
+frameworks/base/core/java/android/widget/ScrollBarDrawable.java
+frameworks/base/core/java/com/android/internal/widget/ScrollBarUtils.java
+
 # Widget interfaces and annotations shared with layout inflation and adapters.
 frameworks/base/core/java/android/view/inspector/InspectableProperty.java
 frameworks/base/core/java/android/widget/Checkable.java
@@ -725,3 +749,12 @@ patches/506-button-sdk36-platform-edges.patch
 
 patches/801-local-display.patch
 patches/802-local-accessibility-manager.patch
+
+patches/920-embedded-input-method.patch
+patches/921-embedded-remote-views.patch
+patches/922-local-remote-collections.patch
+patches/923-embedded-view.patch
+patches/924-embedded-view-group.patch
+patches/925-embedded-view-dependencies.patch
+patches/926-list-view-hierarchy-bridges.patch
+patches/927-adapter-view-focus-bridge.patch
