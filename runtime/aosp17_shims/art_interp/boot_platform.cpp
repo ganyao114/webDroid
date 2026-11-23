@@ -6,14 +6,12 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <filesystem>
 #include <limits>
 #include <numbers>
 #include <thread>
 #include <tuple>
 #include <unordered_set>
 #include <sys/random.h>
-#include <unistd.h>
 
 #include <android-base/properties.h>
 
@@ -149,6 +147,34 @@ void InstallMath(ClassLinker& cl, std::string_view descriptor) {
 void InstallSystem(Runtime& vm) {
   auto& cl = vm.linker;
   Class& sys = cl.Define("Ljava/lang/System;", kObject, art::kAccFinal);
+  constexpr auto kPrintStream = "Ljava/io/PrintStream;";
+  auto& out = cl.AddField(sys, "out", kPrintStream, true);
+  auto& err = cl.AddField(sys, "err", kPrintStream, true);
+  cl.AddMethod(sys, "<clinit>", "()V", art::kAccStatic,
+      [&out, &err](Runtime& vm, Object*, Values) {
+        constexpr auto kDescriptor = "Ljava/io/FileDescriptor;";
+        if (!vm.linker.HasClass(kPrintStream) || !vm.linker.HasClass("Ljava/io/FileOutputStream;")) {
+          return Value{};
+        }
+        auto& descriptor = vm.linker.Resolve(kDescriptor);
+        vm.linker.Initialize(descriptor);
+        auto& file = vm.linker.Resolve("Ljava/io/FileOutputStream;");
+        auto& file_ctor = vm.linker.FindMethod(file, "<init>", "(Ljava/io/FileDescriptor;)V", false);
+        auto& print = vm.linker.Resolve(kPrintStream);
+        auto& print_ctor = vm.linker.FindMethod(print, "<init>", "(Ljava/io/OutputStream;Z)V", false);
+        for (Field* field : {&out, &err}) {
+          const auto fd = vm.linker.FindField(descriptor, field->name, kDescriptor, true).value;
+          RootScope roots(vm);
+          auto* stream = roots.Hold(vm.NewObject(file, file_ctor, {&fd, 1}));
+          const Value args[] = {Value::Ref(stream), Value::Int(1)};
+          field->value = Value::Ref(vm.NewObject(print, print_ctor, args));
+        }
+        return Value{};
+      });
+  cl.AddMethod(sys, "setOut", "(Ljava/io/PrintStream;)V", art::kAccStatic,
+      [&out](Runtime&, Object*, Values a) { out.value = a[0]; return Value{}; });
+  cl.AddMethod(sys, "setErr", "(Ljava/io/PrintStream;)V", art::kAccStatic,
+      [&err](Runtime&, Object*, Values a) { err.value = a[0]; return Value{}; });
   cl.AddMethod(sys, "arraycopy", "(Ljava/lang/Object;ILjava/lang/Object;II)V", art::kAccStatic, ArrayCopy);
   cl.AddMethod(sys, "identityHashCode", "(Ljava/lang/Object;)I", art::kAccStatic,
       [](Runtime&, Object*, Values a) { return Value::Int(a[0].ref() ? IdentityHash(a[0].ref()) : 0); });
@@ -172,6 +198,7 @@ void InstallSystem(Runtime& vm) {
     if (key == "line.separator") return StringValue(vm, "\n");
     if (key == "file.separator") return StringValue(vm, "/");
     if (key == "path.separator") return StringValue(vm, ":");
+    if (key == "java.io.tmpdir") return StringValue(vm, "/tmp");
     return a.size() == 2 ? a[1] : Value{};
   };
   cl.AddMethod(sys, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic, property);
@@ -191,6 +218,7 @@ void InstallSystem(Runtime& vm) {
 
   Class& runtime = cl.Define("Ljava/lang/Runtime;", kObject);
   auto& singleton = cl.AddField(runtime, "currentRuntime", runtime.descriptor, true);
+  auto& shutting_down = cl.AddField(runtime, "shuttingDown", "Z", false);
   cl.AddMethod(runtime, "<clinit>", "()V", art::kAccStatic, [&runtime, &singleton](Runtime& vm, Object*, Values) {
     singleton.value = Value::Ref(vm.heap.Allocate(vm, runtime));
     return Value{};
@@ -199,6 +227,59 @@ void InstallSystem(Runtime& vm) {
       [&singleton](Runtime&, Object*, Values) { return singleton.value; });
   cl.AddMethod(runtime, "availableProcessors", "()I", 0,
       [](Runtime&, Object*, Values) { return Value::Int(1); });
+  const Builtin check_shutdown_hook = [&shutting_down](Runtime& vm, Object* self, Values a) {
+    vm.NonNull(a[0].ref());
+    if (self->fields[shutting_down.slot].i()) vm.Fail("Ljava/lang/IllegalStateException;", "VM already shutting down");
+    return a[0];
+  };
+  cl.AddMethod(runtime, "addShutdownHook", "(Ljava/lang/Thread;)V", 0,
+      [check_shutdown_hook](Runtime& vm, Object* self, Values a) {
+        const auto hook = check_shutdown_hook(vm, self, a);
+        auto& thread = vm.linker.Resolve("Ljava/lang/Thread;");
+        const auto& started = vm.linker.FindField(thread, "started", "Z", false);
+        if (hook.ref()->fields[started.slot].i() ||
+            std::ranges::find(self->elements, hook.ref(), &Value::ref) != self->elements.end()) {
+          vm.Fail("Ljava/lang/IllegalArgumentException;", "Hook is already registered or has started");
+        }
+        self->elements.push_back(hook);
+        return Value{};
+      });
+  cl.AddMethod(runtime, "removeShutdownHook", "(Ljava/lang/Thread;)Z", 0,
+      [check_shutdown_hook](Runtime& vm, Object* self, Values a) {
+        const auto hook = check_shutdown_hook(vm, self, a);
+        const auto index = std::ranges::find(self->elements, hook.ref(), &Value::ref);
+        if (index == self->elements.end()) return Value::Int(0);
+        self->elements.erase(index);
+        return Value::Int(1);
+      });
+  cl.AddMethod(runtime, "runShutdownHooks", "()V", art::kAccPrivate,
+      [&shutting_down](Runtime& vm, Object* self, Values) {
+        if (std::exchange(self->fields[shutting_down.slot], Value::Int(1)).i() ||
+            self->elements.empty()) return Value{};
+        auto& thread = vm.linker.Resolve("Ljava/lang/Thread;");
+        auto& current = vm.linker.FindField(thread, "currentThread", thread.descriptor, true);
+        const auto& started = vm.linker.FindField(thread, "started", "Z", false);
+        RootScope roots(vm, {}, current.value.ref());
+        roots.Hold(vm.exception);
+        auto* pending_exception = vm.exception;
+        for (const auto hook : self->elements) {
+          if (std::exchange(hook.ref()->fields[started.slot], Value::Int(1)).i()) continue;
+          const auto previous = std::exchange(current.value, hook);
+          struct RestoreThread {
+            Value& current;
+            Value previous;
+            ~RestoreThread() { current = previous; }
+          } restore{current.value, previous};
+          try {
+            CallVirtual(vm, hook.ref(), "run", "()V");
+          } catch (const ManagedException&) {
+            std::fprintf(stderr, "Exception in guest shutdown hook: %s\n", vm.ExceptionSummary().c_str());
+            vm.exception = pending_exception;
+          }
+        }
+        self->elements.clear();
+        return Value{};
+      });
   cl.AddMethod(runtime, "gc", "()V", 0, [](Runtime& vm, Object*, Values) {
     if (!vm.gc_paused) vm.heap.Collect(vm);
     return Value{};
@@ -236,6 +317,10 @@ void InstallSystem(Runtime& vm) {
         if (!encoding) vm.Fail("Ljava/nio/charset/UnsupportedCharsetException;", EncodeUtf8(name));
         vm.linker.Initialize(vm.linker.Resolve(standard.descriptor));
         return standard.field_order[static_cast<size_t>(*encoding)]->value;
+      });
+  cl.AddMethod(charset, "isSupported", "(Ljava/lang/String;)Z", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        return Value::Int(FindEncoding(vm.NonNull(a[0].ref()).text).has_value());
       });
 
   Class& reflect_array = cl.Define("Ljava/lang/reflect/Array;", kObject, art::kAccFinal);
@@ -279,23 +364,34 @@ const Field& InstallThread(Runtime& vm) {
   auto& next_id = cl.AddField(thread, "nextThreadId", "J", true, Value::Long(2));
   auto& name = cl.AddField(thread, "name", kString, false);
   auto& id = cl.AddField(thread, "tid", "J", false);
+  auto& priority = cl.AddField(thread, "priority", "I", false);
+  auto& daemon = cl.AddField(thread, "daemon", "Z", false);
   auto& interrupted = cl.AddField(thread, "interrupted", "Z", false);
+  auto& park_permit = cl.AddField(thread, "parkPermit", "Z", false);
+  auto& park_blocker = cl.AddField(thread, "parkBlocker", kObject, false);
   auto& target = cl.AddField(thread, "target", "Ljava/lang/Runnable;", false);
+  auto& started = cl.AddField(thread, "started", "Z", false);
   auto& exception_handler = cl.AddField(thread, "uncaughtExceptionHandler", kHandler, false);
   auto& default_handler = cl.AddField(thread, "defaultUncaughtExceptionHandler", kHandler, true);
   auto& loader = cl.AddField(thread, "contextClassLoader", "Ljava/lang/ClassLoader;", false);
-  cl.AddMethod(thread, "<clinit>", "()V", art::kAccStatic, [&thread, &main, &current, &name, &id](Runtime& vm, Object*, Values) {
+  cl.AddMethod(thread, "<clinit>", "()V", art::kAccStatic,
+      [&thread, &main, &current, &name, &id, &priority, &started](Runtime& vm, Object*, Values) {
     auto* object = vm.heap.Allocate(vm, thread);
     current.value = main.value = Value::Ref(object);
     object->fields[name.slot] = StringValue(vm, "main");
     object->fields[id.slot] = Value::Long(1);
+    object->fields[priority.slot] = Value::Int(5);
+    object->fields[started.slot] = Value::Int(1);
     return Value{};
   });
-  const auto ctor = [&name, &id, &target, &next_id](Runtime& vm, Object* self, Values a) {
+  const auto ctor = [&name, &id, &target, &next_id, &priority, &daemon, &current](Runtime& vm, Object* self, Values a) {
     const auto thread_id = next_id.value.j();
     if (thread_id == INT64_MAX) vm.Fail("Ljava/lang/OutOfMemoryError;", "Thread IDs exhausted");
     next_id.value = Value::Long(thread_id + 1);
     self->fields[id.slot] = Value::Long(thread_id);
+    auto* parent = current.value.ref();
+    self->fields[priority.slot] = parent->fields[priority.slot];
+    self->fields[daemon.slot] = parent->fields[daemon.slot];
     if (!a.empty()) self->fields[target.slot] = a[0];
     self->fields[name.slot] = a.size() == 2 ? Value::Ref(&vm.NonNull(a[1].ref()))
                                          : StringValue(vm, "Thread-" + std::to_string(thread_id - 2));
@@ -315,6 +411,75 @@ const Field& InstallThread(Runtime& vm) {
         vm.NonNull(a[0].ref());
         return std::exchange(current.value, a[0]);
       });
+  auto& scheduler = cl.AddField(context, "scheduler", "Landroid/os/Handler;", true);
+  cl.AddMethod(context, "uptimeMillis", "()J", art::kAccStatic, [](Runtime& vm, Object*, Values) {
+    auto& clock = vm.linker.Resolve("Landroid/os/SystemClock;");
+    return vm.Invoke(vm.linker.FindMethod(clock, "uptimeMillis", "()J", true), nullptr, {});
+  });
+  cl.AddMethod(context, "dispatchMainMessage", "(Ljava/lang/Object;J)Z", art::kAccStatic,
+      [](Runtime& vm, Object*, Values args) {
+        return vm.DispatchMainMessage(vm.NonNull(args[0].ref()), args[1]);
+      });
+  cl.AddMethod(context, "suspendMainLooper", "()V", art::kAccStatic,
+      [](Runtime& vm, Object*, Values) -> Value { vm.SuspendMainLooper(); });
+  cl.AddMethod(context, "postAtTime", "(Ljava/lang/Runnable;J)Z", art::kAccStatic,
+      [&scheduler](Runtime& vm, Object*, Values args) {
+        if (!scheduler.value.ref()) {
+          auto& looper = vm.linker.Resolve("Landroid/os/Looper;");
+          const auto main = vm.Invoke(vm.linker.FindMethod(looper, "getMainLooper", "()Landroid/os/Looper;", true),
+                                      nullptr, {});
+          if (!main.ref()) return Value::Int(0);
+          auto& handler = vm.linker.Resolve(scheduler.type);
+          auto& ctor = vm.linker.FindMethod(handler, "<init>", "(Landroid/os/Looper;)V", false);
+          scheduler.value = Value::Ref(vm.NewObject(handler, ctor, {&main, 1}));
+        }
+        return CallVirtual(vm, scheduler.value.ref(), "postAtTime", "(Ljava/lang/Runnable;J)Z", args);
+      });
+  cl.AddMethod(context, "removeCallbacks", "(Ljava/lang/Runnable;)V", art::kAccStatic,
+      [&scheduler](Runtime& vm, Object*, Values args) {
+        if (scheduler.value.ref()) {
+          CallVirtual(vm, scheduler.value.ref(), "removeCallbacks", "(Ljava/lang/Runnable;)V", args);
+        }
+        return Value{};
+      });
+  cl.AddMethod(context, "clearThreadLocals", "(Ljava/lang/Thread;)V", art::kAccStatic,
+      [](Runtime& vm, Object*, Values args) {
+        vm.NonNull(args[0].ref()).elements.clear();
+        return Value{};
+      });
+  cl.AddMethod(context, "setParkBlocker", "(Ljava/lang/Thread;Ljava/lang/Object;)V", art::kAccStatic,
+      [&park_blocker](Runtime& vm, Object*, Values args) {
+        vm.NonNull(args[0].ref()).fields[park_blocker.slot] = args[1];
+        return Value{};
+      });
+  cl.AddMethod(context, "getParkBlocker", "(Ljava/lang/Thread;)Ljava/lang/Object;", art::kAccStatic,
+      [&park_blocker](Runtime& vm, Object*, Values args) {
+        return vm.NonNull(args[0].ref()).fields[park_blocker.slot];
+      });
+  cl.AddMethod(context, "unpark", "(Ljava/lang/Thread;)V", art::kAccStatic,
+      [&park_permit](Runtime&, Object*, Values args) {
+        if (auto* target = args[0].ref()) target->fields[park_permit.slot] = Value::Int(1);
+        return Value{};
+      });
+  cl.AddMethod(context, "park", "(ZJ)V", art::kAccStatic,
+      [&current, &park_permit, &interrupted](Runtime& vm, Object*, Values args) {
+        vm.linker.Initialize(*current.owner);
+        auto& active = *current.value.ref();
+        if (std::exchange(active.fields[park_permit.slot], {}).i() || active.fields[interrupted.slot].i()) {
+          return Value{};
+        }
+        const auto time = args[1].j();
+        if (args[0].i()) {
+          const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch()).count();
+          if (time > now) std::this_thread::sleep_for(std::chrono::milliseconds(time - now));
+        } else if (time > 0) {
+          std::this_thread::sleep_for(std::chrono::nanoseconds(time));
+        } else if (time == 0) {
+          vm.Fail("Ljava/lang/IllegalStateException;", "The cooperative guest cannot park indefinitely");
+        }
+        return Value{};
+      });
   cl.AddMethod(thread, "getName", "()Ljava/lang/String;", 0,
       [&name](Runtime&, Object* self, Values) { return self->fields[name.slot]; });
   cl.AddMethod(thread, "setName", "(Ljava/lang/String;)V", 0, [&name](Runtime& vm, Object* self, Values a) {
@@ -322,6 +487,19 @@ const Field& InstallThread(Runtime& vm) {
     return Value{};
   });
   cl.AddMethod(thread, "getId", "()J", 0, [&id](Runtime&, Object* self, Values) { return self->fields[id.slot]; });
+  cl.AddMethod(thread, "setDaemon", "(Z)V", 0, [&daemon](Runtime&, Object* self, Values a) {
+    self->fields[daemon.slot] = a[0];
+    return Value{};
+  });
+  cl.AddMethod(thread, "isDaemon", "()Z", 0,
+      [&daemon](Runtime&, Object* self, Values) { return self->fields[daemon.slot]; });
+  cl.AddMethod(thread, "setPriority", "(I)V", 0, [&priority](Runtime& vm, Object* self, Values a) {
+    if (a[0].i() < 1 || a[0].i() > 10) vm.Fail("Ljava/lang/IllegalArgumentException;", "Thread priority");
+    self->fields[priority.slot] = a[0];
+    return Value{};
+  });
+  cl.AddMethod(thread, "getPriority", "()I", 0,
+      [&priority](Runtime&, Object* self, Values) { return self->fields[priority.slot]; });
   cl.AddMethod(thread, "isInterrupted", "()Z", 0,
       [&interrupted](Runtime&, Object* self, Values) { return self->fields[interrupted.slot]; });
   cl.AddMethod(thread, "interrupt", "()V", 0, [&main, &current, &interrupted](Runtime&, Object* self, Values) {
@@ -333,6 +511,10 @@ const Field& InstallThread(Runtime& vm) {
   };
   cl.AddMethod(thread, "interrupted", "()Z", art::kAccStatic, clear_interrupt);
   cl.AddMethod(thread, "yield", "()V", art::kAccStatic, [](Runtime&, Object*, Values) {
+    std::this_thread::yield();
+    return Value{};
+  });
+  cl.AddMethod(thread, "onSpinWait", "()V", art::kAccStatic, [](Runtime&, Object*, Values) {
     std::this_thread::yield();
     return Value{};
   });
@@ -638,114 +820,6 @@ void InstallAtomicUpdaters(ClassLinker& cl) {
           });
     }
   }
-}
-
-std::u16string NormalizePath(std::u16string_view path) {
-  std::u16string result;
-  for (char16_t ch : path) {
-    if (ch != u'/' || result.empty() || result.back() != u'/') result += ch;
-  }
-  if (result.size() > 1 && result.back() == u'/') result.pop_back();
-  return result;
-}
-
-void InstallFiles(Runtime& vm) {
-  auto& cl = vm.linker;
-  auto& file = cl.Define("Ljava/io/File;", kObject, 0, {"Ljava/io/Serializable;"});
-  cl.AddMethod(file, "<init>", "(Ljava/lang/String;)V", 0,
-      [](Runtime& vm, Object* self, Values a) {
-        self->text = NormalizePath(vm.NonNull(a[0].ref()).text);
-        return Value{};
-      });
-  const Builtin child = [](Runtime& vm, Object* self, Values a) {
-    const auto& leaf = vm.NonNull(a[1].ref()).text;
-    if (!a[0].ref() || a[0].ref()->text.empty()) self->text = NormalizePath(leaf);
-    else self->text = NormalizePath(a[0].ref()->text + u'/' + leaf);
-    return Value{};
-  };
-  cl.AddMethod(file, "<init>", "(Ljava/io/File;Ljava/lang/String;)V", 0, child);
-  cl.AddMethod(file, "<init>", "(Ljava/lang/String;Ljava/lang/String;)V", 0, child);
-  const Builtin path = [](Runtime& vm, Object* self, Values) { return StringValue(vm, self->text); };
-  cl.AddMethod(file, "getPath", "()Ljava/lang/String;", 0, path);
-  cl.AddMethod(file, "toString", "()Ljava/lang/String;", 0, path);
-  cl.AddMethod(file, "getAbsolutePath", "()Ljava/lang/String;", 0, [](Runtime& vm, Object* self, Values) {
-    if (self->text.starts_with(u'/')) return StringValue(vm, self->text);
-    std::error_code error;
-    auto absolute = std::filesystem::current_path(error);
-    if (error) vm.Fail("Ljava/io/IOException;", error.message());
-    if (!self->text.empty()) absolute /= EncodeUtf8(self->text, false);
-    return StringValue(vm, absolute.string());
-  });
-  cl.AddMethod(file, "getName", "()Ljava/lang/String;", 0, [](Runtime& vm, Object* self, Values) {
-    const auto index = self->text.rfind(u'/');
-    return StringValue(vm, index == self->text.npos ? self->text : self->text.substr(index + 1));
-  });
-  cl.AddMethod(file, "isDirectory", "()Z", 0, [](Runtime&, Object* self, Values) {
-    std::error_code error;
-    return Value::Int(std::filesystem::is_directory(EncodeUtf8(self->text, false), error));
-  });
-  cl.AddMethod(file, "isFile", "()Z", 0, [](Runtime&, Object* self, Values) {
-    std::error_code error;
-    return Value::Int(std::filesystem::is_regular_file(EncodeUtf8(self->text, false), error));
-  });
-  cl.AddMethod(file, "exists", "()Z", 0, [](Runtime&, Object* self, Values) {
-    std::error_code error;
-    return Value::Int(std::filesystem::exists(EncodeUtf8(self->text, false), error));
-  });
-  cl.AddMethod(file, "listFiles", "()[Ljava/io/File;", 0, [](Runtime& vm, Object* self, Values) {
-    std::vector<std::filesystem::path> paths;
-    std::error_code error;
-    std::filesystem::directory_iterator end;
-    for (auto it = std::filesystem::directory_iterator(EncodeUtf8(self->text, false), error);
-         !error && it != end; it.increment(error)) {
-      paths.push_back(it->path());
-    }
-    if (error) return Value{};
-    RootScope roots(vm);
-    auto* array = roots.Hold(vm.NewArray(vm.linker.Resolve("[Ljava/io/File;"), paths.size()));
-    Class& file = vm.linker.Resolve("Ljava/io/File;");
-    for (size_t i = 0; i < paths.size(); ++i) {
-      auto* child = vm.heap.Allocate(vm, file);
-      child->text = DecodeUtf8(paths[i].string());
-      array->elements[i] = Value::Ref(child);
-    }
-    return Value::Ref(array);
-  });
-
-  auto& fd = cl.Define("Ljava/io/FileDescriptor;", kObject, art::kAccFinal);
-  Field& android_fd = cl.AddField(fd, "descriptor", "I", false);
-  Field& host_fd = cl.AddField(fd, "fd", "I", false);
-  cl.AddField(fd, "handle", "J", false);
-  const Builtin set_fd = [&android_fd, &host_fd](Runtime&, Object* self, Values a) {
-    const Value descriptor = a.empty() ? Value::Int(-1) : a[0];
-    self->fields[android_fd.slot] = self->fields[host_fd.slot] = descriptor;
-    return Value{};
-  };
-  cl.AddMethod(fd, "<init>", "()V", 0, set_fd);
-  cl.AddMethod(fd, "<init>", "(I)V", 0, set_fd);
-  cl.AddMethod(fd, "setInt$", "(I)V", 0, set_fd);
-  cl.AddMethod(fd, "getInt$", "()I", 0,
-      [&android_fd](Runtime&, Object* self, Values) { return self->fields[android_fd.slot]; });
-
-  Class& parcel_fd = cl.Define("Landroid/os/ParcelFileDescriptor;", kObject, 0, {"Ljava/io/Closeable;"});
-  Field& wrapped = cl.AddField(parcel_fd, "descriptor", "Ljava/io/FileDescriptor;", false);
-  cl.AddMethod(parcel_fd, "<init>", "(Ljava/io/FileDescriptor;)V", 0,
-      [&wrapped](Runtime& vm, Object* self, Values a) {
-        self->fields[wrapped.slot] = Value::Ref(&vm.NonNull(a[0].ref()));
-        return Value{};
-      });
-  const Builtin detach = [&wrapped, &android_fd, &host_fd](Runtime& vm, Object* self, Values) {
-    Object& fd = vm.NonNull(self->fields[wrapped.slot].ref());
-    Value current = fd.fields[android_fd.slot];
-    fd.fields[host_fd.slot] = fd.fields[android_fd.slot] = Value::Int(-1);
-    return current;
-  };
-  cl.AddMethod(parcel_fd, "detachFd", "()I", 0, detach);
-  cl.AddMethod(parcel_fd, "close", "()V", 0, [detach](Runtime& vm, Object* self, Values a) {
-    const jint fd = detach(vm, self, a).i();
-    if (fd >= 0 && close(fd) != 0) vm.Fail("Ljava/io/IOException;", "Could not close file descriptor");
-    return Value{};
-  });
 }
 
 void InstallAndroid(Runtime& vm) {

@@ -1,0 +1,352 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/Executors.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/Executors.java
+@@ -567,10 +567,19 @@
+     }
+ 
+     /** Cannot instantiate. */
++    public static ScheduledExecutorService newScheduledThreadPool(int corePoolSize) {
++        return newScheduledThreadPool(corePoolSize, defaultThreadFactory());
++    }
++
++    public static ScheduledExecutorService newScheduledThreadPool(int corePoolSize,
++            ThreadFactory threadFactory) {
++        return new ScheduledThreadPoolExecutor(corePoolSize, threadFactory);
++    }
++
+     private Executors() {}
+ 
+     /** Runs the upstream FutureTask state machine on the guest's interpreter thread. */
+-    private static final class EmbeddedExecutor implements ExecutorService {
++    static final class EmbeddedExecutor implements ExecutorService {
+         private final java.util.ArrayDeque<Runnable> queue = new java.util.ArrayDeque<>();
+         private final ThreadFactory factory;
+         private Thread worker;
+@@ -584,6 +593,10 @@
+         @Override public void execute(Runnable command) {
+             java.util.Objects.requireNonNull(command);
+             if (shutdown) throw new RejectedExecutionException("Executor is shut down");
++            runTask(command);
++        }
++
++        final void runTask(Runnable command) {
+             if (worker == null) {
+                 worker = factory.newThread(this::drain);
+                 if (worker == null) throw new RejectedExecutionException("Thread factory returned null");
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicLong.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicLong.java
+@@ -35,7 +35,6 @@
+ 
+ package java.util.concurrent.atomic;
+ 
+-import java.lang.invoke.MethodHandles;
+ import java.lang.invoke.VarHandle;
+ import java.util.function.LongBinaryOperator;
+ import java.util.function.LongUnaryOperator;
+@@ -55,26 +54,7 @@
+ public class AtomicLong extends Number implements java.io.Serializable {
+     private static final long serialVersionUID = 1927816293512124184L;
+ 
+-    /*
+-     * This class intended to be implemented using VarHandles, but there
+-     * are unresolved cyclic startup dependencies.
+-     */
+-    // BEGIN Android-changed: Using VarHandle instead of Unsafe
+-    // private static final Unsafe U = Unsafe.getUnsafe();
+-    // private static final long VALUE
+-    //     = U.objectFieldOffset(AtomicLong.class, "value");
+-    private static final VarHandle VALUE;
+-    static {
+-        try {
+-            MethodHandles.Lookup l = MethodHandles.lookup();
+-            VALUE = l.findVarHandle(AtomicLong.class, "value", long.class);
+-        } catch (ReflectiveOperationException e) {
+-            throw new ExceptionInInitializerError(e);
+-        }
+-    }
+-    // END Android-changed: Using VarHandle instead of Unsafe
+-
+-    /** @serial */
++    // The ART interpreter serializes cooperative guest threads.
+     private volatile long value;
+ 
+     /**
+@@ -110,9 +90,7 @@
+      */
+     public final void set(long newValue) {
+         // See JDK-8180620: Clarify VarHandle mixed-access subtleties
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // U.putLongVolatile(this, VALUE, newValue);
+-        VALUE.setVolatile(this, newValue);
++        value = newValue;
+     }
+ 
+     /**
+@@ -123,9 +101,7 @@
+      * @since 1.6
+      */
+     public final void lazySet(long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // U.putLongRelease(this, VALUE, newValue);
+-        VALUE.setRelease(this, newValue);
++        value = newValue;
+     }
+ 
+     /**
+@@ -135,10 +111,10 @@
+      * @param newValue the new value
+      * @return the previous value
+      */
+-    public final long getAndSet(long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndSetLong(this, VALUE, newValue);
+-        return (long)VALUE.getAndSet(this, newValue);
++    public final synchronized long getAndSet(long newValue) {
++        long previous = value;
++        value = newValue;
++        return previous;
+     }
+ 
+     /**
+@@ -151,10 +127,10 @@
+      * @return {@code true} if successful. False return indicates that
+      * the actual value was not equal to the expected value.
+      */
+-    public final boolean compareAndSet(long expectedValue, long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.compareAndSetLong(this, VALUE, expectedValue, newValue);
+-        return VALUE.compareAndSet(this, expectedValue, newValue);
++    public final synchronized boolean compareAndSet(long expectedValue, long newValue) {
++        if (value != expectedValue) return false;
++        value = newValue;
++        return true;
+     }
+ 
+     /**
+@@ -175,9 +151,7 @@
+      */
+     @Deprecated(since="9")
+     public final boolean weakCompareAndSet(long expectedValue, long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.weakCompareAndSetLongPlain(this, VALUE, expectedValue, newValue);
+-        return VALUE.weakCompareAndSetPlain(this, expectedValue, newValue);
++        return compareAndSet(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -191,9 +165,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetPlain(long expectedValue, long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.weakCompareAndSetLongPlain(this, VALUE, expectedValue, newValue);
+-        return VALUE.weakCompareAndSetPlain(this, expectedValue, newValue);
++        return compareAndSet(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -205,9 +177,7 @@
+      * @return the previous value
+      */
+     public final long getAndIncrement() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddLong(this, VALUE, 1L);
+-        return (long)VALUE.getAndAdd(this, 1L);
++        return getAndAdd(1L);
+     }
+ 
+     /**
+@@ -219,9 +189,7 @@
+      * @return the previous value
+      */
+     public final long getAndDecrement() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddLong(this, VALUE, -1L);
+-        return (long)VALUE.getAndAdd(this, -1L);
++        return getAndAdd(-1L);
+     }
+ 
+     /**
+@@ -231,10 +199,10 @@
+      * @param delta the value to add
+      * @return the previous value
+      */
+-    public final long getAndAdd(long delta) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddLong(this, VALUE, delta);
+-        return (long)VALUE.getAndAdd(this, delta);
++    public final synchronized long getAndAdd(long delta) {
++        long previous = value;
++        value += delta;
++        return previous;
+     }
+ 
+     /**
+@@ -246,9 +214,7 @@
+      * @return the updated value
+      */
+     public final long incrementAndGet() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddLong(this, VALUE, 1L) + 1L;
+-        return (long)VALUE.getAndAdd(this, 1L) + 1L;
++        return getAndAdd(1L) + 1L;
+     }
+ 
+     /**
+@@ -260,9 +226,7 @@
+      * @return the updated value
+      */
+     public final long decrementAndGet() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddLong(this, VALUE, -1L) - 1L;
+-        return (long)VALUE.getAndAdd(this, -1L) - 1L;
++        return getAndAdd(-1L) - 1L;
+     }
+ 
+     /**
+@@ -273,9 +237,7 @@
+      * @return the updated value
+      */
+     public final long addAndGet(long delta) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getAndAddLong(this, VALUE, delta) + delta;
+-        return (long)VALUE.getAndAdd(this, delta) + delta;
++        return getAndAdd(delta) + delta;
+     }
+ 
+     /**
+@@ -432,9 +394,7 @@
+      * @since 9
+      */
+     public final long getPlain() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getLong(this, VALUE);
+-        return (long)VALUE.get(this);
++        return value;
+     }
+ 
+     /**
+@@ -446,9 +406,7 @@
+      * @since 9
+      */
+     public final void setPlain(long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // U.putLong(this, VALUE, newValue);
+-        VALUE.set(this, newValue);
++        value = newValue;
+     }
+ 
+     /**
+@@ -459,9 +417,7 @@
+      * @since 9
+      */
+     public final long getOpaque() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getLongOpaque(this, VALUE);
+-        return (long)VALUE.getOpaque(this);
++        return value;
+     }
+ 
+     /**
+@@ -472,9 +428,7 @@
+      * @since 9
+      */
+     public final void setOpaque(long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // U.putLongOpaque(this, VALUE, newValue);
+-        VALUE.setOpaque(this, newValue);
++        value = newValue;
+     }
+ 
+     /**
+@@ -485,9 +439,7 @@
+      * @since 9
+      */
+     public final long getAcquire() {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.getLongAcquire(this, VALUE);
+-        return (long)VALUE.getAcquire(this);
++        return value;
+     }
+ 
+     /**
+@@ -498,9 +450,7 @@
+      * @since 9
+      */
+     public final void setRelease(long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // U.putLongRelease(this, VALUE, newValue);
+-        VALUE.setRelease(this, newValue);
++        value = newValue;
+     }
+ 
+     /**
+@@ -515,10 +465,10 @@
+      * expected value if successful
+      * @since 9
+      */
+-    public final long compareAndExchange(long expectedValue, long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.compareAndExchangeLong(this, VALUE, expectedValue, newValue);
+-        return (long)VALUE.compareAndExchange(this, expectedValue, newValue);
++    public final synchronized long compareAndExchange(long expectedValue, long newValue) {
++        long previous = value;
++        if (previous == expectedValue) value = newValue;
++        return previous;
+     }
+ 
+     /**
+@@ -534,9 +484,7 @@
+      * @since 9
+      */
+     public final long compareAndExchangeAcquire(long expectedValue, long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.compareAndExchangeLongAcquire(this, VALUE, expectedValue, newValue);
+-        return (long)VALUE.compareAndExchangeAcquire(this, expectedValue, newValue);
++        return compareAndExchange(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -552,9 +500,7 @@
+      * @since 9
+      */
+     public final long compareAndExchangeRelease(long expectedValue, long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.compareAndExchangeLongRelease(this, VALUE, expectedValue, newValue);
+-        return (long)VALUE.compareAndExchangeRelease(this, expectedValue, newValue);
++        return compareAndExchange(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -569,9 +515,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetVolatile(long expectedValue, long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.weakCompareAndSetLong(this, VALUE, expectedValue, newValue);
+-        return VALUE.weakCompareAndSet(this, expectedValue, newValue);
++        return compareAndSet(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -586,9 +530,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetAcquire(long expectedValue, long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.weakCompareAndSetLongAcquire(this, VALUE, expectedValue, newValue);
+-        return VALUE.weakCompareAndSetAcquire(this, expectedValue, newValue);
++        return compareAndSet(expectedValue, newValue);
+     }
+ 
+     /**
+@@ -603,9 +545,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetRelease(long expectedValue, long newValue) {
+-        // Android-changed: Using VarHandle instead of Unsafe
+-        // return U.weakCompareAndSetLongRelease(this, VALUE, expectedValue, newValue);
+-        return VALUE.weakCompareAndSetRelease(this, expectedValue, newValue);
++        return compareAndSet(expectedValue, newValue);
+     }
+ 
+ }

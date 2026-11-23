@@ -282,6 +282,11 @@ bool ClassLinker::HasClass(std::string_view descriptor) const {
       (classes_.contains(descriptor) || dex_index_.contains(descriptor));
 }
 
+void ClassLinker::AddBootNative(std::string_view owner, std::string_view name,
+                                std::string_view signature, Builtin builtin) {
+  boot_natives_[std::string(owner)].emplace(MemberKey(name, signature), std::move(builtin));
+}
+
 void ClassLinker::LoadMembers(Class& cls) {
   const auto& dex = *cls.dex;
   const art::ClassAccessor access(dex, dex.GetClassDef(cls.definition));
@@ -291,12 +296,17 @@ void ClassLinker::LoadMembers(Class& cls) {
     AddField(cls, dex.GetFieldNameView(id), dex.GetFieldTypeDescriptorView(id),
              (flags & art::kAccStatic) != 0).flags = flags;
   }
+  const auto bindings = boot_natives_.find(cls.descriptor);
   for (const auto& method : access.GetMethods()) {
     const auto& id = dex.GetMethodId(method.GetIndex());
     Method& target = AddMethod(cls, dex.GetMethodNameView(id), dex.GetMethodSignature(id).ToString(),
                                method.GetAccessFlags(), {}, dex.GetMethodShortyView(id));
     target.index = method.GetIndex();
     target.code = method.GetCodeItem();
+    if (target.IsNative() && bindings != boot_natives_.end()) {
+      const auto binding = bindings->second.find(MemberKey(target.name, target.signature));
+      if (binding != bindings->second.end()) target.builtin = binding->second;
+    }
   }
 }
 
@@ -321,7 +331,10 @@ void ClassLinker::Link(Class& cls) {
         }
       }
     } else {
-      if (!cls.superclass_descriptor.empty()) cls.super = &Resolve(cls.superclass_descriptor);
+      if (!cls.superclass_descriptor.empty()) {
+        const auto& super = cls.superclass_descriptor;
+        cls.super = &Resolve(cls.optional_boot_superclass && !HasClass(super) ? "Ljava/lang/Object;" : super);
+      }
       for (const auto& iface : cls.interface_descriptors) cls.interfaces.push_back(&Resolve(iface));
     }
     if (cls.super) {

@@ -1,0 +1,329 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/locks/AbstractQueuedLongSynchronizer.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/locks/AbstractQueuedLongSynchronizer.java
+@@ -39,9 +39,7 @@
+ import java.util.Collection;
+ import java.util.Date;
+ import java.util.concurrent.TimeUnit;
+-import java.util.concurrent.ForkJoinPool;
+ import java.util.concurrent.RejectedExecutionException;
+-import jdk.internal.misc.Unsafe;
+ 
+ /**
+  * A version of {@link AbstractQueuedSynchronizer} in
+@@ -93,39 +91,38 @@
+         volatile int status;      // written by owner, atomic bit ops by others
+ 
+         // methods for atomic operations
+-        final boolean casPrev(Node c, Node v) {  // for cleanQueue
+-            return U.weakCompareAndSetReference(this, PREV, c, v);
+-        }
+-        final boolean casNext(Node c, Node v) {  // for cleanQueue
+-            return U.weakCompareAndSetReference(this, NEXT, c, v);
+-        }
+-        final int getAndUnsetStatus(int v) {     // for signalling
+-            return U.getAndBitwiseAndInt(this, STATUS, ~v);
++        final synchronized boolean casPrev(Node c, Node v) {  // for cleanQueue
++            if (prev != c) return false;
++            prev = v;
++            return true;
++        }
++        final synchronized boolean casNext(Node c, Node v) {  // for cleanQueue
++            if (next != c) return false;
++            next = v;
++            return true;
++        }
++        final synchronized int getAndUnsetStatus(int v) {     // for signalling
++            int old = status;
++            status &= ~v;
++            return old;
+         }
+         final void setPrevRelaxed(Node p) {      // for off-queue assignment
+-            U.putReference(this, PREV, p);
++            prev = p;
+         }
+         final void setStatusRelaxed(int s) {     // for off-queue assignment
+-            U.putInt(this, STATUS, s);
++            status = s;
+         }
+         final void clearStatus() {               // for reducing unneeded signals
+-            U.putIntOpaque(this, STATUS, 0);
+-        }
+-
+-        private static final long STATUS
+-            = U.objectFieldOffset(Node.class, "status");
+-        private static final long NEXT
+-            = U.objectFieldOffset(Node.class, "next");
+-        private static final long PREV
+-            = U.objectFieldOffset(Node.class, "prev");
++            status = 0;
++        }
++
+     }
+ 
+     // Concrete classes tagged by type
+     static final class ExclusiveNode extends Node { }
+     static final class SharedNode extends Node { }
+ 
+-    static final class ConditionNode extends Node
+-        implements ForkJoinPool.ManagedBlocker {
++    static final class ConditionNode extends Node {
+         ConditionNode nextWaiter;            // link to next waiting node
+ 
+         /**
+@@ -137,7 +134,7 @@
+             return status <= 1 || Thread.currentThread().isInterrupted();
+         }
+ 
+-        public final boolean block() {
++        public final boolean block() throws InterruptedException {
+             while (!isReleasable()) LockSupport.park();
+             return true;
+         }
+@@ -187,14 +184,25 @@
+      * @return {@code true} if successful. False return indicates that the actual
+      *         value was not equal to the expected value.
+      */
+-    protected final boolean compareAndSetState(long expect, long update) {
+-        return U.compareAndSetLong(this, STATE, expect, update);
++    protected final synchronized boolean compareAndSetState(long expect, long update) {
++        if (state != expect) return false;
++        state = update;
++        return true;
++    }
++
++    // Cooperative guest threads still share the same lock state.
++    private synchronized boolean casHead(Node update) {
++        if (head != null) return false;
++        head = update;
++        return true;
+     }
+ 
+     // Queuing utilities
+ 
+-    private boolean casTail(Node c, Node v) {
+-        return U.compareAndSetReference(this, TAIL, c, v);
++    private synchronized boolean casTail(Node c, Node v) {
++        if (tail != c) return false;
++        tail = v;
++        return true;
+     }
+ 
+     /**
+@@ -215,7 +223,7 @@
+                         return null;
+                     }
+                 }
+-                if (U.compareAndSetReference(this, HEAD, null, h))
++                if (casHead(h))
+                     return tail = h;
+             }
+         }
+@@ -298,7 +306,7 @@
+             //     emit JFR event
+ 
+             for (long nanos = 1L;;) {
+-                U.park(false, nanos); // must use Unsafe park to sleep
++                LockSupport.parkNanos(nanos);
+                 if (nanos < 1L << 30)            // max about 1 second
+                     nanos <<= 1;
+ 
+@@ -433,7 +441,7 @@
+         for (long nanos = 1L;;) {
+             if (shared ? (tryAcquireShared(arg) >= 0) : tryAcquire(arg))
+                 return 1;
+-            U.park(false, nanos);               // must use Unsafe park to sleep
++            LockSupport.parkNanos(nanos);
+             if (nanos < 1L << 30)               // max about 1 second
+                 nanos <<= 1;
+         }
+@@ -1293,7 +1301,7 @@
+             // fall through if encountered OutOfMemoryError
+             if (!isHeldExclusively() || !release(savedState = getState()))
+                 throw new IllegalMonitorStateException();
+-            U.park(false, OOME_COND_WAIT_DELAY);
++            LockSupport.parkNanos(OOME_COND_WAIT_DELAY);
+             acquireOnOOME(false, savedState);
+             return null;
+         }
+@@ -1324,7 +1332,7 @@
+                         if (rejected)
+                             node.block();
+                         else
+-                            ForkJoinPool.managedBlock(node);
++                            node.block();
+                     } catch (RejectedExecutionException ex) {
+                         rejected = true;
+                     } catch (InterruptedException ie) {
+@@ -1371,7 +1379,7 @@
+                         if (rejected)
+                             node.block();
+                         else
+-                            ForkJoinPool.managedBlock(node);
++                            node.block();
+                     } catch (RejectedExecutionException ex) {
+                         rejected = true;
+                     } catch (InterruptedException ie) {
+@@ -1598,16 +1606,4 @@
+         }
+     }
+ 
+-    // Unsafe
+-    private static final Unsafe U = Unsafe.getUnsafe();
+-    private static final long STATE
+-        = U.objectFieldOffset(AbstractQueuedLongSynchronizer.class, "state");
+-    private static final long HEAD
+-        = U.objectFieldOffset(AbstractQueuedLongSynchronizer.class, "head");
+-    private static final long TAIL
+-        = U.objectFieldOffset(AbstractQueuedLongSynchronizer.class, "tail");
+-
+-    static {
+-        Class<?> ensureLoaded = LockSupport.class;
+-    }
+ }
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/locks/LockSupport.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/locks/LockSupport.java
+@@ -35,9 +35,6 @@
+ 
+ package java.util.concurrent.locks;
+ 
+-import java.util.concurrent.TimeUnit;
+-import jdk.internal.misc.VirtualThreads;
+-import jdk.internal.misc.Unsafe;
+ 
+ /**
+  * Basic thread blocking primitives for creating locks and other
+@@ -142,7 +139,7 @@
+     private LockSupport() {} // Cannot be instantiated.
+ 
+     private static void setBlocker(Thread t, Object arg) {
+-        U.putReferenceOpaque(t, PARKBLOCKER, arg);
++        org.wasmandroid.ui.ThreadContext.setParkBlocker(t, arg);
+     }
+ 
+     /**
+@@ -160,7 +157,7 @@
+      * @since 14
+      */
+     public static void setCurrentBlocker(Object blocker) {
+-        U.putReferenceOpaque(Thread.currentThread(), PARKBLOCKER, blocker);
++        setBlocker(Thread.currentThread(), blocker);
+     }
+ 
+     /**
+@@ -176,13 +173,7 @@
+      */
+     public static void unpark(Thread thread) {
+         if (thread != null) {
+-            if (thread.isVirtual()) {
+-                // Android-changed: Not using JavaLangAccess
+-                // JLA.unparkVirtualThread(thread);
+-                VirtualThreads.unpark(thread);
+-            } else {
+-                U.unpark(thread);
+-            }
++            org.wasmandroid.ui.ThreadContext.unpark(thread);
+         }
+     }
+ 
+@@ -218,13 +209,7 @@
+         Thread t = Thread.currentThread();
+         setBlocker(t, blocker);
+         try {
+-            if (t.isVirtual()) {
+-                // Android-changed: Not using JavaLangAccess
+-                // JLA.parkVirtualThread();
+-                VirtualThreads.park();
+-            } else {
+-                U.park(false, 0L);
+-            }
++            org.wasmandroid.ui.ThreadContext.park(false, 0L);
+         } finally {
+             setBlocker(t, null);
+         }
+@@ -268,13 +253,7 @@
+             Thread t = Thread.currentThread();
+             setBlocker(t, blocker);
+             try {
+-                if (t.isVirtual()) {
+-                    // Android-changed: Not using JavaLangAccess
+-                    // JLA.parkVirtualThread(nanos);
+-                    VirtualThreads.park(nanos);
+-                } else {
+-                    U.park(false, nanos);
+-                }
++                org.wasmandroid.ui.ThreadContext.park(false, nanos);
+             } finally {
+                 setBlocker(t, null);
+             }
+@@ -339,7 +318,7 @@
+     public static Object getBlocker(Thread t) {
+         if (t == null)
+             throw new NullPointerException();
+-        return U.getReferenceOpaque(t, PARKBLOCKER);
++        return org.wasmandroid.ui.ThreadContext.getParkBlocker(t);
+     }
+ 
+     /**
+@@ -368,13 +347,7 @@
+      * for example, the interrupt status of the thread upon return.
+      */
+     public static void park() {
+-        if (Thread.currentThread().isVirtual()) {
+-            // Android-changed: Not using JavaLangAccess
+-            // JLA.parkVirtualThread();
+-            VirtualThreads.park();
+-        } else {
+-            U.park(false, 0L);
+-        }
++        org.wasmandroid.ui.ThreadContext.park(false, 0L);
+     }
+ 
+     /**
+@@ -409,13 +382,7 @@
+      */
+     public static void parkNanos(long nanos) {
+         if (nanos > 0) {
+-            if (Thread.currentThread().isVirtual()) {
+-                // Android-changed: Not using JavaLangAccess
+-                // JLA.parkVirtualThread(nanos);
+-                VirtualThreads.park(nanos);
+-            } else {
+-                U.park(false, nanos);
+-            }
++            org.wasmandroid.ui.ThreadContext.park(false, nanos);
+         }
+     }
+ 
+@@ -450,28 +417,14 @@
+      *        to wait until
+      */
+     public static void parkUntil(long deadline) {
+-        if (Thread.currentThread().isVirtual()) {
+-            long millis = deadline - System.currentTimeMillis();
+-            // Android-changed: Not using JavaLangAccess
+-            // JLA.parkVirtualThread(TimeUnit.MILLISECONDS.toNanos(millis));
+-            VirtualThreads.park(TimeUnit.MILLISECONDS.toNanos(millis));
+-        } else {
+-            U.park(true, deadline);
+-        }
++        org.wasmandroid.ui.ThreadContext.park(true, deadline);
+     }
+ 
+     /**
+      * Returns the thread id for the given thread.
+      */
+     static final long getThreadId(Thread thread) {
+-        return thread.threadId();
+-    }
+-
+-    // Hotspot implementation via intrinsics API
+-    private static final Unsafe U = Unsafe.getUnsafe();
+-    private static final long PARKBLOCKER
+-        = U.objectFieldOffset(Thread.class, "parkBlocker");
+-
+-    // Android-removed: Not using JavaLangAccess
+-    // private static final JavaLangAccess JLA = SharedSecrets.getJavaLangAccess();
++        return thread.getId();
++    }
++
+ }

@@ -1,0 +1,346 @@
+--- a/libcore/ojluni/src/main/java/java/io/RandomAccessFile.java
++++ b/libcore/ojluni/src/main/java/java/io/RandomAccessFile.java
+@@ -26,19 +26,9 @@
+ 
+ package java.io;
+ 
+-import dalvik.annotation.optimization.ReachabilitySensitive;
+ import java.nio.channels.FileChannel;
+ import sun.nio.ch.FileChannelImpl;
+-import android.system.Os;
+-import android.system.ErrnoException;
+-import android.system.OsConstants;
+-
+-import dalvik.system.CloseGuard;
+-import libcore.io.IoBridge;
+-import libcore.io.IoTracker;
+-import libcore.io.IoUtils;
+-import libcore.io.Libcore;
+-import static android.system.OsConstants.*;
++
+ 
+ 
+ /**
+@@ -70,21 +60,9 @@
+ 
+ public class RandomAccessFile implements DataOutput, DataInput, Closeable {
+ 
+-    // BEGIN Android-added: CloseGuard and some helper fields for Android changes in this file.
+-    @ReachabilitySensitive
+-    private final CloseGuard guard = CloseGuard.get();
+     private final byte[] scratch = new byte[8];
+ 
+-    private static final int FLUSH_NONE = 0;
+-    private static final int FLUSH_FSYNC = 1;
+-    private static final int FLUSH_FDATASYNC = 2;
+-    private int flushAfterWrite = FLUSH_NONE;
+-
+-    private int mode;
+-    // END Android-added: CloseGuard and some helper fields for Android changes in this file.
+-
+-    // Android-added: @ReachabilitySensitive
+-    @ReachabilitySensitive
++
+     private FileDescriptor fd;
+     private FileChannel channel = null;
+     private boolean rw;
+@@ -97,14 +75,6 @@
+ 
+     private Object closeLock = new Object();
+     private volatile boolean closed = false;
+-
+-    // BEGIN Android-added: IoTracker.
+-    /**
+-     * A single tracker to track both read and write. The tracker resets when the operation
+-     * performed is different from the operation last performed.
+-     */
+-    private final IoTracker ioTracker = new IoTracker();
+-    // END Android-added: IoTracker.
+ 
+     /**
+      * Creates a random access file stream to read from, and optionally
+@@ -248,37 +218,9 @@
+     public RandomAccessFile(File file, String mode, boolean setCloExecFlag)
+             throws FileNotFoundException {
+         String name = (file != null ? file.getPath() : null);
+-        int imode = -1;
+-        if (mode.equals("r")) {
+-            imode = O_RDONLY;
+-        } else if (mode.startsWith("rw")) {
+-            // Android-changed: Added. O_CREAT
+-            // imode = O_RDWR;
+-            imode = O_RDWR | O_CREAT;
+-            rw = true;
+-            if (mode.length() > 2) {
+-                if (mode.equals("rws")) {
+-                    // Android-changed: For performance reasons, use fsync after each write.
+-                    // RandomAccessFile.write may result in multiple write syscalls,
+-                    // O_SYNC/O_DSYNC flags will cause a blocking wait on each syscall. Replacing
+-                    // them with single fsync/fdatasync call gives better performance with only
+-                    // minor decrease in reliability.
+-                    // imode |= O_SYNC;
+-                    flushAfterWrite = FLUSH_FSYNC;
+-                } else if (mode.equals("rwd")) {
+-                    // Android-changed: For performance reasons, use fdatasync after each write.
+-                    // imode |= O_DSYNC;
+-                    flushAfterWrite = FLUSH_FDATASYNC;
+-                } else {
+-                    imode = -1;
+-                }
+-            }
+-        }
+-        if (imode < 0) {
+-            throw new IllegalArgumentException("Illegal mode \"" + mode
+-                                               + "\" must be one of "
+-                                               + "\"r\", \"rw\", \"rws\","
+-                                               + " or \"rwd\"");
++        rw = mode.equals("rw") || mode.equals("rws") || mode.equals("rwd");
++        if (!rw && !mode.equals("r")) {
++            throw new IllegalArgumentException("Illegal mode: " + mode);
+         }
+         // Android-removed: do not use legacy security code
+         /*
+@@ -299,35 +241,11 @@
+             throw new FileNotFoundException("Invalid file path");
+         }
+         this.path = name;
+-        // Android-added: set O_CLOEXEC flag if requested.
+-        imode = setCloExecFlag ? imode | O_CLOEXEC : imode;
+-        this.mode = imode;
+-
+-        // BEGIN Android-changed: Use IoBridge.open() instead of open.
+-        fd = IoBridge.open(name, imode);
+-        IoUtils.setFdOwner(fd, this);
+-        maybeSync();
+-        guard.open("close");
+-        // END Android-changed: Use IoBridge.open() instead of open.
+-    }
+-
+-    // BEGIN Android-added: Sync after rws/rwd write
+-    private void maybeSync() {
+-        if (flushAfterWrite == FLUSH_FSYNC) {
+-            try {
+-                fd.sync();
+-            } catch (IOException e) {
+-                // Ignored
+-            }
+-        } else if (flushAfterWrite == FLUSH_FDATASYNC) {
+-            try {
+-                Os.fdatasync(fd);
+-            } catch (ErrnoException e) {
+-                // Ignored
+-            }
+-        }
+-    }
+-    // END Android-added: Sync after rws/rwd write
++        fd = open(name, rw);
++    }
++
++    // The guest filesystem stores every completed write in memory.
++    private static native FileDescriptor open(String name, boolean write) throws FileNotFoundException;
+ 
+     /**
+      * Returns the opaque file descriptor object associated with this
+@@ -365,7 +283,7 @@
+     public final FileChannel getChannel() {
+         synchronized (this) {
+             if (channel == null) {
+-                channel = FileChannelImpl.open(fd, path, true, rw, this);
++                channel = FileChannelImpl.open(fd, path, true, rw, false, this);
+             }
+             return channel;
+         }
+@@ -399,11 +317,7 @@
+      * @param len the number of bytes to read.
+      * @exception IOException If an I/O error has occurred.
+      */
+-    private int readBytes(byte b[], int off, int len) throws IOException {
+-        // Android-changed: Implement on top of libcore os API.
+-        ioTracker.trackIo(len, IoTracker.Mode.READ);
+-        return IoBridge.read(fd, b, off, len);
+-    }
++    private native int readBytes(byte[] b, int off, int len) throws IOException;
+ 
+     /**
+      * Reads up to {@code len} bytes of data from this file into an
+@@ -558,13 +472,7 @@
+      * @param len the number of bytes that are written
+      * @exception IOException If an I/O error has occurred.
+      */
+-    private void writeBytes(byte b[], int off, int len) throws IOException {
+-        // BEGIN Android-changed: Implement on top of libcore os API.
+-        ioTracker.trackIo(len, IoTracker.Mode.WRITE);
+-        IoBridge.write(fd, b, off, len);
+-        maybeSync();
+-        // END Android-changed: Implement on top of libcore os API.
+-    }
++    private native void writeBytes(byte[] b, int off, int len) throws IOException;
+ 
+     /**
+      * Writes {@code b.length} bytes from the specified byte array
+@@ -599,15 +507,7 @@
+      *             at which the next read or write occurs.
+      * @exception  IOException  if an I/O error occurs.
+      */
+-    public long getFilePointer() throws IOException {
+-        // BEGIN Android-changed: Implement on top of libcore os API.
+-        try {
+-            return Libcore.os.lseek(fd, 0L, SEEK_CUR);
+-        } catch (ErrnoException errnoException) {
+-            throw errnoException.rethrowAsIOException();
+-        }
+-        // END Android-changed: Implement on top of libcore os API.
+-    }
++    public native long getFilePointer() throws IOException;
+ 
+     /**
+      * Sets the file-pointer offset, measured from the beginning of this
+@@ -628,18 +528,11 @@
+             // Android-changed: different exception message for seek(-1).
+             // throw new IOException("Negative seek offset");
+             throw new IOException("offset < 0: " + pos);
+-        } else {
+-            // BEGIN Android-changed: Implement on top of libcore os API.
+-            // seek0(pos);
+-            try {
+-                Libcore.os.lseek(fd, pos, SEEK_SET);
+-                ioTracker.reset();
+-            } catch (ErrnoException errnoException) {
+-                throw errnoException.rethrowAsIOException();
+-            }
+-            // END Android-changed: Implement on top of libcore os API.
+-        }
+-    }
++        }
++        seek0(pos);
++    }
++
++    private native void seek0(long pos) throws IOException;
+ 
+     /**
+      * Returns the length of this file.
+@@ -647,15 +540,7 @@
+      * @return     the length of this file, measured in bytes.
+      * @exception  IOException  if an I/O error occurs.
+      */
+-    public long length() throws IOException {
+-        // BEGIN Android-changed: Implement on top of libcore os API.
+-        try {
+-            return Libcore.os.fstat(fd).st_size;
+-        } catch (ErrnoException errnoException) {
+-            throw errnoException.rethrowAsIOException();
+-        }
+-        // END Android-changed: Implement on top of libcore os API.
+-    }
++    public native long length() throws IOException;
+ 
+     /**
+      * Sets the length of this file.
+@@ -677,24 +562,13 @@
+      * @since      1.2
+      */
+     public void setLength(long newLength) throws IOException {
+-        // BEGIN Android-changed: Implement on top of libcore os API.
+         if (newLength < 0) {
+             throw new IllegalArgumentException("newLength < 0");
+         }
+-        try {
+-            Libcore.os.ftruncate(fd, newLength);
+-        } catch (ErrnoException errnoException) {
+-            throw errnoException.rethrowAsIOException();
+-        }
+-
+-        long filePointer = getFilePointer();
+-        if (filePointer > newLength) {
+-            seek(newLength);
+-        }
+-        maybeSync();
+-        // END Android-changed: Implement on top of libcore os API.
+-    }
+-
++        setLength0(newLength);
++    }
++
++    private native void setLength0(long newLength) throws IOException;
+ 
+     /**
+      * Closes this random access file stream and releases any system
+@@ -711,7 +585,6 @@
+      * @spec JSR-51
+      */
+     public void close() throws IOException {
+-        guard.close();
+         synchronized (closeLock) {
+             if (closed) {
+                 return;
+@@ -723,9 +596,11 @@
+         if (channel != null && channel.isOpen()) {
+             channel.close();
+         }
+-        IoBridge.closeAndSignalBlockedThreads(fd);
++        close0();
+         // END Android-changed: Implement on top of libcore os API.
+     }
++
++    private native void close0() throws IOException;
+ 
+     //
+     //  Some "reading/writing Java data types" methods stolen from
+@@ -1252,9 +1127,6 @@
+     // Android-added: use finalize() to detect if not close()d.
+     @Override protected void finalize() throws Throwable {
+         try {
+-            if (guard != null) {
+-                guard.warnIfOpen();
+-            }
+             close();
+         } finally {
+             super.finalize();
+--- a/libcore/ojluni/src/main/java/java/io/DataInputStream.java
++++ b/libcore/ojluni/src/main/java/java/io/DataInputStream.java
+@@ -25,8 +25,6 @@
+ 
+ package java.io;
+ 
+-import java.nio.ByteOrder;
+-import libcore.io.Memory;
+ 
+ /**
+  * A data input stream lets an application read primitive Java data
+@@ -320,7 +318,7 @@
+         // b/30268192
+         // Android-changed: Use read(byte[], int, int) instead of read().
+         readFully(readBuffer, 0, 2);
+-        return Memory.peekShort(readBuffer, 0, ByteOrder.BIG_ENDIAN);
++        return (short) ((readBuffer[0] & 0xff) << 8 | (readBuffer[1] & 0xff));
+     }
+ 
+     /**
+@@ -344,7 +342,7 @@
+         // b/30268192
+         // Android-changed: Use read(byte[], int, int) instead of read().
+         readFully(readBuffer, 0, 2);
+-        return Memory.peekShort(readBuffer, 0, ByteOrder.BIG_ENDIAN) & 0xffff;
++        return (short) ((readBuffer[0] & 0xff) << 8 | (readBuffer[1] & 0xff)) & 0xffff;
+     }
+ 
+     /**
+@@ -368,7 +366,7 @@
+         // b/30268192
+         // Android-changed: Use read(byte[], int, int) instead of read().
+         readFully(readBuffer, 0, 2);
+-        return (char)Memory.peekShort(readBuffer, 0, ByteOrder.BIG_ENDIAN);
++        return (char)(short) ((readBuffer[0] & 0xff) << 8 | (readBuffer[1] & 0xff));
+     }
+ 
+     /**
+@@ -392,7 +390,8 @@
+         // b/30268192
+         // Android-changed: Use read(byte[], int, int) instead of read().
+         readFully(readBuffer, 0, 4);
+-        return Memory.peekInt(readBuffer, 0, ByteOrder.BIG_ENDIAN);
++        return (readBuffer[0] & 0xff) << 24 | (readBuffer[1] & 0xff) << 16
++                | (readBuffer[2] & 0xff) << 8 | (readBuffer[3] & 0xff);
+     }
+ 
+     private byte readBuffer[] = new byte[8];

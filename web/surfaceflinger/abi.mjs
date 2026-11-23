@@ -10,7 +10,7 @@ export const INPUT_TEXT_SIZE = 256;
 export const CODEC_AU_SIZE = 512 * 1024;
 export const WEBVIEW_TEXT_SIZE = 2048;
 
-export const Flag = Object.freeze({ VISIBLE: 1, CLIP_BOUNDS: 2, OPAQUE: 4, BLUR_BEHIND: 8 });
+export const Flag = Object.freeze({ VISIBLE: 1, CLIP_BOUNDS: 2, OPAQUE: 4, BLUR_BEHIND: 8, INPUT_MODAL: 16 });
 export const Surface = Object.freeze({ DISPLAY_LIST: 1, BITMAP: 2, TEXTURE: 3, WEBVIEW: 4, VIDEO: 5 });
 export const Op = Object.freeze({
   SAVE: 1, RESTORE: 2, TRANSLATE: 3, SCALE: 4, ROTATE: 5, CLIP_RECT: 6, CLIP_ROUND: 7,
@@ -23,7 +23,7 @@ export const Ime = Object.freeze({ COMPOSING: 1, COMMIT: 2, MORE: 1, CONTINUATIO
 export const CodecAction = Object.freeze({ CONFIGURE: 1, AU: 2, FLUSH: 3, CLOSE: 4 });
 export const CodecStatus = Object.freeze({ CONFIGURED: 1, DECODED: 2, UNSUPPORTED: 3, ERROR: 4, FLUSHED: 5, CLOSED: 6 });
 export const WebViewAction = Object.freeze({ OPEN: 1, CLOSE: 2, EVAL: 3, REPLY: 4 });
-export const WebViewStatus = Object.freeze({ READY: 1, EVAL_RESULT: 2, INTERFACE: 3, ERROR: 4 });
+export const WebViewStatus = Object.freeze({ READY: 1, EVAL_RESULT: 2, INTERFACE: 3, ERROR: 4, PAGE_LOADED: 5 });
 
 export const recordSize = Uint16Array.of(0, 4, 4, 12, 12, 16, 20, 28, 8, 32, 40, 28, 32, 40, 32, 24, 52, 44);
 export const verbCoordinates = Uint8Array.of(0, 2, 2, 4, 6, 0);

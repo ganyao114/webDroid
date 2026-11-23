@@ -1,0 +1,207 @@
+--- a/libcore/ojluni/src/main/java/java/io/InputStreamReader.java
++++ b/libcore/ojluni/src/main/java/java/io/InputStreamReader.java
+@@ -28,7 +28,9 @@
+ import java.nio.CharBuffer;
+ import java.nio.charset.Charset;
+ import java.nio.charset.CharsetDecoder;
+-import sun.nio.cs.StreamDecoder;
++import java.nio.charset.IllegalCharsetNameException;
++import java.nio.charset.UnsupportedCharsetException;
++import java.util.Objects;
+ 
+ 
+ /**
+@@ -62,7 +64,15 @@
+ 
+ public class InputStreamReader extends Reader {
+ 
+-    private final StreamDecoder sd;
++    private final InputStream in;
++    private final Charset charset;
++    private Charset decodingCharset;
++    private final byte[] bytes = new byte[8192];
++    private String decoded = "";
++    private int nextChar;
++    private int pending;
++    private boolean eof;
++    private boolean closed;
+ 
+     /**
+      * Creates an InputStreamReader that uses the
+@@ -73,9 +83,7 @@
+      * @see Charset#defaultCharset()
+      */
+     public InputStreamReader(InputStream in) {
+-        super(in);
+-        sd = StreamDecoder.forInputStreamReader(in, this,
+-                Charset.defaultCharset()); // ## check lock object
++        this(in, Charset.defaultCharset());
+     }
+ 
+     /**
+@@ -94,10 +102,7 @@
+     public InputStreamReader(InputStream in, String charsetName)
+         throws UnsupportedEncodingException
+     {
+-        super(in);
+-        if (charsetName == null)
+-            throw new NullPointerException("charsetName");
+-        sd = StreamDecoder.forInputStreamReader(in, this, charsetName);
++        this(in, lookupCharset(charsetName));
+     }
+ 
+     /**
+@@ -110,9 +115,9 @@
+      */
+     public InputStreamReader(InputStream in, Charset cs) {
+         super(in);
+-        if (cs == null)
+-            throw new NullPointerException("charset");
+-        sd = StreamDecoder.forInputStreamReader(in, this, cs);
++        this.in = in;
++        this.charset = Objects.requireNonNull(cs, "charset");
++        this.decodingCharset = cs;
+     }
+ 
+     /**
+@@ -124,10 +129,7 @@
+      * @since 1.4
+      */
+     public InputStreamReader(InputStream in, CharsetDecoder dec) {
+-        super(in);
+-        if (dec == null)
+-            throw new NullPointerException("charset decoder");
+-        sd = StreamDecoder.forInputStreamReader(in, this, dec);
++        this(in, Objects.requireNonNull(dec, "charset decoder").charset());
+     }
+ 
+     /**
+@@ -150,11 +152,11 @@
+      * @revised 1.4
+      */
+     public String getEncoding() {
+-        return sd.getEncoding();
++        return closed ? null : charset.name();
+     }
+ 
+     public int read(CharBuffer target) throws IOException {
+-        return sd.read(target);
++        return super.read(target);
+     }
+ 
+     /**
+@@ -166,7 +168,10 @@
+      * @throws     IOException  If an I/O error occurs
+      */
+     public int read() throws IOException {
+-        return sd.read();
++        synchronized (lock) {
++            ensureOpen();
++            return refill() ? decoded.charAt(nextChar++) : -1;
++        }
+     }
+ 
+     /**
+@@ -174,7 +179,16 @@
+      * @throws     IndexOutOfBoundsException  {@inheritDoc}
+      */
+     public int read(char[] cbuf, int off, int len) throws IOException {
+-        return sd.read(cbuf, off, len);
++        Objects.checkFromIndexSize(off, len, cbuf.length);
++        synchronized (lock) {
++            ensureOpen();
++            if (len == 0) return 0;
++            if (!refill()) return -1;
++            int count = Math.min(decoded.length() - nextChar, len);
++            decoded.getChars(nextChar, nextChar + count, cbuf, off);
++            nextChar += count;
++            return count;
++        }
+     }
+ 
+     /**
+@@ -185,10 +199,82 @@
+      * @throws     IOException  If an I/O error occurs
+      */
+     public boolean ready() throws IOException {
+-        return sd.ready();
++        synchronized (lock) {
++            ensureOpen();
++            return nextChar < decoded.length() || in.available() > 0;
++        }
+     }
+ 
+     public void close() throws IOException {
+-        sd.close();
++        synchronized (lock) {
++            if (closed) return;
++            closed = true;
++            in.close();
++        }
++    }
++
++    private static Charset lookupCharset(String name) throws UnsupportedEncodingException {
++        Objects.requireNonNull(name, "charsetName");
++        try {
++            return Charset.forName(name);
++        } catch (IllegalCharsetNameException | UnsupportedCharsetException e) {
++            throw new UnsupportedEncodingException(name);
++        }
++    }
++
++    private void ensureOpen() throws IOException {
++        if (closed) throw new IOException("Stream closed");
++    }
++
++    private boolean refill() throws IOException {
++        while (nextChar == decoded.length()) {
++            if (eof) return false;
++            int count = in.read(bytes, pending, bytes.length - pending);
++            eof = count < 0;
++            int limit = pending + Math.max(0, count);
++            if (limit == 0) continue;
++            if (limit < 2 && !eof && "UTF-16".equals(decodingCharset.name())) {
++                pending = limit;
++                continue;
++            }
++
++            int start = 0;
++            if ("UTF-16".equals(decodingCharset.name())) {
++                boolean little = limit >= 2 && (bytes[0] & 255) == 255 && (bytes[1] & 255) == 254;
++                if (little || limit >= 2 && (bytes[0] & 255) == 254 && (bytes[1] & 255) == 255) {
++                    start = 2;
++                }
++                decodingCharset = Charset.forName(little ? "UTF-16LE" : "UTF-16BE");
++            }
++            int end = eof ? limit : completeLength(start, limit);
++            decoded = new String(bytes, start, end - start, decodingCharset);
++            nextChar = 0;
++            pending = limit - end;
++            System.arraycopy(bytes, end, bytes, 0, pending);
++        }
++        return true;
++    }
++
++    private int completeLength(int start, int end) {
++        String name = decodingCharset.name();
++        if ("UTF-8".equals(name)) {
++            int lead = end - 1;
++            while (lead >= start && end - lead < 4 && (bytes[lead] & 0xc0) == 0x80) --lead;
++            if (lead >= start) {
++                int value = bytes[lead] & 255;
++                int length = value >= 0xc2 && value <= 0xdf ? 2 :
++                        value >= 0xe0 && value <= 0xef ? 3 :
++                        value >= 0xf0 && value <= 0xf4 ? 4 : 1;
++                if (end - lead < length) return lead;
++            }
++        } else if (name.startsWith("UTF-16")) {
++            end -= (end - start) & 1;
++            if (end - start >= 2) {
++                boolean little = "UTF-16LE".equals(name);
++                int high = bytes[end - (little ? 1 : 2)] & 255;
++                if (high >= 0xd8 && high <= 0xdb) return end - 2;
++            }
++        }
++        return end;
+     }
+ }

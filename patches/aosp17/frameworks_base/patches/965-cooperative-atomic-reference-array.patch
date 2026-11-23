@@ -1,0 +1,230 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicReferenceArray.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicReferenceArray.java
+@@ -35,16 +35,13 @@
+ 
+ package java.util.concurrent.atomic;
+ 
+-import jdk.internal.misc.Unsafe;
+-
+-import java.lang.invoke.MethodHandles;
++
+ import java.lang.invoke.VarHandle;
+ import java.lang.reflect.Array;
+ import java.util.Arrays;
+ import java.util.function.BinaryOperator;
+ import java.util.function.UnaryOperator;
+ 
+-import jdk.internal.misc.Unsafe;
+ 
+ /**
+  * An array of object references in which elements may be updated
+@@ -56,11 +53,10 @@
+  */
+ public class AtomicReferenceArray<E> implements java.io.Serializable {
+     private static final long serialVersionUID = -6209656149925076980L;
+-    private static final VarHandle AA
+-        = MethodHandles.arrayElementVarHandle(Object[].class);
++    // Access and transitions are serialized on the cooperative Java thread.
+     /** @serial */
+     @SuppressWarnings("serial") // Conditionally serializable
+-    private final Object[] array; // must have exact type Object[]
++    private Object[] array; // must have exact type Object[]
+ 
+     /**
+      * Creates a new AtomicReferenceArray of the given length, with all
+@@ -102,7 +98,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final E get(int i) {
+-        return (E)AA.getVolatile(array, i);
++        return (E)array[i];
+     }
+ 
+     /**
+@@ -113,7 +109,7 @@
+      * @param newValue the new value
+      */
+     public final void set(int i, E newValue) {
+-        AA.setVolatile(array, i, newValue);
++        array[i] = newValue;
+     }
+ 
+     /**
+@@ -125,7 +121,7 @@
+      * @since 1.6
+      */
+     public final void lazySet(int i, E newValue) {
+-        AA.setRelease(array, i, newValue);
++        array[i] = newValue;
+     }
+ 
+     /**
+@@ -138,8 +134,10 @@
+      * @return the previous value
+      */
+     @SuppressWarnings("unchecked")
+-    public final E getAndSet(int i, E newValue) {
+-        return (E)AA.getAndSet(array, i, newValue);
++    public final synchronized E getAndSet(int i, E newValue) {
++        E previous = (E)array[i];
++        array[i] = newValue;
++        return previous;
+     }
+ 
+     /**
+@@ -153,8 +151,10 @@
+      * @return {@code true} if successful. False return indicates that
+      * the actual value was not equal to the expected value.
+      */
+-    public final boolean compareAndSet(int i, E expectedValue, E newValue) {
+-        return AA.compareAndSet(array, i, expectedValue, newValue);
++    public final synchronized boolean compareAndSet(int i, E expectedValue, E newValue) {
++        if (array[i] != expectedValue) return false;
++        array[i] = newValue;
++        return true;
+     }
+ 
+     /**
+@@ -176,7 +176,7 @@
+      */
+     @Deprecated(since="9")
+     public final boolean weakCompareAndSet(int i, E expectedValue, E newValue) {
+-        return AA.weakCompareAndSetPlain(array, i, expectedValue, newValue);
++        return compareAndSet(i, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -191,7 +191,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetPlain(int i, E expectedValue, E newValue) {
+-        return AA.weakCompareAndSetPlain(array, i, expectedValue, newValue);
++        return compareAndSet(i, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -334,12 +334,7 @@
+         if (a.getClass() != Object[].class)
+             a = Arrays.copyOf((Object[])a, Array.getLength(a), Object[].class);
+ 
+-        final Unsafe U = Unsafe.getUnsafe();
+-        U.putReference(
+-            this,
+-            U.objectFieldOffset(AtomicReferenceArray.class, "array"),
+-            a
+-        );
++        array = (Object[]) a;
+     }
+ 
+     // jdk9
+@@ -355,7 +350,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final E getPlain(int i) {
+-        return (E)AA.get(array, i);
++        return (E)array[i];
+     }
+ 
+     /**
+@@ -368,7 +363,7 @@
+      * @since 9
+      */
+     public final void setPlain(int i, E newValue) {
+-        AA.set(array, i, newValue);
++        array[i] = newValue;
+     }
+ 
+     /**
+@@ -381,7 +376,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final E getOpaque(int i) {
+-        return (E)AA.getOpaque(array, i);
++        return (E)array[i];
+     }
+ 
+     /**
+@@ -393,7 +388,7 @@
+      * @since 9
+      */
+     public final void setOpaque(int i, E newValue) {
+-        AA.setOpaque(array, i, newValue);
++        array[i] = newValue;
+     }
+ 
+     /**
+@@ -406,7 +401,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final E getAcquire(int i) {
+-        return (E)AA.getAcquire(array, i);
++        return (E)array[i];
+     }
+ 
+     /**
+@@ -418,7 +413,7 @@
+      * @since 9
+      */
+     public final void setRelease(int i, E newValue) {
+-        AA.setRelease(array, i, newValue);
++        array[i] = newValue;
+     }
+ 
+     /**
+@@ -436,8 +431,10 @@
+      * @since 9
+      */
+     @SuppressWarnings("unchecked")
+-    public final E compareAndExchange(int i, E expectedValue, E newValue) {
+-        return (E)AA.compareAndExchange(array, i, expectedValue, newValue);
++    public final synchronized E compareAndExchange(int i, E expectedValue, E newValue) {
++        E previous = (E)array[i];
++        if (previous == expectedValue) array[i] = newValue;
++        return previous;
+     }
+ 
+     /**
+@@ -456,7 +453,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final E compareAndExchangeAcquire(int i, E expectedValue, E newValue) {
+-        return (E)AA.compareAndExchangeAcquire(array, i, expectedValue, newValue);
++        return compareAndExchange(i, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -475,7 +472,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public final E compareAndExchangeRelease(int i, E expectedValue, E newValue) {
+-        return (E)AA.compareAndExchangeRelease(array, i, expectedValue, newValue);
++        return compareAndExchange(i, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -491,7 +488,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetVolatile(int i, E expectedValue, E newValue) {
+-        return AA.weakCompareAndSet(array, i, expectedValue, newValue);
++        return compareAndSet(i, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -507,7 +504,7 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetAcquire(int i, E expectedValue, E newValue) {
+-        return AA.weakCompareAndSetAcquire(array, i, expectedValue, newValue);
++        return compareAndSet(i, expectedValue, newValue);
+     }
+ 
+     /**
+@@ -523,6 +520,6 @@
+      * @since 9
+      */
+     public final boolean weakCompareAndSetRelease(int i, E expectedValue, E newValue) {
+-        return AA.weakCompareAndSetRelease(array, i, expectedValue, newValue);
++        return compareAndSet(i, expectedValue, newValue);
+     }
+ }

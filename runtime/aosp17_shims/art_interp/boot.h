@@ -17,6 +17,7 @@ using Values = std::span<const Value>;
 
 void InstallCollections(Runtime& vm);
 void InstallPlatform(Runtime& vm);
+void InstallFiles(Runtime& vm);
 Value CallVirtual(Runtime& vm, Object* obj, std::string_view name, std::string_view signature,
                   Values args = {});
 bool JavaEquals(Runtime& vm, Object* left, Object* right);

@@ -1,0 +1,116 @@
+--- a/libcore/ojluni/src/main/java/java/net/URLEncoder.java
++++ b/libcore/ojluni/src/main/java/java/net/URLEncoder.java
+@@ -26,13 +26,10 @@
+ package java.net;
+ 
+ import java.io.UnsupportedEncodingException;
+-import java.io.CharArrayWriter;
+ import java.nio.charset.Charset;
+ import java.nio.charset.IllegalCharsetNameException;
+ import java.nio.charset.UnsupportedCharsetException ;
+-import java.util.BitSet;
+ import java.util.Objects;
+-import sun.security.action.GetPropertyAction;
+ 
+ /**
+  * Utility class for HTML form encoding. This class contains static methods
+@@ -74,7 +71,6 @@
+  * @since   1.0
+  */
+ public class URLEncoder {
+-    static BitSet dontNeedEncoding;
+     static final int caseDiff = ('a' - 'A');
+     static String dfltEncName = null;
+ 
+@@ -116,31 +112,18 @@
+          *
+          */
+ 
+-        dontNeedEncoding = new BitSet(256);
+-        int i;
+-        for (i = 'a'; i <= 'z'; i++) {
+-            dontNeedEncoding.set(i);
+-        }
+-        for (i = 'A'; i <= 'Z'; i++) {
+-            dontNeedEncoding.set(i);
+-        }
+-        for (i = '0'; i <= '9'; i++) {
+-            dontNeedEncoding.set(i);
+-        }
+-        dontNeedEncoding.set(' '); /* encoding a space to a + is done
+-                                    * in the encode() method */
+-        dontNeedEncoding.set('-');
+-        dontNeedEncoding.set('_');
+-        dontNeedEncoding.set('.');
+-        dontNeedEncoding.set('*');
+-
+-        dfltEncName = GetPropertyAction.privilegedGetProperty("file.encoding");
++        dfltEncName = Charset.defaultCharset().name();
+     }
+ 
+     /**
+      * You can't call the constructor.
+      */
+     private URLEncoder() { }
++
++    private static boolean isFormSafe(int c) {
++        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
++                || c == ' ' || c == '-' || c == '_' || c == '.' || c == '*';
++    }
+ 
+     /**
+      * Translates a string into {@code x-www-form-urlencoded}
+@@ -222,12 +205,11 @@
+ 
+         boolean needToChange = false;
+         StringBuilder out = new StringBuilder(s.length());
+-        CharArrayWriter charArrayWriter = new CharArrayWriter();
+ 
+         for (int i = 0; i < s.length();) {
+             int c = (int) s.charAt(i);
+             //System.out.println("Examining character: " + c);
+-            if (dontNeedEncoding.get(c)) {
++            if (isFormSafe(c)) {
+                 if (c == ' ') {
+                     c = '+';
+                     needToChange = true;
+@@ -236,9 +218,9 @@
+                 out.append((char)c);
+                 i++;
+             } else {
+-                // convert to external encoding before hex conversion
++                // Convert contiguous unsafe characters before hex conversion.
++                int start = i;
+                 do {
+-                    charArrayWriter.write(c);
+                     /*
+                      * If this character represents the start of a Unicode
+                      * surrogate pair, then pass in two characters. It's not
+@@ -264,16 +246,14 @@
+                                   + Integer.toHexString(d)
+                                   + " is low surrogate");
+                                 */
+-                                charArrayWriter.write(d);
+                                 i++;
+                             }
+                         }
+                     }
+                     i++;
+-                } while (i < s.length() && !dontNeedEncoding.get((c = (int) s.charAt(i))));
+-
+-                charArrayWriter.flush();
+-                String str = new String(charArrayWriter.toCharArray());
++                } while (i < s.length() && !isFormSafe((c = (int) s.charAt(i))));
++
++                String str = s.substring(start, i);
+                 byte[] ba = str.getBytes(charset);
+                 for (int j = 0; j < ba.length; j++) {
+                     out.append('%');
+@@ -290,7 +270,6 @@
+                     }
+                     out.append(ch);
+                 }
+-                charArrayWriter.reset();
+                 needToChange = true;
+             }
+         }

@@ -6,6 +6,7 @@
 #include <array>
 #include <list>
 #include <map>
+#include <set>
 #include <unordered_map>
 
 #include "dex/code_item_accessors.h"
@@ -122,6 +123,7 @@ enum class InitState { Uninitialized, Initializing, Initialized, Failed };
 struct Class {
   std::string descriptor;
   char kind = 'L';
+  bool optional_boot_superclass = false;
   const art::DexFile* dex = nullptr;
   uint16_t definition = 0;
   uint32_t flags = 0;
@@ -189,6 +191,7 @@ class ClassLinker {
   void LoadDexFile(std::string location, std::vector<uint8_t> bytes, bool fallback = false);
   void LoadApkDexFiles(const std::string& path, bool fallback);
   DexStats GetDexStats() const;
+  std::span<const std::unique_ptr<const art::DexFile>> LoadedDexFiles() const { return dex_files_; }
   std::string DexLocation(std::string_view descriptor) const;
   Class& Define(std::string_view name, std::string_view super, uint32_t flags = 0,
                 std::initializer_list<std::string_view> interfaces = {});
@@ -196,6 +199,8 @@ class ClassLinker {
                   Value initial = {});
   Method& AddMethod(Class& cls, std::string_view name, std::string_view signature, uint32_t flags,
                     Builtin builtin = {}, std::string_view shorty = {});
+  void AddBootNative(std::string_view owner, std::string_view name, std::string_view signature,
+                     Builtin builtin);
   Class& Resolve(std::string_view descriptor);
   const Class* FindLinkedClass(std::string_view descriptor) const;
   bool HasClass(std::string_view descriptor) const;
@@ -229,6 +234,7 @@ class ClassLinker {
   DexFiles dex_files_;
   std::unordered_map<std::string_view, DexClass> dex_index_;
   std::unordered_map<std::string, Class, DescriptorHash, std::equal_to<>> classes_;
+  std::map<std::string, std::map<std::string, Builtin>, std::less<>> boot_natives_;
   size_t linked_dex_classes_ = 0;
 };
 
@@ -271,16 +277,22 @@ struct Runtime {
   explicit Runtime(Options options);
   ~Runtime();
   void InstallBootClasses();
+  struct CallDepth {
+    size_t& depth;
+    explicit CallDepth(size_t& depth) : depth(depth) { ++depth; }
+    ~CallDepth() { --depth; }
+  };
+  struct SuspendedFrame {
+    Method* method;
+    uint32_t dex_pc;
+    std::vector<Value> slots;
+  };
   [[gnu::always_inline]] Value Invoke(Method& method, Object* receiver, std::span<const Value> args) {
     if (args.size() + 1 != method.shorty.size())
       Fail("Ljava/lang/VerifyError;", "Wrong argument count for " + method.QualifiedName());
     if (call_depth >= 384) Fail("Ljava/lang/StackOverflowError;");
     if (!method.IsStatic()) NonNull(receiver);
-    struct CallDepth {
-      size_t& depth;
-      explicit CallDepth(size_t& depth) : depth(depth) { ++depth; }
-      ~CallDepth() { --depth; }
-    } depth(call_depth);
+    CallDepth depth(call_depth);
 
     constexpr auto monitor = art::kAccSynchronized | art::kAccDeclaredSynchronized;
     if (method.code && !method.compiled && !(method.flags & monitor) &&
@@ -293,7 +305,11 @@ struct Runtime {
     return InvokeSlow(method, receiver, args);
   }
   Value InvokeSlow(Method& method, Object* receiver, std::span<const Value> args);
-  Value Interpret(Method& method, Object* receiver, std::span<const Value> args);
+  Value Interpret(Method& method, Object* receiver, std::span<const Value> args,
+                  std::span<const SuspendedFrame> suspended = {});
+  Value ResumeSuspendedLoop(std::span<const SuspendedFrame> frames);
+  Value DispatchMainMessage(Object& looper, Value now);
+  [[noreturn]] void SuspendMainLooper();
   void Promote(Method& method);
   Object* NewObject(Class& cls, Method& constructor, std::span<const Value> args);
   Object* NewArray(Class& cls, int32_t length);
@@ -319,6 +335,23 @@ struct Runtime {
   ClassLinker linker;
   GcHeap heap;
   std::unique_ptr<JniBridge> jni;
+  struct GuestFile {
+    std::vector<uint8_t> bytes;
+    int64_t last_modified;
+  };
+  struct FileHandle {
+    std::shared_ptr<GuestFile> file;
+    uint64_t position = 0;
+    bool readable;
+    bool writable;
+    bool append;
+  };
+  // An empty pointer denotes a directory. Open descriptors keep unlinked files alive.
+  std::map<std::string, std::shared_ptr<GuestFile>, std::less<>> guest_files{{"/", {}}};
+  std::set<std::string, std::less<>> read_only_paths;
+  std::unordered_map<const Object*, FileHandle> file_handles;
+  std::unordered_map<const Object*, std::shared_ptr<const void>> regex_programs;
+  int32_t next_file_descriptor = 3;
   RootScope* roots = nullptr;
   Object* exception = nullptr;
   std::unordered_map<std::u16string, Object*> interned;  // Weak entries, pruned during sweep.
@@ -329,11 +362,19 @@ struct Runtime {
   std::array<uint8_t, 256> executed_opcodes{};
   size_t call_depth = 0;
   struct ActiveTraceFrame {
-    const Method* method;
+    Method* method;
     const uint32_t* dex_pc;
     ActiveTraceFrame* caller;
+    const RootScope& frame_roots;
+    size_t depth;
   };
   ActiveTraceFrame* active_trace = nullptr;
+  struct LoopDispatch {
+    ActiveTraceFrame* boundary;
+    size_t depth;
+  };
+  const LoopDispatch* loop_dispatch = nullptr;
+  std::vector<std::vector<SuspendedFrame>> suspended_loops;
   bool gc_paused = false;
   bool inline_caches = true;
 };

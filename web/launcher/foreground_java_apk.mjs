@@ -103,6 +103,22 @@ class ForegroundActivityAbi {
   sendBack() { return this.#check('send_back', this.#call('send_back')) === 1; }
   get scene() { return this.#call('sf_ctx'); }
 
+  readWebViewFile(id, url) {
+    return withString(this.module, url, address => {
+      const length = this.#call('read_webview_file', id, address, 0, 0);
+      if (length < 0) return null;
+      if (!length) return new Uint8Array();
+      const output = this.module._malloc(length) >>> 0;
+      if (!output) throw new Error('Could not allocate WebView file buffer');
+      try {
+        if (this.#call('read_webview_file', id, address, output, length) !== length) return null;
+        return this.memory.refresh().bytes.slice(output, output + length);
+      } finally {
+        this.module._free(output);
+      }
+    });
+  }
+
   state() {
     const length = this.#check('state_json', this.#call('state_json', this.#scratch, textCapacity));
     return JSON.parse(this.memory.refresh().utf8(this.#scratch, length));
@@ -167,6 +183,7 @@ export class ForegroundJavaApk {
     surface.replaceChildren(host);
     this.#creating = createSurfaceFlingerCompositor({
       module, scene: abi.scene, canvas, webviewHost: host, viewport, preferredBackend: backend,
+      readWebViewFile: (id, url) => abi.readWebViewFile(id, url),
       onVsync: () => this.#tick(),
       onError: error => { if (!this.#closed) this.options.onError(error); },
       onCanvasChanged: next => { if (this.#input && !this.#closed) this.#bindInput(next); },

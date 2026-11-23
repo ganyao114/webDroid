@@ -20,7 +20,7 @@ function replacementCanvas(canvas) {
 }
 
 export async function createSurfaceFlingerCompositor({
-  module, scene, canvas, webviewHost, webviewMethods, onVsync, onError = console.error,
+  module, scene, canvas, webviewHost, webviewMethods, readWebViewFile, onVsync, onError = console.error,
   onCanvasChanged, viewport, preferredBackend = 'auto', maxPixelRatio = 2,
 }) {
   await loadAospRoboto(canvas.ownerDocument ?? globalThis.document);
@@ -45,7 +45,7 @@ export async function createSurfaceFlingerCompositor({
     }
   }
   const compositor = new SurfaceFlingerCompositor({
-    module, scene, canvas, backend, webviewHost, webviewMethods, onVsync, viewport,
+    module, scene, canvas, backend, webviewHost, webviewMethods, readWebViewFile, onVsync, viewport,
     onError, onCanvasChanged, maxPixelRatio, fallbackReason,
   });
   if (canvas !== inputCanvas) onCanvasChanged?.(canvas);
@@ -53,7 +53,7 @@ export async function createSurfaceFlingerCompositor({
 }
 
 class SurfaceFlingerCompositor {
-  constructor({ module, scene, canvas, backend, webviewHost, webviewMethods, onVsync, viewport,
+  constructor({ module, scene, canvas, backend, webviewHost, webviewMethods, readWebViewFile, onVsync, viewport,
                 onError, onCanvasChanged, maxPixelRatio, fallbackReason }) {
     this.module = module;
     this.scene = scene;
@@ -79,7 +79,7 @@ class SurfaceFlingerCompositor {
       module._wa_sf_codec_requests(scene), module._wa_sf_codec_events(scene));
     this.webview = webviewHost && new BrowserIframeWebViewProvider(this.memory,
       module._wa_sf_webview_requests(scene), module._wa_sf_webview_events(scene), webviewHost,
-      { methods: webviewMethods });
+      { methods: webviewMethods, readFile: readWebViewFile });
     this.input = new AndroidInputWriter(this.memory, module._wa_sf_input(scene));
     this.bind(backend);
     this.animate = time => {

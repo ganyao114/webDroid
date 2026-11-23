@@ -1,0 +1,502 @@
+--- a/frameworks/base/core/java/android/database/CursorWindow.java
++++ b/frameworks/base/core/java/android/database/CursorWindow.java
+@@ -16,10 +16,8 @@
+ 
+ package android.database;
+ 
+-import static java.lang.ref.Reference.reachabilityFence;
+ import static java.util.Objects.requireNonNull;
+ 
+-import android.annotation.BytesLong;
+ import android.annotation.IntRange;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.res.Resources;
+@@ -27,14 +25,9 @@
+ import android.database.sqlite.SQLiteException;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.ravenwood.annotation.RavenwoodRedirect;
+-import android.ravenwood.annotation.RavenwoodRedirectionClass;
+-import android.ravenwood.annotation.RavenwoodThrow;
+-
+-import dalvik.annotation.optimization.CriticalNative;
+-import dalvik.annotation.optimization.FastNative;
+-import dalvik.system.CloseGuard;
++
++import java.util.ArrayList;
++
+ 
+ /**
+  * A buffer containing multiple cursor rows.
+@@ -46,93 +39,40 @@
+  * consumer for reading.
+  * </p>
+  */
+-@RavenwoodKeepWholeClass
+-@RavenwoodRedirectionClass("CursorWindow_ravenwood")
+ public class CursorWindow extends SQLiteClosable implements Parcelable {
+-    private static final String STATS_TAG = "CursorWindowStats";
+-
+-    // This static member will be evaluated when first used.
+     @UnsupportedAppUsage
+     private static int sCursorWindowSize = -1;
+ 
+-    /**
+-     * The native CursorWindow object pointer.  (FOR INTERNAL USE ONLY)
+-     * @hide
+-     */
+-    @UnsupportedAppUsage
+-    public long mWindowPtr;
+-
+     private int mStartPos;
+     private final String mName;
+-
+-    private final CloseGuard mCloseGuard;
+-
+-    // May throw CursorWindowAllocationException
+-    @RavenwoodRedirect
+-    private static native long nativeCreate(String name, int cursorWindowSize);
+-
+-    // May throw CursorWindowAllocationException
+-    @RavenwoodRedirect
+-    private static native long nativeCreateFromParcel(Parcel parcel);
+-    @RavenwoodRedirect
+-    private static native void nativeDispose(long windowPtr);
+-    @RavenwoodRedirect
+-    private static native void nativeWriteToParcel(long windowPtr, Parcel parcel);
+-
+-    @RavenwoodRedirect
+-    private static native String nativeGetName(long windowPtr);
+-    @RavenwoodRedirect
+-    private static native byte[] nativeGetBlob(long windowPtr, int row, int column);
+-    @RavenwoodRedirect
+-    private static native String nativeGetString(long windowPtr, int row, int column);
+-    @RavenwoodThrow
+-    private static native void nativeCopyStringToBuffer(long windowPtr, int row, int column,
+-            CharArrayBuffer buffer);
+-    @RavenwoodRedirect
+-    private static native boolean nativePutBlob(long windowPtr, byte[] value, int row, int column);
+-    @RavenwoodRedirect
+-    private static native boolean nativePutString(long windowPtr, String value,
+-            int row, int column);
+-
+-    // Below native methods don't do unconstrained work, so are FastNative for performance
+-
+-    @CriticalNative
+-    @RavenwoodThrow
+-    private static native void nativeClear(long windowPtr);
+-
+-    @CriticalNative
+-    @RavenwoodRedirect
+-    private static native int nativeGetNumRows(long windowPtr);
+-    @CriticalNative
+-    @RavenwoodRedirect
+-    private static native boolean nativeSetNumColumns(long windowPtr, int columnNum);
+-    @FastNative
+-    @RavenwoodRedirect
+-    private static native boolean nativeAllocRow(long windowPtr);
+-    @CriticalNative
+-    @RavenwoodThrow
+-    private static native void nativeFreeLastRow(long windowPtr);
+-
+-    @CriticalNative
+-    @RavenwoodRedirect
+-    private static native int nativeGetType(long windowPtr, int row, int column);
+-    @FastNative
+-    @RavenwoodRedirect
+-    private static native long nativeGetLong(long windowPtr, int row, int column);
+-    @FastNative
+-    @RavenwoodRedirect
+-    private static native double nativeGetDouble(long windowPtr, int row, int column);
+-
+-    @CriticalNative
+-    @RavenwoodRedirect
+-    private static native boolean nativePutLong(long windowPtr, long value, int row, int column);
+-    @CriticalNative
+-    @RavenwoodRedirect
+-    private static native boolean nativePutDouble(long windowPtr, double value, int row, int column);
+-    @CriticalNative
+-    @RavenwoodThrow
+-    private static native boolean nativePutNull(long windowPtr, int row, int column);
+-
++    private final long mCapacity;
++    private final boolean mReadOnly;
++    private final ArrayList<Object[]> mRows = new ArrayList<>();
++    private int mColumns;
++    private long mUsed;
++
++    private Object valueAt(int row, int column) {
++        int index = row - mStartPos;
++        if (index < 0 || index >= mRows.size() || column < 0 || column >= mColumns) {
++            throw new CursorIndexOutOfBoundsException("row " + row + ", column " + column);
++        }
++        return mRows.get(index)[column];
++    }
++
++    private static long payloadSize(Object value) {
++        if (value instanceof String) return 2L * ((String) value).length();
++        if (value instanceof byte[]) return ((byte[]) value).length;
++        return 0;
++    }
++
++    private boolean putValue(Object value, int row, int column) {
++        if (mReadOnly) return false;
++        long used = mUsed - payloadSize(valueAt(row, column)) + payloadSize(value);
++        if (used > mCapacity) return false;
++        mRows.get(row - mStartPos)[column] = value instanceof byte[] ? ((byte[]) value).clone() : value;
++        mUsed = used;
++        return true;
++    }
+ 
+     /**
+      * Creates a new empty cursor window and gives it a name.
+@@ -162,17 +102,14 @@
+      * window. Depending on the amount of data stored, the actual amount of memory allocated can be
+      * lower than specified size, but cannot exceed it.
+      */
+-    public CursorWindow(String name, @BytesLong long windowSizeBytes) {
++    public CursorWindow(String name, long windowSizeBytes) {
+         if (windowSizeBytes < 0) {
+             throw new IllegalArgumentException("Window size cannot be less than 0");
+         }
+         mStartPos = 0;
+         mName = name != null && name.length() != 0 ? name : "<unnamed>";
+-        mWindowPtr = nativeCreate(mName, (int) windowSizeBytes);
+-        if (mWindowPtr == 0) {
+-            throw new AssertionError(); // Not possible, the native code won't return it.
+-        }
+-        mCloseGuard = createCloseGuard();
++        mCapacity = windowSizeBytes;
++        mReadOnly = false;
+     }
+ 
+     /**
+@@ -195,48 +132,25 @@
+ 
+     private CursorWindow(Parcel source) {
+         mStartPos = source.readInt();
+-        mWindowPtr = nativeCreateFromParcel(source);
+-        if (mWindowPtr == 0) {
+-            throw new AssertionError(); // Not possible, the native code won't return it.
+-        }
+-        mName = nativeGetName(mWindowPtr);
+-        mCloseGuard = createCloseGuard();
+-    }
+-
+-    @android.ravenwood.annotation.RavenwoodReplace
+-    private CloseGuard createCloseGuard() {
+-        final CloseGuard closeGuard = CloseGuard.get();
+-        closeGuard.open("CursorWindow.close");
+-        return closeGuard;
+-    }
+-
+-    private CloseGuard createCloseGuard$ravenwood() {
+-        return null;
+-    }
+-
+-    @Override
+-    protected void finalize() throws Throwable {
+-        try {
+-            if (mCloseGuard != null) {
+-                mCloseGuard.warnIfOpen();
++        mName = requireNonNull(source.readString());
++        mCapacity = source.readLong();
++        mReadOnly = true;
++        mColumns = source.readInt();
++        int rows = source.readInt();
++        long rowSize = 16L + 8L * mColumns;
++        if (mColumns < 0 || rows < 0 || rows > mCapacity / rowSize) {
++            throw new SQLiteException("Invalid cursor window dimensions");
++        }
++        mUsed = rowSize * rows;
++        for (int row = 0; row < rows; row++) {
++            Object[] values = new Object[mColumns];
++            for (int column = 0; column < mColumns; column++) {
++                Object value = source.readValue(null);
++                mUsed += payloadSize(value);
++                if (mUsed > mCapacity) throw new SQLiteException("Cursor window exceeds its capacity");
++                values[column] = value;
+             }
+-            dispose();
+-        } finally {
+-            super.finalize();
+-        }
+-    }
+-
+-    private void dispose() {
+-        try {
+-            if (mCloseGuard != null) {
+-                mCloseGuard.close();
+-            }
+-            if (mWindowPtr != 0) {
+-                nativeDispose(mWindowPtr);
+-                mWindowPtr = 0;
+-            }
+-        } finally {
+-            reachabilityFence(this);
++            mRows.add(values);
+         }
+     }
+ 
+@@ -259,8 +173,11 @@
+     public void clear() {
+         acquireReference();
+         try {
++            if (mReadOnly) throw new IllegalStateException("Cursor window is read-only");
+             mStartPos = 0;
+-            nativeClear(mWindowPtr);
++            mRows.clear();
++            mColumns = 0;
++            mUsed = 0;
+         } finally {
+             releaseReference();
+         }
+@@ -300,7 +217,7 @@
+     public @IntRange(from = 0) int getNumRows() {
+         acquireReference();
+         try {
+-            return nativeGetNumRows(mWindowPtr);
++            return mRows.size();
+         } finally {
+             releaseReference();
+         }
+@@ -320,7 +237,11 @@
+     public boolean setNumColumns(@IntRange(from = 0) int columnNum) {
+         acquireReference();
+         try {
+-            return nativeSetNumColumns(mWindowPtr, columnNum);
++            if (mReadOnly || columnNum < 0 || (!mRows.isEmpty() && columnNum != mColumns)) {
++                return false;
++            }
++            mColumns = columnNum;
++            return true;
+         } finally {
+             releaseReference();
+         }
+@@ -334,7 +255,11 @@
+     public boolean allocRow(){
+         acquireReference();
+         try {
+-            return nativeAllocRow(mWindowPtr);
++            long size = 16L + 8L * mColumns;
++            if (mReadOnly || size > mCapacity - mUsed) return false;
++            mRows.add(new Object[mColumns]);
++            mUsed += size;
++            return true;
+         } finally {
+             releaseReference();
+         }
+@@ -346,7 +271,10 @@
+     public void freeLastRow(){
+         acquireReference();
+         try {
+-            nativeFreeLastRow(mWindowPtr);
++            if (mReadOnly || mRows.isEmpty()) return;
++            Object[] row = mRows.remove(mRows.size() - 1);
++            mUsed -= 16L + 8L * mColumns;
++            for (Object value : row) mUsed -= payloadSize(value);
+         } finally {
+             releaseReference();
+         }
+@@ -433,11 +361,11 @@
+      * @param column The zero-based column index.
+      * @return The field type.
+      */
+-    public @Cursor.FieldType int getType(@IntRange(from = 0) int row,
++    public int getType(@IntRange(from = 0) int row,
+             @IntRange(from = 0) int column) {
+         acquireReference();
+         try {
+-            return nativeGetType(mWindowPtr, row - mStartPos, column);
++            return DatabaseUtils.getTypeOfObject(valueAt(row, column));
+         } finally {
+             releaseReference();
+         }
+@@ -467,7 +395,10 @@
+     public byte[] getBlob(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
+         acquireReference();
+         try {
+-            return nativeGetBlob(mWindowPtr, row - mStartPos, column);
++            Object value = valueAt(row, column);
++            if (value == null) return null;
++            if (value instanceof byte[]) return ((byte[]) value).clone();
++            throw new SQLiteException("Column does not contain a blob");
+         } finally {
+             releaseReference();
+         }
+@@ -502,7 +433,9 @@
+     public String getString(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
+         acquireReference();
+         try {
+-            return nativeGetString(mWindowPtr, row - mStartPos, column);
++            Object value = valueAt(row, column);
++            if (value instanceof byte[]) throw new SQLiteException("Column contains a blob");
++            return value == null ? null : value.toString();
+         } finally {
+             releaseReference();
+         }
+@@ -545,7 +478,11 @@
+         }
+         acquireReference();
+         try {
+-            nativeCopyStringToBuffer(mWindowPtr, row - mStartPos, column, buffer);
++            String value = getString(row, column);
++            int length = value == null ? 0 : value.length();
++            if (buffer.data == null || buffer.data.length < length) buffer.data = new char[length];
++            if (length != 0) value.getChars(0, length, buffer.data, 0);
++            buffer.sizeCopied = length;
+         } finally {
+             releaseReference();
+         }
+@@ -576,7 +513,15 @@
+     public long getLong(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
+         acquireReference();
+         try {
+-            return nativeGetLong(mWindowPtr, row - mStartPos, column);
++            Object value = valueAt(row, column);
++            if (value == null) return 0;
++            if (value instanceof Number) return ((Number) value).longValue();
++            if (value instanceof byte[]) throw new SQLiteException("Column contains a blob");
++            try {
++                return Long.parseLong(value.toString());
++            } catch (NumberFormatException ignored) {
++                return 0;
++            }
+         } finally {
+             releaseReference();
+         }
+@@ -608,7 +553,15 @@
+     public double getDouble(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
+         acquireReference();
+         try {
+-            return nativeGetDouble(mWindowPtr, row - mStartPos, column);
++            Object value = valueAt(row, column);
++            if (value == null) return 0;
++            if (value instanceof Number) return ((Number) value).doubleValue();
++            if (value instanceof byte[]) throw new SQLiteException("Column contains a blob");
++            try {
++                return Double.parseDouble(value.toString());
++            } catch (NumberFormatException ignored) {
++                return 0;
++            }
+         } finally {
+             releaseReference();
+         }
+@@ -675,7 +628,7 @@
+         requireNonNull(value);
+         acquireReference();
+         try {
+-            return nativePutBlob(mWindowPtr, value, row - mStartPos, column);
++            return putValue(value, row, column);
+         } finally {
+             releaseReference();
+         }
+@@ -694,7 +647,7 @@
+         requireNonNull(value);
+         acquireReference();
+         try {
+-            return nativePutString(mWindowPtr, value, row - mStartPos, column);
++            return putValue(value, row, column);
+         } finally {
+             releaseReference();
+         }
+@@ -712,7 +665,7 @@
+             @IntRange(from = 0) int row, @IntRange(from = 0) int column) {
+         acquireReference();
+         try {
+-            return nativePutLong(mWindowPtr, value, row - mStartPos, column);
++            return putValue(value, row, column);
+         } finally {
+             releaseReference();
+         }
+@@ -731,7 +684,7 @@
+             @IntRange(from = 0) int row, @IntRange(from = 0) int column) {
+         acquireReference();
+         try {
+-            return nativePutDouble(mWindowPtr, value, row - mStartPos, column);
++            return putValue(value, row, column);
+         } finally {
+             releaseReference();
+         }
+@@ -747,7 +700,7 @@
+     public boolean putNull(@IntRange(from = 0) int row, @IntRange(from = 0) int column) {
+         acquireReference();
+         try {
+-            return nativePutNull(mWindowPtr, row - mStartPos, column);
++            return putValue(null, row, column);
+         } finally {
+             releaseReference();
+         }
+@@ -776,7 +729,13 @@
+         acquireReference();
+         try {
+             dest.writeInt(mStartPos);
+-            nativeWriteToParcel(mWindowPtr, dest);
++            dest.writeString(mName);
++            dest.writeLong(mCapacity);
++            dest.writeInt(mColumns);
++            dest.writeInt(mRows.size());
++            for (Object[] row : mRows) {
++                for (Object value : row) dest.writeValue(value);
++            }
+         } finally {
+             releaseReference();
+         }
+@@ -788,10 +747,10 @@
+ 
+     @Override
+     protected void onAllReferencesReleased() {
+-        dispose();
+-    }
+-
+-    @android.ravenwood.annotation.RavenwoodReplace
++        mRows.clear();
++        mUsed = 0;
++    }
++
+     private static int getCursorWindowSize() {
+         if (sCursorWindowSize < 0) {
+             // The cursor window size. resource xml file specifies the value in kB.
+@@ -802,12 +761,8 @@
+         return sCursorWindowSize;
+     }
+ 
+-    private static int getCursorWindowSize$ravenwood() {
+-        return 1024;
+-    }
+-
+     @Override
+     public String toString() {
+-        return getName() + " {" + Long.toHexString(mWindowPtr) + "}";
++        return getName() + " {" + "rows=" + mRows.size() + "}";
+     }
+ }
+--- a/frameworks/base/core/java/android/database/AbstractWindowedCursor.java
++++ b/frameworks/base/core/java/android/database/AbstractWindowedCursor.java
+@@ -144,7 +144,6 @@
+         }
+     }
+ 
+-    @Override
+     public CursorWindow getWindow() {
+         return mWindow;
+     }
+@@ -208,9 +207,14 @@
+ 
+     /** @hide */
+     @Override
+-    @UnsupportedAppUsage
+-    protected void onDeactivateOrClose() {
+-        super.onDeactivateOrClose();
++    public void deactivate() {
++        super.deactivate();
+         closeWindow();
+     }
++
++    @Override
++    public void close() {
++        super.close();
++        closeWindow();
++    }
+ }

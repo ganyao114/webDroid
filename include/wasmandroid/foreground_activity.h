@@ -30,6 +30,10 @@ int32_t wa_system_app_resize(int32_t width, int32_t height, int32_t density_dpi)
 // Returns 1 if the activity is still running, 0 after it finishes, or a WA_ERR_*.
 int32_t wa_system_app_send_back(void);
 
+// Read a file requested by a locally navigated WebView from guest storage or the app APK.
+// A null buffer and zero capacity return the required byte count.
+int32_t wa_system_app_read_webview_file(uint32_t view, const char* url, uint8_t* out, size_t cap);
+
 // NUL-terminated UTF-8. Returns the byte length, or a negative WA_ERR_* status.
 int32_t wa_system_app_state_json(char* out, size_t cap);
 int32_t wa_system_app_last_error(char* out, size_t cap);

@@ -1,0 +1,79 @@
+--- a/frameworks/base/core/java/android/database/sqlite/SQLiteDatabase.java
++++ b/frameworks/base/core/java/android/database/sqlite/SQLiteDatabase.java
+@@ -447,7 +447,12 @@
+ 
+     @Override
+     protected void onAllReferencesReleased() {
+-        if (inTransaction()) endTransaction();
++        if (inTransaction()) {
++            data.version = snapshot.version;
++            data.tables = snapshot.tables;
++            transactions.clear();
++            snapshot = null;
++        }
+         open = false;
+     }
+ 
+@@ -505,9 +510,13 @@
+      */
+     public void beginTransaction() {
+         checkWritable();
+-        if (snapshot != null) throw new IllegalStateException("Nested database transaction");
+-        snapshot = data.copy();
+-        successful = false;
++        if (transactions.isEmpty()) {
++            snapshot = data.copy();
++            transactionFailed = false;
++        } else if (transactions.get(transactions.size() - 1)) {
++            throw new IllegalStateException("Cannot nest a transaction marked successful");
++        }
++        transactions.add(false);
+     }
+ 
+     /**
+@@ -539,12 +548,16 @@
+      * are committed and rolled back.
+      */
+     public void endTransaction() {
+-        if (snapshot == null) throw new IllegalStateException("No database transaction");
+-        if (!successful) {
+-            data.version = snapshot.version;
+-            data.tables = snapshot.tables;
+-        }
+-        snapshot = null;
++        int last = transactions.size() - 1;
++        if (last < 0) throw new IllegalStateException("No database transaction");
++        transactionFailed |= !transactions.remove(last);
++        if (last == 0) {
++            if (transactionFailed) {
++                data.version = snapshot.version;
++                data.tables = snapshot.tables;
++            }
++            snapshot = null;
++        }
+     }
+ 
+     /**
+@@ -557,8 +570,10 @@
+      * transaction is already marked as successful.
+      */
+     public void setTransactionSuccessful() {
+-        if (snapshot == null) throw new IllegalStateException("No database transaction");
+-        successful = true;
++        int last = transactions.size() - 1;
++        if (last < 0) throw new IllegalStateException("No database transaction");
++        if (transactions.get(last)) throw new IllegalStateException("Transaction already marked successful");
++        transactions.set(last, true);
+     }
+ 
+     /**
+@@ -2156,7 +2171,8 @@
+     private boolean readOnly;
+     private int busyTimeout;
+     private Data snapshot;
+-    private boolean successful;
++    private final ArrayList<Boolean> transactions = new ArrayList<>();
++    private boolean transactionFailed;
+ 
+     private SQLiteDatabase(String path, Data data, OpenParams params) {
+         this.path = path;

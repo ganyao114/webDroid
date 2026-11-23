@@ -1,0 +1,477 @@
+--- a/libcore/ojluni/src/main/java/java/io/FileInputStream.java
++++ b/libcore/ojluni/src/main/java/java/io/FileInputStream.java
+@@ -26,19 +26,12 @@
+ 
+ package java.io;
+ 
+-import static android.system.OsConstants.O_RDONLY;
+ 
+ import java.nio.channels.FileChannel;
+ 
+-import dalvik.annotation.optimization.ReachabilitySensitive;
+-import dalvik.system.BlockGuard;
+-import dalvik.system.CloseGuard;
+ import java.util.Arrays;
+ import jdk.internal.util.ArraysSupport;
+ import sun.nio.ch.FileChannelImpl;
+-import libcore.io.IoBridge;
+-import libcore.io.IoTracker;
+-import libcore.io.IoUtils;
+ 
+ /**
+  * A {@code FileInputStream} obtains input bytes
+@@ -76,8 +69,6 @@
+     private static final int DEFAULT_BUFFER_SIZE = 8192;
+ 
+     /* File Descriptor - handle to the open file */
+-    // Android-added: @ReachabilitySensitive
+-    @ReachabilitySensitive
+     private final FileDescriptor fd;
+ 
+     /**
+@@ -94,13 +85,6 @@
+ 
+     // Android-added: Field for tracking whether the stream owns the underlying FileDescriptor.
+     private final boolean isFdOwner;
+-
+-    // Android-added: CloseGuard support.
+-    @ReachabilitySensitive
+-    private final CloseGuard guard = CloseGuard.get();
+-
+-    // Android-added: Tracking of unbuffered I/O.
+-    private final IoTracker tracker = new IoTracker();
+ 
+     /**
+      * Creates a {@code FileInputStream} by
+@@ -162,39 +146,15 @@
+      */
+     public FileInputStream(File file) throws FileNotFoundException {
+         String name = (file != null ? file.getPath() : null);
+-        @SuppressWarnings("removal")
+-        SecurityManager security = System.getSecurityManager();
+-        if (security != null) {
+-            security.checkRead(name);
+-        }
+         if (name == null) {
+             throw new NullPointerException();
+         }
+         if (file.isInvalid()) {
+             throw new FileNotFoundException("Invalid file path");
+         }
+-        // BEGIN Android-changed: Open files using IoBridge to share BlockGuard & StrictMode logic.
+-        // http://b/112107427
+-        // fd = new FileDescriptor();
+-        fd = IoBridge.open(name, O_RDONLY);
+-        // END Android-changed: Open files using IoBridge to share BlockGuard & StrictMode logic.
+-
+-        // Android-changed: Tracking mechanism for FileDescriptor sharing.
+-        // fd.attach(this);
++        fd = open(name);
+         isFdOwner = true;
+-
+         path = name;
+-
+-        // Android-removed: Open files using IoBridge to share BlockGuard & StrictMode logic.
+-        // open(name);
+-
+-        // Android-added: File descriptor ownership tracking.
+-        IoUtils.setFdOwner(this.fd, this);
+-
+-        // Android-added: CloseGuard support.
+-        guard.open("close");
+-        // Android-removed: TODO: Enable this when FileCleanable is imported to replace finalize().
+-        // FileCleanable.register(fd);       // open set the fd, register the cleanup
+     }
+ 
+     // Android-removed: Documentation around SecurityException. Not thrown on Android.
+@@ -252,30 +212,9 @@
+         fd.attach(this);
+         */
+         this.isFdOwner = isFdOwner;
+-        if (isFdOwner) {
+-            IoUtils.setFdOwner(this.fd, this);
+-        }
+-    }
+-
+-    // BEGIN Android-changed: Open files using IoBridge to share BlockGuard & StrictMode logic.
+-    // http://b/112107427
+-    /*
+-    /**
+-     * Opens the specified file for reading.
+-     * @param name the name of the file
+-     *
+-    private native void open0(String name) throws FileNotFoundException;
+-
+-    // wrap native call to allow instrumentation
+-    /**
+-     * Opens the specified file for reading.
+-     * @param name the name of the file
+-     *
+-    private void open(String name) throws FileNotFoundException {
+-        open0(name);
+-    }
+-    */
+-    // END Android-changed: Open files using IoBridge to share BlockGuard & StrictMode logic.
++    }
++
++    private static native FileDescriptor open(String name) throws FileNotFoundException;
+ 
+     /**
+      * Reads a byte of data from this input stream. This method blocks
+@@ -291,20 +230,7 @@
+         return (read(b, 0, 1) != -1) ? b[0] & 0xff : -1;
+     }
+ 
+-    // Android-removed: Read methods delegate to read(byte[], int, int) to share Android logic.
+-    // private native int read0() throws IOException;
+-
+-    // Android-removed: Read methods delegate to read(byte[], int, int) to share Android logic.
+-    /*
+-    /**
+-     * Reads a subarray as a sequence of bytes.
+-     * @param     b the data to be written
+-     * @param     off the start offset in the data
+-     * @param     len the number of bytes that are written
+-     * @throws    IOException If an I/O error has occurred.
+-     *
+-    private native int readBytes(byte b[], int off, int len) throws IOException;
+-    */
++    private native int readBytes(byte[] b, int off, int len) throws IOException;
+ 
+     /**
+      * Reads up to {@code b.length} bytes of data from this input
+@@ -346,11 +272,7 @@
+             throw new IOException("Stream Closed");
+         }
+ 
+-        // Android-added: Tracking of unbuffered I/O.
+-        tracker.trackIo(len, IoTracker.Mode.READ);
+-
+-        // Android-changed: Use IoBridge instead of calling native method.
+-        return IoBridge.read(fd, b, off, len);
++        return readBytes(b, off, len);
+     }
+ 
+     // BEGIN Android-changed: Disable overridden implementation of readAllBytes() and readNBytes().
+@@ -478,23 +400,10 @@
+             throw new IOException("Stream Closed");
+         }
+ 
+-        try {
+-            // Android-added: BlockGuard support.
+-            BlockGuard.getThreadPolicy().onReadFromDisk();
+-            return skip0(n);
+-        } catch(UseManualSkipException e) {
+-            return super.skip(n);
+-        }
+-    }
+-
+-    private native long skip0(long n) throws IOException, UseManualSkipException;
+-
+-    /*
+-     * Used to force manual skip when FileInputStream operates on pipe
+-     */
+-    private static class UseManualSkipException extends Exception {
+-    }
+-    // END Android-changed: skip(long) implementation changed from bare native.
++        return skip0(n);
++    }
++
++    private native long skip0(long n) throws IOException;
+ 
+     /**
+      * Returns an estimate of the number of remaining bytes that can be read (or
+@@ -556,9 +465,6 @@
+             closed = true;
+         }
+ 
+-        // Android-added: CloseGuard support.
+-        guard.close();
+-
+         FileChannel fc = channel;
+         if (fc != null) {
+             // possible race with getChannel(), benign since
+@@ -566,19 +472,10 @@
+             fc.close();
+         }
+ 
+-        // BEGIN Android-changed: Close handling / notification of blocked threads.
+-        /*
+-        fd.closeAll(new Closeable() {
+-            public void close() throws IOException {
+-               fd.close();
+-           }
+-        });
+-        */
+-        if (isFdOwner) {
+-            IoBridge.closeAndSignalBlockedThreads(fd);
+-        }
+-        // END Android-changed: Close handling / notification of blocked threads.
+-    }
++        if (isFdOwner) close0();
++    }
++
++    private native void close0() throws IOException;
+ 
+     /**
+      * Returns the {@code FileDescriptor}
+@@ -622,7 +519,7 @@
+                         // Android-changed: TODO: Remove this patch when direct flag is supported.
+                         // This patch should cause no behavior change as direct is off by default.
+                         // false, false, this);
+-                        false, this);
++                        false, false, this);
+                     if (closed) {
+                         try {
+                             // possible race with close(), benign since
+@@ -657,11 +554,6 @@
+      * @see        java.io.FileInputStream#close()
+      */
+     protected void finalize() throws IOException {
+-        // Android-added: CloseGuard support.
+-        if (guard != null) {
+-            guard.warnIfOpen();
+-        }
+-
+         if ((fd != null) &&  (fd != FileDescriptor.in)) {
+             // Android-removed: Obsoleted comment about shared FileDescriptor handling.
+             close();
+--- a/libcore/ojluni/src/main/java/java/io/FileOutputStream.java
++++ b/libcore/ojluni/src/main/java/java/io/FileOutputStream.java
+@@ -26,21 +26,11 @@
+ 
+ package java.io;
+ 
+-import static android.system.OsConstants.O_APPEND;
+-import static android.system.OsConstants.O_CREAT;
+-import static android.system.OsConstants.O_TRUNC;
+-import static android.system.OsConstants.O_WRONLY;
+ import java.nio.channels.FileChannel;
+ import jdk.internal.access.SharedSecrets;
+ import jdk.internal.access.JavaIOFileDescriptorAccess;
+ import sun.nio.ch.FileChannelImpl;
+ 
+-import dalvik.annotation.optimization.ReachabilitySensitive;
+-import dalvik.system.BlockGuard;
+-import dalvik.system.CloseGuard;
+-import libcore.io.IoBridge;
+-import libcore.io.IoTracker;
+-import libcore.io.IoUtils;
+ 
+ /**
+  * A file output stream is an output stream for writing data to a
+@@ -89,8 +79,6 @@
+     /**
+      * The system dependent file descriptor.
+      */
+-    // Android-added: @ReachabilitySensitive
+-    @ReachabilitySensitive
+     private final FileDescriptor fd;
+ 
+     /**
+@@ -108,15 +96,8 @@
+ 
+     private volatile boolean closed;
+ 
+-    // Android-added: CloseGuard support: Log if the stream is not closed.
+-    @ReachabilitySensitive
+-    private final CloseGuard guard = CloseGuard.get();
+-
+     // Android-added: Field for tracking whether the stream owns the underlying FileDescriptor.
+     private final boolean isFdOwner;
+-
+-    // Android-added: Tracking of unbuffered I/O.
+-    private final IoTracker tracker = new IoTracker();
+ 
+     /**
+      * Creates a file output stream to write to the file with the
+@@ -241,40 +222,15 @@
+         throws FileNotFoundException
+     {
+         String name = (file != null ? file.getPath() : null);
+-        @SuppressWarnings("removal")
+-        SecurityManager security = System.getSecurityManager();
+-        if (security != null) {
+-            security.checkWrite(name);
+-        }
+         if (name == null) {
+             throw new NullPointerException();
+         }
+         if (file.isInvalid()) {
+             throw new FileNotFoundException("Invalid file path");
+         }
+-        // BEGIN Android-changed: Open files using IoBridge to share BlockGuard & StrictMode logic.
+-        // http://b/111268862
+-        // this.fd = new FileDescriptor();
+-        int flags = O_WRONLY | O_CREAT | (append ? O_APPEND : O_TRUNC);
+-        this.fd = IoBridge.open(name, flags);
+-        // END Android-changed: Open files using IoBridge to share BlockGuard & StrictMode logic.
+-
+-        // Android-changed: Tracking mechanism for FileDescriptor sharing.
+-        // fd.attach(this);
++        this.fd = open(name, append);
+         this.isFdOwner = true;
+-
+         this.path = name;
+-
+-        // Android-removed: Open files using IoBridge to share BlockGuard & StrictMode logic.
+-        // open(name, append);
+-
+-        // Android-added: File descriptor ownership tracking.
+-        IoUtils.setFdOwner(this.fd, this);
+-
+-        // Android-added: CloseGuard support.
+-        guard.open("close");
+-        // Android-removed: TODO: Enable this when FileCleanable is imported to replace finalize().
+-        // FileCleanable.register(fd);   // open sets the fd, register the cleanup
+     }
+ 
+     // Android-removed: Documentation around SecurityException. Not thrown on Android.
+@@ -331,46 +287,10 @@
+         // Android-changed: FileDescriptor ownership tracking mechanism.
+         // fd.attach(this);
+         this.isFdOwner = isFdOwner;
+-        if (isFdOwner) {
+-            IoUtils.setFdOwner(this.fd, this);
+-        }
+-    }
+-
+-    // BEGIN Android-changed: Open files using IoBridge to share BlockGuard & StrictMode logic.
+-    // http://b/112107427
+-    /*
+-    /**
+-     * Opens a file, with the specified name, for overwriting or appending.
+-     * @param name name of file to be opened
+-     * @param append whether the file is to be opened in append mode
+-     *
+-    private native void open0(String name, boolean append)
+-        throws FileNotFoundException;
+-
+-    // wrap native call to allow instrumentation
+-    /**
+-     * Opens a file, with the specified name, for overwriting or appending.
+-     * @param name name of file to be opened
+-     * @param append whether the file is to be opened in append mode
+-     *
+-    private void open(String name, boolean append)
+-        throws FileNotFoundException {
+-        open0(name, append);
+-    }
+-    */
+-    // END Android-changed: Open files using IoBridge to share BlockGuard & StrictMode logic.
+-
+-    // Android-removed: write(int, boolean), use IoBridge instead.
+-    /*
+-    /**
+-     * Writes the specified byte to this file output stream.
+-     *
+-     * @param   b   the byte to be written.
+-     * @param   append   {@code true} if the write operation first
+-     *     advances the position to the end of file
+-     *
+-    private native void write(int b, boolean append) throws IOException;
+-    */
++    }
++
++    private static native FileDescriptor open(String name, boolean append)
++            throws FileNotFoundException;
+ 
+     /**
+      * Writes the specified byte to this file output stream. Implements
+@@ -385,20 +305,7 @@
+         write(new byte[] { (byte) b }, 0, 1);
+     }
+ 
+-    // Android-removed: Write methods delegate to write(byte[],int,int) to share Android logic.
+-    /*
+-    /**
+-     * Writes a sub array as a sequence of bytes.
+-     * @param b the data to be written
+-     * @param off the start offset in the data
+-     * @param len the number of bytes that are written
+-     * @param append {@code true} to first advance the position to the
+-     *     end of file
+-     * @throws    IOException If an I/O error has occurred.
+-     *
+-    private native void writeBytes(byte b[], int off, int len, boolean append)
+-        throws IOException;
+-    */
++    private native void writeBytes(byte[] b, int off, int len) throws IOException;
+ 
+     /**
+      * Writes {@code b.length} bytes from the specified byte array
+@@ -428,12 +335,7 @@
+             throw new IOException("Stream Closed");
+         }
+ 
+-        // Android-added: Tracking of unbuffered I/O.
+-        tracker.trackIo(len, IoTracker.Mode.WRITE);
+-
+-        // Android-changed: Use IoBridge instead of calling native method.
+-        // writeBytes(b, off, len, fdAccess.getAppend(fd));
+-        IoBridge.write(fd, b, off, len);
++        writeBytes(b, off, len);
+     }
+ 
+     /**
+@@ -467,26 +369,14 @@
+             closed = true;
+         }
+ 
+-        // Android-added: CloseGuard support.
+-        guard.close();
+-
+         if (channel != null) {
+             channel.close();
+         }
+ 
+-        // BEGIN Android-changed: Close handling / notification of blocked threads.
+-        /*
+-        fd.closeAll(new Closeable() {
+-            public void close() throws IOException {
+-               fd.close();
+-           }
+-        });
+-         */
+-        if (isFdOwner) {
+-            IoBridge.closeAndSignalBlockedThreads(fd);
+-        }
+-        // END Android-changed: Close handling / notification of blocked threads.
+-    }
++        if (isFdOwner) close0();
++    }
++
++    private native void close0() throws IOException;
+ 
+     /**
+      * Returns the file descriptor associated with this stream.
+@@ -498,8 +388,6 @@
+      * @throws     IOException  if an I/O error occurs.
+      * @see        java.io.FileDescriptor
+      */
+-     // Android-added: @ReachabilitySensitive
+-     @ReachabilitySensitive
+      public final FileDescriptor getFD()  throws IOException {
+         if (fd != null) {
+             return fd;
+@@ -533,7 +421,7 @@
+                         // Android-changed: TODO: remove patch when FileChannelImpl supports direct.
+                         // This patch should cause no behavior change as direct is off by default.
+                         // true, false, this);
+-                        true, this);
++                        true, false, this);
+                     if (closed) {
+                         try {
+                             // possible race with close(), benign since
+@@ -559,11 +447,6 @@
+      * @see        java.io.FileInputStream#close()
+      */
+     protected void finalize() throws IOException {
+-        // Android-added: CloseGuard support.
+-        if (guard != null) {
+-            guard.warnIfOpen();
+-        }
+-
+         if (fd != null) {
+             if (fd == FileDescriptor.out || fd == FileDescriptor.err) {
+                 flush();

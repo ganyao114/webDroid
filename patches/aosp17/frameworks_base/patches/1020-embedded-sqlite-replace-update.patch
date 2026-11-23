@@ -1,0 +1,44 @@
+--- a/frameworks/base/core/java/android/database/sqlite/SQLiteDatabase.java
++++ b/frameworks/base/core/java/android/database/sqlite/SQLiteDatabase.java
+@@ -1446,6 +1446,10 @@
+         }
+         if (upper.startsWith("INSERT INTO ")) {
+             insertSql(trimmed, upper);
++            return;
++        }
++        if (upper.startsWith("UPDATE ")) {
++            updateSql(trimmed);
+             return;
+         }
+         if (!upper.startsWith("CREATE TABLE ")) throw new SQLiteException("Unsupported SQL " + sql);
+@@ -2261,6 +2265,30 @@
+             + "(?:\\s+WHERE\\s+(.+?))?(?:\\s+ORDER\\s+BY\\s+(.+?))?(?:\\s+LIMIT\\s+(\\d+))?",
+             java.util.regex.Pattern.CASE_INSENSITIVE);
+ 
++    private static final java.util.regex.Pattern UPDATE_REPLACE = java.util.regex.Pattern.compile(
++            "UPDATE\\s+(\\w+)\\s+SET\\s+(\\w+)\\s*=\\s*REPLACE\\s*\\(\\s*(\\w+)\\s*,"
++            + "\\s*'((?:[^']|'')*)'\\s*,\\s*'((?:[^']|'')*)'\\s*\\)(?:\\s+WHERE\\s+(.+))?",
++            java.util.regex.Pattern.CASE_INSENSITIVE);
++
++    private void updateSql(String sql) {
++        var replace = UPDATE_REPLACE.matcher(sql);
++        if (!replace.matches()) throw new SQLiteException("Unsupported UPDATE " + sql);
++        Table target = table(replace.group(1));
++        String column = replace.group(2);
++        String source = replace.group(3);
++        if (!target.columns.contains(column) || !target.columns.contains(source)) {
++            throw new SQLiteException("Unknown column in " + sql);
++        }
++        String oldValue = replace.group(4).replace("''", "'");
++        String newValue = replace.group(5).replace("''", "'");
++        String where = replace.group(6);
++        for (ContentValues row : target.rows) {
++            if (!matches(row, where, null)) continue;
++            String value = row.getAsString(source);
++            row.put(column, value == null || oldValue.isEmpty() ? value : value.replace(oldValue, newValue));
++        }
++    }
++
+     private void insertSql(String sql, String upper) {
+         int values = upper.indexOf(" VALUES ", 12);
+         int end = sql.length() - 1;

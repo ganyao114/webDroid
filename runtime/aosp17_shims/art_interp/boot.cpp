@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <limits>
 #include <regex>
+#include <unordered_set>
 
 #include "base/leb128.h"
 #include "dex/dex_file-inl.h"
@@ -152,12 +153,77 @@ std::string SimpleClassName(const Class& cls) {
                                        descriptor.size() - std::max<size_t>(1, first) - 1));
 }
 
+const uint8_t* ClassSystemAnnotation(const Class& cls, std::string_view descriptor) {
+  if (!cls.dex) return nullptr;
+  const auto& dex = *cls.dex;
+  const auto* dir = dex.GetAnnotationsDirectory(dex.GetClassDef(cls.definition));
+  const auto* set = dir ? dex.GetClassAnnotationSet(dir) : nullptr;
+  if (!set) return nullptr;
+  for (uint32_t i = 0; i < set->size_; ++i) {
+    const uint8_t* data = dex.GetAnnotationItem(set, i)->annotation_;
+    const auto type = art::dex::TypeIndex(art::DecodeUnsignedLeb128(&data));
+    if (dex.GetTypeDescriptorView(type) == descriptor) return data;
+  }
+  return nullptr;
+}
+
+uint32_t ClassModifiers(const Class& cls) {
+  if (cls.IsArray()) {
+    auto component = ClassModifiers(*cls.component);
+    if (component & art::kAccInterface) component &= ~(art::kAccInterface | art::kAccStatic);
+    return component | art::kAccAbstract | art::kAccFinal;
+  }
+  if (cls.IsPrimitive()) return art::kAccPublic | art::kAccAbstract | art::kAccFinal;
+  const uint8_t* data = ClassSystemAnnotation(cls, "Ldalvik/annotation/InnerClass;");
+  if (data) {
+    const auto count = art::DecodeUnsignedLeb128(&data);
+    for (uint32_t i = 0; i < count; ++i) {
+      const auto name = art::dex::StringIndex(art::DecodeUnsignedLeb128(&data));
+      const uint8_t header = *data++;
+      const auto kind = header & art::DexFile::kDexAnnotationValueTypeMask;
+      const auto width = header >> art::DexFile::kDexAnnotationValueArgShift;
+      if (kind == art::DexFile::kDexAnnotationInt && cls.dex->GetStringView(name) == "accessFlags") {
+        return art::DexFile::ReadUnsignedInt(data, width, false) & art::kAccJavaFlagsMask;
+      }
+      if (kind == art::DexFile::kDexAnnotationNull) continue;
+      if (kind != art::DexFile::kDexAnnotationInt && kind != art::DexFile::kDexAnnotationString) break;
+      data += width + 1;
+    }
+  }
+  return cls.flags & art::kAccJavaFlagsMask;
+}
+
+std::optional<std::string> CanonicalClassName(Runtime& vm, const Class& cls, unsigned depth = 0) {
+  if (depth == 256) return std::nullopt;
+  if (cls.IsArray()) {
+    if (auto name = CanonicalClassName(vm, *cls.component, depth + 1)) return *name + "[]";
+    return std::nullopt;
+  }
+  if (ClassSystemAnnotation(cls, "Ldalvik/annotation/EnclosingMethod;")) return std::nullopt;
+  const uint8_t* enclosing = ClassSystemAnnotation(cls, "Ldalvik/annotation/EnclosingClass;");
+  if (!enclosing || art::DecodeUnsignedLeb128(&enclosing) != 1) return ClassName(cls);
+  art::DecodeUnsignedLeb128(&enclosing);  // Element name.
+  const uint8_t header = *enclosing++;
+  if ((header & art::DexFile::kDexAnnotationValueTypeMask) != art::DexFile::kDexAnnotationType) {
+    return ClassName(cls);
+  }
+  const auto index = art::DexFile::ReadUnsignedInt(
+      enclosing, header >> art::DexFile::kDexAnnotationValueArgShift, false);
+  auto& owner = vm.linker.Resolve(cls.dex->GetTypeDescriptorView(art::dex::TypeIndex(index)));
+  const auto simple = SimpleClassName(cls);
+  if (!simple.empty()) {
+    if (auto name = CanonicalClassName(vm, owner, depth + 1)) return *name + '.' + simple;
+  }
+  return std::nullopt;
+}
+
 bool HasRuntimeAnnotation(const art::DexFile& dex, const art::dex::AnnotationSetItem* set,
                           std::string_view descriptor) {
   if (!set) return false;
   for (uint32_t i = 0; i < set->size_; ++i) {
     const auto* item = dex.GetAnnotationItem(set, i);
     if (item->visibility_ != static_cast<uint8_t>(art::DexFile::DexVisibility::kRuntime)) continue;
+    if (descriptor.empty()) return true;
     const uint8_t* data = item->annotation_;
     if (dex.GetTypeDescriptorView(art::dex::TypeIndex(art::DecodeUnsignedLeb128(&data))) ==
         descriptor) return true;
@@ -203,9 +269,9 @@ bool IsPublic(const Method& method) {
          (!method.owner->dex && !(method.flags & (art::kAccPrivate | art::kAccProtected)));
 }
 
-void CheckReflectiveAccess(Runtime& vm, const Method& method) {
-  const Class& owner = *method.owner;
-  if (IsPublic(method) && (!owner.dex || (owner.flags & art::kAccPublic))) return;
+void CheckReflectiveAccess(Runtime& vm, const Class& owner, uint32_t flags, bool is_public,
+                           std::string_view member) {
+  if (is_public && (!owner.dex || (owner.flags & art::kAccPublic))) return;
   for (const RootScope* scope = vm.roots; scope; scope = scope->previous) {
     if (!scope->declaring_class) continue;
     const Class& caller = *scope->declaring_class;
@@ -213,10 +279,39 @@ void CheckReflectiveAccess(Runtime& vm, const Method& method) {
     const auto package = [](const Class& cls) {
       return std::string_view(cls.descriptor).substr(0, cls.descriptor.find_last_of('/') + 1);
     };
-    if (!(method.flags & art::kAccPrivate) && package(caller) == package(owner)) return;
+    if (!(flags & art::kAccPrivate) && package(caller) == package(owner)) return;
     break;
   }
-  vm.Fail("Ljava/lang/IllegalAccessException;", method.QualifiedName());
+  vm.Fail("Ljava/lang/IllegalAccessException;", member);
+}
+
+void CheckReflectiveAccess(Runtime& vm, const Method& method) {
+  if (IsPublic(method) && (!method.owner->dex || (method.owner->flags & art::kAccPublic))) return;
+  CheckReflectiveAccess(vm, *method.owner, method.flags, IsPublic(method), method.QualifiedName());
+}
+
+constexpr std::string_view kBoxedPrimitives = "ZBCSIJFD";
+constexpr std::array kBoxedTypes{"Ljava/lang/Boolean;", "Ljava/lang/Byte;", "Ljava/lang/Character;",
+    "Ljava/lang/Short;", "Ljava/lang/Integer;", "Ljava/lang/Long;", "Ljava/lang/Float;", "Ljava/lang/Double;"};
+
+Value BoxReflectivePrimitive(Runtime& vm, Value value, char type) {
+  auto& cls = vm.linker.Resolve(kBoxedTypes[kBoxedPrimitives.find(type)]);
+  auto& value_of = vm.linker.FindMethod(cls, "valueOf", std::string("(") + type + ")" + cls.descriptor, true);
+  return vm.Invoke(value_of, nullptr, std::array{value});
+}
+
+Value WidenPrimitive(Runtime& vm, Value value, char from, char to) {
+  if (from == to) return value;
+  constexpr std::array<std::string_view, 8> widen{"", "SIJFD", "IJFD", "IJFD", "JFD", "FD", "D", ""};
+  const auto type = kBoxedPrimitives.find(from);
+  if (type == kBoxedPrimitives.npos || !widen[type].contains(to)) vm.Fail("Ljava/lang/IllegalArgumentException;");
+  if (to == 'D') {
+    if (from == 'F') return Value::Double(value.f());
+    return Value::Double(from == 'J' ? value.j() : value.i());
+  }
+  if (to == 'F') return Value::Float(from == 'J' ? value.j() : value.i());
+  if (to == 'J') return Value::Long(value.i());
+  return Value::Int(value.i());
 }
 
 Value ReflectArgument(Runtime& vm, Value argument, Class& type) {
@@ -225,25 +320,10 @@ Value ReflectArgument(Runtime& vm, Value argument, Class& type) {
     if (object && !vm.linker.IsAssignable(type, *object->type)) vm.Fail("Ljava/lang/IllegalArgumentException;");
     return argument;
   }
-  constexpr std::array wrappers{"Ljava/lang/Boolean;", "Ljava/lang/Byte;", "Ljava/lang/Character;",
-      "Ljava/lang/Short;", "Ljava/lang/Integer;", "Ljava/lang/Long;", "Ljava/lang/Float;", "Ljava/lang/Double;"};
-  constexpr std::string_view primitives = "ZBCSIJFD";
   if (!object) vm.Fail("Ljava/lang/IllegalArgumentException;");
-  const auto wrapper = std::ranges::find(wrappers, object->type->descriptor);
-  if (wrapper == wrappers.end()) vm.Fail("Ljava/lang/IllegalArgumentException;");
-  const char from = primitives[wrapper - wrappers.begin()];
-  const char to = type.descriptor.front();
-  if (from == to) return object->payload;
-  constexpr std::array<std::string_view, 8> widen{"", "SIJFD", "IJFD", "IJFD", "JFD", "FD", "D", ""};
-  if (!widen[wrapper - wrappers.begin()].contains(to)) vm.Fail("Ljava/lang/IllegalArgumentException;");
-  const Value value = object->payload;
-  if (to == 'D') {
-    if (from == 'F') return Value::Double(value.f());
-    return Value::Double(from == 'J' ? value.j() : value.i());
-  }
-  if (to == 'F') return Value::Float(from == 'J' ? value.j() : value.i());
-  if (to == 'J') return Value::Long(value.i());
-  return Value::Int(value.i());
+  const auto wrapper = std::ranges::find(kBoxedTypes, object->type->descriptor);
+  if (wrapper == kBoxedTypes.end()) vm.Fail("Ljava/lang/IllegalArgumentException;");
+  return WidenPrimitive(vm, object->payload, kBoxedPrimitives[wrapper - kBoxedTypes.begin()], type.kind);
 }
 
 std::vector<Value> ReflectArguments(Runtime& vm, const Method& method, Object* array) {
@@ -263,6 +343,111 @@ std::vector<Value> ReflectArguments(Runtime& vm, const Method& method, Object* a
   return arguments;
 }
 
+Value InvokeProxy(Runtime& vm, Object* proxy, Method& method, Values args) {
+  RootScope roots(vm, args, proxy);
+  auto* reflected = roots.Hold(vm.heap.Allocate(vm, vm.linker.Resolve("Ljava/lang/reflect/Method;")));
+  reflected->reflected_method = &method;
+  Object* boxed = nullptr;
+  if (!args.empty()) {
+    boxed = roots.Hold(vm.NewArray(vm.linker.Resolve("[Ljava/lang/Object;"), args.size()));
+    for (size_t i = 0; i < args.size(); ++i) {
+      const auto type = method.shorty[i + 1];
+      boxed->elements[i] = type == 'L' ? args[i] : BoxReflectivePrimitive(vm, args[i], type);
+    }
+  }
+  auto& base = vm.linker.Resolve("Ljava/lang/reflect/Proxy;");
+  auto& dispatch = vm.linker.FindMethod(base, "invoke",
+      "(Ljava/lang/reflect/Proxy;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;", true);
+  const auto result = vm.Invoke(dispatch, nullptr,
+      std::array{Value::Ref(proxy), Value::Ref(reflected), Value::Ref(boxed)});
+  const auto type = method.shorty.front();
+  if (type == 'V') return {};
+  if (type == 'L') {
+    const auto descriptor = std::string_view(method.signature).substr(method.signature.find(')') + 1);
+    if (result.ref() && !vm.linker.IsAssignable(vm.linker.Resolve(descriptor), *result.ref()->type)) {
+      vm.Fail("Ljava/lang/ClassCastException;", descriptor);
+    }
+    return result;
+  }
+  Object& value = vm.NonNull(result.ref());
+  if (value.type->descriptor != kBoxedTypes[kBoxedPrimitives.find(type)]) {
+    vm.Fail("Ljava/lang/ClassCastException;", value.type->descriptor);
+  }
+  return value.payload;
+}
+
+Value ProxyClass(Runtime& vm, Object*, Values args) {
+  constexpr auto kProxy = "Ljava/lang/reflect/Proxy;";
+  constexpr auto kHandlerConstructor = "(Ljava/lang/reflect/InvocationHandler;)V";
+  const auto& requested = vm.NonNull(args[1].ref()).elements;
+  if (requested.size() > 65535) vm.Fail("Ljava/lang/IllegalArgumentException;", "Too many proxy interfaces");
+  std::vector<Class*> interfaces;
+  std::vector<std::string> descriptors;
+  std::set<Class*> members;
+  std::string_view nonpublic_package;
+  for (Value value : requested) {
+    auto* interface = vm.NonNull(value.ref()).represented_class;
+    if (!interface->IsInterface() || !members.insert(interface).second) {
+      vm.Fail("Ljava/lang/IllegalArgumentException;", interface->descriptor);
+    }
+    if (!(interface->flags & art::kAccPublic)) {
+      const auto name = std::string_view(interface->descriptor);
+      const auto slash = name.find_last_of('/');
+      const auto package = name.substr(0, slash == name.npos ? 1 : slash + 1);
+      if (!nonpublic_package.empty() && package != nonpublic_package) {
+        vm.Fail("Ljava/lang/IllegalArgumentException;", "Non-public proxy interfaces use different packages");
+      }
+      nonpublic_package = package;
+    }
+    interfaces.push_back(interface);
+    descriptors.push_back(interface->descriptor);
+  }
+  const auto prefix = nonpublic_package.empty() ? "Lorg/wasmandroid/reflect/" : nonpublic_package;
+  std::string key;
+  for (const auto& descriptor : descriptors) key += descriptor;
+  const auto stem = std::string(prefix) + "$Proxy" + std::to_string(std::hash<std::string>{}(key));
+  auto name = stem + ';';
+  for (size_t suffix = 1; vm.linker.HasClass(name); ++suffix) {
+    auto& existing = vm.linker.Resolve(name);
+    if (!existing.dex && (existing.flags & art::kAccClassIsProxy) &&
+        existing.interface_descriptors == descriptors) {
+      return Value::Ref(vm.ClassObject(existing));
+    }
+    name = stem + "$" + std::to_string(suffix) + ';';
+  }
+  std::map<std::string, Method*> methods;
+  auto& object = vm.linker.Resolve(kObject);
+  for (const auto& [name, sig] : {std::pair{"equals", "(Ljava/lang/Object;)Z"}, {"hashCode", "()I"},
+                                  {"toString", "()Ljava/lang/String;"}}) {
+    methods.emplace(MemberKey(name, sig), &vm.linker.FindMethod(object, name, sig, false));
+  }
+  std::set<Class*> visited;
+  const auto collect = [&](const auto& visit, Class& interface) -> void {
+    if (!visited.insert(&interface).second) return;
+    for (auto& [key, method] : interface.methods) {
+      if (method.IsVirtual()) methods.emplace(key, &method);
+    }
+    for (auto* parent : interface.interfaces) visit(visit, *parent);
+  };
+  for (auto* interface : interfaces) collect(collect, *interface);
+  auto& generated = vm.linker.Define(name, kProxy, art::kAccFinal | art::kAccClassIsProxy |
+      (nonpublic_package.empty() ? art::kAccPublic : 0));
+  generated.interface_descriptors = std::move(descriptors);
+  vm.linker.AddMethod(generated, "<init>", kHandlerConstructor, art::kAccPublic,
+      [base = &vm.linker.FindMethod(vm.linker.Resolve(kProxy), "<init>", kHandlerConstructor, false)](
+          Runtime& runtime, Object* self, Values arguments) {
+        return runtime.Invoke(*base, self, arguments);
+      });
+  for (const auto& [key, method] : methods) {
+    vm.linker.AddMethod(generated, method->name, method->signature, art::kAccPublic | art::kAccFinal,
+        [method](Runtime& runtime, Object* self, Values arguments) {
+          return InvokeProxy(runtime, self, *method, arguments);
+        });
+  }
+  vm.linker.Resolve(generated.descriptor);
+  return Value::Ref(vm.ClassObject(generated));
+}
+
 std::string ReflectParameters(Runtime& vm, Object* array) {
   std::string signature = "(";
   if (array) {
@@ -278,23 +463,147 @@ Value EnumConstants(Runtime& vm, Class& type) {
   return vm.Invoke(vm.linker.FindMethod(type, "values", "()[" + type.descriptor, true), nullptr, {});
 }
 
+const art::dex::AnnotationSetItem* FieldAnnotations(const Field& field) {
+  if (!field.owner->dex) return nullptr;
+  const auto& dex = *field.owner->dex;
+  const auto* directory = dex.GetAnnotationsDirectory(dex.GetClassDef(field.owner->definition));
+  if (!directory) return nullptr;
+  const auto* annotations = dex.GetFieldAnnotations(directory);
+  for (uint32_t i = 0; i < directory->fields_size_; ++i) {
+    const auto& id = dex.GetFieldId(annotations[i].field_idx_);
+    if (dex.GetFieldNameView(id) == field.name && dex.GetFieldTypeDescriptorView(id) == field.type) {
+      return dex.GetFieldAnnotationSetItem(annotations[i]);
+    }
+  }
+  return nullptr;
+}
+
+Value& ReflectiveFieldValue(Runtime& vm, Object& mirror, Object* receiver, bool write) {
+  const auto& field = *mirror.reflected_field;
+  if (!mirror.payload.i()) {
+    CheckReflectiveAccess(vm, *field.owner, field.flags, field.flags & art::kAccPublic, field.name);
+  }
+  if (write && (field.flags & art::kAccFinal) && (field.is_static || !mirror.payload.i())) {
+    vm.Fail("Ljava/lang/IllegalAccessException;", field.name);
+  }
+  if (field.is_static) {
+    vm.linker.Initialize(*field.owner);
+    return mirror.reflected_field->value;
+  }
+  auto& object = vm.NonNull(receiver);
+  if (!vm.linker.IsAssignable(*field.owner, *object.type)) vm.Fail("Ljava/lang/IllegalArgumentException;");
+  return object.fields[field.slot];
+}
+
+void InstallFieldReflection(ClassLinker& linker, Class& cls) {
+  constexpr auto descriptor = "Ljava/lang/reflect/Field;";
+  linker.AddMethod(cls, "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;", 0,
+      [](Runtime& vm, Object* self, Values a) {
+        auto& owner = *self->represented_class;
+        const auto name = EncodeUtf8(vm.NonNull(a[0].ref()).text);
+        auto field = std::ranges::find(owner.field_order, name, &Field::name);
+        if (field == owner.field_order.end()) vm.Fail("Ljava/lang/NoSuchFieldException;", name);
+        auto& type = vm.linker.Resolve("Ljava/lang/reflect/Field;");
+        RootScope roots(vm);
+        auto* mirror = roots.Hold(vm.heap.Allocate(vm, type));
+        mirror->reflected_field = *field;
+        const auto initialize = [&](std::string_view name, std::string_view signature, Value value) {
+          mirror->fields[vm.linker.FindField(type, name, signature, false).slot] = value;
+        };
+        initialize("accessFlags", "I", Value::Int((*field)->flags));
+        initialize("offset", "I", Value::Int(static_cast<int32_t>((*field)->slot)));
+        initialize("declaringClass", "Ljava/lang/Class;", Value::Ref(self));
+        auto& actual = vm.linker.Resolve((*field)->type);
+        initialize("type", "Ljava/lang/Class;", Value::Ref(vm.ClassObject(actual)));
+        return Value::Ref(mirror);
+      });
+  const auto bind = [&](std::string_view name, std::string_view sig, Builtin fn) {
+    linker.AddBootNative(descriptor, name, sig, std::move(fn));
+  };
+  bind("getNameInternal", "()Ljava/lang/String;", [](Runtime& vm, Object* self, Values) {
+    return StringValue(vm, self->reflected_field->name);
+  });
+  bind("get", "(Ljava/lang/Object;)Ljava/lang/Object;", [](Runtime& vm, Object* self, Values a) {
+    const auto value = ReflectiveFieldValue(vm, *self, a[0].ref(), false);
+    const char type = self->reflected_field->value_type;
+    return IsReference(type) ? value : BoxReflectivePrimitive(vm, value, type);
+  });
+  bind("set", "(Ljava/lang/Object;Ljava/lang/Object;)V", [](Runtime& vm, Object* self, Values a) {
+    auto& storage = ReflectiveFieldValue(vm, *self, a[0].ref(), true);
+    auto& type = vm.linker.Resolve(self->reflected_field->type);
+    storage = ReflectArgument(vm, a[1], type);
+    return Value{};
+  });
+  constexpr std::array labels{"Boolean", "Byte", "Char", "Short", "Int", "Long", "Float", "Double"};
+  for (auto i = 0u; i < labels.size(); ++i) {
+    const auto type = kBoxedPrimitives[i];
+    bind(std::string("get") + labels[i], std::string("(Ljava/lang/Object;)") + type,
+        [type](Runtime& vm, Object* self, Values a) {
+          const auto value = ReflectiveFieldValue(vm, *self, a[0].ref(), false);
+          return WidenPrimitive(vm, value, self->reflected_field->value_type, type);
+        });
+    bind(std::string("set") + labels[i], std::string("(Ljava/lang/Object;") + type + ")V",
+        [type](Runtime& vm, Object* self, Values a) {
+          auto& storage = ReflectiveFieldValue(vm, *self, a[0].ref(), true);
+          storage = WidenPrimitive(vm, a[1], type, self->reflected_field->value_type);
+          return Value{};
+        });
+  }
+  bind("isUnmodifiable0", "()Z", [](Runtime&, Object* self, Values) {
+    const auto& field = *self->reflected_field;
+    return Value::Int(field.is_static && (field.flags & art::kAccFinal));
+  });
+  bind("hasGenericSignature", "()Z", [](Runtime&, Object* self, Values) {
+    const auto& field = *self->reflected_field;
+    const auto* set = FieldAnnotations(field);
+    for (uint32_t i = 0; set && i < set->size_; ++i) {
+      const uint8_t* data = field.owner->dex->GetAnnotationItem(set, i)->annotation_;
+      const auto type = art::dex::TypeIndex(art::DecodeUnsignedLeb128(&data));
+      if (field.owner->dex->GetTypeDescriptorView(type) == "Ldalvik/annotation/Signature;") return Value::Int(1);
+    }
+    return Value::Int(0);
+  });
+  const auto has_annotation = [](Runtime& vm, Object* self, Values a) {
+    const auto& field = *self->reflected_field;
+    const auto name = vm.NonNull(a[0].ref()).represented_class->descriptor;
+    return field.owner->dex && HasRuntimeAnnotation(*field.owner->dex, FieldAnnotations(field), name);
+  };
+  bind("isAnnotationPresentNative", "(Ljava/lang/Class;)Z",
+      [has_annotation](Runtime& vm, Object* self, Values a) { return Value::Int(has_annotation(vm, self, a)); });
+  bind("getAnnotationNative", "(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;",
+      [has_annotation](Runtime& vm, Object* self, Values a) {
+        if (has_annotation(vm, self, a)) vm.Fail("Ljava/lang/UnsupportedOperationException;", "Field annotation instances");
+        return Value{};
+      });
+  bind("getDeclaredAnnotations", "()[Ljava/lang/annotation/Annotation;", [](Runtime& vm, Object* self, Values) {
+    const auto& field = *self->reflected_field;
+    if (field.owner->dex && HasRuntimeAnnotation(*field.owner->dex, FieldAnnotations(field), {})) {
+      vm.Fail("Ljava/lang/UnsupportedOperationException;", "Field annotation instances");
+    }
+    return Value::Ref(vm.NewArray(vm.linker.Resolve("[Ljava/lang/annotation/Annotation;"), 0));
+  });
+}
+
 void InstallReflection(Runtime& vm, Class& cls) {
   auto& cl = vm.linker;
   cl.Define("Ljava/lang/annotation/Annotation;", kObject, art::kAccInterface | art::kAccAbstract);
   auto& loader = cl.Define("Ljava/lang/ClassLoader;", kObject, art::kAccAbstract);
   auto& class_loader = cl.AddField(cls, "appLoader", loader.descriptor, true);
+  const Builtin system_loader = [&loader, &class_loader](Runtime& vm, Object*, Values) {
+    if (!class_loader.value.ref()) {
+      class_loader.value = Value::Ref(vm.heap.Allocate(vm, vm.linker.Resolve(loader.descriptor)));
+    }
+    return class_loader.value;
+  };
+  cl.AddMethod(loader, "getSystemClassLoader", "()Ljava/lang/ClassLoader;", art::kAccStatic, system_loader);
   cl.AddMethod(loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", 0,
       [](Runtime& vm, Object*, Values a) { return Value::Ref(vm.ClassObject(ClassForName(vm, a[0].ref(), false))); });
   cl.AddMethod(loader, "getParent", "()Ljava/lang/ClassLoader;", 0, Void);
   cl.AddMethod(cls, "getClassLoader", "()Ljava/lang/ClassLoader;", 0,
-      [&loader, &class_loader](Runtime& vm, Object* self, Values) {
+      [system_loader](Runtime& vm, Object* self, Values) {
         const Class* type = self->represented_class;
         while (type->IsArray()) type = type->component;
-        if (!type->dex) return Value{};
-        if (!class_loader.value.ref()) {
-          class_loader.value = Value::Ref(vm.heap.Allocate(vm, vm.linker.Resolve(loader.descriptor)));
-        }
-        return class_loader.value;
+        return type->dex ? system_loader(vm, nullptr, {}) : Value{};
       });
   const Builtin for_name = [](Runtime& vm, Object*, Values a) {
     return Value::Ref(vm.ClassObject(ClassForName(vm, a[0].ref(), a.size() == 1 || a[1].i())));
@@ -312,6 +621,36 @@ void InstallReflection(Runtime& vm, Class& cls) {
       });
   cl.AddMethod(cls, "getSimpleName", "()Ljava/lang/String;", 0,
       [](Runtime& vm, Object* self, Values) { return StringValue(vm, SimpleClassName(*self->represented_class)); });
+  cl.AddMethod(cls, "getCanonicalName", "()Ljava/lang/String;", 0,
+      [](Runtime& vm, Object* self, Values) {
+        const auto name = CanonicalClassName(vm, *self->represented_class);
+        return name ? StringValue(vm, *name) : Value{};
+      });
+  cl.AddMethod(cls, "getTypeName", "()Ljava/lang/String;", 0, [](Runtime& vm, Object* self, Values) {
+    const auto* type = self->represented_class;
+    std::string dimensions;
+    for (; type->IsArray(); type = type->component) dimensions += "[]";
+    return StringValue(vm, ClassName(*type) + dimensions);
+  });
+  cl.AddMethod(cls, "getPackage", "()Ljava/lang/Package;", 0,
+      [](Runtime& vm, Object* self, Values) {
+        if (self->represented_class->IsPrimitive() || self->represented_class->IsArray()) return Value{};
+        auto& type = vm.linker.Resolve("Ljava/lang/Package;");
+        auto& method = vm.linker.FindMethod(type, "getPackage", "(Ljava/lang/Class;)Ljava/lang/Package;", true);
+        return vm.Invoke(method, nullptr, std::array{Value::Ref(self)});
+      });
+  cl.AddMethod(cls, "getModifiers", "()I", 0, [](Runtime&, Object* self, Values) {
+    return Value::Int(ClassModifiers(*self->represented_class));
+  });
+  cl.AddMethod(cls, "isAnonymousClass", "()Z", 0, [](Runtime&, Object* self, Values) {
+    const auto& type = *self->represented_class;
+    return Value::Int(ClassSystemAnnotation(type, "Ldalvik/annotation/InnerClass;") && SimpleClassName(type).empty());
+  });
+  cl.AddMethod(cls, "isMemberClass", "()Z", 0, [](Runtime&, Object* self, Values) {
+    const auto& type = *self->represented_class;
+    return Value::Int(ClassSystemAnnotation(type, "Ldalvik/annotation/EnclosingClass;") &&
+                     !SimpleClassName(type).empty());
+  });
   cl.AddMethod(cls, "getSuperclass", "()Ljava/lang/Class;", 0, [](Runtime& vm, Object* self, Values) {
     const Class& type = *self->represented_class;
     return Value::Ref(type.super && !type.IsInterface() ? vm.ClassObject(*type.super) : nullptr);
@@ -374,6 +713,9 @@ void InstallReflection(Runtime& vm, Class& cls) {
     self->payload = a[0];
     return Value{};
   });
+  cl.AddMethod(accessible, "isAccessible", "()Z", 0,
+      [](Runtime&, Object* self, Values) { return self->payload; });
+  InstallFieldReflection(cl, cls);
   auto& constructor = cl.Define("Ljava/lang/reflect/Constructor;", accessible.descriptor, art::kAccFinal);
   for (bool declared : {false, true}) {
     cl.AddMethod(cls, declared ? "getDeclaredConstructor" : "getConstructor",
@@ -413,6 +755,15 @@ void InstallReflection(Runtime& vm, Class& cls) {
   });
 
   auto& method_type = cl.Define("Ljava/lang/reflect/Method;", accessible.descriptor, art::kAccFinal);
+  cl.AddMethod(method_type, "getName", "()Ljava/lang/String;", 0,
+      [](Runtime& vm, Object* self, Values) { return StringValue(vm, self->reflected_method->name); });
+  cl.AddBootNative("Ljava/lang/reflect/Proxy;", "getProxyClass0",
+      "(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;", ProxyClass);
+  cl.AddBootNative("Ljava/lang/reflect/Proxy;", "isEmbeddedProxyClass", "(Ljava/lang/Class;)Z",
+      [](Runtime& vm, Object*, Values args) {
+        const auto& type = *vm.NonNull(args[0].ref()).represented_class;
+        return Value::Int(!type.dex && (type.flags & art::kAccClassIsProxy));
+      });
   cl.AddMethod(method_type, "isAnnotationPresent", "(Ljava/lang/Class;)Z", 0,
       [](Runtime& vm, Object* self, Values a) {
         const Class& annotation = *vm.NonNull(a[0].ref()).represented_class;
@@ -462,12 +813,7 @@ void InstallReflection(Runtime& vm, Class& cls) {
         const char type = method.shorty.front();
         if (type == 'V') return Value{};
         if (type == 'L') return result;
-        constexpr std::string_view primitives = "ZBCSIJFD";
-        constexpr std::array wrappers{"Ljava/lang/Boolean;", "Ljava/lang/Byte;", "Ljava/lang/Character;",
-            "Ljava/lang/Short;", "Ljava/lang/Integer;", "Ljava/lang/Long;", "Ljava/lang/Float;", "Ljava/lang/Double;"};
-        Class& boxed = vm.linker.Resolve(wrappers[primitives.find(type)]);
-        auto& value_of = vm.linker.FindMethod(boxed, "valueOf", std::string("(") + type + ")" + boxed.descriptor, true);
-        return vm.Invoke(value_of, nullptr, std::array{result});
+        return BoxReflectivePrimitive(vm, result, type);
       });
 }
 
@@ -547,8 +893,11 @@ void InstallObject(Runtime& vm) {
 
 void InstallThrowable(Runtime& vm) {
   auto& cl = vm.linker;
+  constexpr std::string_view throwable = "Ljava/lang/Throwable;";
+  auto& base = cl.Define(throwable, kObject);
+  auto& cause_assigned = cl.AddField(base, "causeAssigned", "Z", false);
   const auto define = [&](std::string_view name, std::string_view parent) -> Class& {
-    Class& cls = cl.Define(name, parent);
+    Class& cls = name == throwable ? base : cl.Define(name, parent);
     cl.AddMethod(cls, "<init>", "()V", 0, [](Runtime& vm, Object* self, Values) {
       vm.CaptureThrowableStack(*self);
       return Value{};
@@ -560,22 +909,23 @@ void InstallThrowable(Runtime& vm) {
           return Value{};
         });
     cl.AddMethod(cls, "<init>", "(Ljava/lang/String;Ljava/lang/Throwable;)V", 0,
-        [](Runtime& vm, Object* self, Values args) {
+        [&cause_assigned](Runtime& vm, Object* self, Values args) {
           if (args[0].ref()) self->text = args[0].ref()->text;
           self->payload = args[1];
+          self->fields[cause_assigned.slot] = Value::Int(1);
           vm.CaptureThrowableStack(*self);
           return Value{};
         });
     cl.AddMethod(cls, "<init>", "(Ljava/lang/Throwable;)V", 0,
-        [](Runtime& vm, Object* self, Values args) {
+        [&cause_assigned](Runtime& vm, Object* self, Values args) {
           if (args[0].ref()) self->text = JavaText(vm, args[0].ref());
           self->payload = args[0];
+          self->fields[cause_assigned.slot] = Value::Int(1);
           vm.CaptureThrowableStack(*self);
           return Value{};
         });
     return cls;
   };
-  constexpr std::string_view throwable = "Ljava/lang/Throwable;";
   constexpr std::string_view exception = "Ljava/lang/Exception;";
   constexpr std::string_view runtime = "Ljava/lang/RuntimeException;";
   constexpr std::string_view bad_argument = "Ljava/lang/IllegalArgumentException;";
@@ -583,11 +933,21 @@ void InstallThrowable(Runtime& vm) {
   constexpr std::string_view error = "Ljava/lang/Error;";
   constexpr std::string_view linkage = "Ljava/lang/LinkageError;";
   constexpr std::string_view incompatible = "Ljava/lang/IncompatibleClassChangeError;";
-  Class& base = define(throwable, kObject);
+  define(throwable, kObject);
   cl.AddMethod(base, "getMessage", "()Ljava/lang/String;", 0,
       [](Runtime& vm, Object* self, Values) { return self->text.empty() ? Value{} : StringValue(vm, self->text); });
   cl.AddMethod(base, "getCause", "()Ljava/lang/Throwable;", 0,
       [](Runtime&, Object* self, Values) { return self->payload; });
+  cl.AddMethod(base, "initCause", "(Ljava/lang/Throwable;)Ljava/lang/Throwable;", 0,
+      [&cause_assigned](Runtime& vm, Object* self, Values a) {
+        if (self->fields[cause_assigned.slot].i() || self->payload.ref()) {
+          vm.Fail("Ljava/lang/IllegalStateException;", "Cannot overwrite cause");
+        }
+        if (a[0].ref() == self) vm.Fail("Ljava/lang/IllegalArgumentException;", "Self-causation");
+        self->payload = a[0];
+        self->fields[cause_assigned.slot] = Value::Int(1);
+        return Value::Ref(self);
+      });
   cl.AddMethod(base, "toString", "()Ljava/lang/String;", 0,
       [](Runtime& vm, Object* self, Values) {
         const std::string name = ClassName(*self->type);
@@ -599,6 +959,37 @@ void InstallThrowable(Runtime& vm) {
         self->elements.push_back(args[0]);
         return Value{};
       });
+  const Builtin print_stack = [](Runtime& vm, Object* self, Values a) {
+    Object* stream = nullptr;
+    if (a.empty()) {
+      auto& system = vm.linker.Resolve("Ljava/lang/System;");
+      vm.linker.Initialize(system);
+      stream = vm.linker.FindField(system, "err", "Ljava/io/PrintStream;", true).value.ref();
+    } else {
+      stream = a[0].ref();
+    }
+    vm.NonNull(stream);
+    const auto print = [&](std::u16string line) {
+      CallVirtual(vm, stream, "println", "(Ljava/lang/String;)V", std::array{StringValue(vm, std::move(line))});
+    };
+    std::unordered_set<Object*> seen;
+    for (auto* current = self; current; current = current->payload.ref()) {
+      const auto message = JavaText(vm, current);
+      if (!seen.insert(current).second) {
+        print(u"[CIRCULAR REFERENCE: " + message + u"]");
+        break;
+      }
+      print(current == self ? message : u"Caused by: " + message);
+      if (!current->exception_stack) continue;
+      for (const auto& [method, pc] : *current->exception_stack) {
+        print(DecodeUtf8("\tat " + method->QualifiedName() + " @ dex pc " + std::to_string(pc)));
+      }
+    }
+    return Value{};
+  };
+  cl.AddMethod(base, "printStackTrace", "()V", 0, print_stack);
+  cl.AddMethod(base, "printStackTrace", "(Ljava/io/PrintStream;)V", 0, print_stack);
+  cl.AddMethod(base, "printStackTrace", "(Ljava/io/PrintWriter;)V", 0, print_stack);
   define(exception, throwable);
   define(runtime, exception);
   define("Ljava/io/IOException;", exception);
@@ -728,6 +1119,66 @@ std::string EncodeString(std::u16string_view text, Encoding encoding) {
   return bytes;
 }
 
+std::u16string DecodeString(std::span<const Value> bytes, Encoding encoding) {
+  const auto byte = [&](size_t i) { return static_cast<uint8_t>(bytes[i].i()); };
+  std::u16string text;
+  if (encoding == Encoding::Ascii || encoding == Encoding::Latin1) {
+    for (size_t i = 0; i < bytes.size(); ++i) {
+      const auto value = byte(i);
+      text += encoding == Encoding::Ascii && value >= 128 ? u'\ufffd' : char16_t(value);
+    }
+    return text;
+  }
+  if (encoding == Encoding::Utf8) {
+    for (size_t i = 0; i < bytes.size();) {
+      const uint32_t first = byte(i++);
+      if (first < 128) {
+        text += static_cast<char16_t>(first);
+        continue;
+      }
+      const int length = first >= 0xf0 && first <= 0xf4 ? 4 :
+          first >= 0xe0 && first <= 0xef ? 3 : first >= 0xc2 && first <= 0xdf ? 2 : 0;
+      uint32_t code = first & (0x7f >> length);
+      int consumed = 1;
+      for (; consumed < length && i < bytes.size(); ++consumed) {
+        const auto next = byte(i);
+        if ((next & 0xc0) != 0x80 ||
+            (consumed == 1 && ((first == 0xe0 && next < 0xa0) ||
+                (first == 0xf0 && next < 0x90) || (first == 0xf4 && next >= 0x90)))) break;
+        code = (code << 6) | (next & 0x3f);
+        ++i;
+      }
+      if (consumed != length || (code >= 0xd800 && code <= 0xdfff)) text += u'\ufffd';
+      else text += CodePoint(code);
+    }
+    return text;
+  }
+  bool little = encoding == Encoding::Utf16Le;
+  size_t i = 0;
+  if (encoding == Encoding::Utf16 && bytes.size() >= 2) {
+    little = byte(0) == 0xff && byte(1) == 0xfe;
+    if (little || (byte(0) == 0xfe && byte(1) == 0xff)) i = 2;
+  }
+  const auto unit = [&](size_t index) {
+    return static_cast<char16_t>((byte(index + little) << 8) | byte(index + !little));
+  };
+  for (; i + 1 < bytes.size(); i += 2) {
+    const auto value = unit(i);
+    if (value >= 0xd800 && value <= 0xdbff && i + 3 < bytes.size()) {
+      const auto low = unit(i + 2);
+      if (low >= 0xdc00 && low <= 0xdfff) {
+        text += value;
+        text += low;
+        i += 2;
+        continue;
+      }
+    }
+    text += value >= 0xd800 && value <= 0xdfff ? u'\ufffd' : value;
+  }
+  if (i < bytes.size()) text += u'\ufffd';
+  return text;
+}
+
 uint32_t MapCase(uint32_t cp, bool upper) {
   if (cp < 128) {
     if (upper && cp >= 'a' && cp <= 'z') return cp - ('a' - 'A');
@@ -830,32 +1281,283 @@ std::u16string PrimitiveText(char type, Value value) {
   }
 }
 
-std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern) {
+struct RegexProgram {
+  std::wregex expression;
+  std::map<std::u16string, int32_t> named_groups;
+  bool marks = false;
+  bool end_anchor = false;
+};
+
+std::wstring_view RegexProperty(std::u16string_view name, bool unicode_classes) {
+  if (name == u"Zs") return L" \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000";
+  if (name == u"javaWhitespace") return L"\t-\r\u001c-\u001f \u1680\u2000-\u2006"
+      L"\u2008-\u200a\u2028\u2029\u205f\u3000";
+  if (unicode_classes) return {};
+  constexpr std::pair<std::u16string_view, std::wstring_view> posix[]{
+      {u"Lower", L"a-z"}, {u"Upper", L"A-Z"}, {u"ASCII", L"\\x00-\\x7f"},
+      {u"Alpha", L"a-zA-Z"}, {u"Digit", L"0-9"}, {u"Alnum", L"a-zA-Z0-9"},
+      {u"Punct", L"\\x21-\\x2f\\x3a-\\x40\\x5b-\\x60\\x7b-\\x7e"},
+      {u"Graph", L"\\x21-\\x7e"}, {u"Print", L"\\x20-\\x7e"},
+      {u"Blank", L" \t"}, {u"Cntrl", L"\\x00-\\x1f\\x7f"},
+      {u"XDigit", L"0-9a-fA-F"}, {u"Space", L" \t-\r"}};
+  for (const auto& [property, ranges] : posix) {
+    if (property == name) return ranges;
+  }
+  return {};
+}
+
+std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern, int flags = 0,
+                         RegexProgram* program = nullptr) {
+  constexpr int kCaseInsensitive = 2, kComments = 4, kMultiline = 8, kLiteral = 16;
+  constexpr int kDotAll = 32, kUnicodeClasses = 256;
   std::wstring translated;
   bool in_class = false;
+  bool quoted = (flags & kLiteral) != 0;
+  int32_t group_count = 0;
+  const auto invalid = [&] { vm.Fail("Ljava/util/regex/PatternSyntaxException;", EncodeUtf8(pattern)); };
+  if (!quoted) {
+    while (pattern.starts_with(u"(?")) {
+      const auto end = pattern.find(u')', 2);
+      if (end == pattern.npos || end == 2) break;
+      const auto options = pattern.substr(2, end - 2);
+      if (options.find_first_not_of(u"imsxU") != options.npos) break;
+      constexpr std::array bits{kCaseInsensitive, kMultiline, kDotAll, kComments, kUnicodeClasses};
+      for (char16_t option : options) flags |= bits[std::u16string_view(u"imsxU").find(option)];
+      pattern.remove_prefix(end + 1);
+    }
+  }
   for (size_t i = 0; i < pattern.size(); ++i) {
     const char16_t ch = pattern[i];
+    if (quoted) {
+      if (!(flags & kLiteral) && pattern.substr(i).starts_with(u"\\E")) {
+        quoted = false;
+        ++i;
+        continue;
+      }
+      if (std::u16string_view(u".\\+*?[]^$(){}|").contains(ch)) translated += L'\\';
+      translated += ch;
+      continue;
+    }
     if (ch == u'\\' && i + 1 < pattern.size()) {
       const char16_t escaped = pattern[++i];
-      if (escaped == u'h') {
-        if (!in_class) translated += L'[';
-        translated += L" \t\u00a0\u1680\u180e\u2000-\u200a\u202f\u205f\u3000";
+      if (escaped == u'Q') {
+        quoted = true;
+      } else if (!in_class && escaped == u'A' && !(flags & kMultiline)) {
+        translated += L'^';
+      } else if (!in_class && escaped == u'z') {
+        translated += L"$(?![\\s\\S])";
+        if (program) program->end_anchor = true;
+      } else if ((escaped == u'p' || (escaped == u'P' && !in_class)) &&
+                 pattern.substr(i + 1).starts_with(u"{")) {
+        const auto end = pattern.find(u'}', i + 2);
+        if (end == pattern.npos) invalid();
+        const auto property = RegexProperty(pattern.substr(i + 2, end - i - 2), flags & kUnicodeClasses);
+        if (property.empty()) invalid();
+        if (!in_class) translated += escaped == u'P' ? L"[^" : L"[";
+        translated += property;
         if (!in_class) translated += L']';
+        i = end;
+      } else if (escaped == u'h' || (escaped == u's' && (flags & kUnicodeClasses))) {
+        if (!in_class) translated += L'[';
+        translated += escaped == u'h' ? L" \t\u00a0\u1680\u180e\u2000-\u200a\u202f\u205f\u3000"
+            : L" \t-\r\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000";
+        if (!in_class) translated += L']';
+      } else if (escaped == u'k' && program && pattern.substr(i + 1).starts_with(u"<")) {
+        const auto end = pattern.find(u'>', i + 2);
+        if (end == pattern.npos) invalid();
+        const auto name = program->named_groups.find(std::u16string(pattern.substr(i + 2, end - i - 2)));
+        if (name == program->named_groups.end()) invalid();
+        translated += L"(?:\\" + std::to_wstring(name->second) + L")";
+        i = end;
       } else {
         translated += L'\\';
         translated += escaped;
       }
-    } else {
-      if (ch == u'[') in_class = true;
-      if (ch == u']') in_class = false;
-      translated += ch;
+      continue;
     }
+    if (!in_class && (flags & kComments)) {
+      if (std::u16string_view(u" \t\r\n\f\v").contains(ch)) continue;
+      if (ch == u'#') {
+        const auto line = pattern.find_first_of(u"\r\n", i + 1);
+        if (line == pattern.npos) break;
+        i = line;
+        continue;
+      }
+    }
+    if (!in_class && ch == u'(' && program) {
+      const auto suffix = pattern.substr(i + 1);
+      if (!suffix.starts_with(u"?")) ++group_count;
+      if (suffix.starts_with(u"?<") && !suffix.starts_with(u"?<=") && !suffix.starts_with(u"?<!")) {
+        const auto end = pattern.find(u'>', i + 3);
+        if (end == pattern.npos || end == i + 3 ||
+            !program->named_groups.emplace(pattern.substr(i + 3, end - i - 3), ++group_count).second) invalid();
+        i = end;
+      }
+    }
+    if (!in_class && ch == u'.' && (flags & kDotAll)) {
+      translated += L"[\\s\\S]";
+      continue;
+    }
+    if (!in_class && ch == u'$' && program) program->end_anchor = true;
+    if (ch == u'[') in_class = true;
+    if (ch == u']') in_class = false;
+    translated += ch;
   }
   try {
-    return std::wregex(translated);
+    auto opt = std::regex_constants::ECMAScript;
+    if (flags & kCaseInsensitive) opt |= std::regex_constants::icase;
+    if (flags & kMultiline) opt |= std::regex_constants::multiline;
+    return std::wregex(translated, opt);
   } catch (const std::regex_error&) {
     vm.Fail("Ljava/util/regex/PatternSyntaxException;", EncodeUtf8(pattern));
   }
+}
+
+const RegexProgram& GetRegex(Runtime& vm, const Object* pattern) {
+  const auto program = vm.regex_programs.find(pattern);
+  if (program == vm.regex_programs.end()) vm.Fail("Ljava/lang/IllegalStateException;", "Regex has not been compiled");
+  return *static_cast<const RegexProgram*>(program->second.get());
+}
+
+std::pair<size_t, size_t> MatchMarks(Runtime& vm, std::u16string_view text, size_t start,
+                                     size_t end, bool find) {
+  auto& type = vm.linker.FindMethod(vm.linker.Resolve("Ljava/text/Normalizer;"), "characterType", "(I)I", true);
+  const auto mark_at = [&](size_t& at) {
+    const auto point = ReadCodePoint(text.substr(0, end), at);
+    const auto kind = vm.Invoke(type, nullptr, std::array{Value::Int(static_cast<int32_t>(point))}).i();
+    return kind >= 6 && kind <= 8;
+  };
+  for (size_t offset = start; offset < end;) {
+    const size_t begin = offset;
+    if (mark_at(offset)) {
+      while (offset < end) {
+        size_t next = offset;
+        if (!mark_at(next)) break;
+        offset = next;
+      }
+      return {begin, offset};
+    }
+    if (!find) break;
+  }
+  return {end, end};
+}
+
+Value MatchRegex(Runtime& vm, Object* self, Values a) {
+  const auto& program = GetRegex(vm, self);
+  const auto& text = vm.NonNull(a[0].ref()).text;
+  const int32_t from = a[1].i(), to = a[2].i(), start = a[3].i(), mode = a[4].i() & 3;
+  if (from < 0 || to < from || start < from || static_cast<size_t>(to) > text.size()) {
+    vm.Fail("Ljava/lang/IndexOutOfBoundsException;", "Regex region is outside the string");
+  }
+  if (start > to) return Value::Int(2);
+  auto& groups = vm.NonNull(a[5].ref()).elements;
+  if (groups.size() < 2 * (1 + program.expression.mark_count())) {
+    vm.Fail("Ljava/lang/IndexOutOfBoundsException;", "Regex capture array is too small");
+  }
+  if (program.marks) {
+    const auto [begin, end] = MatchMarks(vm, text, start, to, mode == 0);
+    if (begin == end || (mode == 2 && end != static_cast<size_t>(to))) return Value::Int(2);
+    groups[0] = Value::Int(static_cast<int32_t>(begin));
+    groups[1] = Value::Int(static_cast<int32_t>(end));
+    return Value::Int(end == static_cast<size_t>(to) ? 3 : 1);
+  }
+  const bool anchors = (a[4].i() & 4) != 0;
+  const bool transparent = (a[4].i() & 8) != 0;
+  const std::wstring wide(text.begin(), text.end());
+  auto flags = std::regex_constants::match_default;
+  if (start > from || (!anchors && start > 0) || (transparent && start > 0)) {
+    flags |= std::regex_constants::match_prev_avail;
+  }
+  if (!anchors && static_cast<size_t>(to) < text.size()) flags |= std::regex_constants::match_not_eol;
+  if (mode == 1) flags |= std::regex_constants::match_continuous;
+  std::wsmatch match;
+  try {
+    const auto begin = wide.cbegin() + start, end = wide.cbegin() + to;
+    const bool found = mode == 2 ? std::regex_match(begin, end, match, program.expression, flags)
+                                 : std::regex_search(begin, end, match, program.expression, flags);
+    if (!found) return Value::Int(2);
+    for (size_t i = 0; i < match.size(); ++i) {
+      groups[i * 2] = Value::Int(match[i].matched ? static_cast<int32_t>(start + match.position(i)) : -1);
+      groups[i * 2 + 1] = Value::Int(match[i].matched ? static_cast<int32_t>(start + match.position(i) + match.length(i)) : -1);
+    }
+  } catch (const std::regex_error& error) {
+    vm.Fail("Ljava/lang/StackOverflowError;", error.what());
+  }
+  return Value::Int(groups[1].i() == to ? 3 | (program.end_anchor ? 4 : 0) : 1);
+}
+
+void InstallRegex(Runtime& vm) {
+  constexpr auto owner = "Ljava/util/regex/Pattern;";
+  auto& cl = vm.linker;
+  cl.AddBootNative(owner, "compileNative", "(Ljava/lang/String;I)V", [](Runtime& vm, Object* self, Values a) {
+    const auto& text = vm.NonNull(a[0].ref()).text;
+    auto program = std::make_shared<RegexProgram>();
+    program->marks = text == u"\\p{M}+" && !(a[1].i() & 16);
+    if (!program->marks) program->expression = CompileRegex(vm, text, a[1].i(), program.get());
+    vm.regex_programs.insert_or_assign(self, std::move(program));
+    return Value{};
+  });
+  cl.AddBootNative(owner, "groupCountNative", "()I", [](Runtime& vm, Object* self, Values) {
+    return Value::Int(static_cast<int32_t>(GetRegex(vm, self).expression.mark_count()));
+  });
+  cl.AddBootNative(owner, "namedGroupNative", "(Ljava/lang/String;)I", [](Runtime& vm, Object* self, Values a) {
+    const auto& named = GetRegex(vm, self).named_groups;
+    const auto match = named.find(vm.NonNull(a[0].ref()).text);
+    return Value::Int(match == named.end() ? -1 : match->second);
+  });
+  cl.AddBootNative(owner, "matchNative", "(Ljava/lang/String;IIII[I)I", MatchRegex);
+}
+
+void InstallMessageDigest(Runtime& vm) {
+  vm.linker.AddBootNative("Ljava/security/MessageDigest$EmbeddedSha1;", "compress", "([I[BI)V",
+      [](Runtime& vm, Object*, Values a) {
+        auto& state = vm.NonNull(a[0].ref()).elements;
+        const auto& input = vm.NonNull(a[1].ref()).elements;
+        const auto offset = static_cast<size_t>(a[2].i());
+        if (state.size() != 5 || offset > input.size() || input.size() - offset < 64) {
+          vm.Fail("Ljava/lang/IndexOutOfBoundsException;", "Invalid SHA-1 block");
+        }
+        std::array<uint32_t, 80> words{};
+        for (size_t i = 0; i < 16; ++i) {
+          const size_t at = offset + i * 4;
+          for (size_t j = 0; j < 4; ++j) {
+            words[i] = (words[i] << 8) | static_cast<uint8_t>(input[at + j].i());
+          }
+        }
+        for (size_t i = 16; i < words.size(); ++i) {
+          words[i] = std::rotl(words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16], 1);
+        }
+        std::array<uint32_t, 5> hash{};
+        for (size_t i = 0; i < hash.size(); ++i) hash[i] = state[i].bits();
+        auto [w0, w1, w2, w3, w4] = hash;
+        for (size_t i = 0; i < words.size(); ++i) {
+          uint32_t mix, constant;
+          if (i < 20) {
+            mix = (w1 & w2) | (~w1 & w3);
+            constant = 0x5a827999;
+          } else if (i < 40) {
+            mix = w1 ^ w2 ^ w3;
+            constant = 0x6ed9eba1;
+          } else if (i < 60) {
+            mix = (w1 & w2) | (w1 & w3) | (w2 & w3);
+            constant = 0x8f1bbcdc;
+          } else {
+            mix = w1 ^ w2 ^ w3;
+            constant = 0xca62c1d6;
+          }
+          const uint32_t next = std::rotl(w0, 5) + mix + w4 + constant + words[i];
+          w4 = w3;
+          w3 = w2;
+          w2 = std::rotl(w1, 30);
+          w1 = w0;
+          w0 = next;
+        }
+        const std::array compressed{w0, w1, w2, w3, w4};
+        for (size_t i = 0; i < hash.size(); ++i) {
+          state[i] = Value::Int(std::bit_cast<int32_t>(hash[i] + compressed[i]));
+        }
+        return Value{};
+      });
 }
 
 Value ReplaceRegex(Runtime& vm, Object* self, Values args) {
@@ -1142,6 +1844,29 @@ void InstallStrings(Runtime& vm) {
       return Value{};
     });
     cl.AddMethod(str, "valueOf", std::string(parameters) + "Ljava/lang/String;", art::kAccStatic, from_chars);
+  }
+  const Builtin from_bytes = [](Runtime& vm, Object* self, Values args) {
+    const auto& bytes = vm.NonNull(args[0].ref()).elements;
+    const bool slice = args.size() >= 3;
+    const int32_t start = slice ? args[1].i() : 0;
+    const int32_t length = slice ? args[2].i() : bytes.size();
+    if (start < 0 || length < 0 || uint64_t(start) + length > bytes.size()) {
+      vm.Fail("Ljava/lang/StringIndexOutOfBoundsException;");
+    }
+    auto encoding = Encoding::Utf8;
+    if (args.size() == (slice ? 4 : 2)) {
+      const auto& name = vm.NonNull(args.back().ref()).text;
+      const auto found = FindEncoding(name);
+      if (!found) vm.Fail("Ljava/io/UnsupportedEncodingException;", EncodeUtf8(name));
+      encoding = *found;
+    }
+    self->text = DecodeString(std::span(bytes).subspan(start, length), encoding);
+    return Value{};
+  };
+  for (const auto signature : {"([B)V", "([BII)V", "([BLjava/lang/String;)V",
+      "([BIILjava/lang/String;)V", "([BLjava/nio/charset/Charset;)V",
+      "([BIILjava/nio/charset/Charset;)V"}) {
+    add("<init>", signature, from_bytes);
   }
   const Builtin identity = [](Runtime&, Object* self, Values) { return Value::Ref(self); };
   add("toString", "()Ljava/lang/String;", identity);
@@ -1628,23 +2353,50 @@ int Digit(uint32_t ch) {
   return DecimalDigit(ch);
 }
 
-template<class T> T ParseInteger(Runtime& vm, Object* str, int radix) {
+template<class T> std::optional<T> ParseDigits(std::u16string_view text, int radix, bool negative) {
   using Unsigned = std::make_unsigned_t<T>;
-  if (!str) vm.Fail("Ljava/lang/NumberFormatException;", "Cannot parse null string");
-  const auto& text = str->text;
-  const auto invalid = [&]() { vm.Fail("Ljava/lang/NumberFormatException;", EncodeUtf8(text)); };
-  if (text.empty() || radix < 2 || radix > 36) invalid();
-  const bool negative = text.front() == u'-';
-  const size_t begin = negative || text.front() == u'+' ? 1 : 0;
-  if (begin == text.size()) invalid();
+  if (text.empty() || radix < 2 || radix > 36) return std::nullopt;
   const Unsigned max = static_cast<Unsigned>(std::numeric_limits<T>::max()) + negative;
   Unsigned result = 0;
-  for (size_t i = begin; i < text.size(); ++i) {
-    int digit = Digit(text[i]);
-    if (digit < 0 || digit >= radix || result > (max - digit) / radix) invalid();
+  for (const char16_t ch : text) {
+    const int digit = Digit(ch);
+    if (digit < 0 || digit >= radix || result > (max - digit) / radix) return std::nullopt;
     result = result * radix + digit;
   }
   return static_cast<T>(negative ? Unsigned{0} - result : result);
+}
+
+template<class T> T ParseInteger(Runtime& vm, Object* str, int radix) {
+  if (!str) vm.Fail("Ljava/lang/NumberFormatException;", "Cannot parse null string");
+  const auto& text = str->text;
+  const bool negative = text.starts_with(u'-');
+  const bool sign = negative || text.starts_with(u'+');
+  if (const auto result = ParseDigits<T>(std::u16string_view(text).substr(sign), radix, negative)) {
+    return *result;
+  }
+  vm.Fail("Ljava/lang/NumberFormatException;", EncodeUtf8(text));
+}
+
+template<class T> std::optional<T> IntegerProperty(Runtime& vm, Object* key) {
+  if (!key || key->text.empty()) return std::nullopt;
+  const auto entry = vm.options.system_properties.find(EncodeUtf8(key->text, false));
+  if (entry == vm.options.system_properties.end()) return std::nullopt;
+  const auto decoded = DecodeUtf8(entry->second);
+  std::u16string_view text(decoded);
+  const bool negative = text.starts_with(u'-');
+  if (negative || text.starts_with(u'+')) text.remove_prefix(1);
+  int radix = 10;
+  if (text.starts_with(u"0x") || text.starts_with(u"0X")) {
+    radix = 16;
+    text.remove_prefix(2);
+  } else if (text.starts_with(u'#')) {
+    radix = 16;
+    text.remove_prefix(1);
+  } else if (text.size() > 1 && text.starts_with(u'0')) {
+    radix = 8;
+    text.remove_prefix(1);
+  }
+  return ParseDigits<T>(text, radix, negative);
 }
 
 std::string BoxText(char type, Value value) {
@@ -1848,6 +2600,9 @@ void InstallNumbers(Runtime& vm) {
     }
   }
   auto& integer = *classes['I'];
+  cl.AddMethod(integer, "toUnsignedLong", "(I)J", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    return Value::Long(static_cast<uint32_t>(a[0].i()));
+  });
   cl.AddMethod(integer, "highestOneBit", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
     return Value::Int(std::bit_cast<int32_t>(std::bit_floor(static_cast<uint32_t>(a[0].i()))));
   });
@@ -1877,14 +2632,45 @@ void InstallNumbers(Runtime& vm) {
   const Builtin parse_long = [](Runtime& vm, Object*, Values a) {
     return Value::Long(ParseInteger<int64_t>(vm, a[0].ref(), a.size() > 1 ? a[1].i() : 10));
   };
+  const Builtin parse_byte = [](Runtime& vm, Object*, Values a) {
+    return Value::Int(ParseInteger<int8_t>(vm, a[0].ref(), a.size() > 1 ? a[1].i() : 10));
+  };
   cl.AddMethod(integer, "parseInt", "(Ljava/lang/String;)I", art::kAccStatic, parse_int);
   cl.AddMethod(integer, "parseInt", "(Ljava/lang/String;I)I", art::kAccStatic, parse_int);
   cl.AddMethod(lng, "parseLong", "(Ljava/lang/String;)J", art::kAccStatic, parse_long);
   cl.AddMethod(lng, "parseLong", "(Ljava/lang/String;I)J", art::kAccStatic, parse_long);
+  cl.AddMethod(*classes['B'], "parseByte", "(Ljava/lang/String;)B", art::kAccStatic, parse_byte);
+  cl.AddMethod(*classes['B'], "parseByte", "(Ljava/lang/String;I)B", art::kAccStatic, parse_byte);
+  cl.AddMethod(integer, "getInteger", "(Ljava/lang/String;I)Ljava/lang/Integer;", art::kAccStatic,
+      [&integer](Runtime& vm, Object*, Values a) {
+        const Value value = Value::Int(IntegerProperty<int32_t>(vm, a[0].ref()).value_or(a[1].i()));
+        auto& box = vm.linker.FindMethod(integer, "valueOf", "(I)Ljava/lang/Integer;", true);
+        return vm.Invoke(box, nullptr, {&value, 1});
+      });
+  cl.AddMethod(lng, "getLong", "(Ljava/lang/String;J)Ljava/lang/Long;", art::kAccStatic,
+      [&lng](Runtime& vm, Object*, Values a) {
+        const Value value = Value::Long(IntegerProperty<int64_t>(vm, a[0].ref()).value_or(a[1].j()));
+        auto& box = vm.linker.FindMethod(lng, "valueOf", "(J)Ljava/lang/Long;", true);
+        return vm.Invoke(box, nullptr, {&value, 1});
+      });
   cl.AddMethod(integer, "toHexString", "(I)Ljava/lang/String;", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) { return StringValue(vm, Hex(static_cast<uint32_t>(a[0].i()))); });
+  cl.AddMethod(integer, "toBinaryString", "(I)Ljava/lang/String;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        char buffer[32];
+        const auto result = std::to_chars(buffer, buffer + sizeof(buffer), static_cast<uint32_t>(a[0].i()), 2);
+        return StringValue(vm, std::string_view(buffer, result.ptr));
+      });
   cl.AddMethod(*classes['Z'], "parseBoolean", "(Ljava/lang/String;)Z", art::kAccStatic,
       [](Runtime&, Object*, Values a) { return Value::Int(a[0].ref() && CompareText(a[0].ref()->text, u"true", true) == 0); });
+  cl.AddMethod(*classes['Z'], "getBoolean", "(Ljava/lang/String;)Z", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        if (!a[0].ref() || a[0].ref()->text.empty()) return Value::Int(0);
+        const auto key = EncodeUtf8(a[0].ref()->text, false);
+        const auto entry = vm.options.system_properties.find(key);
+        return Value::Int(entry != vm.options.system_properties.end() &&
+            CompareText(DecodeUtf8(entry->second), u"true", true) == 0);
+      });
   auto& character = *classes['C'];
   const Builtin character_type = [](Runtime& vm, Object*, Values a) {
     auto& normalizer = vm.linker.Resolve("Ljava/text/Normalizer;");
@@ -1942,6 +2728,13 @@ void InstallNumbers(Runtime& vm) {
   for (auto sig : {"(I)Z", "(C)Z"}) {
     cl.AddMethod(character, "isWhitespace", sig, art::kAccStatic,
         [](Runtime&, Object*, Values a) { return Value::Int(IsWhitespace(a[0].i())); });
+    cl.AddMethod(character, "isSpaceChar", sig, art::kAccStatic, [](Runtime&, Object*, Values a) {
+      // libcore Character.isSpaceChar selects the Unicode Zs, Zl and Zp categories.
+      const int code = a[0].i();
+      return Value::Int(code == 0x20 || code == 0xa0 || code == 0x1680 ||
+                        (code >= 0x2000 && code <= 0x200a) || code == 0x2028 || code == 0x2029 ||
+                        code == 0x202f || code == 0x205f || code == 0x3000);
+    });
     cl.AddMethod(character, "isDigit", sig, art::kAccStatic,
         [](Runtime&, Object*, Values a) { return Value::Int(DecimalDigit(a[0].i()) >= 0); });
     cl.AddMethod(character, "isLetter", sig, art::kAccStatic,
@@ -2130,6 +2923,8 @@ void Runtime::InstallBootClasses() {
   InstallObject(*this);
   InstallThrowable(*this);
   InstallStrings(*this);
+  InstallRegex(*this);
+  InstallMessageDigest(*this);
   InstallNumbers(*this);
   InstallEnumAndReferences(*this);
   InstallUnicodeScript(linker);

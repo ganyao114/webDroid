@@ -5,13 +5,16 @@
 #include "mounted_apk.h"
 #include "native_methods.h"
 #include "ui_bridge.h"
+#include "ziparchive/zip_archive.h"
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -40,6 +43,8 @@ constexpr int32_t kBack = 4;
 constexpr uint32_t kActivityLayer = 1;
 constexpr uint64_t kMatchDisabled = 0x200;
 constexpr uint64_t kMatchDefaultOnly = 0x10000;
+constexpr std::string_view kAssetPath = "/android_asset/";
+constexpr size_t kMaxWebViewFileSize = 2 * 1024 * 1024;
 
 double MillisecondsSince(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
@@ -147,6 +152,40 @@ struct WebViewLayer {
     wa_sf_layer_desc_t layer{};
     bool navigate = false;
 };
+
+std::string WebViewFilePath(std::string_view url, std::string_view package) {
+    constexpr std::string_view scheme = "file://";
+    if (!url.starts_with(scheme) || url.size() > WA_WEBVIEW_TEXT_CAPACITY) return {};
+    url.remove_prefix(scheme.size());
+    if (!url.starts_with('/')) return {};
+    url = url.substr(0, url.find_first_of("?#"));
+    std::string path;
+    for (size_t i = 0; i < url.size(); ++i) {
+        char ch = url[i];
+        if (ch == '%') {
+            if (url.size() - i < 3) return {};
+            unsigned value;
+            const char* end = url.data() + i + 3;
+            const auto result = std::from_chars(end - 2, end, value, 16);
+            if (result.ec != std::errc{} || result.ptr != end) return {};
+            ch = static_cast<char>(value);
+            i += 2;
+        }
+        if (ch == '\0' || ch == '\\') return {};
+        path += ch;
+    }
+    const std::string data_path = "/data/user/0/" + std::string(package) + '/';
+    const std::string_view root = path.starts_with(kAssetPath) ? kAssetPath : std::string_view(data_path);
+    if (!path.starts_with(root)) return {};
+    // Guest storage has no symlinks. A normalized path must stay in the same root.
+    path = std::filesystem::path(path).lexically_normal().string();
+    return path.starts_with(root) && path.size() > root.size() ? path : std::string{};
+}
+
+int32_t WebViewFileSize(uint64_t size, const uint8_t* out, size_t cap) {
+    if (size > kMaxWebViewFileSize || (out && cap < size)) return WA_ERR_OVERFLOW;
+    return static_cast<int32_t>(size);
+}
 
 struct Session {
     Session(int32_t width, int32_t height, int32_t dpi, const char* language)
@@ -341,6 +380,7 @@ struct Session {
     std::map<std::string, Package, std::less<>> catalog;
     std::map<uint32_t, WebViewLayer> webviews;
     Vm vm{wa::interp::Options{.gc_interval = 4096, .verify_dex = true, .capture_exception_stack = true,
+        .sandboxed_files = true,
         .system_properties = {{"org.wasmandroid.foreground", "true"}}}};
     wa::ui_jni::UiBridge ui;
     std::string package_name, activity_class, activity_descriptor, application_class,
@@ -363,7 +403,8 @@ jboolean WebViewNavigate(JNIEnv* env, jclass, jint id, jstring url) {
     return wa::ui_jni::detail::CallSafely(env, [&]() -> jboolean {
         auto text = wa::ui_jni::detail::Utf8(env, url);
         if (id <= static_cast<jint>(kActivityLayer) || text.size() > WA_WEBVIEW_TEXT_CAPACITY ||
-            (text != "about:blank" && !text.starts_with("https://") && !text.starts_with("http://")))
+            (text != "about:blank" && !text.starts_with("https://") && !text.starts_with("http://") &&
+             WebViewFilePath(text, session->package_name).empty()))
             return JNI_FALSE;
         auto& view = session->webviews[id];
         view.url = std::move(text);
@@ -493,6 +534,10 @@ void wa_system_app_destroy() {
             session->ui.DestroyActivity(session->vm);
             return WA_OK;
         });
+        Api("Run foreground process shutdown hooks", [] {
+            session->vm.RunShutdownHooks();
+            return WA_OK;
+        });
     }
     session.reset();
     last_error.clear();
@@ -567,6 +612,7 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
         s.catalog.insert_or_assign(s.package_name, std::move(package));
         s.boot_attempted = true;
 
+        s.vm.MountReadOnlyFile(apk_path, {bytes, size});
         s.vm.LoadApkDexFiles(apk_path);
         const auto prefix = apk_path + '!';
         if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))
@@ -628,7 +674,18 @@ int32_t wa_system_app_tick(int64_t nanos) {
         if (nanos >= 0) s.last_time = std::max(s.last_time, static_cast<uint64_t>(nanos));
         wa_webview_event_t event{};
         while (wa_webview_poll(s.scene.get(), &event) == 1) {
-            // The iframe may load independently of the bridge's optional message handshake.
+            if (event.status != WA_WEBVIEW_PAGE_LOADED || event.text_len > sizeof(event.text)) continue;
+            const auto view = s.webviews.find(event.webview_id);
+            const std::string_view payload(event.text, event.text_len);
+            const auto separator = payload.find('\0');
+            const auto url = payload.substr(0, separator);
+            if (view == s.webviews.end() || view->second.url != url || view->second.submitted_url != url) continue;
+            ScopedHandleScope roots(s.vm);
+            auto* address = roots.Hold(s.vm.NewString(url));
+            auto* title = separator == payload.npos ? nullptr : roots.Hold(s.vm.NewString(payload.substr(separator + 1)));
+            s.vm.CallStatic("Landroid/webkit/WebView;", "dispatchEmbeddedPageLoaded",
+                "(ILjava/lang/String;Ljava/lang/String;)V",
+                std::array{Value::Int(event.webview_id), Value::Ref(address), Value::Ref(title)});
         }
         const int32_t status = s.Draw(s.last_time);
         if (status == WA_OK) {
@@ -667,6 +724,37 @@ int32_t wa_system_app_state_json(char* out, size_t cap) {
     return Api("Read foreground state", [&]() -> int32_t {
         if (!session) return WA_ERR_NOENT;
         return CopyText(session->Describe(), out, cap);
+    });
+}
+
+int32_t wa_system_app_read_webview_file(uint32_t id, const char* url, uint8_t* out, size_t cap) {
+    return Api("Read foreground WebView file", [&]() -> int32_t {
+        if (!session) return WA_ERR_NOENT;
+        if (!url || (!out && cap)) return WA_ERR_INVALID;
+        const auto view = session->webviews.find(id);
+        if (view == session->webviews.end() || !view->second.submitted_url.starts_with("file://")) {
+            return WA_ERR_NOENT;
+        }
+        const auto path = WebViewFilePath(url, session->package_name);
+        if (path.empty()) return WA_ERR_INVALID;
+        if (path.starts_with(kAssetPath)) {
+            const auto package = session->catalog.find(session->package_name);
+            if (package == session->catalog.end()) return WA_ERR_NOENT;
+            ZipArchiveHandle handle;
+            if (OpenArchive(package->second.mount->path(), &handle) != 0) return WA_ERR_INTERNAL;
+            const std::unique_ptr<ZipArchive, decltype(&CloseArchive)> archive(handle, CloseArchive);
+            const auto name = "assets/" + path.substr(kAssetPath.size());
+            ZipEntry64 entry;
+            if (FindEntry(archive.get(), name, &entry) != 0) return WA_ERR_NOENT;
+            const int32_t size = WebViewFileSize(entry.uncompressed_length, out, cap);
+            if (size > 0 && out && ExtractToMemory(archive.get(), &entry, out, size) != 0) return WA_ERR_INTERNAL;
+            return size;
+        }
+        const auto bytes = session->vm.ReadGuestFile(path);
+        if (!bytes) return WA_ERR_NOENT;
+        const int32_t size = WebViewFileSize(bytes->size(), out, cap);
+        if (size > 0 && out) std::memcpy(out, bytes->data(), size);
+        return size;
     });
 }
 

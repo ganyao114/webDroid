@@ -1,0 +1,305 @@
+--- a/libcore/ojluni/src/main/java/java/lang/reflect/Field.java
++++ b/libcore/ojluni/src/main/java/java/lang/reflect/Field.java
+@@ -26,12 +26,9 @@
+ 
+ package java.lang.reflect;
+ 
+-import dalvik.annotation.optimization.FastNative;
+-import sun.reflect.CallerSensitive;
+ import java.lang.annotation.Annotation;
+ import java.util.Objects;
+ import libcore.reflect.AnnotatedElements;
+-import libcore.reflect.GenericSignatureParser;
+ 
+ 
+ /**
+@@ -61,7 +58,6 @@
+ 
+     private int accessFlags;
+     private Class<?> declaringClass;
+-    private int artFieldIndex;
+     private int offset;
+     private Class<?> type;
+ 
+@@ -81,25 +77,10 @@
+      * Returns the name of the field represented by this {@code Field} object.
+      */
+     public String getName() {
+-        // Android-changed: getName() implemented differently.
+-        if (declaringClass.isProxy()) {
+-            // Proxy classes have 1 synthesized static field with no valid dex index.
+-            if ((getModifiers() & Modifier.STATIC) == 0) {
+-                throw new AssertionError("Invalid modifiers for proxy field: " + getModifiers());
+-            }
+-            // Only 2 fields are present on proxy classes.
+-            switch (artFieldIndex) {
+-                case 0: return "interfaces";
+-                case 1: return "throws";
+-                default: throw new AssertionError("Invalid index for proxy: " + artFieldIndex);
+-            }
+-        }
+-
+         return getNameInternal();
+     }
+ 
+     // Android-added: getName() implemented differently.
+-    @FastNative
+     private native String getNameInternal();
+ 
+     /**
+@@ -175,34 +156,13 @@
+      * @since 1.5
+      */
+     public Type getGenericType() {
+-        // Android-changed: getGenericType() implemented differently.
+-        String signatureAttribute = getSignatureAttribute();
+-        ClassLoader cl = declaringClass.getClassLoader();
+-        GenericSignatureParser parser = new GenericSignatureParser(cl);
+-        parser.parseForField(declaringClass, signatureAttribute);
+-        Type genericType = parser.fieldType;
+-        if (genericType == null) {
+-            genericType = getType();
++        if (hasGenericSignature()) {
++            throw new UnsupportedOperationException("Generic signatures are unavailable for embedded fields");
+         }
+-        return genericType;
+-    }
+-
+-    // BEGIN Android-added: getGenericType() implemented differently.
+-    String getSignatureAttribute() {
+-        String[] annotation = getSignatureAnnotation();
+-        if (annotation == null) {
+-            return null;
+-        }
+-        StringBuilder result = new StringBuilder();
+-        for (String s : annotation) {
+-            result.append(s);
+-        }
+-        return result.toString();
+-    }
+-    @FastNative
+-    private native String[] getSignatureAnnotation();
+-    // END Android-added: getGenericType() implemented differently.
+-
++        return getType();
++    }
++
++    private native boolean hasGenericSignature();
+ 
+     /**
+      * Compares this {@code Field} against the specified object.  Returns
+@@ -334,9 +294,7 @@
+      * @exception ExceptionInInitializerError if the initialization provoked
+      *              by this method fails.
+      */
+-    @CallerSensitive
+     // Android-changed: get*(Object) implemented natively.
+-    @FastNative
+     public native Object get(Object obj)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -362,9 +320,7 @@
+      *              by this method fails.
+      * @see       Field#get
+      */
+-    @CallerSensitive
+     // Android-changed: get*(Object) implemented natively.
+-    @FastNative
+     public native boolean getBoolean(Object obj)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -390,9 +346,7 @@
+      *              by this method fails.
+      * @see       Field#get
+      */
+-    @CallerSensitive
+     // Android-changed: get*(Object) implemented natively.
+-    @FastNative
+     public native byte getByte(Object obj)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -420,9 +374,7 @@
+      *              by this method fails.
+      * @see Field#get
+      */
+-    @CallerSensitive
+     // Android-changed: get*(Object) implemented natively.
+-    @FastNative
+     public native char getChar(Object obj)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -450,9 +402,7 @@
+      *              by this method fails.
+      * @see       Field#get
+      */
+-    @CallerSensitive
+     // Android-changed: get*(Object) implemented natively.
+-    @FastNative
+     public native short getShort(Object obj)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -480,9 +430,7 @@
+      *              by this method fails.
+      * @see       Field#get
+      */
+-    @CallerSensitive
+     // Android-changed: get*(Object) implemented natively.
+-    @FastNative
+     public native int getInt(Object obj)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -510,9 +458,7 @@
+      *              by this method fails.
+      * @see       Field#get
+      */
+-    @CallerSensitive
+     // Android-changed: get*(Object) implemented natively.
+-    @FastNative
+     public native long getLong(Object obj)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -540,9 +486,7 @@
+      *              by this method fails.
+      * @see Field#get
+      */
+-    @CallerSensitive
+     // Android-changed: get*(Object) implemented natively.
+-    @FastNative
+     public native float getFloat(Object obj)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -570,9 +514,7 @@
+      *              by this method fails.
+      * @see       Field#get
+      */
+-    @CallerSensitive
+     // Android-changed: get*(Object) implemented natively.
+-    @FastNative
+     public native double getDouble(Object obj)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -651,9 +593,7 @@
+      * @exception ExceptionInInitializerError if the initialization provoked
+      *              by this method fails.
+      */
+-    @CallerSensitive
+     // Android-changed: set*(Object, ...) implemented natively.
+-    @FastNative
+     public native void set(Object obj, Object value)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -681,9 +621,7 @@
+      *              by this method fails.
+      * @see       Field#set
+      */
+-    @CallerSensitive
+     // Android-changed: set*(Object, ...) implemented natively.
+-    @FastNative
+     public native void setBoolean(Object obj, boolean z)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -711,9 +649,7 @@
+      *              by this method fails.
+      * @see       Field#set
+      */
+-    @CallerSensitive
+     // Android-changed: set*(Object, ...) implemented natively.
+-    @FastNative
+     public native void setByte(Object obj, byte b)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -741,9 +677,7 @@
+      *              by this method fails.
+      * @see       Field#set
+      */
+-    @CallerSensitive
+     // Android-changed: set*(Object, ...) implemented natively.
+-    @FastNative
+     public native void setChar(Object obj, char c)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -771,9 +705,7 @@
+      *              by this method fails.
+      * @see       Field#set
+      */
+-    @CallerSensitive
+     // Android-changed: set*(Object, ...) implemented natively.
+-    @FastNative
+     public native void setShort(Object obj, short s)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -801,9 +733,7 @@
+      *              by this method fails.
+      * @see       Field#set
+      */
+-    @CallerSensitive
+     // Android-changed: set*(Object, ...) implemented natively.
+-    @FastNative
+     public native void setInt(Object obj, int i)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -831,9 +761,7 @@
+      *              by this method fails.
+      * @see       Field#set
+      */
+-    @CallerSensitive
+     // Android-changed: set*(Object, ...) implemented natively.
+-    @FastNative
+     public native void setLong(Object obj, long l)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -861,9 +789,7 @@
+      *              by this method fails.
+      * @see       Field#set
+      */
+-    @CallerSensitive
+     // Android-changed: set*(Object, ...) implemented natively.
+-    @FastNative
+     public native void setFloat(Object obj, float f)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -891,9 +817,7 @@
+      *              by this method fails.
+      * @see       Field#set
+      */
+-    @CallerSensitive
+     // Android-changed: set*(Object, ...) implemented natively.
+-    @FastNative
+     public native void setDouble(Object obj, double d)
+         throws IllegalArgumentException, IllegalAccessException;
+ 
+@@ -907,7 +831,6 @@
+         return getAnnotationNative(annotationClass);
+     }
+     // Android-added: getAnnotation(Class) implemented differently.
+-    @FastNative
+     private native <A extends Annotation> A getAnnotationNative(Class<A> annotationType);
+ 
+     /**
+@@ -929,7 +852,6 @@
+         }
+         return isAnnotationPresentNative(annotationType);
+     }
+-    @FastNative
+     private native boolean isAnnotationPresentNative(Class<? extends Annotation> annotationType);
+     // END Android-added: isAnnotationPresent(Class) overridden in Field.
+ 
+@@ -937,7 +859,6 @@
+      * {@inheritDoc}
+      */
+     @Override
+-    @FastNative
+     public native Annotation[] getDeclaredAnnotations();
+ 
+     // BEGIN Android-added: Methods for use by Android-specific code.
+@@ -970,7 +891,8 @@
+     /**
+      * @hide - export for use by {@code java.lang.invoke.*}
+      */
+-    @FastNative
+-    public native long getArtField();
++    public long getArtField() {
++        throw new UnsupportedOperationException("Embedded fields do not have ART addresses");
++    }
+     // END Android-added: Methods for use by Android-specific code.
+ }

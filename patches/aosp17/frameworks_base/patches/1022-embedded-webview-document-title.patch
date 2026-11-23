@@ -1,0 +1,59 @@
+--- a/frameworks/base/core/java/android/webkit/WebView.java
++++ b/frameworks/base/core/java/android/webkit/WebView.java
+@@ -2456,11 +2456,11 @@
+             new android.util.SparseArray<>();
+ 
+     /** Receive completion for the exact URL submitted through the host bridge. @hide */
+-    public static void dispatchEmbeddedPageLoaded(int id, String url) {
++    public static void dispatchEmbeddedPageLoaded(int id, String url, String title) {
+         var reference = sActiveIframes.get(id);
+         IframeProvider provider = reference == null ? null : reference.get();
+         if (provider == null) sActiveIframes.remove(id);
+-        else provider.pageLoaded(url);
++        else provider.pageLoaded(url, title);
+     }
+ 
+     private static final class IframeProvider implements WebViewProvider {
+@@ -2472,6 +2472,7 @@
+         private final int[] mLocation = new int[2];
+         private final WebView mView;
+         private WebViewClient mClient;
++        private String mTitle;
+         private WebChromeClient mChromeClient;
+         private int mProgress;
+         private static final String HISTORY_KEY = "wasmandroid.webview.history";
+@@ -2493,7 +2494,7 @@
+         @Override public WebSettings getSettings() { return mSettings; }
+         @Override public int getContentHeight() { return mView.getHeight(); }
+         @Override public int getContentWidth() { return mView.getWidth(); }
+-        @Override public String getTitle() { return null; }
++        @Override public String getTitle() { return mTitle; }
+         @Override public Bitmap getFavicon() { return null; }
+         @Override public android.net.http.SslCertificate getCertificate() { return null; }
+         @Override public void setDownloadListener(DownloadListener listener) {}
+@@ -2606,17 +2607,21 @@
+         }
+ 
+         private void beginPage(String url) {
++            mTitle = null;
+             mProgress = 0;
+             mView.invalidate();
+             if (mClient != null) mClient.onPageStarted(mView, url, null);
+             if (mDestroyed || !url.equals(getUrl())) return;
+             if (mChromeClient != null) mChromeClient.onProgressChanged(mView, mProgress);
+-            if (BLANK.equals(url)) pageLoaded(url);
+-        }
+-
+-        private void pageLoaded(String url) {
++            if (BLANK.equals(url)) pageLoaded(url, null);
++        }
++
++        private void pageLoaded(String url, String title) {
+             if (mDestroyed || !url.equals(getUrl()) || mProgress == 100) return;
+             mProgress = 100;
++            mTitle = title;
++            if (mChromeClient != null && title != null) mChromeClient.onReceivedTitle(mView, title);
++            if (mDestroyed || !url.equals(getUrl()) || mProgress != 100) return;
+             if (mChromeClient != null) mChromeClient.onProgressChanged(mView, mProgress);
+             if (mClient != null && mProgress == 100 && url.equals(getUrl())) mClient.onPageFinished(mView, url);
+         }

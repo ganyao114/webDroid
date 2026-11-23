@@ -1,0 +1,21 @@
+--- a/frameworks/base/core/java/android/app/BackStackRecord.java
++++ b/frameworks/base/core/java/android/app/BackStackRecord.java
+@@ -668,7 +668,17 @@
+     }
+ 
+     int commitInternal(boolean allowStateLoss) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        if (mCommitted) {
++            throw new IllegalStateException("commit already called");
++        }
++        mCommitted = true;
++        if (mAddToBackStack) {
++            mIndex = mManager.allocBackStackIndex(this);
++        } else {
++            mIndex = -1;
++        }
++        mManager.enqueueAction(this, allowStateLoss);
++        return mIndex;
+     }
+ 
+     /**

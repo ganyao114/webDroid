@@ -1,0 +1,317 @@
+--- a/libcore/ojluni/src/main/java/java/util/regex/Pattern.java
++++ b/libcore/ojluni/src/main/java/java/util/regex/Pattern.java
+@@ -26,14 +26,8 @@
+ 
+ package java.util.regex;
+ 
+-import android.compat.Compatibility;
+-import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledSince;
+-
+-import com.android.icu.util.regex.PatternNative;
+-
+-import dalvik.annotation.compat.VersionCodes;
+-import dalvik.system.VMRuntime;
++
++
+ import java.util.ArrayList;
+ import java.util.Iterator;
+ import java.util.NoSuchElementException;
+@@ -42,7 +36,6 @@
+ import java.util.function.Predicate;
+ import java.util.stream.Stream;
+ import java.util.stream.StreamSupport;
+-import libcore.util.EmptyArray;
+ 
+ // Android-changed: Document that named capturing is only available from API 26.
+ // Android-changed: Android always uses unicode character classes.
+@@ -866,7 +859,7 @@
+             // Android-changed: CANON_EQ and UNICODE_CHARACTER_CLASS flags aren't supported.
+             // DOTALL | UNICODE_CASE | CANON_EQ | UNIX_LINES | LITERAL |
+             // UNICODE_CHARACTER_CLASS | COMMENTS;
+-            DOTALL | UNICODE_CASE | UNIX_LINES | LITERAL | COMMENTS;
++            DOTALL | UNICODE_CASE | UNIX_LINES | LITERAL | COMMENTS | UNICODE_CHARACTER_CLASS;
+ 
+     /* Pattern has only two serialized components: The pattern string
+      * and the flags, which are all that is needed to recompile the pattern
+@@ -899,7 +892,10 @@
+     // BEGIN Android-changed: reimplement matching logic natively via ICU.
+     // We only need some tie-ins to native memory, instead of a large number
+     // of fields on the .java side.
+-    /* package */ transient PatternNative nativePattern;
++    private native void compileNative(String expression, int flags);
++    native int groupCountNative();
++    native int namedGroupNative(String name);
++    native int matchNative(String text, int from, int to, int start, int mode, int[] groups);
+     // END Android-changed: reimplement matching logic natively via ICU.
+ 
+     /**
+@@ -1112,7 +1108,6 @@
+      *
+      * @since   21
+      */
+-    @libcore.api.Hide
+     public String[] splitWithDelimiters(CharSequence input, int limit) {
+         return split(input, limit, true);
+     }
+@@ -1250,7 +1245,7 @@
+      */
+     public String[] split(CharSequence input, int limit) {
+         // BEGIN Android-added: fastSplit() to speed up simple cases.
+-        String[] fast = fastSplit(pattern, input.toString(), limit);
++        String[] fast = flags == 0 ? fastSplit(pattern, input.toString(), limit) : null;
+         if (fast != null) {
+             return fast;
+         }
+@@ -1266,13 +1261,7 @@
+                 if (index == 0 && index == m.start() && m.start() == m.end()) {
+                     // no empty leading substring included for zero-width match
+                     // at the beginning of the input char sequence.
+-                    // BEGIN Android-changed: split() compat behavior for apps targeting <= 28.
+-                    // continue;
+-                    int targetSdkVersion = VMRuntime.getRuntime().getTargetSdkVersion();
+-                    if (targetSdkVersion > 28) {
+-                        continue;
+-                    }
+-                    // END Android-changed: split() compat behavior for apps targeting <= 28.
++                    continue;
+                 }
+                 String match = input.subSequence(index, m.start()).toString();
+                 matchList.add(match);
+@@ -1365,7 +1354,7 @@
+             // Last part is empty for limit == 0, remove all trailing empty matches.
+             if (separatorCount == lastPartEnd) {
+                 // Input contains only separators.
+-                return EmptyArray.STRING;
++                return new String[0];
+             }
+             // Find the beginning of trailing separators.
+             do {
+@@ -1511,9 +1500,6 @@
+         // BEGIN Android-added: CANON_EQ and UNICODE_CHARACTER_CLASS flags are not supported.
+         if ((f & CANON_EQ) != 0) {
+             throw new IllegalArgumentException("CANON_EQ flag isn't supported");
+-        }
+-        if ((f & UNICODE_CHARACTER_CLASS) != 0) {
+-            throw new IllegalArgumentException("UNICODE_CHARACTER_CLASS flag not supported");
+         }
+         // END Android-added: CANON_EQ and UNICODE_CHARACTER_CLASS flags are not supported.
+         if ((f & ~ALL_FLAGS) != 0) {
+@@ -3655,15 +3641,7 @@
+             throw new NullPointerException("pattern == null");
+         }
+ 
+-        String icuPattern = pattern;
+-        if ((flags & LITERAL) != 0) {
+-            icuPattern = quote(pattern);
+-        }
+-
+-        // These are the flags natively supported by ICU.
+-        // They even have the same value in native code.
+-        int icuFlags = flags & (CASE_INSENSITIVE | COMMENTS | MULTILINE | DOTALL | UNIX_LINES);
+-        nativePattern = PatternNative.create(icuPattern, icuFlags);
++        compileNative(pattern, flags);
+     }
+     // END Android-changed: reimplement matching logic natively via ICU.
+ 
+@@ -5872,10 +5850,7 @@
+                     // element count to 1
+                     // Android-changed: Keep old behavior on Android 13 or below. http://b/286499139
+                     // emptyElementCount = input.length() == 0 ? 1 : 0;
+-                    if (input.length() == 0
+-                            && VMRuntime.getSdkVersion() >= VersionCodes.UPSIDE_DOWN_CAKE
+-                            && Compatibility.isChangeEnabled(
+-                                    SPLIT_AS_STREAM_RETURNS_SINGLE_EMPTY_STRING)) {
++                    if (input.length() == 0) {
+                         emptyElementCount = 1;
+                     } else {
+                         emptyElementCount = 0;
+@@ -5927,8 +5902,6 @@
+      *
+      * @hide
+      */
+-    @ChangeId
+-    @EnabledSince(targetSdkVersion = VersionCodes.UPSIDE_DOWN_CAKE)
+     public static final long SPLIT_AS_STREAM_RETURNS_SINGLE_EMPTY_STRING = 288845345L;
+ 
+ }
+--- a/libcore/ojluni/src/main/java/java/util/regex/Matcher.java
++++ b/libcore/ojluni/src/main/java/java/util/regex/Matcher.java
+@@ -26,12 +26,6 @@
+ 
+ package java.util.regex;
+ 
+-import android.compat.Compatibility;
+-import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledSince;
+-import com.android.icu.util.regex.MatcherNative;
+-import dalvik.annotation.compat.VersionCodes;
+-import dalvik.system.VMRuntime;
+ import java.util.ConcurrentModificationException;
+ import java.util.Iterator;
+ import java.util.NoSuchElementException;
+@@ -147,7 +141,22 @@
+      */
+     private boolean matchFound;
+ 
+-    private MatcherNative nativeMatcher;
++    private int nextFind;
++    private boolean hitEnd, requireEnd;
++
++    private boolean match(int start, int mode) {
++        // Modes 0, 1 and 2 mean find, lookingAt and matches respectively.
++        int options = mode | (anchoringBounds ? 4 : 0) | (transparentBounds ? 8 : 0);
++        int result = parentPattern.matchNative(text, from, to, start, options, groups);
++        hitEnd = (result & 2) != 0;
++        requireEnd = (result & 4) != 0;
++        if ((result & 1) != 0) {
++            nextFind = groups[1] + (groups[0] == groups[1] ? 1 : 0);
++            return true;
++        }
++        nextFind = mode == 0 ? to + 1 : from;
++        return false;
++    }
+ 
+     /**
+      * The index of the last position appended in a substitution.
+@@ -336,10 +345,6 @@
+         if (newPattern == null)
+             throw new IllegalArgumentException("Pattern cannot be null");
+ 
+-        synchronized (this) {
+-            // may throw
+-            nativeMatcher = MatcherNative.create(newPattern.nativePattern);
+-        }
+         parentPattern = newPattern;
+ 
+         if (text != null) {
+@@ -640,7 +645,7 @@
+      */
+     public int groupCount() {
+         synchronized (this) {
+-            return nativeMatcher.groupCount();
++            return parentPattern.groupCountNative();
+         }
+     }
+ 
+@@ -655,7 +660,7 @@
+      */
+     public boolean matches() {
+         synchronized (this) {
+-            matchFound = nativeMatcher.matches(groups);
++            matchFound = match(from, 2);
+         }
+         modCount++;
+         return matchFound;
+@@ -678,7 +683,7 @@
+      */
+     public boolean find() {
+         synchronized (this) {
+-            matchFound = nativeMatcher.findNext(groups);
++            matchFound = match(nextFind, 0);
+         }
+         modCount++;
+         return matchFound;
+@@ -709,7 +714,7 @@
+             throw new IndexOutOfBoundsException("Illegal start index");
+         reset();
+         synchronized (this) {
+-            matchFound = nativeMatcher.find(start, groups);
++            matchFound = match(start, 0);
+         }
+         modCount++;
+         return matchFound;
+@@ -731,7 +736,7 @@
+      */
+     public boolean lookingAt() {
+         synchronized (this) {
+-            matchFound = nativeMatcher.lookingAt(groups);
++            matchFound = match(from, 1);
+         }
+         modCount++;
+         return matchFound;
+@@ -878,17 +883,10 @@
+      *
+      * @hide
+      */
+-    @ChangeId
+-    @EnabledSince(targetSdkVersion = VersionCodes.UPSIDE_DOWN_CAKE)
+     public static final long DISALLOW_INVALID_GROUP_REFERENCE = 247079863L;
+ 
+     private void appendReplacementInternal(StringBuilder sb, String replacement) {
+-        if (VMRuntime.getSdkVersion() >= VersionCodes.UPSIDE_DOWN_CAKE
+-                && Compatibility.isChangeEnabled(DISALLOW_INVALID_GROUP_REFERENCE)) {
+-            appendExpandedReplacement(replacement, sb);
+-        } else {
+-            appendEvaluated(sb, replacement);
+-        }
++        appendExpandedReplacement(replacement, sb);
+     }
+ 
+     /**
+@@ -1107,7 +1105,7 @@
+                                         "} starts with digit character");
+                     // Android-changed: Use ICU4C as the regex backend.
+                     // if (!parentPattern.namedGroups().containsKey(gname))
+-                    int groupIndex = nativeMatcher.getMatchedGroupIndex(gname);
++                    int groupIndex = parentPattern.namedGroupNative(gname);
+                     if (groupIndex < 0)
+                         throw new IllegalArgumentException(
+                                 "No group with name {" + gname + "}");
+@@ -1648,7 +1646,6 @@
+     public Matcher useTransparentBounds(boolean b) {
+         synchronized (this) {
+             transparentBounds = b;
+-            nativeMatcher.useTransparentBounds(b);
+         }
+         return this;
+     }
+@@ -1697,7 +1694,6 @@
+     public Matcher useAnchoringBounds(boolean b) {
+         synchronized (this) {
+             anchoringBounds = b;
+-            nativeMatcher.useAnchoringBounds(b);
+         }
+         return this;
+     }
+@@ -1739,7 +1735,7 @@
+      */
+     public boolean hitEnd() {
+         synchronized (this) {
+-            return nativeMatcher.hitEnd();
++            return hitEnd;
+         }
+     }
+ 
+@@ -1759,7 +1755,7 @@
+      */
+     public boolean requireEnd() {
+         synchronized (this) {
+-            return nativeMatcher.requireEnd();
++            return requireEnd;
+         }
+     }
+ 
+@@ -1822,11 +1818,8 @@
+     }
+ 
+     private void resetForInput() {
+-        synchronized (this) {
+-            nativeMatcher.setInput(text, from, to);
+-            nativeMatcher.useAnchoringBounds(anchoringBounds);
+-            nativeMatcher.useTransparentBounds(transparentBounds);
+-        }
++        nextFind = from;
++        hitEnd = requireEnd = false;
+     }
+ 
+     /**
+@@ -1844,7 +1837,7 @@
+ 
+     private int getMatchedGroupIndex(String name) {
+         ensureMatch();
+-        int result = nativeMatcher.getMatchedGroupIndex(name);
++        int result = parentPattern.namedGroupNative(name);
+         if (result < 0) {
+             throw new IllegalArgumentException("No capturing group in the pattern " +
+                                                "with the name " + name);

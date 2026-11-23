@@ -53,6 +53,8 @@ int32_t wa_sf_begin(wa_sf_t *sf, uint32_t width, uint32_t height, uint32_t densi
 }
 
 static int valid_layer(const wa_sf_layer_desc_t *d) {
+    const uint32_t known_flags = WA_SF_VISIBLE | WA_SF_CLIP_BOUNDS | WA_SF_OPAQUE |
+                                 WA_SF_BLUR_BEHIND | WA_SF_INPUT_MODAL;
     const float values[] = {d->x, d->y, d->width, d->height, d->scroll_x, d->scroll_y,
                             d->scale_x, d->scale_y, d->rotation_deg, d->alpha, d->corner_radius,
                             d->clip_x, d->clip_y, d->clip_w, d->clip_h, d->backdrop_blur_px};
@@ -61,7 +63,7 @@ static int valid_layer(const wa_sf_layer_desc_t *d) {
             return 0;
     return d->layer_id && d->layer_id != d->parent_id && d->width >= 0 && d->height >= 0 &&
            d->alpha >= 0 && d->alpha <= 1 && d->corner_radius >= 0 && d->clip_w >= 0 &&
-           d->clip_h >= 0 && d->backdrop_blur_px >= 0 && !(d->flags & ~15u) &&
+           d->clip_h >= 0 && d->backdrop_blur_px >= 0 && !(d->flags & ~known_flags) &&
            d->surface_kind >= WA_SF_SURFACE_DISPLAY_LIST &&
            d->surface_kind <= WA_SF_SURFACE_VIDEO_DECODER;
 }

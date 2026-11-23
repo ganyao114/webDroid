@@ -1,0 +1,47 @@
+--- a/frameworks/base/core/java/android/os/StatFs.java
++++ b/frameworks/base/core/java/android/os/StatFs.java
+@@ -17,8 +17,6 @@
+ package android.os;
+ 
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.system.ErrnoException;
+-import android.system.Os;
+ import android.system.StructStatVfs;
+ 
+ /**
+@@ -47,11 +45,11 @@
+      * @throws IllegalArgumentException if the file system access fails
+      */
+     private static StructStatVfs doStat(String path) {
+-        try {
+-            return Os.statvfs(path);
+-        } catch (ErrnoException e) {
+-            throw new IllegalArgumentException("Invalid path: " + path, e);
++        if (!new java.io.File(path).exists()) {
++            throw new IllegalArgumentException("Invalid path: " + path);
+         }
++        // The guest filesystem is memory-backed and does not expose host disk capacity.
++        return new StructStatVfs(4096, 4096, 0, 0, 0, 0, 0, 0, 0, 0, 255);
+     }
+ 
+     /**
+--- a/libcore/luni/src/main/java/android/system/StructStatVfs.java
++++ b/libcore/luni/src/main/java/android/system/StructStatVfs.java
+@@ -15,8 +15,6 @@
+  */
+ 
+ package android.system;
+-
+-import libcore.util.Objects;
+ 
+ /**
+  * File information returned by {@link Os#fstatvfs} and {@link Os#statvfs}.
+@@ -75,6 +73,7 @@
+     }
+ 
+     @Override public String toString() {
+-        return Objects.toString(this);
++        return "StructStatVfs[blockSize=" + f_frsize + ", blocks=" + f_blocks
++                + ", freeBlocks=" + f_bfree + ", availableBlocks=" + f_bavail + "]";
+     }
+ }

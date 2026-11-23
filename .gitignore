@@ -11,6 +11,6 @@ __pycache__/
 *.pyc
 node_modules/
 !demos/**/*.so
-third_party/aosp17/
-third_party/aosp17_deps/
-third_party/commercial_apks/
+/third_party/aosp17
+/third_party/aosp17_deps
+/third_party/commercial_apks

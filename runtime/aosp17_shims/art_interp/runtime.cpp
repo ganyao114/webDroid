@@ -11,6 +11,10 @@
 namespace wa::interp {
 namespace {
 
+struct LoopSuspended {
+  std::vector<Runtime::SuspendedFrame> frames;
+};
+
 std::vector<uint8_t> ReadDexFile(const std::string& path) {
   std::ifstream input(path, std::ios::binary | std::ios::ate);
   if (!input) throw std::runtime_error("Cannot open DEX " + path);
@@ -84,6 +88,67 @@ Value Runtime::InvokeSlow(Method& method, Object* receiver, std::span<const Valu
   if (!method.code) Fail("Ljava/lang/VerifyError;", "Missing code for " + method.QualifiedName());
   ++method.stats.interpreted;
   return Interpret(method, receiver, args);
+}
+
+[[noreturn]] void Runtime::SuspendMainLooper() {
+  if (!loop_dispatch) Fail("Ljava/lang/IllegalStateException;", "Main Looper dispatch is unavailable");
+  LoopSuspended suspended;
+  size_t depth = call_depth;
+  for (auto* frame = active_trace; frame != loop_dispatch->boundary; frame = frame->caller) {
+    constexpr auto monitor = art::kAccSynchronized | art::kAccDeclaredSynchronized;
+    if (!frame || frame->depth != --depth || (frame->method->flags & monitor) ||
+        frame->method->name == "<clinit>" || !frame->frame_roots.values.empty()) {
+      Fail("Ljava/lang/IllegalStateException;", "Cannot suspend the main Looper across a native or locked frame");
+    }
+    const auto slots = frame->frame_roots.borrowed;
+    suspended.frames.push_back({frame->method, *frame->dex_pc, {slots.begin(), slots.end()}});
+  }
+  if (suspended.frames.empty() || depth != loop_dispatch->depth + 1) {
+    Fail("Ljava/lang/IllegalStateException;", "Missing the main Looper caller");
+  }
+  std::ranges::reverse(suspended.frames);
+  throw suspended;
+}
+
+Value Runtime::ResumeSuspendedLoop(std::span<const SuspendedFrame> frames) {
+  // The innermost Looper.loop call observes the failed message as a Java throw.
+  if (frames.empty()) throw ManagedException{};
+  CallDepth depth(call_depth);
+  return Interpret(*frames.front().method, nullptr, {}, frames);
+}
+
+Value Runtime::DispatchMainMessage(Object& looper, Value now) {
+  if (loop_dispatch) Fail("Ljava/lang/IllegalStateException;", "Main Looper dispatch is already active");
+  const LoopDispatch dispatch{active_trace, call_depth};
+  loop_dispatch = &dispatch;
+  struct Reset {
+    const LoopDispatch*& dispatch;
+    ~Reset() { dispatch = nullptr; }
+  } reset{loop_dispatch};
+  try {
+    try {
+      auto& method = linker.FindMethod(*looper.type, "loopOnce", "(Landroid/os/Looper;JI)Z", true);
+      return Invoke(method, nullptr, std::array{Value::Ref(&looper), now, Value::Int(-1)});
+    } catch (const ManagedException&) {
+      // Feed the failure to the innermost suspended Looper.loop invocation first.
+      while (!suspended_loops.empty()) {
+        try {
+          const Value result = ResumeSuspendedLoop(suspended_loops.back());
+          suspended_loops.pop_back();
+          return result;
+        } catch (const ManagedException&) {
+          suspended_loops.pop_back();
+        } catch (const LoopSuspended&) {
+          suspended_loops.pop_back();
+          throw;
+        }
+      }
+      throw;
+    }
+  } catch (LoopSuspended& suspended) {
+    suspended_loops.push_back(std::move(suspended.frames));
+    return Value::Int(1);
+  }
 }
 
 Object* Runtime::NewObject(Class& cls, Method& constructor, std::span<const Value> args) {
@@ -164,7 +229,7 @@ Object* Runtime::MakeException(std::string_view type, std::string_view message) 
 }
 
 void Runtime::CaptureThrowableStack(Object& throwable) {
-  if (!active_trace) return;
+  if (!options.capture_exception_stack || !active_trace) return;
   throwable.exception_stack = std::make_unique<std::vector<Object::TraceFrame>>();
   throwable.stack_at_construction = true;
   auto* frame = active_trace;
@@ -307,6 +372,13 @@ std::string Vm::StringUtf8(const Object* string) const {
 std::string Vm::ExceptionSummary() const { return runtime_->ExceptionSummary(); }
 std::vector<std::string> Vm::ExceptionStackTrace() const { return runtime_->ExceptionStackTrace(); }
 void Vm::ClearException() { runtime_->exception = nullptr; }
+
+void Vm::RunShutdownHooks() {
+  auto& cls = runtime_->linker.Resolve("Ljava/lang/Runtime;");
+  if (cls.init_state != InitState::Initialized) return;
+  auto* runtime = runtime_->linker.FindField(cls, "currentRuntime", cls.descriptor, true).value.ref();
+  runtime_->Invoke(runtime_->linker.FindMethod(cls, "runShutdownHooks", "()V", false), runtime, {});
+}
 GcStats Vm::Collect() { return runtime_->heap.Collect(*runtime_); }
 void Vm::CollectIfNeeded() {
   if (!runtime_->gc_paused && runtime_->heap.ShouldCollect(runtime_->options.gc_interval))

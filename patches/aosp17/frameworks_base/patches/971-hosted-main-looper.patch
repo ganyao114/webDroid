@@ -1,0 +1,26 @@
+--- a/frameworks/base/core/java/android/os/Looper.java
++++ b/frameworks/base/core/java/android/os/Looper.java
+@@ -305,6 +305,11 @@
+         if (me == null) {
+             throw new RuntimeException("No Looper; Looper.prepare() wasn't called on this thread.");
+         }
++        if (me == getMainLooper() && me.mInLoop) {
++            // Keep the caller's exception handlers around the host-driven message loop.
++            ThreadContext.suspendMainLooper();
++            return;
++        }
+         me.dispatchDueMessages(SystemClock.uptimeMillis());
+     }
+ 
+@@ -342,7 +347,10 @@
+         mSlowDeliveryDetected = false;
+         try {
+             int count = 0;
+-            while (count < 1000 && loopOnce(this, now, -1)) {
++            boolean main = this == getMainLooper();
++            while (count < 1000 && (main
++                    ? ThreadContext.dispatchMainMessage(this, now)
++                    : loopOnce(this, now, -1))) {
+                 count++;
+             }
+             return count;

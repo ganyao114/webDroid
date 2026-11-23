@@ -436,6 +436,7 @@ export class DisplayListRenderer {
     this.layerIds.clear();
     this.atlas.beginFrame();
     this.textures.begin();
+    let inputModal = false;
     for (let i = 0; i < packet.count; ++i) {
       const p = packet.layer(i);
       const id = m.u32(p);
@@ -460,6 +461,7 @@ export class DisplayListRenderer {
       translate(content, -m.f32(p + 28), -m.f32(p + 32));
       const w = m.f32(p + 20), h = m.f32(p + 24), radius = m.f32(p + 52);
       const flags = m.u32(p + 76);
+      inputModal ||= (flags & Flag.INPUT_MODAL) !== 0;
       let clip = parent?.clip ?? 0;
       const x0 = m.f32(p + 56), y0 = m.f32(p + 60), clipW = m.f32(p + 64), clipH = m.f32(p + 68);
       if (flags & Flag.CLIP_BOUNDS) clip = this.clip(clip, mat, x0, y0, clipW, clipH);
@@ -495,7 +497,7 @@ export class DisplayListRenderer {
           0, flipY ? 1 : 0, 1, flipY ? -1 : 1);
       }
     }
-    this.webview?.finishLayout();
+    this.webview?.finishLayout(inputModal);
     return this;
   }
 

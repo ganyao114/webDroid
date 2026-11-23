@@ -1,0 +1,49 @@
+--- a/libcore/ojluni/src/main/java/java/util/SortedMap.java
++++ b/libcore/ojluni/src/main/java/java/util/SortedMap.java
+@@ -110,7 +110,7 @@
+  * @since 1.2
+  */
+ 
+-public interface SortedMap<K,V> extends SequencedMap<K,V>, Map<K,V> {
++public interface SortedMap<K,V> extends Map<K,V> {
+     /**
+      * Returns the comparator used to order the keys in this map, or
+      * {@code null} if this map uses the {@linkplain Comparable
+@@ -329,6 +329,6 @@
+      * @since 21
+      */
+     default SortedMap<K, V> reversed() {
+-        return ReverseOrderSortedMapView.of(this);
++        throw new UnsupportedOperationException("Use a NavigableMap for reverse ordering");
+     }
+ }
+--- a/libcore/ojluni/src/main/java/java/util/SortedSet.java
++++ b/libcore/ojluni/src/main/java/java/util/SortedSet.java
+@@ -105,7 +105,7 @@
+  * @since 1.2
+  */
+ 
+-public interface SortedSet<E> extends Set<E>, SequencedSet<E> {
++public interface SortedSet<E> extends Set<E> {
+     /**
+      * Returns the comparator used to order the elements in this set,
+      * or {@code null} if this set uses the {@linkplain Comparable
+@@ -373,6 +373,6 @@
+      * @since 21
+      */
+     default SortedSet<E> reversed() {
+-        return ReverseOrderSortedSetView.of(this);
++        throw new UnsupportedOperationException("Use a NavigableSet for reverse ordering");
+     }
+ }
+--- a/libcore/ojluni/src/main/java/java/util/TreeMap.java
++++ b/libcore/ojluni/src/main/java/java/util/TreeMap.java
+@@ -2308,7 +2308,7 @@
+         /** @serial */
+         @SuppressWarnings("serial") // Conditionally serializable
+         private final Comparator<? super K> reverseComparator =
+-            Collections.reverseOrder(m.comparator);
++            m.comparator == null ? Collections.reverseOrder() : (a, b) -> m.comparator.compare(b, a);
+ 
+         public Comparator<? super K> comparator() {
+             return reverseComparator;

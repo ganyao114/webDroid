@@ -1,0 +1,75 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ThreadPoolExecutor.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ThreadPoolExecutor.java
+@@ -35,7 +35,6 @@
+ 
+ package java.util.concurrent;
+ 
+-import dalvik.annotation.optimization.ReachabilitySensitive;
+ import java.util.ArrayList;
+ import java.util.ConcurrentModificationException;
+ import java.util.HashSet;
+@@ -46,8 +45,6 @@
+ import java.util.concurrent.locks.AbstractQueuedSynchronizer;
+ import java.util.concurrent.locks.Condition;
+ import java.util.concurrent.locks.ReentrantLock;
+-
+-import jdk.internal.vm.SharedThreadContainer;
+ 
+ // BEGIN android-note
+ // removed security manager docs
+@@ -385,8 +382,6 @@
+      * that workerCount is 0 (which sometimes entails a recheck -- see
+      * below).
+      */
+-    // Android-added: @ReachabilitySensitive
+-    @ReachabilitySensitive
+     private final AtomicInteger ctl = new AtomicInteger(ctlOf(RUNNING, 0));
+     private static final int COUNT_BITS = Integer.SIZE - 3;
+     private static final int COUNT_MASK = (1 << COUNT_BITS) - 1;
+@@ -475,19 +470,12 @@
+      * Set containing all worker threads in pool. Accessed only when
+      * holding mainLock.
+      */
+-    // Android-added: @ReachabilitySensitive
+-    @ReachabilitySensitive
+     private final HashSet<Worker> workers = new HashSet<>();
+ 
+     /**
+      * Wait condition to support awaitTermination.
+      */
+     private final Condition termination = mainLock.newCondition();
+-
+-    /**
+-     * The thread container for the worker threads.
+-     */
+-    private final SharedThreadContainer container;
+ 
+     /**
+      * Tracks largest attained pool size. Accessed only under
+@@ -712,7 +700,6 @@
+                     } finally {
+                         ctl.set(ctlOf(TERMINATED, 0));
+                         termination.signalAll();
+-                        container.close();
+                     }
+                     return;
+                 }
+@@ -906,7 +893,7 @@
+                     mainLock.unlock();
+                 }
+                 if (workerAdded) {
+-                    container.start(t);
++                    t.start();
+                     workerStarted = true;
+                 }
+             }
+@@ -1280,9 +1267,6 @@
+         this.keepAliveTime = unit.toNanos(keepAliveTime);
+         this.threadFactory = threadFactory;
+         this.handler = handler;
+-
+-        String name = Objects.toIdentityString(this);
+-        this.container = SharedThreadContainer.create(name);
+     }
+ 
+     /**

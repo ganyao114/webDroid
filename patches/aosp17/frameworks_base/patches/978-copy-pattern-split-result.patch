@@ -1,0 +1,22 @@
+--- a/libcore/ojluni/src/main/java/java/util/regex/Pattern.java
++++ b/libcore/ojluni/src/main/java/java/util/regex/Pattern.java
+@@ -1158,7 +1158,8 @@
+             }
+         }
+         String[] result = new String[resultSize];
+-        return matchList.subList(0, resultSize).toArray(result);
++        for (int i = 0; i < resultSize; ++i) result[i] = matchList.get(i);
++        return result;
+     }
+ 
+     // Android-changed: Adopt split() behavior change only for apps targeting API > 28.
+@@ -1288,7 +1289,8 @@
+             while (resultSize > 0 && matchList.get(resultSize-1).isEmpty())
+                 resultSize--;
+         String[] result = new String[resultSize];
+-        return matchList.subList(0, resultSize).toArray(result);
++        for (int i = 0; i < resultSize; ++i) result[i] = matchList.get(i);
++        return result;
+     }
+ 
+     // BEGIN Android-added: fastSplit() to speed up simple cases.

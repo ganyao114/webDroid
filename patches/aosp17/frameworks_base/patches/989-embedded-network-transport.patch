@@ -1,0 +1,319 @@
+--- a/packages/modules/Connectivity/framework/src/android/net/Network.java
++++ b/packages/modules/Connectivity/framework/src/android/net/Network.java
+@@ -22,33 +22,20 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.os.Build;
+ import android.os.Parcel;
+-import android.os.ParcelFileDescriptor;
+ import android.os.Parcelable;
+-import android.system.ErrnoException;
+-import android.system.Os;
+-import android.system.OsConstants;
+-
+-import com.android.internal.annotations.GuardedBy;
+-import com.android.modules.utils.build.SdkLevel;
+-
+-import libcore.io.IoUtils;
+-import libcore.net.http.Dns;
+-import libcore.net.http.HttpURLConnectionFactory;
++
++
+ 
+ import java.io.FileDescriptor;
+ import java.io.IOException;
+ import java.net.DatagramSocket;
+ import java.net.InetAddress;
+-import java.net.InetSocketAddress;
+ import java.net.MalformedURLException;
+ import java.net.Socket;
+-import java.net.SocketAddress;
+ import java.net.SocketException;
+ import java.net.URL;
+ import java.net.URLConnection;
+ import java.net.UnknownHostException;
+-import java.util.Arrays;
+-import java.util.concurrent.TimeUnit;
+ 
+ import javax.net.SocketFactory;
+ 
+@@ -73,21 +60,8 @@
+     // Objects used to perform per-network operations such as getSocketFactory
+     // and openConnection, and a lock to protect access to them.
+     private volatile NetworkBoundSocketFactory mNetworkBoundSocketFactory = null;
+-    // mUrlConnectionFactory is initialized lazily when it is first needed.
+-    @GuardedBy("mLock")
+-    private HttpURLConnectionFactory mUrlConnectionFactory;
+     private final Object mLock = new Object();
+ 
+-    // Default connection pool values. These are evaluated at startup, just
+-    // like the OkHttp code. Also like the OkHttp code, we will throw parse
+-    // exceptions at class loading time if the properties are set but are not
+-    // valid integers.
+-    private static final boolean httpKeepAlive =
+-            Boolean.parseBoolean(System.getProperty("http.keepAlive", "true"));
+-    private static final int httpMaxConnections =
+-            httpKeepAlive ? Integer.parseInt(System.getProperty("http.maxConnections", "5")) : 0;
+-    private static final long httpKeepAliveDurationMs =
+-            Long.parseLong(System.getProperty("http.keepAliveDuration", "300000"));  // 5 minutes.
+     // Value used to obfuscate network handle longs.
+     // The HANDLE_MAGIC value MUST be kept in sync with the corresponding
+     // value in the native/android/net.c NDK implementation.
+@@ -138,7 +112,7 @@
+      * @throws UnknownHostException if the address lookup fails.
+      */
+     public InetAddress[] getAllByName(String host) throws UnknownHostException {
+-        return InetAddress.getAllByNameOnNet(host, getNetIdForResolv());
++        throw new UnknownHostException(host);
+     }
+ 
+     /**
+@@ -151,7 +125,7 @@
+      *             if the address lookup fails.
+      */
+     public InetAddress getByName(String host) throws UnknownHostException {
+-        return InetAddress.getByNameOnNet(host, getNetIdForResolv());
++        return getAllByName(host)[0];
+     }
+ 
+     /**
+@@ -206,80 +180,31 @@
+      * A {@code SocketFactory} that produces {@code Socket}'s bound to this network.
+      */
+     private class NetworkBoundSocketFactory extends SocketFactory {
+-        private Socket connectToHost(String host, int port, SocketAddress localAddress)
+-                throws IOException {
+-            // Lookup addresses only on this Network.
+-            InetAddress[] hostAddresses = getAllByName(host);
+-            // Try all addresses.
+-            for (int i = 0; i < hostAddresses.length; i++) {
+-                try {
+-                    Socket socket = createSocket();
+-                    boolean failed = true;
+-                    try {
+-                        if (localAddress != null) socket.bind(localAddress);
+-                        socket.connect(new InetSocketAddress(hostAddresses[i], port));
+-                        failed = false;
+-                        return socket;
+-                    } finally {
+-                        if (failed) IoUtils.closeQuietly(socket);
+-                    }
+-                } catch (IOException e) {
+-                    if (i == (hostAddresses.length - 1)) throw e;
+-                }
+-            }
+-            throw new UnknownHostException(host);
+-        }
+-
+         @Override
+         public Socket createSocket(String host, int port, InetAddress localHost, int localPort)
+                 throws IOException {
+-            return connectToHost(host, port, new InetSocketAddress(localHost, localPort));
++            return createSocket();
+         }
+ 
+         @Override
+         public Socket createSocket(InetAddress address, int port, InetAddress localAddress,
+                 int localPort) throws IOException {
+-            Socket socket = createSocket();
+-            boolean failed = true;
+-            try {
+-                socket.bind(new InetSocketAddress(localAddress, localPort));
+-                socket.connect(new InetSocketAddress(address, port));
+-                failed = false;
+-            } finally {
+-                if (failed) IoUtils.closeQuietly(socket);
+-            }
+-            return socket;
++            return createSocket();
+         }
+ 
+         @Override
+         public Socket createSocket(InetAddress host, int port) throws IOException {
+-            Socket socket = createSocket();
+-            boolean failed = true;
+-            try {
+-                socket.connect(new InetSocketAddress(host, port));
+-                failed = false;
+-            } finally {
+-                if (failed) IoUtils.closeQuietly(socket);
+-            }
+-            return socket;
++            return createSocket();
+         }
+ 
+         @Override
+         public Socket createSocket(String host, int port) throws IOException {
+-            return connectToHost(host, port, null);
++            return createSocket();
+         }
+ 
+         @Override
+         public Socket createSocket() throws IOException {
+-            Socket socket = new Socket();
+-            boolean failed = true;
+-            try {
+-                bindSocket(socket);
+-                failed = false;
+-            } finally {
+-                if (failed) IoUtils.closeQuietly(socket);
+-            }
+-            return socket;
++            throw new SocketException("No embedded network to bind to");
+         }
+     }
+ 
+@@ -303,18 +228,6 @@
+         return mNetworkBoundSocketFactory;
+     }
+ 
+-    private static HttpURLConnectionFactory createUrlConnectionFactory(Dns dnsLookup) {
+-        // Set configuration on the HttpURLConnectionFactory that will be good for all
+-        // connections created by this Network. Configuration that might vary is left
+-        // until openConnection() and passed as arguments.
+-        HttpURLConnectionFactory urlConnectionFactory = HttpURLConnectionFactory.createInstance();
+-        urlConnectionFactory.setDns(dnsLookup); // Let traffic go via dnsLookup
+-        // A private connection pool just for this Network.
+-        urlConnectionFactory.setNewConnectionPool(httpMaxConnections,
+-                httpKeepAliveDurationMs, TimeUnit.MILLISECONDS);
+-        return urlConnectionFactory;
+-    }
+-
+     /**
+      * Opens the specified {@link URL} on this {@code Network}, such that all traffic will be sent
+      * on this Network. The URL protocol must be {@code HTTP} or {@code HTTPS}.
+@@ -325,19 +238,7 @@
+      * @see java.net.URL#openConnection()
+      */
+     public URLConnection openConnection(URL url) throws IOException {
+-        final ConnectivityManager cm = ConnectivityManager.getInstanceOrNull();
+-        if (cm == null) {
+-            throw new IOException("No ConnectivityManager yet constructed, please construct one");
+-        }
+-        // TODO: Should this be optimized to avoid fetching the global proxy for every request?
+-        final ProxyInfo proxyInfo = cm.getProxyForNetwork(this);
+-        final java.net.Proxy proxy;
+-        if (proxyInfo != null) {
+-            proxy = proxyInfo.makeProxy();
+-        } else {
+-            proxy = java.net.Proxy.NO_PROXY;
+-        }
+-        return openConnection(url, proxy);
++        return openConnection(url, java.net.Proxy.NO_PROXY);
+     }
+ 
+     /**
+@@ -353,31 +254,11 @@
+      */
+     public URLConnection openConnection(URL url, java.net.Proxy proxy) throws IOException {
+         if (proxy == null) throw new IllegalArgumentException("proxy is null");
+-        // TODO: This creates a connection pool and host resolver for
+-        // every Network object, instead of one for every NetId. This is
+-        // suboptimal, because an app could potentially have more than one
+-        // Network object for the same NetId, causing increased memory footprint
+-        // and performance penalties due to lack of connection reuse (connection
+-        // setup time, congestion window growth time, etc.).
+-        //
+-        // Instead, investigate only having one connection pool and host resolver
+-        // for every NetId, perhaps by using a static HashMap of NetIds to
+-        // connection pools and host resolvers. The tricky part is deciding when
+-        // to remove a map entry; a WeakHashMap shouldn't be used because whether
+-        // a Network is referenced doesn't correlate with whether a new Network
+-        // will be instantiated in the near future with the same NetID. A good
+-        // solution would involve purging empty (or when all connections are timed
+-        // out) ConnectionPools.
+-        final HttpURLConnectionFactory urlConnectionFactory;
+-        synchronized (mLock) {
+-            if (mUrlConnectionFactory == null) {
+-                Dns dnsLookup = hostname -> Arrays.asList(getAllByName(hostname));
+-                mUrlConnectionFactory = createUrlConnectionFactory(dnsLookup);
+-            }
+-            urlConnectionFactory = mUrlConnectionFactory;
+-        }
+-        SocketFactory socketFactory = getSocketFactory();
+-        return urlConnectionFactory.openConnection(url, socketFactory, proxy);
++        final String protocol = url.getProtocol();
++        if (!"http".equals(protocol) && !"https".equals(protocol)) {
++            throw new MalformedURLException("Unsupported protocol: " + protocol);
++        }
++        throw new IOException("No embedded network transport");
+     }
+ 
+     /**
+@@ -387,17 +268,7 @@
+      * connected.
+      */
+     public void bindSocket(DatagramSocket socket) throws IOException {
+-        // Query a property of the underlying socket to ensure that the socket's file descriptor
+-        // exists, is available to bind to a network and is not closed.
+-        socket.getReuseAddress();
+-
+-        // ParcelFileDescriptor.fromDatagramSocket() creates a dup of the original fd. The original
+-        // and the dup share the underlying socket in the kernel. The socket is never truly closed
+-        // until the last fd pointing to the socket being closed. Try and eventually close the dup
+-        // one after binding the socket to control the lifetime of the dup fd.
+-        try (ParcelFileDescriptor pfd = ParcelFileDescriptor.fromDatagramSocket(socket)) {
+-            bindSocket(pfd.getFileDescriptor());
+-        }
++        throw new SocketException("No embedded network to bind to");
+     }
+ 
+     /**
+@@ -406,16 +277,7 @@
+      * {@link ConnectivityManager#bindProcessToNetwork}. The socket must not be connected.
+      */
+     public void bindSocket(Socket socket) throws IOException {
+-        // Query a property of the underlying socket to ensure that the socket's file descriptor
+-        // exists, is available to bind to a network and is not closed.
+-        socket.getReuseAddress();
+-        // ParcelFileDescriptor.fromSocket() creates a dup of the original fd. The original and
+-        // the dup share the underlying socket in the kernel. The socket is never truly closed
+-        // until the last fd pointing to the socket being closed. Try and eventually close the dup
+-        // one after binding the socket to control the lifetime of the dup fd.
+-        try (ParcelFileDescriptor pfd = ParcelFileDescriptor.fromSocket(socket)) {
+-            bindSocket(pfd.getFileDescriptor());
+-        }
++        throw new SocketException("No embedded network to bind to");
+     }
+ 
+     /**
+@@ -425,30 +287,7 @@
+      * {@link ConnectivityManager#bindProcessToNetwork}. The socket must not be connected.
+      */
+     public void bindSocket(FileDescriptor fd) throws IOException {
+-        try {
+-            final SocketAddress peer = Os.getpeername(fd);
+-            final InetAddress inetPeer = ((InetSocketAddress) peer).getAddress();
+-            if (!inetPeer.isAnyLocalAddress()) {
+-                // Apparently, the kernel doesn't update a connected UDP socket's
+-                // routing upon mark changes.
+-                throw new SocketException("Socket is connected");
+-            }
+-        } catch (ErrnoException e) {
+-            // getpeername() failed.
+-            if (e.errno != OsConstants.ENOTCONN) {
+-                throw e.rethrowAsSocketException();
+-            }
+-        } catch (ClassCastException e) {
+-            // Wasn't an InetSocketAddress.
+-            throw new SocketException("Only AF_INET/AF_INET6 sockets supported");
+-        }
+-
+-        final int err = NetworkUtils.bindSocketToNetwork(fd, netId);
+-        if (err != 0) {
+-            // bindSocketToNetwork returns negative errno.
+-            throw new ErrnoException("Binding socket to network " + netId, -err)
+-                    .rethrowAsSocketException();
+-        }
++        throw new SocketException("No embedded network to bind to");
+     }
+ 
+     /**
+@@ -505,7 +344,7 @@
+     }
+     public void writeToParcel(Parcel dest, int flags) {
+         dest.writeInt(netId);
+-        if (SdkLevel.isAtLeastB()) {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.BAKLAVA) {
+             dest.writeBoolean(mPrivateDnsBypass);
+         } else {
+             dest.writeBoolean(false);

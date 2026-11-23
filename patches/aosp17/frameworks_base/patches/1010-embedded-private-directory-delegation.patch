@@ -1,0 +1,24 @@
+--- a/frameworks/base/core/java/android/content/ContextWrapper.java
++++ b/frameworks/base/core/java/android/content/ContextWrapper.java
+@@ -136,6 +136,21 @@
+     @Override
+     public SharedPreferences getSharedPreferences(String name, int mode) {
+         return mBase.getSharedPreferences(name, mode);
++    }
++
++    @Override
++    public File getCodeCacheDir() {
++        return mBase.getCodeCacheDir();
++    }
++
++    @Override
++    public File getCacheDir() {
++        return mBase.getCacheDir();
++    }
++
++    @Override
++    public File getNoBackupFilesDir() {
++        return mBase.getNoBackupFilesDir();
+     }
+ 
+     @Override

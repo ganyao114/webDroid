@@ -1,0 +1,322 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/SynchronousQueue.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/SynchronousQueue.java
+@@ -36,8 +36,6 @@
+ 
+ package java.util.concurrent;
+ 
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+ import java.util.AbstractQueue;
+ import java.util.Collection;
+ import java.util.Collections;
+@@ -45,11 +43,6 @@
+ import java.util.Objects;
+ import java.util.Spliterator;
+ import java.util.Spliterators;
+-import java.util.concurrent.locks.LockSupport;
+-import java.util.concurrent.locks.ReentrantLock;
+-import java.util.concurrent.ForkJoinWorkerThread;
+-import java.util.concurrent.LinkedTransferQueue;
+-import java.util.concurrent.TransferQueue;
+ 
+ /**
+  * A {@linkplain BlockingQueue blocking queue} in which each insert
+@@ -94,147 +87,6 @@
+     implements BlockingQueue<E>, java.io.Serializable {
+     private static final long serialVersionUID = -3223113410248163686L;
+ 
+-    /*
+-     * This class implements extensions of the dual stack and dual
+-     * queue algorithms described in "Nonblocking Concurrent Objects
+-     * with Condition Synchronization", by W. N. Scherer III and
+-     * M. L. Scott.  18th Annual Conf. on Distributed Computing,
+-     * Oct. 2004 (see also
+-     * http://www.cs.rochester.edu/u/scott/synchronization/pseudocode/duals.html).
+-     * The queue is treated as a Lifo stack in non-fair mode, and a
+-     * Fifo queue in fair mode. In most contexts, transfer performance
+-     * is roughly comparable across them. Lifo is usually faster under
+-     * low contention, but slower under high contention.  Performance
+-     * of applications using them also varies. Lifo is generally
+-     * preferable in resource management settings (for example cached
+-     * thread pools) because of better temporal locality, but
+-     * inappropriate for message-passing applications.
+-     *
+-     * A dual queue is one that at any given time either holds "data"
+-     * -- items provided by put operations, or "requests" -- slots
+-     * representing take operations, or is empty. A fulfilling
+-     * operation (i.e., a call requesting an item from a queue holding
+-     * data or vice versa) "matches" the item of and then dequeues a
+-     * complementary node.  Any operation can figure out which mode
+-     * the queue is in, and act accordingly without needing locks.  So
+-     * put and take operations are symmetrical, and all transfer
+-     * methods invoke a single "xfer" method that does a put or a take
+-     * in either fifo or lifo mode.
+-     *
+-     * The algorithms here differ from the versions in the above paper
+-     * in ways including:
+-     *
+-     *  * The original algorithms used bit-marked pointers, but the
+-     *     ones here use a bit (isData) in nodes, and usually avoid
+-     *     creating nodes when fulfilling. They also use the
+-     *     compareAndExchange form of CAS for pointer updates to
+-     *     reduce memory traffic.
+-     *  * Fifo mode is based on LinkedTransferQueue operations, but
+-     *     Lifo mode support is added in subclass Transferer.
+-     *  * The Fifo version accommodates lazy updates and slack as
+-     *     described in LinkedTransferQueue internal documentation.
+-     *  * Threads may block when waiting to become fulfilled,
+-     *     sometimes preceded by brief spins.
+-     *  * Support for cancellation via timeout and interrupts,
+-     *     including cleaning out cancelled nodes/threads from lists
+-     *     to avoid garbage retention and memory depletion.
+-     */
+-
+-    /**
+-     * Extension of LinkedTransferQueue to support Lifo (stack) mode.
+-     * Methods use the "head" field as head (top) of stack (versus
+-     * queue). Note that popped nodes are not self-linked because they
+-     * are not prone to unbounded garbage chains. Also note that
+-     * "async" mode is never used and not supported for synchronous
+-     * transfers.
+-     */
+-    @SuppressWarnings("serial") // never serialized
+-    static final class Transferer<E> extends LinkedTransferQueue<E> {
+-
+-        /**
+-         * Puts or takes an item with lifo ordering. Loops trying:
+-         * * If top (var p) exists and is already matched, pop and continue
+-         * * If top has complementary type, try to fulfill by CASing item,
+-         *    On success pop (which will succeed unless already helped),
+-         *    otherwise restart.
+-         * * If no possible match, unless immediate mode, push a
+-         *    node and wait, later unsplicing if cancelled.
+-         *
+-         * @param e the item or null for take
+-         * @param ns timeout or 0 if immediate, Long.MAX_VALUE if untimed
+-         * @return an item if matched, else e
+-         */
+-        final Object xferLifo(Object e, long ns) {
+-            boolean haveData = (e != null);
+-            Object m;                              // the match or e if none
+-            outer: for (DualNode s = null, p = head;;) {
+-                while (p != null) {
+-                    boolean isData; DualNode n, u; // help collapse
+-                    if ((isData = p.isData) != ((m = p.item) != null))
+-                        p = (p == (u = cmpExHead(p, (n = p.next)))) ? n : u;
+-                    else if (isData == haveData)   // same mode; push below
+-                        break;
+-                    else if (p.cmpExItem(m, e) != m)
+-                        p = head;                  // missed; restart
+-                    else {                         // matched complementary node
+-                        Thread w = p.waiter;
+-                        cmpExHead(p, p.next);
+-                        LockSupport.unpark(w);
+-                        break outer;
+-                    }
+-                }
+-                if (ns == 0L) {                    // no match, no wait
+-                    m = e;
+-                    break;
+-                }
+-                if (s == null)                     // try to push node and wait
+-                    s = new DualNode(e, haveData);
+-                s.next = p;
+-                if (p == (p = cmpExHead(p, s))) {
+-                    if ((m = s.await(e, ns, this,  // spin if (nearly) empty
+-                                     p == null || p.waiter == null)) == e)
+-                        unspliceLifo(s);           // cancelled
+-                    else if (m != null)
+-                        s.selfLinkItem();
+-                    break;
+-                }
+-            }
+-            return m;
+-        }
+-
+-        /**
+-         * Unlinks node s. Same idea as Fifo version.
+-         */
+-        private void unspliceLifo(DualNode s) {
+-            boolean seen = false; // try removing by collapsing head
+-            DualNode p = head;
+-            for (DualNode f, u; p != null && p.matched();) {
+-                if (p == s)
+-                    seen = true;
+-                p = (p == (u = cmpExHead(p, (f = p.next)))) ? f : u;
+-            }
+-            if (p != null && !seen && sweepNow()) { // occasionally sweep
+-                for (DualNode f, n, u; p != null && (f = p.next) != null; ) {
+-                    p = (!f.matched() ? f :
+-                         f == (u = p.cmpExNext(f, n = f.next)) ? n : u);
+-                }
+-            }
+-        }
+-    }
+-
+-    /**
+-     * The transferer. (See below about serialization.)
+-     */
+-    private final transient Transferer<E> transferer;
+-
+-    private final transient boolean fair;
+-
+-    /** Invokes fair or lifo transfer */
+-    private Object xfer(Object e, long nanos) {
+-        Transferer<E> x = transferer;
+-        return (fair) ? x.xfer(e, nanos) : x.xferLifo(e, nanos);
+-    }
+-
+     /**
+      * Creates a {@code SynchronousQueue} with nonfair access policy.
+      */
+@@ -249,8 +101,7 @@
+      *        access; otherwise the order is unspecified.
+      */
+     public SynchronousQueue(boolean fair) {
+-        this.fair = fair;
+-        transferer = new Transferer<E>();
++        // This executor profile has no other Java thread waiting for a hand-off.
+     }
+ 
+     /**
+@@ -262,12 +113,8 @@
+      */
+     public void put(E e) throws InterruptedException {
+         Objects.requireNonNull(e);
+-        if (!Thread.interrupted()) {
+-            if (xfer(e, Long.MAX_VALUE) == null)
+-                return;
+-            Thread.interrupted(); // failure possible only due to interrupt
+-        }
+-        throw new InterruptedException();
++        if (Thread.interrupted()) throw new InterruptedException();
++        throw new IllegalStateException("No synchronous receiver in the cooperative runtime");
+     }
+ 
+     /**
+@@ -279,15 +126,10 @@
+      * @throws InterruptedException {@inheritDoc}
+      * @throws NullPointerException {@inheritDoc}
+      */
+-    public boolean offer(E e, long timeout, TimeUnit unit)
+-        throws InterruptedException {
+-        Objects.requireNonNull(e);
+-        long nanos = Math.max(unit.toNanos(timeout), 0L);
+-        if (xfer(e, nanos) == null)
+-            return true;
+-        if (!Thread.interrupted())
+-            return false;
+-        throw new InterruptedException();
++    public boolean offer(E e, long timeout, TimeUnit unit) throws InterruptedException {
++        Objects.requireNonNull(unit);
++        if (Thread.interrupted()) throw new InterruptedException();
++        return offer(e);
+     }
+ 
+     /**
+@@ -301,7 +143,7 @@
+      */
+     public boolean offer(E e) {
+         Objects.requireNonNull(e);
+-        return xfer(e, 0L) == null;
++        return false;
+     }
+ 
+     /**
+@@ -313,13 +155,8 @@
+      */
+     @SuppressWarnings("unchecked")
+     public E take() throws InterruptedException {
+-        Object e;
+-        if (!Thread.interrupted()) {
+-            if ((e = xfer(null, Long.MAX_VALUE)) != null)
+-                return (E) e;
+-            Thread.interrupted();
+-        }
+-        throw new InterruptedException();
++        if (Thread.interrupted()) throw new InterruptedException();
++        throw new IllegalStateException("No synchronous sender in the cooperative runtime");
+     }
+ 
+     /**
+@@ -333,11 +170,9 @@
+      */
+     @SuppressWarnings("unchecked")
+     public E poll(long timeout, TimeUnit unit) throws InterruptedException {
+-        Object e;
+-        long nanos = Math.max(unit.toNanos(timeout), 0L);
+-        if ((e = xfer(null, nanos)) != null || !Thread.interrupted())
+-            return (E) e;
+-        throw new InterruptedException();
++        Objects.requireNonNull(unit);
++        if (Thread.interrupted()) throw new InterruptedException();
++        return null;
+     }
+ 
+     /**
+@@ -349,7 +184,7 @@
+      */
+     @SuppressWarnings("unchecked")
+     public E poll() {
+-        return (E) xfer(null, 0L);
++        return null;
+     }
+ 
+     /**
+@@ -537,56 +372,4 @@
+         return n;
+     }
+ 
+-    /*
+-     * To cope with serialization across multiple implementation
+-     * overhauls, we declare some unused classes and fields that exist
+-     * solely to enable serializability across versions.  These fields
+-     * are never used, so are initialized only if this object is ever
+-     * serialized. We use readResolve to replace a deserialized queue
+-     * with a fresh one. Note that no queue elements are serialized,
+-     * since any existing ones are only transient.
+-     */
+-
+-    @SuppressWarnings("serial")
+-    static class WaitQueue implements java.io.Serializable { }
+-    static class LifoWaitQueue extends WaitQueue {
+-        private static final long serialVersionUID = -3633113410248163686L;
+-    }
+-    static class FifoWaitQueue extends WaitQueue {
+-        private static final long serialVersionUID = -3623113410248163686L;
+-    }
+-    /** @serial */
+-    private ReentrantLock qlock;
+-    /** @serial */
+-    private WaitQueue waitingProducers;
+-    /** @serial */
+-    private WaitQueue waitingConsumers;
+-
+-    /**
+-     * Saves this queue to a stream (that is, serializes it).
+-     * @param s the stream
+-     * @throws java.io.IOException if an I/O error occurs
+-     */
+-    private void writeObject(java.io.ObjectOutputStream s)
+-        throws java.io.IOException {
+-        if (fair) {
+-            qlock = new ReentrantLock(true);
+-            waitingProducers = new FifoWaitQueue();
+-            waitingConsumers = new FifoWaitQueue();
+-        }
+-        else {
+-            qlock = new ReentrantLock();
+-            waitingProducers = new LifoWaitQueue();
+-            waitingConsumers = new LifoWaitQueue();
+-        }
+-        s.defaultWriteObject();
+-    }
+-
+-    /**
+-     * Replaces a deserialized SynchronousQueue with a fresh one with
+-     * the associated fairness
+-     */
+-    private Object readResolve() {
+-        return new SynchronousQueue<E>(waitingProducers instanceof FifoWaitQueue);
+-    }
+ }

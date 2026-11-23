@@ -13,7 +13,9 @@ import android.content.ServiceConnection;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.LauncherApps;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ServiceInfo;
 import android.content.res.AssetManager;
 import android.content.res.Configuration;
 import android.content.res.Resources;
@@ -47,6 +49,9 @@ import com.android.internal.policy.PhoneLayoutInflater;
 import com.android.internal.policy.PhoneWindow;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import org.xmlpull.v1.XmlPullParser;
@@ -105,8 +110,9 @@ public final class UiRuntime {
         private KeyguardManager keyguard;
         private NotificationManager notifications;
         private StorageManager storage;
+        private android.net.ConnectivityManager connectivity;
         private Resources.Theme theme;
-        private final ArrayMap<String, Integer> serviceTypes;
+        private final ArrayMap<String, ServiceInfo> services;
         private final ArrayList<String> manifestReceivers;
         private final ArrayMap<ComponentName, RunningService> runningServices = new ArrayMap<>();
         private final ArrayMap<ServiceConnection, RunningService> connections = new ArrayMap<>();
@@ -131,9 +137,9 @@ public final class UiRuntime {
 
         AppContext(Resources resources, ApplicationInfo info, Manifest manifest) {
             this.resources = resources; this.info = info;
-            serviceTypes = manifest.serviceTypes;
+            services = manifest.services;
             manifestReceivers = manifest.receivers;
-            packages = PackageManager.forHost(this);
+            packages = PackageManager.forHost(this, services, manifest.packageInfo);
             resolver = new ContentResolver(this) {};
             displays = new DisplayManager(new Display(resources));
             windows = new WindowManager() {
@@ -339,11 +345,11 @@ public final class UiRuntime {
             if (closing || name == null || !getPackageName().equals(name.getPackageName())) return null;
             RunningService service = runningServices.get(name);
             if (service != null || !create) return service;
-            Integer type = serviceTypes.get(name.getClassName());
-            if (type == null) return null;
+            ServiceInfo info = services.get(name.getClassName());
+            if (info == null) return null;
             Service instance = instantiate(name.getClassName(), Service.class);
             RunningService record = new RunningService(instance, name);
-            instance.attachEmbedded(this, name.getClassName(), application, type,
+            instance.attachEmbedded(this, name.getClassName(), application, info.getForegroundServiceType(),
                     startId -> stopService(record, startId));
             runningServices.put(name, record);
             try {
@@ -371,6 +377,44 @@ public final class UiRuntime {
                 service.instance.detachAndCleanUp();
             }
         }
+        private static File ensureDirectory(File directory) {
+            if (!directory.isDirectory()) directory.mkdirs();
+            return directory;
+        }
+        private File dataDirectory(String name) {
+            return ensureDirectory(new File(getDataDir(), name));
+        }
+        private static File childFile(File directory, String name) {
+            if (name.isEmpty() || name.equals(".") || name.equals("..") || name.indexOf('/') >= 0) {
+                throw new IllegalArgumentException("Invalid file name " + name);
+            }
+            return new File(directory, name);
+        }
+        @Override public File getDataDir() { return ensureDirectory(super.getDataDir()); }
+        @Override public File getFilesDir() { return dataDirectory("files"); }
+        @Override public File getCacheDir() { return dataDirectory("cache"); }
+        @Override public File getCodeCacheDir() { return dataDirectory("code_cache"); }
+        @Override public File getNoBackupFilesDir() { return dataDirectory("no_backup"); }
+        @Override public File getDir(String name, int mode) {
+            return ensureDirectory(childFile(getDataDir(), "app_" + name));
+        }
+        @Override public File getFileStreamPath(String name) { return childFile(getFilesDir(), name); }
+        @Override public FileInputStream openFileInput(String name) throws FileNotFoundException {
+            return new FileInputStream(getFileStreamPath(name));
+        }
+        @Override public FileOutputStream openFileOutput(String name, int mode) throws FileNotFoundException {
+            return new FileOutputStream(getFileStreamPath(name), (mode & MODE_APPEND) != 0);
+        }
+        @Override public boolean deleteFile(String name) { return getFileStreamPath(name).delete(); }
+        @Override public File getDatabasePath(String name) {
+            File file = new File(name);
+            if (file.isAbsolute()) {
+                File parent = file.getParentFile();
+                if (parent != null) ensureDirectory(parent);
+                return file;
+            }
+            return childFile(dataDirectory("databases"), name);
+        }
         @Override public File getExternalFilesDir(String type) { return externalDirectory("data", "files", type); }
         @Override public File[] getExternalFilesDirs(String type) { return new File[] {getExternalFilesDir(type)}; }
         @Override public File getExternalCacheDir() { return externalDirectory("data", "cache", null); }
@@ -387,7 +431,7 @@ public final class UiRuntime {
                 }
                 path = new File(path, type);
             }
-            return path;
+            return ensureDirectory(path);
         }
         void setInteractive(boolean interactive) {
             this.interactive = interactive;
@@ -417,6 +461,10 @@ public final class UiRuntime {
             if (WINDOW_SERVICE.equals(name)) return windows;
             if (USER_SERVICE.equals(name)) return users;
             if (APPWIDGET_SERVICE.equals(name)) return widgets;
+            if (CONNECTIVITY_SERVICE.equals(name)) {
+                if (connectivity == null) connectivity = new android.net.ConnectivityManager(this);
+                return connectivity;
+            }
             if (CLIPBOARD_SERVICE.equals(name)) {
                 if (clipboard == null) clipboard = new ClipboardManager(this, new Handler(getMainLooper()));
                 return clipboard;
@@ -480,7 +528,8 @@ public final class UiRuntime {
     }
     private static final class Manifest {
         final ApplicationInfo info = new ApplicationInfo();
-        final ArrayMap<String, Integer> serviceTypes = new ArrayMap<>();
+        final PackageInfo packageInfo = new PackageInfo();
+        final ArrayMap<String, ServiceInfo> services = new ArrayMap<>();
         final ArrayList<String> receivers = new ArrayList<>();
         String application;
         String activity;
@@ -551,6 +600,13 @@ public final class UiRuntime {
             if (!"manifest".equals(xml.getName())) throw new XmlPullParserException("APK has no manifest");
             result.info.packageName = xml.getAttributeValue(null, "package");
             if (result.info.packageName == null) throw new XmlPullParserException("Manifest has no package name");
+            int versionCode = xml.getAttributeIntValue(XmlValues.ANDROID, "versionCode", 0);
+            int versionCodeMajor = xml.getAttributeIntValue(XmlValues.ANDROID, "versionCodeMajor", 0);
+            result.packageInfo.setLongVersionCode(PackageInfo.composeLongVersionCode(versionCodeMajor, versionCode));
+            int versionName = xml.getAttributeResourceValue(XmlValues.ANDROID, "versionName", 0);
+            result.packageInfo.versionName = versionName == 0
+                    ? xml.getAttributeValue(XmlValues.ANDROID, "versionName") : res.getString(versionName);
+            result.info.setVersionCode(result.packageInfo.getLongVersionCode());
             result.info.sourceDir = result.info.publicSourceDir = path;
             String desired = requested == null || requested.length() == 0 ? null : fullName(result.info.packageName, requested);
             String fallback = null;
@@ -572,9 +628,13 @@ public final class UiRuntime {
                 } else if (xml.getDepth() == 3 && xml.getAttributeBooleanValue(XmlValues.ANDROID, "enabled", true)) {
                     String tag = xml.getName();
                     String name = xml.getAttributeValue(XmlValues.ANDROID, "name");
+                    if (name != null && "meta-data".equals(tag)) {
+                        result.info.metaData = readMetadata(res, xml, result.info.metaData);
+                        continue;
+                    }
                     if (name != null && "service".equals(tag)) {
-                        result.serviceTypes.put(fullName(result.info.packageName, name),
-                                xml.getAttributeIntValue(XmlValues.ANDROID, "foregroundServiceType", 0));
+                        ServiceInfo service = readService(res, xml, result.info, name);
+                        result.services.put(service.name, service);
                     } else if (name != null && "receiver".equals(tag)) {
                         result.receivers.add(fullName(result.info.packageName, name));
                     }
@@ -596,6 +656,36 @@ public final class UiRuntime {
             if (result.activity == null) throw new IllegalArgumentException("Activity absent from manifest " + requested);
         }
         return result;
+    }
+    private static ServiceInfo readService(Resources res, XmlResourceParser xml, ApplicationInfo application,
+                                           String name) throws IOException, XmlPullParserException {
+        ServiceInfo service = new ServiceInfo();
+        service.applicationInfo = application;
+        service.packageName = application.packageName;
+        service.name = fullName(application.packageName, name);
+        service.exported = xml.getAttributeBooleanValue(XmlValues.ANDROID, "exported", false);
+        service.permission = xml.getAttributeValue(XmlValues.ANDROID, "permission");
+        service.mForegroundServiceType = xml.getAttributeIntValue(XmlValues.ANDROID, "foregroundServiceType", 0);
+        int depth = xml.getDepth();
+        for (int event = xml.next(); event != XmlPullParser.END_DOCUMENT; event = xml.next()) {
+            if (event == XmlPullParser.END_TAG && xml.getDepth() == depth) break;
+            if (event != XmlPullParser.START_TAG || xml.getDepth() != depth + 1 || !"meta-data".equals(xml.getName())) {
+                continue;
+            }
+            service.metaData = readMetadata(res, xml, service.metaData);
+        }
+        return service;
+    }
+    private static Bundle readMetadata(Resources res, XmlResourceParser xml, Bundle metadata)
+            throws XmlPullParserException {
+        if (metadata == null) metadata = new Bundle();
+        int resource = xml.getAttributeResourceValue(XmlValues.ANDROID, "resource", 0);
+        if (resource != 0) {
+            metadata.putInt(xml.getAttributeValue(XmlValues.ANDROID, "name"), resource);
+        } else {
+            res.parseBundleExtra("meta-data", xml, metadata);
+        }
+        return metadata;
     }
     private static boolean isLauncherActivity(XmlResourceParser xml) throws IOException, XmlPullParserException {
         int depth = xml.getDepth(), filterDepth = 0;
