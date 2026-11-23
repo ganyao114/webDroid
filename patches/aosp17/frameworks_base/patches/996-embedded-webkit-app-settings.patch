@@ -1,0 +1,236 @@
+--- a/frameworks/base/core/java/android/webkit/WebView.java
++++ b/frameworks/base/core/java/android/webkit/WebView.java
+@@ -2462,7 +2462,7 @@
+         private static final String BLANK = "about:blank";
+         private static int sNextId = 2;
+         private final int mId = sNextId++;
+-        private final IframeSettings mSettings = new IframeSettings();
++        private final IframeSettings mSettings;
+         private final java.util.ArrayList<String> mHistory = new java.util.ArrayList<>();
+         private final int[] mLocation = new int[2];
+         private final WebView mView;
+@@ -2472,10 +2472,11 @@
+         private static final String HISTORY_KEY = "wasmandroid.webview.history";
+         private static final String POSITION_KEY = "wasmandroid.webview.position";
+         private int mPage = -1;
+-        private boolean mDestroyed;
++        private boolean mDestroyed, mPaused;
+ 
+         IframeProvider(WebView view) {
+             mView = view;
++            mSettings = new IframeSettings(view.getContext().getApplicationInfo().targetSdkVersion);
+         }
+ 
+         @Override public void init(Map<String, Object> interfaces, boolean privateBrowsing) {
+@@ -2485,6 +2486,29 @@
+         }
+ 
+         @Override public WebSettings getSettings() { return mSettings; }
++        @Override public int getContentHeight() { return mView.getHeight(); }
++        @Override public int getContentWidth() { return mView.getWidth(); }
++        @Override public String getTitle() { return null; }
++        @Override public Bitmap getFavicon() { return null; }
++        @Override public android.net.http.SslCertificate getCertificate() { return null; }
++        @Override public void setDownloadListener(DownloadListener listener) {}
++        @Override public void setFindListener(WebView.FindListener listener) {}
++
++        // Browser navigation and isolation do not expose a synchronous Java object bridge.
++        @Override public void addJavascriptInterface(Object object, String name) {}
++        @Override public void removeJavascriptInterface(String name) {}
++        @Override public void evaluateJavaScript(String script, ValueCallback<String> callback) {
++            if (callback != null) mView.post(() -> callback.onReceiveValue("null"));
++        }
++        @Override public void onPause() { mPaused = true; close(); }
++        @Override public void onResume() { mPaused = false; attach(); }
++        @Override public boolean isPaused() { return mPaused; }
++        @Override public void pauseTimers() {}
++        @Override public void resumeTimers() {}
++        @Override public void stopLoading() {}
++        @Override public void freeMemory() {}
++        @Override public void clearCache(boolean disk) {}
++        @Override public void clearSslPreferences() {}
+         @Override public void setWebViewClient(WebViewClient client) { mClient = client; }
+         @Override public WebViewClient getWebViewClient() { return mClient; }
+         @Override public void setWebChromeClient(WebChromeClient client) { mChromeClient = client; }
+@@ -2495,9 +2519,6 @@
+         @Override public boolean isPrivateBrowsingEnabled() { return false; }
+ 
+         @Override public void loadUrl(String url, Map<String, String> headers) {
+-            if (headers != null && !headers.isEmpty()) {
+-                throw new UnsupportedOperationException("The iframe does not support request headers");
+-            }
+             loadUrl(url);
+         }
+ 
+@@ -2567,11 +2588,13 @@
+ 
+         private boolean navigate(String url) {
+             if (mDestroyed) return false;
+-            // The iframe provider allows page scripts only after the app opts in.
++            // Local navigation is additionally confined to this app's storage by the host.
+             if (url == null || (!BLANK.equals(url) && !mSettings.getJavaScriptEnabled())
++                    || (url.startsWith("file://") && !url.startsWith("file:///android_asset/")
++                            && !mSettings.getAllowFileAccess())
+                     || !nativeNavigate(mId, url)) {
+                 if (mClient != null) mClient.onReceivedError(mView, WebViewClient.ERROR_UNSUPPORTED_SCHEME,
+-                        "The embedded WebView requires an HTTP(S) URL and JavaScript permission", url);
++                        "The iframe provider could not load this URL", url);
+                 return false;
+             }
+             return true;
+@@ -2595,7 +2618,7 @@
+ 
+         void attach() {
+             String url = getUrl();
+-            if (!mDestroyed && url != null) nativeNavigate(mId, url);
++            if (!mDestroyed && !mPaused && url != null) nativeNavigate(mId, url);
+         }
+ 
+         void close() {
+@@ -2604,7 +2627,7 @@
+         }
+ 
+         void place() {
+-            if (mDestroyed || mPage < 0) return;
++            if (mDestroyed || mPaused || mPage < 0) return;
+             if (sActiveIframes.get(mId) == null) {
+                 sActiveIframes.put(mId, new java.lang.ref.WeakReference<>(this));
+             }
+@@ -2661,10 +2684,88 @@
+ 
+     private static final class IframeSettings extends WebSettings {
+         private boolean mJavaScriptEnabled;
++        private boolean mAllowFileAccess;
++        private boolean mAllowContentAccess;
++        private boolean mBlockNetworkImage;
++        private boolean mBuiltInZoomControls;
++        private int mCacheMode = LOAD_DEFAULT;
++        private boolean mDisplayZoomControls = true;
++        private String mDefaultTextEncodingName = "UTF-8";
++        private boolean mDomStorageEnabled;
++        private int mForceDark = FORCE_DARK_AUTO;
++        private boolean mJavaScriptCanOpenWindowsAutomatically;
++        private boolean mLoadWithOverviewMode;
++        private boolean mLoadsImagesAutomatically = true;
++        private boolean mMediaPlaybackRequiresUserGesture = true;
++        private int mMinimumFontSize = 8;
++        private int mMixedContentMode = MIXED_CONTENT_NEVER_ALLOW;
++        private boolean mSafeBrowsingEnabled = true;
++        private boolean mSupportMultipleWindows;
++        private boolean mSupportZoom = true;
++        private int mTextZoom = 100;
++        private boolean mUseWideViewPort;
++        private String mUserAgentString;
++
++        IframeSettings(int targetSdkVersion) {
++            mAllowFileAccess = targetSdkVersion < android.os.Build.VERSION_CODES.R;
++        }
+ 
+         @Override public boolean getJavaScriptEnabled() { return mJavaScriptEnabled; }
+-        @Override public void setJavaScriptEnabled(boolean enabled) { mJavaScriptEnabled = enabled; }
+-        @Override public String getUserAgentString() { return getDefaultUserAgent(null); }
++        @Override public void setJavaScriptEnabled(boolean value) { mJavaScriptEnabled = value; }
++        @Override public boolean getAllowFileAccess() { return mAllowFileAccess; }
++        @Override public void setAllowFileAccess(boolean value) { mAllowFileAccess = value; }
++        @Override public boolean getAllowContentAccess() { return mAllowContentAccess; }
++        @Override public void setAllowContentAccess(boolean value) { mAllowContentAccess = value; }
++        @Override public boolean getBlockNetworkImage() { return mBlockNetworkImage; }
++        @Override public void setBlockNetworkImage(boolean value) { mBlockNetworkImage = value; }
++        @Override public boolean getBuiltInZoomControls() { return mBuiltInZoomControls; }
++        @Override public void setBuiltInZoomControls(boolean value) { mBuiltInZoomControls = value; }
++        @Override public int getCacheMode() { return mCacheMode; }
++        @Override public void setCacheMode(int value) { mCacheMode = value; }
++        @Override public boolean getDisplayZoomControls() { return mDisplayZoomControls; }
++        @Override public void setDisplayZoomControls(boolean value) { mDisplayZoomControls = value; }
++        @Override public String getDefaultTextEncodingName() { return mDefaultTextEncodingName; }
++        @Override public void setDefaultTextEncodingName(String value) { mDefaultTextEncodingName = value; }
++        @Override public boolean getDomStorageEnabled() { return mDomStorageEnabled; }
++        @Override public void setDomStorageEnabled(boolean value) { mDomStorageEnabled = value; }
++        @Override public int getForceDark() { return mForceDark; }
++        @Override public void setForceDark(int value) { mForceDark = value; }
++        @Override public boolean getJavaScriptCanOpenWindowsAutomatically() { return mJavaScriptCanOpenWindowsAutomatically; }
++        @Override public void setJavaScriptCanOpenWindowsAutomatically(boolean value) { mJavaScriptCanOpenWindowsAutomatically = value; }
++        @Override public boolean getLoadWithOverviewMode() { return mLoadWithOverviewMode; }
++        @Override public void setLoadWithOverviewMode(boolean value) { mLoadWithOverviewMode = value; }
++        @Override public boolean getLoadsImagesAutomatically() { return mLoadsImagesAutomatically; }
++        @Override public void setLoadsImagesAutomatically(boolean value) { mLoadsImagesAutomatically = value; }
++        @Override public boolean getMediaPlaybackRequiresUserGesture() { return mMediaPlaybackRequiresUserGesture; }
++        @Override public void setMediaPlaybackRequiresUserGesture(boolean value) { mMediaPlaybackRequiresUserGesture = value; }
++        @Override public int getMinimumFontSize() { return mMinimumFontSize; }
++        @Override public void setMinimumFontSize(int value) { mMinimumFontSize = value; }
++        @Override public int getMixedContentMode() { return mMixedContentMode; }
++        @Override public void setMixedContentMode(int value) { mMixedContentMode = value; }
++        @Override public boolean getSafeBrowsingEnabled() { return mSafeBrowsingEnabled; }
++        @Override public void setSafeBrowsingEnabled(boolean value) { mSafeBrowsingEnabled = value; }
++        @Override public boolean supportMultipleWindows() { return mSupportMultipleWindows; }
++        @Override public void setSupportMultipleWindows(boolean value) { mSupportMultipleWindows = value; }
++        @Override public boolean supportZoom() { return mSupportZoom; }
++        @Override public void setSupportZoom(boolean value) { mSupportZoom = value; }
++        @Override public int getTextZoom() { return mTextZoom; }
++        @Override public void setTextZoom(int value) { mTextZoom = value; }
++        @Override public boolean getUseWideViewPort() { return mUseWideViewPort; }
++        @Override public void setUseWideViewPort(boolean value) { mUseWideViewPort = value; }
++        @Override public String getUserAgentString() { return mUserAgentString == null || mUserAgentString.isEmpty() ? getDefaultUserAgent(null) : mUserAgentString; }
++        @Override public void setUserAgentString(String value) { mUserAgentString = value; }
++
++        // The sandbox owns its storage, permission policy and origin isolation.
++        @Override public void setAllowFileAccessFromFileURLs(boolean value) {}
++        @Override public boolean getAllowFileAccessFromFileURLs() { return false; }
++        @Override public void setAllowUniversalAccessFromFileURLs(boolean value) {}
++        @Override public boolean getAllowUniversalAccessFromFileURLs() { return false; }
++        @Override public void setDatabaseEnabled(boolean value) {}
++        @Override public void setDatabasePath(String path) {}
++        @Override public void setEnableSmoothTransition(boolean value) {}
++        @Override public void setGeolocationDatabasePath(String path) {}
++        @Override public void setGeolocationEnabled(boolean value) {}
++        @Override public void setSaveFormData(boolean value) {}
+     }
+ 
+     private static native boolean nativeNavigate(int id, String url);
+--- a/frameworks/base/core/java/android/webkit/CookieManager.java
++++ b/frameworks/base/core/java/android/webkit/CookieManager.java
+@@ -47,7 +47,7 @@
+      * @return the singleton CookieManager instance
+      */
+     public static CookieManager getInstance() {
+-        return WebViewFactory.getProvider().getCookieManager();
++        return EmbeddedCookieManager.INSTANCE;
+     }
+ 
+     /**
+@@ -341,4 +341,35 @@
+     @SuppressWarnings("HiddenAbstractMethod")
+     @SystemApi
+     protected abstract void setAcceptFileSchemeCookiesImpl(boolean accept);
++
++    private static final class EmbeddedCookieManager extends CookieManager {
++        static final CookieManager INSTANCE = new EmbeddedCookieManager();
++        private boolean acceptsCookies = true;
++
++        @Override public void setAcceptCookie(boolean accept) { acceptsCookies = accept; }
++        @Override public boolean acceptCookie() { return acceptsCookies; }
++        // The browser's isolated cookie store is inaccessible to Android callers.
++        @Override public void setAcceptThirdPartyCookies(WebView view, boolean accept) {}
++        @Override public boolean acceptThirdPartyCookies(WebView view) { return false; }
++        @Override public void setCookie(String url, String value) {}
++        @Override public void setCookie(String url, String value, ValueCallback<Boolean> callback) {
++            if (callback != null) callback.onReceiveValue(false);
++        }
++        @Override public String getCookie(String url) { return null; }
++        @Override public String getCookie(String url, boolean privateBrowsing) { return null; }
++        @Override public void removeSessionCookie() {}
++        @Override public void removeSessionCookies(ValueCallback<Boolean> callback) {
++            if (callback != null) callback.onReceiveValue(false);
++        }
++        @Override public void removeAllCookie() {}
++        @Override public void removeAllCookies(ValueCallback<Boolean> callback) {
++            if (callback != null) callback.onReceiveValue(false);
++        }
++        @Override public boolean hasCookies() { return false; }
++        @Override public boolean hasCookies(boolean privateBrowsing) { return false; }
++        @Override public void removeExpiredCookie() {}
++        @Override public void flush() {}
++        @Override protected boolean allowFileSchemeCookiesImpl() { return false; }
++        @Override protected void setAcceptFileSchemeCookiesImpl(boolean accept) {}
++    }
+ }

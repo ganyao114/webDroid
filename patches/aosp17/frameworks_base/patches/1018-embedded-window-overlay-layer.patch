@@ -1,0 +1,90 @@
+--- a/frameworks/base/core/java/com/android/internal/policy/PhoneWindow.java
++++ b/frameworks/base/core/java/com/android/internal/policy/PhoneWindow.java
+@@ -211,6 +211,7 @@
+ 
+     private final java.util.ArrayList<EmbeddedLayer> mEmbeddedLayers = new java.util.ArrayList<>();
+     private EmbeddedLayer mEmbeddedTouchTarget;
++    private boolean mRecordingMainWindow;
+ 
+     private final class EmbeddedLayer extends FrameLayout {
+         final View view;
+@@ -250,7 +251,7 @@
+         }
+ 
+         @Override public void draw(android.graphics.Canvas canvas) {
+-            if (view.getVisibility() != View.VISIBLE) return;
++            if (mRecordingMainWindow || view.getVisibility() != View.VISIBLE) return;
+             if ((flags & WindowManager.LayoutParams.FLAG_DIM_BEHIND) != 0) {
+                 canvas.drawColor(0x66000000);
+             }
+@@ -285,6 +286,42 @@
+                         : callback.dispatchTouchEvent(local);
+             } finally {
+                 local.recycle();
++            }
++        }
++    }
++
++    /** @hide */
++    public boolean hasVisibleEmbeddedLayers() {
++        for (EmbeddedLayer layer : mEmbeddedLayers) {
++            if (layer.view.getVisibility() == View.VISIBLE) return true;
++        }
++        return false;
++    }
++
++    /** @hide */
++    public boolean hasModalEmbeddedLayer() {
++        for (EmbeddedLayer layer : mEmbeddedLayers) {
++            if (layer.view.getVisibility() == View.VISIBLE && layer.isModal()
++                    && (layer.flags & WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE) == 0) return true;
++        }
++        return false;
++    }
++
++    /** @hide */
++    public void setRecordingMainWindow(boolean recording) {
++        mRecordingMainWindow = recording;
++    }
++
++    /** @hide */
++    public void drawEmbeddedLayers(android.graphics.Canvas canvas) {
++        for (EmbeddedLayer layer : mEmbeddedLayers) {
++            if (layer.view.getVisibility() != View.VISIBLE) continue;
++            int saved = canvas.save();
++            try {
++                canvas.translate(layer.getLeft(), layer.getTop());
++                layer.draw(canvas);
++            } finally {
++                canvas.restoreToCount(saved);
+             }
+         }
+     }
+--- a/frameworks/base/core/java/android/view/ViewRootImpl.java
++++ b/frameworks/base/core/java/android/view/ViewRootImpl.java
+@@ -197,7 +197,16 @@
+         mAttachInfo.mDrawingTime = SystemClock.uptimeMillis();
+         nativeBeginDraw();
+         mAttachInfo.mTreeObserver.dispatchOnDraw();
+-        performDraw(mCanvas);
++        final boolean overlays = mHostWindow != null && mHostWindow.hasVisibleEmbeddedLayers();
++        if (overlays) mHostWindow.setRecordingMainWindow(true);
++        try {
++            performDraw(mCanvas);
++        } finally {
++            if (overlays) mHostWindow.setRecordingMainWindow(false);
++        }
++        if (overlays && nativeBeginOverlayDraw(mHostWindow.hasModalEmbeddedLayer())) {
++            mHostWindow.drawEmbeddedLayers(mCanvas);
++        }
+         return true;
+     }
+ 
+@@ -240,6 +249,7 @@
+     }
+ 
+     private static native void nativeBeginDraw();
++    private static native boolean nativeBeginOverlayDraw(boolean modal);
+ 
+     public int getDisplayId() {
+         return mDisplay.getDisplayId();

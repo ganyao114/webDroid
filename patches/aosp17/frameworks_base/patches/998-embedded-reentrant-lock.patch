@@ -1,0 +1,143 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/locks/ReentrantLock.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/locks/ReentrantLock.java
+@@ -37,7 +37,6 @@
+ 
+ import java.util.Collection;
+ import java.util.concurrent.TimeUnit;
+-import jdk.internal.vm.annotation.ReservedStackAccess;
+ 
+ /**
+  * A reentrant mutual exclusion {@link Lock} with the same basic
+@@ -116,16 +115,15 @@
+      * into fair and nonfair versions below. Uses AQS state to
+      * represent the number of holds on the lock.
+      */
+-    abstract static class Sync extends AbstractQueuedSynchronizer {
++    abstract static class Sync extends AbstractQueuedLongSynchronizer {
+         private static final long serialVersionUID = -5179523762034025860L;
+ 
+         /**
+          * Performs non-fair tryLock.
+          */
+-        @ReservedStackAccess
+         final boolean tryLock() {
+             Thread current = Thread.currentThread();
+-            int c = getState();
++            int c = (int) getState();
+             if (c == 0) {
+                 if (compareAndSetState(0, 1)) {
+                     setExclusiveOwnerThread(current);
+@@ -148,13 +146,11 @@
+          */
+         abstract boolean initialTryLock();
+ 
+-        @ReservedStackAccess
+         final void lock() {
+             if (!initialTryLock())
+                 acquire(1);
+         }
+ 
+-        @ReservedStackAccess
+         final void lockInterruptibly() throws InterruptedException {
+             if (Thread.interrupted())
+                 throw new InterruptedException();
+@@ -162,16 +158,14 @@
+                 acquireInterruptibly(1);
+         }
+ 
+-        @ReservedStackAccess
+         final boolean tryLockNanos(long nanos) throws InterruptedException {
+             if (Thread.interrupted())
+                 throw new InterruptedException();
+             return initialTryLock() || tryAcquireNanos(1, nanos);
+         }
+ 
+-        @ReservedStackAccess
+-        protected final boolean tryRelease(int releases) {
+-            int c = getState() - releases;
++        protected final boolean tryRelease(long releases) {
++            long c = getState() - releases;
+             if (getExclusiveOwnerThread() != Thread.currentThread())
+                 throw new IllegalMonitorStateException();
+             boolean free = (c == 0);
+@@ -198,7 +192,7 @@
+         }
+ 
+         final int getHoldCount() {
+-            return isHeldExclusively() ? getState() : 0;
++            return isHeldExclusively() ? (int) getState() : 0;
+         }
+ 
+         final boolean isLocked() {
+@@ -227,7 +221,7 @@
+                 setExclusiveOwnerThread(current);
+                 return true;
+             } else if (getExclusiveOwnerThread() == current) {
+-                int c = getState() + 1;
++                int c = (int) getState() + 1;
+                 if (c < 0) // overflow
+                     throw new Error("Maximum lock count exceeded");
+                 setState(c);
+@@ -239,7 +233,7 @@
+         /**
+          * Acquire for non-reentrant cases after initialTryLock prescreen
+          */
+-        protected final boolean tryAcquire(int acquires) {
++        protected final boolean tryAcquire(long acquires) {
+             if (getState() == 0 && compareAndSetState(0, acquires)) {
+                 setExclusiveOwnerThread(Thread.currentThread());
+                 return true;
+@@ -259,7 +253,7 @@
+          */
+         final boolean initialTryLock() {
+             Thread current = Thread.currentThread();
+-            int c = getState();
++            int c = (int) getState();
+             if (c == 0) {
+                 if (!hasQueuedThreads() && compareAndSetState(0, 1)) {
+                     setExclusiveOwnerThread(current);
+@@ -277,7 +271,7 @@
+         /**
+          * Acquires only if thread is first waiter or empty
+          */
+-        protected final boolean tryAcquire(int acquires) {
++        protected final boolean tryAcquire(long acquires) {
+             if (getState() == 0 && !hasQueuedPredecessors() &&
+                 compareAndSetState(0, acquires)) {
+                 setExclusiveOwnerThread(Thread.currentThread());
+@@ -729,9 +723,9 @@
+     public boolean hasWaiters(Condition condition) {
+         if (condition == null)
+             throw new NullPointerException();
+-        if (!(condition instanceof AbstractQueuedSynchronizer.ConditionObject))
++        if (!(condition instanceof AbstractQueuedLongSynchronizer.ConditionObject))
+             throw new IllegalArgumentException("not owner");
+-        return sync.hasWaiters((AbstractQueuedSynchronizer.ConditionObject)condition);
++        return sync.hasWaiters((AbstractQueuedLongSynchronizer.ConditionObject)condition);
+     }
+ 
+     /**
+@@ -752,9 +746,9 @@
+     public int getWaitQueueLength(Condition condition) {
+         if (condition == null)
+             throw new NullPointerException();
+-        if (!(condition instanceof AbstractQueuedSynchronizer.ConditionObject))
++        if (!(condition instanceof AbstractQueuedLongSynchronizer.ConditionObject))
+             throw new IllegalArgumentException("not owner");
+-        return sync.getWaitQueueLength((AbstractQueuedSynchronizer.ConditionObject)condition);
++        return sync.getWaitQueueLength((AbstractQueuedLongSynchronizer.ConditionObject)condition);
+     }
+ 
+     /**
+@@ -777,9 +771,9 @@
+     protected Collection<Thread> getWaitingThreads(Condition condition) {
+         if (condition == null)
+             throw new NullPointerException();
+-        if (!(condition instanceof AbstractQueuedSynchronizer.ConditionObject))
++        if (!(condition instanceof AbstractQueuedLongSynchronizer.ConditionObject))
+             throw new IllegalArgumentException("not owner");
+-        return sync.getWaitingThreads((AbstractQueuedSynchronizer.ConditionObject)condition);
++        return sync.getWaitingThreads((AbstractQueuedLongSynchronizer.ConditionObject)condition);
+     }
+ 
+     /**

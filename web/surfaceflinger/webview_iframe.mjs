@@ -1,6 +1,42 @@
 import { Ring, WEBVIEW_TEXT_SIZE, WebViewAction, WebViewStatus, encoder } from './abi.mjs';
 
 const protocol = 'wa-webview/1';
+const localMediaTypes = new Map(Object.entries({
+  css: 'text/css', js: 'text/javascript', svg: 'image/svg+xml', png: 'image/png',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif', ico: 'image/x-icon',
+}));
+const decoder = new TextDecoder();
+
+function localDocument(document, readFile, id, source) {
+  const bytes = readFile?.(id, source);
+  if (!bytes) throw new Error('WebView document is unavailable');
+  const resource = (reference, base, stylesheet = false) => {
+    let url;
+    try { url = new URL(reference, base); }
+    catch { return reference; }
+    if (url.protocol !== 'file:') return reference;
+    const type = localMediaTypes.get(url.pathname.split('.').at(-1).toLowerCase());
+    if (!type || (stylesheet && type === 'text/css')) return reference;
+    const data = readFile(id, url.href);
+    if (!data) return reference;
+    const content = type === 'text/css'
+      ? encoder.encode(decoder.decode(data).replace(/url\(\s*(["']?)([^()]*?)\1\s*\)/gi,
+        (match, quote, path) => `url(${quote}${resource(path, url, true)}${quote})`))
+      : data;
+    return `data:${type};base64,${content.toBase64()}`;
+  };
+  const html = decoder.decode(bytes).replace(/\b(src|href|poster)(\s*=\s*)(["'])([^\n]+?)\3/gi,
+    (match, attribute, equals, quote, reference) =>
+      attribute + equals + quote + resource(reference, source) + quote);
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const title = template.content.querySelector('title')?.textContent ?? '';
+  // A srcdoc frame has an opaque origin. Give it a base independent of the host page.
+  const base = '<base href="about:blank"><meta name="referrer" content="no-referrer">';
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
+  const content = doctype ? doctype[0] + base + html.slice(doctype[0].length) : '<!doctype html>' + base + html;
+  return { content, title };
+}
 const validRequest = id => Number.isInteger(id) && id > 0 && id <= 0xffffffff;
 
 // Iframes are DOM planes. The host uses the same origin/size as the canvas.
@@ -8,12 +44,13 @@ const validRequest = id => Number.isInteger(id) && id > 0 && id <= 0xffffffff;
 // If web/workers/sw_corp.js supplies the headers, keep the iframe's COEP
 // and use CORP cross-origin or CORS for assets served to its opaque origin.
 export class BrowserIframeWebViewProvider {
-  constructor(memory, requests, events, host, { methods = [] } = {}) {
+  constructor(memory, requests, events, host, { methods = [], readFile } = {}) {
     this.memory = memory;
     this.requests = new Ring(memory, requests, 16, 24 + WEBVIEW_TEXT_SIZE);
     this.events = new Ring(memory, events, 16, 16 + WEBVIEW_TEXT_SIZE);
     this.host = host;
     this.methods = new Set(methods);
+    this.readFile = readFile;
     this.views = new Map();
   }
 
@@ -38,7 +75,11 @@ export class BrowserIframeWebViewProvider {
   open(id, layerId, source) {
     const document = this.host.ownerDocument;
     const url = new URL(source, document.baseURI);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') throw new Error('WebView URL must use HTTP(S)');
+    const local = url.protocol === 'file:';
+    if (!local && url.protocol !== 'https:' && url.protocol !== 'http:') {
+      throw new Error('Unsupported WebView URL scheme');
+    }
+    const page = local ? localDocument(document, this.readFile, id, source) : null;
     this.close(id);
     const frame = document.createElement('iframe');
     frame.title = 'Embedded WebView';
@@ -52,7 +93,9 @@ export class BrowserIframeWebViewProvider {
     this.views.set(id, state);
     frame.addEventListener('load', () => {
       if (this.views.get(id) !== state) return;
-      this.report(id, WebViewStatus.PAGE_LOADED, 0, source);
+      const withTitle = page?.title ? `${source}\0${page.title}` : source;
+      this.report(id, WebViewStatus.PAGE_LOADED, 0,
+        encoder.encode(withTitle).length <= WEBVIEW_TEXT_SIZE ? withTitle : source);
       this.disconnect(state, 'WebView navigated');
       const { port1, port2 } = new MessageChannel();
       state.port = port1;
@@ -69,7 +112,8 @@ export class BrowserIframeWebViewProvider {
         }
       }, 10_000);
     });
-    frame.src = url.href;
+    if (page) frame.srcdoc = page.content;
+    else frame.src = url.href;
     this.host.append(frame);
   }
 
@@ -184,8 +228,10 @@ export class BrowserIframeWebViewProvider {
     return visible;
   }
 
-  finishLayout() {
+  finishLayout(inputModal = false) {
+    const pointerEvents = inputModal ? 'none' : 'auto';
     for (const state of this.views.values()) {
+      if (state.frame.style.pointerEvents !== pointerEvents) state.frame.style.pointerEvents = pointerEvents;
       if (!state.seen) {
         if (state.frame.style.display !== 'none') state.frame.style.display = 'none';
         state.clipPath = undefined;

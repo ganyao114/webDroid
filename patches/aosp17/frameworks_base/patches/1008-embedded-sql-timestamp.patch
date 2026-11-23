@@ -1,0 +1,123 @@
+--- a/libcore/ojluni/src/main/java/java/sql/Timestamp.java
++++ b/libcore/ojluni/src/main/java/java/sql/Timestamp.java
+@@ -25,7 +25,10 @@
+ 
+ package java.sql;
+ 
+-import java.util.StringTokenizer;
++import java.text.ParsePosition;
++import java.text.SimpleDateFormat;
++import java.util.Date;
++import java.util.Locale;
+ 
+ /**
+  * <P>A thin wrapper around <code>java.util.Date</code> that allows
+@@ -86,11 +89,23 @@
+     @Deprecated
+     public Timestamp(int year, int month, int date,
+                      int hour, int minute, int second, int nano) {
+-        super(year, month, date, hour, minute, second);
++        super(legacyTime(year, month, date, hour, minute, second));
+         if (nano > 999999999 || nano < 0) {
+             throw new IllegalArgumentException("nanos > 999999999 or < 0");
+         }
+         nanos = nano;
++    }
++
++    private static long legacyTime(int year, int month, int date, int hour, int minute,
++            int second) {
++        int normalizedYear = year + 1900 + Math.floorDiv(month, 12);
++        int normalizedMonth = Math.floorMod(month, 12) + 1;
++        String input = normalizedYear + "-" + normalizedMonth + "-" + date + " "
++                + hour + ":" + minute + ":" + second;
++        SimpleDateFormat format = new SimpleDateFormat("yyyy-M-d H:m:s", Locale.US);
++        Date value = format.parse(input, new ParsePosition(0));
++        if (value == null) throw new IllegalArgumentException(input);
++        return value.getTime();
+     }
+ 
+     /**
+@@ -273,56 +288,10 @@
+      */
+     public String toString () {
+ 
+-        int year = super.getYear() + 1900;
+-        int month = super.getMonth() + 1;
+-        int day = super.getDate();
+-        int hour = super.getHours();
+-        int minute = super.getMinutes();
+-        int second = super.getSeconds();
+-        String yearString;
+-        String monthString;
+-        String dayString;
+-        String hourString;
+-        String minuteString;
+-        String secondString;
++        String prefix = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(this);
+         String nanosString;
+         String zeros = "000000000";
+-        String yearZeros = "0000";
+-        StringBuffer timestampBuf;
+-
+-        if (year < 1000) {
+-            // Add leading zeros
+-            yearString = "" + year;
+-            yearString = yearZeros.substring(0, (4-yearString.length())) +
+-                yearString;
+-        } else {
+-            yearString = "" + year;
+-        }
+-        if (month < 10) {
+-            monthString = "0" + month;
+-        } else {
+-            monthString = Integer.toString(month);
+-        }
+-        if (day < 10) {
+-            dayString = "0" + day;
+-        } else {
+-            dayString = Integer.toString(day);
+-        }
+-        if (hour < 10) {
+-            hourString = "0" + hour;
+-        } else {
+-            hourString = Integer.toString(hour);
+-        }
+-        if (minute < 10) {
+-            minuteString = "0" + minute;
+-        } else {
+-            minuteString = Integer.toString(minute);
+-        }
+-        if (second < 10) {
+-            secondString = "0" + second;
+-        } else {
+-            secondString = Integer.toString(second);
+-        }
++
+         if (nanos == 0) {
+             nanosString = "0";
+         } else {
+@@ -343,23 +312,7 @@
+             nanosString = new String(nanosChar, 0, truncIndex + 1);
+         }
+ 
+-        // do a string buffer here instead.
+-        timestampBuf = new StringBuffer(20+nanosString.length());
+-        timestampBuf.append(yearString);
+-        timestampBuf.append("-");
+-        timestampBuf.append(monthString);
+-        timestampBuf.append("-");
+-        timestampBuf.append(dayString);
+-        timestampBuf.append(" ");
+-        timestampBuf.append(hourString);
+-        timestampBuf.append(":");
+-        timestampBuf.append(minuteString);
+-        timestampBuf.append(":");
+-        timestampBuf.append(secondString);
+-        timestampBuf.append(".");
+-        timestampBuf.append(nanosString);
+-
+-        return (timestampBuf.toString());
++        return prefix + "." + nanosString;
+     }
+ 
+     /**

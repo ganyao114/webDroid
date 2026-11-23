@@ -1,0 +1,542 @@
+--- a/libcore/ojluni/src/main/java/java/lang/reflect/Proxy.java
++++ b/libcore/ojluni/src/main/java/java/lang/reflect/Proxy.java
+@@ -27,31 +27,7 @@
+ package java.lang.reflect;
+ 
+ 
+-import dalvik.annotation.optimization.FastNative;
+-import dalvik.annotation.optimization.NeverInline;
+-import java.lang.ref.Reference;
+-import java.lang.ref.WeakReference;
+-import java.security.Permission;
+-import java.security.PrivilegedAction;
+-import java.util.ArrayList;
+-import java.util.Arrays;
+-import java.util.Arrays;
+-import java.util.Collections;
+-import java.util.Comparator;
+-import java.util.HashMap;
+-import java.util.HashSet;
+-import java.util.IdentityHashMap;
+-import java.util.List;
+-import java.util.Map;
+ import java.util.Objects;
+-import java.util.Set;
+-import java.util.WeakHashMap;
+-import java.util.concurrent.atomic.AtomicLong;
+-import java.util.function.BiFunction;
+-import libcore.util.EmptyArray;
+-import sun.reflect.CallerSensitive;
+-import sun.reflect.misc.ReflectUtil;
+-import sun.security.util.SecurityConstants;
+ 
+ /**
+  * {@code Proxy} provides static methods for creating dynamic proxy
+@@ -244,12 +220,6 @@
+     /** parameter types of a proxy class constructor */
+     private static final Class<?>[] constructorParams =
+         { InvocationHandler.class };
+-
+-    /**
+-     * a cache of proxy classes
+-     */
+-    private static final WeakCache<ClassLoader, Class<?>[], Class<?>>
+-        proxyClassCache = new WeakCache<>(new KeyFactory(), new ProxyClassFactory());
+ 
+     /**
+      * the invocation handler for this proxy instance.
+@@ -368,7 +338,6 @@
+      * @throws  NullPointerException if the {@code interfaces} array
+      *          argument or any of its elements are {@code null}
+      */
+-    @CallerSensitive
+     public static Class<?> getProxyClass(ClassLoader loader,
+                                          Class<?>... interfaces)
+         throws IllegalArgumentException
+@@ -388,425 +357,10 @@
+         // END Android-changed: Excluded SecurityManager / permission checks.
+     }
+ 
+-    // Android-removed: SecurityManager / permission check code.
+-    /*
+-    /*
+-     * Check permissions required to create a Proxy class.
+-     *
+-     * To define a proxy class, it performs the access checks as in
+-     * Class.forName (VM will invoke ClassLoader.checkPackageAccess):
+-     * 1. "getClassLoader" permission check if loader == null
+-     * 2. checkPackageAccess on the interfaces it implements
+-     *
+-     * To get a constructor and new instance of a proxy class, it performs
+-     * the package access check on the interfaces it implements
+-     * as in Class.getConstructor.
+-     *
+-     * If an interface is non-public, the proxy class must be defined by
+-     * the defining loader of the interface.  If the caller's class loader
+-     * is not the same as the defining loader of the interface, the VM
+-     * will throw IllegalAccessError when the generated proxy class is
+-     * being defined via the defineClass0 method.
+-     *
+-    private static void checkProxyAccess(Class<?> caller,
+-                                         ClassLoader loader,
+-                                         Class<?>... interfaces)
+-    {
+-        SecurityManager sm = System.getSecurityManager();
+-        if (sm != null) {
+-            ClassLoader ccl = caller.getClassLoader();
+-            if (VM.isSystemDomainLoader(loader) && !VM.isSystemDomainLoader(ccl)) {
+-                sm.checkPermission(SecurityConstants.GET_CLASSLOADER_PERMISSION);
+-            }
+-            ReflectUtil.checkProxyPackageAccess(ccl, interfaces);
+-        }
+-    }
+-    */
+-
+-    /**
+-     * Generate a proxy class.  Must call the checkProxyAccess method
+-     * to perform permission checks before calling this.
+-     */
+-    private static Class<?> getProxyClass0(ClassLoader loader,
+-                                           Class<?>... interfaces) {
+-        if (interfaces.length > 65535) {
+-            throw new IllegalArgumentException("interface limit exceeded");
+-        }
+-
+-        // If the proxy class defined by the given loader implementing
+-        // the given interfaces exists, this will simply return the cached copy;
+-        // otherwise, it will create the proxy class via the ProxyClassFactory
+-        return proxyClassCache.get(loader, interfaces);
+-    }
+-
+-    /*
+-     * a key used for proxy class with 0 implemented interfaces
+-     */
+-    private static final Object key0 = new Object();
+-
+-    /*
+-     * Key1 and Key2 are optimized for the common use of dynamic proxies
+-     * that implement 1 or 2 interfaces.
+-     */
+-
+-    /*
+-     * a key used for proxy class with 1 implemented interface
+-     */
+-    private static final class Key1 extends WeakReference<Class<?>> {
+-        private final int hash;
+-
+-        Key1(Class<?> intf) {
+-            super(intf);
+-            this.hash = intf.hashCode();
+-        }
+-
+-        @Override
+-        public int hashCode() {
+-            return hash;
+-        }
+-
+-        @Override
+-        public boolean equals(Object obj) {
+-            Class<?> intf;
+-            return this == obj ||
+-                   obj != null &&
+-                   obj.getClass() == Key1.class &&
+-                   (intf = get()) != null &&
+-                   intf == ((Key1) obj).get();
+-        }
+-    }
+-
+-    /*
+-     * a key used for proxy class with 2 implemented interfaces
+-     */
+-    private static final class Key2 extends WeakReference<Class<?>> {
+-        private final int hash;
+-        private final WeakReference<Class<?>> ref2;
+-
+-        Key2(Class<?> intf1, Class<?> intf2) {
+-            super(intf1);
+-            hash = 31 * intf1.hashCode() + intf2.hashCode();
+-            ref2 = new WeakReference<Class<?>>(intf2);
+-        }
+-
+-        @Override
+-        public int hashCode() {
+-            return hash;
+-        }
+-
+-        @Override
+-        public boolean equals(Object obj) {
+-            Class<?> intf1, intf2;
+-            return this == obj ||
+-                   obj != null &&
+-                   obj.getClass() == Key2.class &&
+-                   (intf1 = get()) != null &&
+-                   intf1 == ((Key2) obj).get() &&
+-                   (intf2 = ref2.get()) != null &&
+-                   intf2 == ((Key2) obj).ref2.get();
+-        }
+-    }
+-
+-    /*
+-     * a key used for proxy class with any number of implemented interfaces
+-     * (used here for 3 or more only)
+-     */
+-    private static final class KeyX {
+-        private final int hash;
+-        private final WeakReference<Class<?>>[] refs;
+-
+-        @SuppressWarnings("unchecked")
+-        KeyX(Class<?>[] interfaces) {
+-            hash = Arrays.hashCode(interfaces);
+-            refs = (WeakReference<Class<?>>[])new WeakReference<?>[interfaces.length];
+-            for (int i = 0; i < interfaces.length; i++) {
+-                refs[i] = new WeakReference<>(interfaces[i]);
+-            }
+-        }
+-
+-        @Override
+-        public int hashCode() {
+-            return hash;
+-        }
+-
+-        @Override
+-        public boolean equals(Object obj) {
+-            return this == obj ||
+-                   obj != null &&
+-                   obj.getClass() == KeyX.class &&
+-                   equals(refs, ((KeyX) obj).refs);
+-        }
+-
+-        private static boolean equals(WeakReference<Class<?>>[] refs1,
+-                                      WeakReference<Class<?>>[] refs2) {
+-            if (refs1.length != refs2.length) {
+-                return false;
+-            }
+-            for (int i = 0; i < refs1.length; i++) {
+-                Class<?> intf = refs1[i].get();
+-                if (intf == null || intf != refs2[i].get()) {
+-                    return false;
+-                }
+-            }
+-            return true;
+-        }
+-    }
+-
+-    /**
+-     * A function that maps an array of interfaces to an optimal key where
+-     * Class objects representing interfaces are weakly referenced.
+-     */
+-    private static final class KeyFactory
+-        implements BiFunction<ClassLoader, Class<?>[], Object>
+-    {
+-        @Override
+-        public Object apply(ClassLoader classLoader, Class<?>[] interfaces) {
+-            switch (interfaces.length) {
+-                case 1: return new Key1(interfaces[0]); // the most frequent
+-                case 2: return new Key2(interfaces[0], interfaces[1]);
+-                case 0: return key0;
+-                default: return new KeyX(interfaces);
+-            }
+-        }
+-    }
+-
+-    // BEGIN Android-changed: How proxies are generated.
+-    /**
+-     * Orders methods by their name, parameters, return type and inheritance relationship.
+-     *
+-     * @hide
+-     */
+-    private static final Comparator<Method> ORDER_BY_SIGNATURE_AND_SUBTYPE = new Comparator<Method>() {
+-        @Override public int compare(Method a, Method b) {
+-            int comparison = Method.ORDER_BY_SIGNATURE.compare(a, b);
+-            if (comparison != 0) {
+-                return comparison;
+-            }
+-            Class<?> aClass = a.getDeclaringClass();
+-            Class<?> bClass = b.getDeclaringClass();
+-            if (aClass == bClass) {
+-                return 0;
+-            } else if (aClass.isAssignableFrom(bClass)) {
+-                return 1;
+-            } else if (bClass.isAssignableFrom(aClass)) {
+-                return -1;
+-            } else {
+-                return 0;
+-            }
+-        }
+-    };
+-
+-    /**
+-     * A factory function that generates, defines and returns the proxy class given
+-     * the ClassLoader and array of interfaces.
+-     */
+-    private static final class ProxyClassFactory
+-        implements BiFunction<ClassLoader, Class<?>[], Class<?>>
+-    {
+-        // prefix for all proxy class names
+-        private static final String proxyClassNamePrefix = "$Proxy";
+-
+-        // next number to use for generation of unique proxy class names
+-        private static final AtomicLong nextUniqueNumber = new AtomicLong();
+-
+-        @Override
+-        public Class<?> apply(ClassLoader loader, Class<?>[] interfaces) {
+-
+-            Map<Class<?>, Boolean> interfaceSet = new IdentityHashMap<>(interfaces.length);
+-            for (Class<?> intf : interfaces) {
+-                /*
+-                 * Verify that the class loader resolves the name of this
+-                 * interface to the same Class object.
+-                 */
+-                Class<?> interfaceClass = null;
+-                try {
+-                    interfaceClass = Class.forName(intf.getName(), false, loader);
+-                } catch (ClassNotFoundException e) {
+-                }
+-                if (interfaceClass != intf) {
+-                    throw new IllegalArgumentException(
+-                        intf + " is not visible from class loader");
+-                }
+-                /*
+-                 * Verify that the Class object actually represents an
+-                 * interface.
+-                 */
+-                if (!interfaceClass.isInterface()) {
+-                    throw new IllegalArgumentException(
+-                        interfaceClass.getName() + " is not an interface");
+-                }
+-                /*
+-                 * Verify that this interface is not a duplicate.
+-                 */
+-                if (interfaceSet.put(interfaceClass, Boolean.TRUE) != null) {
+-                    throw new IllegalArgumentException(
+-                        "repeated interface: " + interfaceClass.getName());
+-                }
+-            }
+-
+-            String proxyPkg = null;     // package to define proxy class in
+-            int accessFlags = Modifier.PUBLIC | Modifier.FINAL;
+-
+-            /*
+-             * Record the package of a non-public proxy interface so that the
+-             * proxy class will be defined in the same package.  Verify that
+-             * all non-public proxy interfaces are in the same package.
+-             */
+-            for (Class<?> intf : interfaces) {
+-                int flags = intf.getModifiers();
+-                if (!Modifier.isPublic(flags)) {
+-                    accessFlags = Modifier.FINAL;
+-                    String name = intf.getName();
+-                    int n = name.lastIndexOf('.');
+-                    String pkg = ((n == -1) ? "" : name.substring(0, n + 1));
+-                    if (proxyPkg == null) {
+-                        proxyPkg = pkg;
+-                    } else if (!pkg.equals(proxyPkg)) {
+-                        throw new IllegalArgumentException(
+-                            "non-public interfaces from different packages");
+-                    }
+-                }
+-            }
+-
+-            if (proxyPkg == null) {
+-                // if no non-public proxy interfaces, use the default package.
+-                proxyPkg = "";
+-            }
+-
+-            {
+-                // Android-changed: Generate the proxy directly instead of calling
+-                // through to ProxyGenerator.
+-                List<Method> methods = getMethods(interfaces);
+-                Collections.sort(methods, ORDER_BY_SIGNATURE_AND_SUBTYPE);
+-                validateReturnTypes(methods);
+-                List<Class<?>[]> exceptions = deduplicateAndGetExceptions(methods);
+-
+-                Method[] methodsArray = methods.toArray(new Method[methods.size()]);
+-                Class<?>[][] exceptionsArray = exceptions.toArray(new Class<?>[exceptions.size()][]);
+-
+-                /*
+-                 * Choose a name for the proxy class to generate.
+-                 */
+-                long num = nextUniqueNumber.getAndIncrement();
+-                String proxyName = proxyPkg + proxyClassNamePrefix + num;
+-
+-                return generateProxy(proxyName, interfaces, loader, methodsArray,
+-                                     exceptionsArray);
+-            }
+-        }
+-    }
+-
+-    /**
+-     * Remove methods that have the same name, parameters and return type. This
+-     * computes the exceptions of each method; this is the intersection of the
+-     * exceptions of equivalent methods.
+-     *
+-     * @param methods the methods to find exceptions for, ordered by name and
+-     *     signature.
+-     */
+-    private static List<Class<?>[]> deduplicateAndGetExceptions(List<Method> methods) {
+-        List<Class<?>[]> exceptions = new ArrayList<Class<?>[]>(methods.size());
+-
+-        for (int i = 0; i < methods.size(); ) {
+-            Method method = methods.get(i);
+-            Class<?>[] exceptionTypes = method.getExceptionTypes();
+-
+-            if (i > 0 && Method.ORDER_BY_SIGNATURE.compare(method, methods.get(i - 1)) == 0) {
+-                exceptions.set(i - 1, intersectExceptions(exceptions.get(i - 1), exceptionTypes));
+-                methods.remove(i);
+-            } else {
+-                exceptions.add(exceptionTypes);
+-                i++;
+-            }
+-        }
+-        return exceptions;
+-    }
+-
+-    /**
+-     * Returns the exceptions that are declared in both {@code aExceptions} and
+-     * {@code bExceptions}. If an exception type in one array is a subtype of an
+-     * exception from the other, the subtype is included in the intersection.
+-     */
+-    private static Class<?>[] intersectExceptions(Class<?>[] aExceptions, Class<?>[] bExceptions) {
+-        if (aExceptions.length == 0 || bExceptions.length == 0) {
+-            return EmptyArray.CLASS;
+-        }
+-        if (Arrays.equals(aExceptions, bExceptions)) {
+-            return aExceptions;
+-        }
+-        Set<Class<?>> intersection = new HashSet<Class<?>>();
+-        for (Class<?> a : aExceptions) {
+-            for (Class<?> b : bExceptions) {
+-                if (a.isAssignableFrom(b)) {
+-                    intersection.add(b);
+-                } else if (b.isAssignableFrom(a)) {
+-                    intersection.add(a);
+-                }
+-            }
+-        }
+-        return intersection.toArray(new Class<?>[intersection.size()]);
+-    }
+-
+-    /**
+-     * Throws if any two methods in {@code methods} have the same name and
+-     * parameters but incompatible return types.
+-     *
+-     * @param methods the methods to find exceptions for, ordered by name and
+-     *     signature.
+-     */
+-    private static void validateReturnTypes(List<Method> methods) {
+-        Method vs = null;
+-        for (Method method : methods) {
+-            if (vs == null || !vs.equalNameAndParameters(method)) {
+-                vs = method; // this has a different name or parameters
+-                continue;
+-            }
+-            Class<?> returnType = method.getReturnType();
+-            Class<?> vsReturnType = vs.getReturnType();
+-            if (returnType.isInterface() && vsReturnType.isInterface()) {
+-                // all interfaces are mutually compatible
+-            } else if (vsReturnType.isAssignableFrom(returnType)) {
+-                vs = method; // the new return type is a subtype; use it instead
+-            } else if (!returnType.isAssignableFrom(vsReturnType)) {
+-                throw new IllegalArgumentException("proxied interface methods have incompatible "
+-                        + "return types:\n  " + vs + "\n  " + method);
+-            }
+-        }
+-    }
+-
+-    @NeverInline  // Prevent code bloat from inlining recursive code.
+-    private static List<Method> getMethods(Class<?>[] interfaces) {
+-        List<Method> result = new ArrayList<Method>();
+-        try {
+-            result.add(Object.class.getMethod("equals", Object.class));
+-            result.add(Object.class.getMethod("hashCode", EmptyArray.CLASS));
+-            result.add(Object.class.getMethod("toString", EmptyArray.CLASS));
+-        } catch (NoSuchMethodException e) {
+-            throw new AssertionError();
+-        }
+-
+-        getMethodsRecursive(interfaces, result);
+-        return result;
+-    }
+-
+-    /**
+-     * Fills {@code proxiedMethods} with the methods of {@code interfaces} and
+-     * the interfaces they extend. May contain duplicates.
+-     */
+-    @NeverInline  // Prevent code bloat from inlining recursive code.
+-    private static void getMethodsRecursive(Class<?>[] interfaces, List<Method> methods) {
+-        for (Class<?> i : interfaces) {
+-            getMethodsRecursive(i.getInterfaces(), methods);
+-            Collections.addAll(methods, i.getDeclaredMethods());
+-        }
+-    }
+-
+-    @FastNative
+-    private static native Class<?> generateProxy(String name, Class<?>[] interfaces,
+-                                                 ClassLoader loader, Method[] methods,
+-                                                 Class<?>[][] exceptions);
+-    // END Android-changed: How proxies are generated.
+-
++    // The interpreter synthesizes and caches the class in its shared guest loader.
++    private static native Class<?> getProxyClass0(ClassLoader loader, Class<?>... interfaces);
++
++    private static native boolean isEmbeddedProxyClass(Class<?> type);
+ 
+     /**
+      * Returns an instance of a proxy class for the specified interfaces
+@@ -853,7 +407,6 @@
+      *          if the invocation handler, {@code h}, is
+      *          {@code null}
+      */
+-    @CallerSensitive
+     public static Object newProxyInstance(ClassLoader loader,
+                                           Class<?>[] interfaces,
+                                           InvocationHandler h)
+@@ -917,31 +470,6 @@
+         }
+     }
+ 
+-    // Android-removed: SecurityManager / permission checks.
+-    /*
+-    private static void checkNewProxyPermission(Class<?> caller, Class<?> proxyClass) {
+-        SecurityManager sm = System.getSecurityManager();
+-        if (sm != null) {
+-            if (ReflectUtil.isNonPublicProxyClass(proxyClass)) {
+-                ClassLoader ccl = caller.getClassLoader();
+-                ClassLoader pcl = proxyClass.getClassLoader();
+-
+-                // do permission check if the caller is in a different runtime package
+-                // of the proxy class
+-                int n = proxyClass.getName().lastIndexOf('.');
+-                String pkg = (n == -1) ? "" : proxyClass.getName().substring(0, n);
+-
+-                n = caller.getName().lastIndexOf('.');
+-                String callerPkg = (n == -1) ? "" : caller.getName().substring(0, n);
+-
+-                if (pcl != ccl || !pkg.equals(callerPkg)) {
+-                    sm.checkPermission(new ReflectPermission("newProxyInPackage." + pkg));
+-                }
+-            }
+-        }
+-    }
+-    */
+-
+     /**
+      * Returns true if and only if the specified class was dynamically
+      * generated to be a proxy class using the {@code getProxyClass}
+@@ -957,7 +485,7 @@
+      * @throws  NullPointerException if {@code cl} is {@code null}
+      */
+     public static boolean isProxyClass(Class<?> cl) {
+-        return Proxy.class.isAssignableFrom(cl) && proxyClassCache.containsValue(cl);
++        return isEmbeddedProxyClass(Objects.requireNonNull(cl));
+     }
+ 
+     /**
+@@ -974,7 +502,6 @@
+      *          s.checkPackageAccess()} denies access to the invocation
+      *          handler's class.
+      */
+-    @CallerSensitive
+     public static InvocationHandler getInvocationHandler(Object proxy)
+         throws IllegalArgumentException
+     {

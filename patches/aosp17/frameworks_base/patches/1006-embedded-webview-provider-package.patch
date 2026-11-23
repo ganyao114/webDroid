@@ -1,0 +1,16 @@
+--- a/frameworks/base/core/java/android/webkit/WebView.java
++++ b/frameworks/base/core/java/android/webkit/WebView.java
+@@ -2405,7 +2405,12 @@
+      */
+     @Nullable
+     public static PackageInfo getCurrentWebViewPackage() {
+-        return null;
++        if (sDisabled) return null;
++        PackageInfo provider = new PackageInfo();
++        provider.packageName = "org.wasmandroid.webview";
++        provider.versionName = "1.0";
++        provider.setLongVersionCode(1);
++        return provider;
+     }
+ 
+     /** @deprecated Address detection requires a local WebView engine. */

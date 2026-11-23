@@ -1,0 +1,56 @@
+--- a/frameworks/base/core/java/android/webkit/URLUtil.java
++++ b/frameworks/base/core/java/android/webkit/URLUtil.java
+@@ -18,9 +18,6 @@
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+-import android.compat.Compatibility;
+-import android.compat.annotation.ChangeId;
+-import android.compat.annotation.EnabledSince;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.net.ParseException;
+ import android.net.Uri;
+@@ -36,17 +33,6 @@
+ import java.util.regex.Pattern;
+ 
+ public final class URLUtil {
+-
+-    /**
+-     * This feature enables parsing of Content-Disposition headers that conform to RFC 6266. In
+-     * particular, this enables parsing of {@code filename*} values which can use a different
+-     * character encoding.
+-     *
+-     * @hide
+-     */
+-    @ChangeId
+-    @EnabledSince(targetSdkVersion = Build.VERSION_CODES.VANILLA_ICE_CREAM)
+-    static final long PARSE_CONTENT_DISPOSITION_USING_RFC_6266 = 319400769L;
+ 
+     private static final String LOGTAG = "webkit";
+     private static final boolean TRACE = false;
+@@ -345,10 +331,8 @@
+      */
+     public static String guessFileName(
+             String url, @Nullable String contentDisposition, @Nullable String mimeType) {
+-        if (android.os.Flags.androidOsBuildVanillaIceCream()) {
+-            if (Compatibility.isChangeEnabled(PARSE_CONTENT_DISPOSITION_USING_RFC_6266)) {
+-                return guessFileNameRfc6266(url, contentDisposition, mimeType);
+-            }
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
++            return guessFileNameRfc6266(url, contentDisposition, mimeType);
+         }
+ 
+         return guessFileNameRfc2616(url, contentDisposition, mimeType);
+@@ -553,10 +537,8 @@
+      */
+     @UnsupportedAppUsage
+     static String parseContentDisposition(String contentDisposition) {
+-        if (android.os.Flags.androidOsBuildVanillaIceCream()) {
+-            if (Compatibility.isChangeEnabled(PARSE_CONTENT_DISPOSITION_USING_RFC_6266)) {
+-                return getFilenameFromContentDispositionRfc6266(contentDisposition);
+-            }
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
++            return getFilenameFromContentDispositionRfc6266(contentDisposition);
+         }
+         return parseContentDispositionRfc2616(contentDisposition);
+     }

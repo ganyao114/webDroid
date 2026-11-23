@@ -271,6 +271,12 @@ void Vm::MountReadOnlyFile(std::string_view name, std::span<const uint8_t> bytes
   }
 }
 
+std::optional<std::span<const uint8_t>> Vm::ReadGuestFile(std::string_view path) const {
+  const auto file = runtime_->guest_files.find(path);
+  if (file == runtime_->guest_files.end() || !file->second) return std::nullopt;
+  return file->second->bytes;
+}
+
 void InstallFiles(Runtime& vm) {
   vm.guest_files.try_emplace("/tmp", nullptr);
   auto& cl = vm.linker;
@@ -399,6 +405,17 @@ void InstallFiles(Runtime& vm) {
     const auto entry = vm.guest_files.find(GuestPath(self->text));
     return Value::Long(entry != vm.guest_files.end() && entry->second ? entry->second->last_modified : 0);
   });
+  cl.AddMethod(file, "setLastModified", "(J)Z", 0, [](Runtime& vm, Object* self, Values args) {
+    const auto time = args[0].j();
+    if (time < 0) vm.Fail("Ljava/lang/IllegalArgumentException;", "Negative modification time");
+    const auto path = GuestPath(self->text);
+    const auto entry = vm.guest_files.find(path);
+    if (entry == vm.guest_files.end() || !entry->second || vm.read_only_paths.contains(path)) {
+      return Value::Int(0);
+    }
+    entry->second->last_modified = time;
+    return Value::Int(1);
+  });
   cl.AddMethod(file, "delete", "()Z", 0, [](Runtime& vm, Object* self, Values) {
     const auto path = GuestPath(self->text);
     const auto entry = vm.guest_files.find(path);
@@ -425,7 +442,7 @@ void InstallFiles(Runtime& vm) {
     vm.guest_files.erase(source);
     return Value::Int(1);
   });
-  cl.AddMethod(file, "listFiles", "()[Ljava/io/File;", 0, [](Runtime& vm, Object* self, Values) {
+  const auto list_files = [](Runtime& vm, Object* self, Object* filter, bool names_only) {
     std::vector<std::string> paths;
     const auto path = GuestPath(self->text);
     const auto entry = vm.guest_files.find(path);
@@ -448,14 +465,42 @@ void InstallFiles(Runtime& vm) {
       if (error) return Value{};
     }
     RootScope roots(vm);
-    auto* array = roots.Hold(vm.NewArray(vm.linker.Resolve("[Ljava/io/File;"), paths.size()));
+    roots.Hold(filter);
     Class& file = vm.linker.Resolve("Ljava/io/File;");
-    for (size_t i = 0; i < paths.size(); ++i) {
-      auto* child = vm.heap.Allocate(vm, file);
-      child->text = DecodeUtf8(paths[i]);
-      array->elements[i] = Value::Ref(child);
+    std::vector<Object*> accepted;
+    for (const auto& path : paths) {
+      Object* name = nullptr;
+      if (filter || names_only) {
+        name = roots.Hold(vm.NewString(DecodeUtf8(std::filesystem::path(path).filename().string())));
+      }
+      if (filter && !CallVirtual(vm, filter, "accept", "(Ljava/io/File;Ljava/lang/String;)Z",
+                                 std::array{Value::Ref(self), Value::Ref(name)}).i()) continue;
+      if (names_only) {
+        accepted.push_back(name);
+      } else {
+        auto* child = roots.Hold(vm.heap.Allocate(vm, file));
+        child->text = DecodeUtf8(path);
+        accepted.push_back(child);
+      }
     }
+    auto* array = vm.NewArray(vm.linker.Resolve(names_only ? "[Ljava/lang/String;" : "[Ljava/io/File;"),
+                              accepted.size());
+    for (size_t i = 0; i < accepted.size(); ++i) array->elements[i] = Value::Ref(accepted[i]);
     return Value::Ref(array);
+  };
+  cl.AddMethod(file, "listFiles", "()[Ljava/io/File;", 0, [list_files](Runtime& vm, Object* self, Values) {
+    return list_files(vm, self, nullptr, false);
+  });
+  cl.AddMethod(file, "listFiles", "(Ljava/io/FilenameFilter;)[Ljava/io/File;", 0,
+               [list_files](Runtime& vm, Object* self, Values a) {
+    return list_files(vm, self, a[0].ref(), false);
+  });
+  cl.AddMethod(file, "list", "()[Ljava/lang/String;", 0, [list_files](Runtime& vm, Object* self, Values) {
+    return list_files(vm, self, nullptr, true);
+  });
+  cl.AddMethod(file, "list", "(Ljava/io/FilenameFilter;)[Ljava/lang/String;", 0,
+               [list_files](Runtime& vm, Object* self, Values a) {
+    return list_files(vm, self, a[0].ref(), true);
   });
 
   auto& fd = cl.Define("Ljava/io/FileDescriptor;", kObject, art::kAccFinal);

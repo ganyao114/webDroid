@@ -343,6 +343,111 @@ std::vector<Value> ReflectArguments(Runtime& vm, const Method& method, Object* a
   return arguments;
 }
 
+Value InvokeProxy(Runtime& vm, Object* proxy, Method& method, Values args) {
+  RootScope roots(vm, args, proxy);
+  auto* reflected = roots.Hold(vm.heap.Allocate(vm, vm.linker.Resolve("Ljava/lang/reflect/Method;")));
+  reflected->reflected_method = &method;
+  Object* boxed = nullptr;
+  if (!args.empty()) {
+    boxed = roots.Hold(vm.NewArray(vm.linker.Resolve("[Ljava/lang/Object;"), args.size()));
+    for (size_t i = 0; i < args.size(); ++i) {
+      const auto type = method.shorty[i + 1];
+      boxed->elements[i] = type == 'L' ? args[i] : BoxReflectivePrimitive(vm, args[i], type);
+    }
+  }
+  auto& base = vm.linker.Resolve("Ljava/lang/reflect/Proxy;");
+  auto& dispatch = vm.linker.FindMethod(base, "invoke",
+      "(Ljava/lang/reflect/Proxy;Ljava/lang/reflect/Method;[Ljava/lang/Object;)Ljava/lang/Object;", true);
+  const auto result = vm.Invoke(dispatch, nullptr,
+      std::array{Value::Ref(proxy), Value::Ref(reflected), Value::Ref(boxed)});
+  const auto type = method.shorty.front();
+  if (type == 'V') return {};
+  if (type == 'L') {
+    const auto descriptor = std::string_view(method.signature).substr(method.signature.find(')') + 1);
+    if (result.ref() && !vm.linker.IsAssignable(vm.linker.Resolve(descriptor), *result.ref()->type)) {
+      vm.Fail("Ljava/lang/ClassCastException;", descriptor);
+    }
+    return result;
+  }
+  Object& value = vm.NonNull(result.ref());
+  if (value.type->descriptor != kBoxedTypes[kBoxedPrimitives.find(type)]) {
+    vm.Fail("Ljava/lang/ClassCastException;", value.type->descriptor);
+  }
+  return value.payload;
+}
+
+Value ProxyClass(Runtime& vm, Object*, Values args) {
+  constexpr auto kProxy = "Ljava/lang/reflect/Proxy;";
+  constexpr auto kHandlerConstructor = "(Ljava/lang/reflect/InvocationHandler;)V";
+  const auto& requested = vm.NonNull(args[1].ref()).elements;
+  if (requested.size() > 65535) vm.Fail("Ljava/lang/IllegalArgumentException;", "Too many proxy interfaces");
+  std::vector<Class*> interfaces;
+  std::vector<std::string> descriptors;
+  std::set<Class*> members;
+  std::string_view nonpublic_package;
+  for (Value value : requested) {
+    auto* interface = vm.NonNull(value.ref()).represented_class;
+    if (!interface->IsInterface() || !members.insert(interface).second) {
+      vm.Fail("Ljava/lang/IllegalArgumentException;", interface->descriptor);
+    }
+    if (!(interface->flags & art::kAccPublic)) {
+      const auto name = std::string_view(interface->descriptor);
+      const auto slash = name.find_last_of('/');
+      const auto package = name.substr(0, slash == name.npos ? 1 : slash + 1);
+      if (!nonpublic_package.empty() && package != nonpublic_package) {
+        vm.Fail("Ljava/lang/IllegalArgumentException;", "Non-public proxy interfaces use different packages");
+      }
+      nonpublic_package = package;
+    }
+    interfaces.push_back(interface);
+    descriptors.push_back(interface->descriptor);
+  }
+  const auto prefix = nonpublic_package.empty() ? "Lorg/wasmandroid/reflect/" : nonpublic_package;
+  std::string key;
+  for (const auto& descriptor : descriptors) key += descriptor;
+  const auto stem = std::string(prefix) + "$Proxy" + std::to_string(std::hash<std::string>{}(key));
+  auto name = stem + ';';
+  for (size_t suffix = 1; vm.linker.HasClass(name); ++suffix) {
+    auto& existing = vm.linker.Resolve(name);
+    if (!existing.dex && (existing.flags & art::kAccClassIsProxy) &&
+        existing.interface_descriptors == descriptors) {
+      return Value::Ref(vm.ClassObject(existing));
+    }
+    name = stem + "$" + std::to_string(suffix) + ';';
+  }
+  std::map<std::string, Method*> methods;
+  auto& object = vm.linker.Resolve(kObject);
+  for (const auto& [name, sig] : {std::pair{"equals", "(Ljava/lang/Object;)Z"}, {"hashCode", "()I"},
+                                  {"toString", "()Ljava/lang/String;"}}) {
+    methods.emplace(MemberKey(name, sig), &vm.linker.FindMethod(object, name, sig, false));
+  }
+  std::set<Class*> visited;
+  const auto collect = [&](const auto& visit, Class& interface) -> void {
+    if (!visited.insert(&interface).second) return;
+    for (auto& [key, method] : interface.methods) {
+      if (method.IsVirtual()) methods.emplace(key, &method);
+    }
+    for (auto* parent : interface.interfaces) visit(visit, *parent);
+  };
+  for (auto* interface : interfaces) collect(collect, *interface);
+  auto& generated = vm.linker.Define(name, kProxy, art::kAccFinal | art::kAccClassIsProxy |
+      (nonpublic_package.empty() ? art::kAccPublic : 0));
+  generated.interface_descriptors = std::move(descriptors);
+  vm.linker.AddMethod(generated, "<init>", kHandlerConstructor, art::kAccPublic,
+      [base = &vm.linker.FindMethod(vm.linker.Resolve(kProxy), "<init>", kHandlerConstructor, false)](
+          Runtime& runtime, Object* self, Values arguments) {
+        return runtime.Invoke(*base, self, arguments);
+      });
+  for (const auto& [key, method] : methods) {
+    vm.linker.AddMethod(generated, method->name, method->signature, art::kAccPublic | art::kAccFinal,
+        [method](Runtime& runtime, Object* self, Values arguments) {
+          return InvokeProxy(runtime, self, *method, arguments);
+        });
+  }
+  vm.linker.Resolve(generated.descriptor);
+  return Value::Ref(vm.ClassObject(generated));
+}
+
 std::string ReflectParameters(Runtime& vm, Object* array) {
   std::string signature = "(";
   if (array) {
@@ -650,6 +755,15 @@ void InstallReflection(Runtime& vm, Class& cls) {
   });
 
   auto& method_type = cl.Define("Ljava/lang/reflect/Method;", accessible.descriptor, art::kAccFinal);
+  cl.AddMethod(method_type, "getName", "()Ljava/lang/String;", 0,
+      [](Runtime& vm, Object* self, Values) { return StringValue(vm, self->reflected_method->name); });
+  cl.AddBootNative("Ljava/lang/reflect/Proxy;", "getProxyClass0",
+      "(Ljava/lang/ClassLoader;[Ljava/lang/Class;)Ljava/lang/Class;", ProxyClass);
+  cl.AddBootNative("Ljava/lang/reflect/Proxy;", "isEmbeddedProxyClass", "(Ljava/lang/Class;)Z",
+      [](Runtime& vm, Object*, Values args) {
+        const auto& type = *vm.NonNull(args[0].ref()).represented_class;
+        return Value::Int(!type.dex && (type.flags & art::kAccClassIsProxy));
+      });
   cl.AddMethod(method_type, "isAnnotationPresent", "(Ljava/lang/Class;)Z", 0,
       [](Runtime& vm, Object* self, Values a) {
         const Class& annotation = *vm.NonNull(a[0].ref()).represented_class;
@@ -875,6 +989,7 @@ void InstallThrowable(Runtime& vm) {
   };
   cl.AddMethod(base, "printStackTrace", "()V", 0, print_stack);
   cl.AddMethod(base, "printStackTrace", "(Ljava/io/PrintStream;)V", 0, print_stack);
+  cl.AddMethod(base, "printStackTrace", "(Ljava/io/PrintWriter;)V", 0, print_stack);
   define(exception, throwable);
   define(runtime, exception);
   define("Ljava/io/IOException;", exception);
@@ -2613,6 +2728,13 @@ void InstallNumbers(Runtime& vm) {
   for (auto sig : {"(I)Z", "(C)Z"}) {
     cl.AddMethod(character, "isWhitespace", sig, art::kAccStatic,
         [](Runtime&, Object*, Values a) { return Value::Int(IsWhitespace(a[0].i())); });
+    cl.AddMethod(character, "isSpaceChar", sig, art::kAccStatic, [](Runtime&, Object*, Values a) {
+      // libcore Character.isSpaceChar selects the Unicode Zs, Zl and Zp categories.
+      const int code = a[0].i();
+      return Value::Int(code == 0x20 || code == 0xa0 || code == 0x1680 ||
+                        (code >= 0x2000 && code <= 0x200a) || code == 0x2028 || code == 0x2029 ||
+                        code == 0x202f || code == 0x205f || code == 0x3000);
+    });
     cl.AddMethod(character, "isDigit", sig, art::kAccStatic,
         [](Runtime&, Object*, Values a) { return Value::Int(DecimalDigit(a[0].i()) >= 0); });
     cl.AddMethod(character, "isLetter", sig, art::kAccStatic,

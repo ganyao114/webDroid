@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -106,6 +107,8 @@ class Vm {
   void LoadFallbackDexFile(std::string location, std::vector<uint8_t> bytes);
   // Copies an immutable file into this VM's guest filesystem.
   void MountReadOnlyFile(std::string_view path, std::span<const uint8_t> bytes);
+  // The returned view is valid until a guest write or removal of the file.
+  std::optional<std::span<const uint8_t>> ReadGuestFile(std::string_view path) const;
   // Adds the numbered DEX entries atomically, in DEX order. DEX files loaded
   // via LoadDexFile or LoadFallbackDexFile form the parent class path.
   // Keep the APK immutable while it is in use because entries can be file-backed.

@@ -40,6 +40,7 @@ enum wa_sf_layer_flags {
     WA_SF_CLIP_BOUNDS = 1u << 1,
     WA_SF_OPAQUE = 1u << 2,
     WA_SF_BLUR_BEHIND = 1u << 3,
+    WA_SF_INPUT_MODAL = 1u << 4,
 };
 
 enum wa_sf_surface_kind {
@@ -272,6 +273,7 @@ int32_t wa_codec_control(wa_sf_t *sf, uint32_t id, uint32_t action);
 int32_t wa_codec_poll(wa_sf_t *sf, wa_codec_event_t *event);
 
 enum wa_webview_action { WA_WEBVIEW_OPEN = 1, WA_WEBVIEW_CLOSE, WA_WEBVIEW_EVAL, WA_WEBVIEW_REPLY };
+/* PAGE_LOADED carries the UTF-8 URL, optionally followed by NUL and the document title. */
 enum wa_webview_status { WA_WEBVIEW_READY = 1, WA_WEBVIEW_EVAL_RESULT,
                          WA_WEBVIEW_INTERFACE, WA_WEBVIEW_ERROR, WA_WEBVIEW_PAGE_LOADED };
 typedef struct wa_webview_desc {

@@ -28,6 +28,7 @@ namespace {
 thread_local std::unordered_map<JNIEnv*, State*> bindings;
 constexpr char kRuntime[] = "Landroid/app/UiRuntime;";
 constexpr char kPackageEntry[] = "android/content/pm/PackageManager$Entry";
+constexpr uint32_t kEmbeddedOverlayLayer = UINT32_MAX;
 
 class LocalFrame {
   public:
@@ -139,6 +140,35 @@ void BeginDraw(JNIEnv* env, jclass) {
     state->needs_draw = true;
     if (!state->canvas)
         state->result = WA_SF_STATE;
+}
+
+jboolean BeginOverlayDraw(JNIEnv* env, jclass, jboolean modal) {
+    auto* state = GetState(env);
+    if (!state || !state->transaction || !state->canvas || state->overlay_drawn) {
+        Throw(env, "java/lang/IllegalStateException", "Overlay needs the active window recording");
+        return JNI_FALSE;
+    }
+    if (state->result != WA_SF_OK) return JNI_FALSE;
+    state->result = wa_canvas_end(state->canvas);
+    state->canvas = nullptr;
+    if (state->result != WA_SF_OK) return JNI_FALSE;
+    const auto width = static_cast<float>(state->recording_viewport.viewport_w);
+    const auto height = static_cast<float>(state->recording_viewport.viewport_h);
+    const wa_sf_layer_desc_t overlay{.layer_id = kEmbeddedOverlayLayer, .parent_id = state->layer_id,
+        .z_order = INT32_MAX, .width = width, .height = height, .scale_x = 1, .scale_y = 1, .alpha = 1,
+        .clip_w = width, .clip_h = height,
+        .flags = WA_SF_VISIBLE | WA_SF_CLIP_BOUNDS | (modal ? uint32_t{WA_SF_INPUT_MODAL} : 0u),
+        .surface_kind = WA_SF_SURFACE_DISPLAY_LIST};
+    state->result = wa_sf_set_layer(state->sf, &overlay);
+    if (state->result != WA_SF_OK) return JNI_FALSE;
+    state->canvas = wa_canvas_begin(state->sf, kEmbeddedOverlayLayer);
+    if (!state->canvas) {
+        state->result = WA_SF_STATE;
+        return JNI_FALSE;
+    }
+    state->overlay_drawn = true;
+    ++state->recording_serial;
+    return JNI_TRUE;
 }
 
 void ApplyFontCalibration(interp::Vm& vm, State& state) {
@@ -552,6 +582,8 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     Register(vm, "com/android/internal/policy/PhoneWindow",
              Method<detail::SetSystemBars>(vm, "nativeSetSystemBars", "(III)V"));
     Register(vm, "android/view/ViewRootImpl", Method<detail::BeginDraw>(vm, "nativeBeginDraw", "()V"));
+    detail::RegisterIfDeclared(vm, "android/view/ViewRootImpl",
+        Method<detail::BeginOverlayDraw>(vm, "nativeBeginOverlayDraw", "(Z)Z"));
     Register(
         vm, "android/icu/util/ULocale",
         Method<detail::LikelyScript>(vm, "likelyScript", "(Ljava/lang/String;)Ljava/lang/String;"));
@@ -706,7 +738,8 @@ int32_t UiBridge::DoFrame(interp::Vm& vm, const wa_sf_vsync_state_t& tick) {
     if (status != WA_SF_OK)
         return status;
     if (state.presented_layer && state.presented_layer != state.layer_id) {
-        status = wa_sf_remove_layer(state.sf, state.presented_layer);
+        status = wa_sf_remove_layer(state.sf, detail::kEmbeddedOverlayLayer);
+        if (status == WA_SF_OK) status = wa_sf_remove_layer(state.sf, state.presented_layer);
         if (status != WA_SF_OK) {
             state.Abort();
             return status;
@@ -728,6 +761,8 @@ int32_t UiBridge::DoFrame(interp::Vm& vm, const wa_sf_vsync_state_t& tick) {
         return status;
     }
     state.result = WA_SF_OK;
+    state.recording_viewport = tick;
+    state.overlay_drawn = false;
     int outcome;
     try {
         detail::ApplyFontCalibration(vm, state);
@@ -747,7 +782,8 @@ int32_t UiBridge::DoFrame(interp::Vm& vm, const wa_sf_vsync_state_t& tick) {
         status = state.Begin(tick);
         if (status != WA_SF_OK)
             return status;
-        status = wa_sf_remove_layer(state.sf, state.presented_layer);
+        status = wa_sf_remove_layer(state.sf, detail::kEmbeddedOverlayLayer);
+        if (status == WA_SF_OK) status = wa_sf_remove_layer(state.sf, state.presented_layer);
         if (status != WA_SF_OK) {
             state.Abort();
             return status;
@@ -759,6 +795,8 @@ int32_t UiBridge::DoFrame(interp::Vm& vm, const wa_sf_vsync_state_t& tick) {
         if (state.result == WA_SF_OK)
             state.result = wa_canvas_end(state.canvas);
         state.canvas = nullptr;
+        if (state.result == WA_SF_OK && !state.overlay_drawn)
+            state.result = wa_sf_remove_layer(state.sf, detail::kEmbeddedOverlayLayer);
         if (state.result != WA_SF_OK) {
             const auto failure = state.result;
             state.Abort();

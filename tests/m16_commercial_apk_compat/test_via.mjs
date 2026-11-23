@@ -3,8 +3,10 @@ import { readFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  Action, Flag, FramePacket, INPUT_SIZE, Input, Memory, Op, Surface, checkedRecordSize,
+  Action, Flag, FramePacket, Ime, Input, Memory, Op, Ring, Surface, WEBVIEW_TEXT_SIZE,
+  WebViewAction, WebViewStatus, checkedRecordSize,
 } from '../../web/surfaceflinger/abi.mjs';
+import { AndroidInputWriter } from '../../web/surfaceflinger/input_ime.mjs';
 
 const [runtimePath, frameworkPath, fallbackPath, resourcesPath, apkPath] = process.argv.slice(2);
 assert(apkPath, 'Expected the runtime, framework DEX, fallback DEX, resources and Via APK');
@@ -53,9 +55,16 @@ function frame(scene) {
     const packet = new FramePacket(memory).read(address);
     const labels = [];
     let draws = 0;
+    let webviews = 0;
+    let modal = false;
     for (let i = 0; i < packet.count; ++i) {
       const layer = packet.layer(i);
-      if (!(memory.u32(layer + 76) & Flag.VISIBLE) || memory.u32(layer + 80) !== Surface.DISPLAY_LIST) continue;
+      const flags = memory.u32(layer + 76);
+      if (!(flags & Flag.VISIBLE)) continue;
+      modal ||= (flags & Flag.INPUT_MODAL) !== 0;
+      const surface = memory.u32(layer + 80);
+      if (surface === Surface.WEBVIEW) ++webviews;
+      if (surface !== Surface.DISPLAY_LIST) continue;
       const end = memory.u32(layer + 92);
       const start = packet.list(layer);
       let [x, y, scaleX, scaleY] = [memory.f32(layer + 12) - memory.f32(layer + 28),
@@ -94,23 +103,88 @@ function frame(scene) {
       }
     }
     assert(draws > 0, 'Empty Via display list');
-    return { draws, labels };
+    return { draws, webviews, modal, labels };
   } finally {
     module._wa_sf_frame_release(scene, address);
   }
 }
 
-function tap(scene, frame, label, nanos) {
-  const position = frame.labels.find(entry => entry.text === label);
-  assert(position, `Missing visible label ${label}`);
-  for (const action of [Action.DOWN, Action.UP]) {
-    memory.bytes.fill(0, scratch, scratch + INPUT_SIZE);
-    memory.view.setUint32(scratch, Input.MOTION, true);
-    memory.view.setUint32(scratch + 4, action, true);
-    memory.view.setFloat64(scratch + 24, Number(nanos) / 1e6 + (action === Action.UP ? 3 : 1), true);
-    memory.view.setFloat32(scratch + 32, position.x, true);
-    memory.view.setFloat32(scratch + 36, position.y, true);
-    assert.equal(module._wa_input_push(module._wa_sf_input(scene), scratch), 0, 'Push tap');
+function label(frame, text) {
+  const position = frame.labels.find(entry => entry.text === text);
+  assert(position, `Missing visible label ${text}`);
+  return position;
+}
+
+class Browser {
+  constructor(scene) {
+    this.scene = scene;
+    this.now = 0n;
+    this.input = new AndroidInputWriter(memory, module._wa_sf_input(scene));
+    this.requests = new Ring(memory, module._wa_sf_webview_requests(scene), 16, 24 + WEBVIEW_TEXT_SIZE);
+    this.events = new Ring(memory, module._wa_sf_webview_events(scene), 16, 16 + WEBVIEW_TEXT_SIZE);
+  }
+
+  get time() { return Number(this.now) / 1e6; }
+
+  advance(frames) {
+    for (let i = 0; i < frames; ++i) {
+      this.now += 16_666_667n;
+      call('tick', this.now);
+      this.pumpWebViews();
+    }
+    return frame(this.scene);
+  }
+
+  tap({ x, y }) {
+    assert(this.input.write(Input.MOTION, Action.DOWN, this.time + 1, 0, 0, 0, x, y));
+    assert(this.input.write(Input.MOTION, Action.UP, this.time + 3, 0, 0, 0, x, y));
+  }
+
+  enter(text) {
+    assert(this.input.ime(Ime.COMMIT, text, this.time + 1));
+    assert(this.input.write(Input.KEY, Action.DOWN, this.time + 2, 0, 66));
+    assert(this.input.write(Input.KEY, Action.UP, this.time + 3, 0, 66));
+  }
+
+  back() { assert.equal(call('send_back'), 1, 'Back left Via'); }
+
+  document(url) {
+    return withString(url, path => {
+      const size = call('read_webview_file', this.id, path, 0, 0);
+      const data = module._malloc(size);
+      assert(data, 'Could not allocate the WebView document');
+      try {
+        assert.equal(call('read_webview_file', this.id, path, data, size), size);
+        return memory.refresh().utf8(data, size);
+      } finally {
+        module._free(data);
+      }
+    });
+  }
+
+  pumpWebViews() {
+    for (let request; (request = this.requests.peek()); this.requests.consume()) {
+      if (memory.u32(request) !== WebViewAction.OPEN) continue;
+      this.id = memory.u32(request + 4);
+      const size = memory.u32(request + 16);
+      assert(size <= WEBVIEW_TEXT_SIZE);
+      this.url = memory.utf8(request + 24, size);
+      console.log(`WebView opened ${this.url}`);
+      const title = this.url.startsWith('file:///')
+        ? /<title>([^<]*)<\/title>/i.exec(this.document(this.url))?.[1]
+        : '';
+      let completion = encoder.encode(title ? `${this.url}\0${title}` : this.url);
+      if (completion.length > WEBVIEW_TEXT_SIZE) completion = encoder.encode(this.url);
+      const slot = this.events.reserve();
+      assert(slot >= 0, 'WebView completion queue is full');
+      const event = this.events.offset(slot);
+      memory.view.setUint32(event, WebViewStatus.PAGE_LOADED, true);
+      memory.view.setUint32(event + 4, this.id, true);
+      memory.view.setUint32(event + 8, 0, true);
+      memory.view.setUint32(event + 12, completion.length, true);
+      memory.bytes.set(completion, event + 16);
+      this.events.publish();
+    }
   }
 }
 
@@ -133,27 +207,67 @@ try {
   for (const field of ['onCreateCalls', 'onStartCalls', 'onResumeCalls', 'executedApplicationMethods']) {
     assert(boot[field] > 0, `${field} was not called`);
   }
-  const scene = module._wa_system_app_sf_ctx();
-  const first = frame(scene);
-  let now = 0n;
-  for (let i = 0; i < 120; ++i) {
-    now += 16_666_667n;
-    call('tick', now);
-    frame(scene);
-  }
+  const browser = new Browser(module._wa_system_app_sf_ctx());
+  const consent = browser.advance(120);
+  label(consent, 'Welcome');
+  label(consent, 'Disagree');
+  browser.tap(label(consent, 'Agree'));
+  const home = browser.advance(120);
+  console.log('Browser home', JSON.stringify(home));
+  label(home, 'Homepage');
+  assert.equal(home.webviews, 1);
+  const homeUrl = browser.url;
+  assert.match(homeUrl, /^file:\/\/\/data\/user\/0\/mark\.via\/.*\.html$/);
+  const html = browser.document(homeUrl);
+  assert.match(html, /<input\b/);
+  assert.match(html, /<img\b/);
+  const { y } = label(home, '1');
+  const openMenu = () => {
+    browser.tap({ x: 432, y });
+    const menu = browser.advance(36);
+    assert(menu.modal, 'The Via menu did not open above the WebView');
+    for (const text of ['Bookmarks', 'History', 'Settings']) label(menu, text);
+    console.log('Browser menu', JSON.stringify(menu));
+    return menu;
+  };
+  openMenu();
+  browser.back();
+  const dismissed = browser.advance(36);
+  label(dismissed, 'Homepage');
+  assert(!dismissed.modal, 'Menu stayed open');
+  assert(!dismissed.labels.some(entry => entry.text === 'Settings'), 'Menu stayed open');
+
+  browser.tap(label(openMenu(), 'Bookmarks'));
+  const bookmarks = browser.advance(36);
+  label(bookmarks, 'Bookmarks');
+  label(bookmarks, 'Saved pages');
+  assert.equal(bookmarks.webviews, 0);
+  browser.back();
+  const returned = browser.advance(36);
+  label(returned, 'Homepage');
+  assert.equal(returned.webviews, 1);
+
+  browser.tap(label(returned, 'Homepage'));
+  browser.advance(16);
+  assert(state().imeFocused, 'Via address field did not focus');
+  const testUrl = 'https://example.com/';
+  browser.enter(testUrl);
+  const page = browser.advance(60);
+  assert.equal(browser.url, testUrl);
+  assert.equal(page.webviews, 1);
+  browser.back();
+  const final = browser.advance(120);
+  label(final, 'Homepage');
+  assert.equal(final.webviews, 1);
+  assert.equal(browser.url, homeUrl);
+  assert.match(browser.document(homeUrl), /<input\b/);
+  console.log('Home after Back', JSON.stringify(final));
+
   const steady = state();
+  const heapHeadroomBytes = steady.wasmLinearBytes - steady.wasmHeapEndBytes;
   assert(steady.avgFrameMs < 3, `Steady frames averaged ${steady.avgFrameMs} ms`);
-  console.log('Via Browser', JSON.stringify({ ...steady, first,
-    heapHeadroomBytes: steady.wasmLinearBytes - steady.wasmHeapEndBytes }));
-  tap(scene, first, 'Agree', now);
-  for (let i = 0; i < 60; ++i) {
-    now += 16_666_667n;
-    call('tick', now);
-  }
-  const afterAgree = frame(scene);
-  console.log('After Agree', JSON.stringify(afterAgree));
-  assert(!afterAgree.labels.some(entry => entry.text === 'Welcome'), 'Via stayed on its first-run screen');
-  call('send_back');
+  assert(heapHeadroomBytes > 100 * 1024 ** 2, `Via heap headroom fell to ${heapHeadroomBytes} bytes`);
+  console.log('Via journey passed', JSON.stringify({ ...steady, heapHeadroomBytes }));
 } finally {
   module._wa_system_app_destroy();
   module._free(scratch);

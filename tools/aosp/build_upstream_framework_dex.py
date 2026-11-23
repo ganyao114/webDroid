@@ -24,13 +24,28 @@ COMPATIBILITY = Path(__file__).with_name("framework_build")
 JAVA_BASE = Path("libcore/ojluni/src/main/java")
 LIBCORE_LUNI = Path("libcore/luni/src/main/java")
 LIBCORE_JSON = Path("libcore/json/src/main/java")
+JAVA_BASE_ADAPTERS = {
+    Path("java/util/Collections.java"): Path("java/util/EmbeddedSynchronizedCollections.java"),
+}
 SPARSE_LIBCORE_ROOTS = (JAVA_BASE, LIBCORE_LUNI, LIBCORE_JSON)
 SPARSE_FRAMEWORK_ROOTS = ("frameworks/base/core/java", "frameworks/base/media/java")
+CONNECTIVITY_PROJECT = "packages/modules/Connectivity"
+UPSTREAM_JAVA_PROJECTS = ("frameworks/base/", "libcore/", CONNECTIVITY_PROJECT + "/")
+SPARSE_CONNECTIVITY_ROOT = CONNECTIVITY_PROJECT + "/staticlibs/framework"
+SPARSE_SOURCE_ROOTS = {
+    "libcore": SPARSE_LIBCORE_ROOTS,
+    "frameworks/base": SPARSE_FRAMEWORK_ROOTS,
+    CONNECTIVITY_PROJECT: (SPARSE_CONNECTIVITY_ROOT,),
+}
 SPARSE_SOURCE_MIRRORS = {
     "frameworks/base/core/java/android/service/notification/StatusBarNotification.java":
         "937-status-bar-source-mirror.patch",
     "frameworks/base/media/java/android/media/AudioAttributes.java":
         "949-audio-attributes-source-mirror.patch",
+    f"{SPARSE_CONNECTIVITY_ROOT}/com/android/net/module/util/CollectionUtils.java":
+        "985-connectivity-collection-utils-source-mirror.patch",
+    f"{SPARSE_CONNECTIVITY_ROOT}/com/android/net/module/util/NetworkCapabilitiesUtils.java":
+        "986-network-capabilities-utils-source-mirror.patch",
 }
 FRAMEWORK_DEX = "aosp17_upstream_framework.dex"
 FRAMEWORK_JAR = "aosp17_upstream_framework_classes.jar"
@@ -176,16 +191,8 @@ def digest(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def read_sparse_source(args, name, inputs):
+def read_sparse_source(args, name, inputs, project, source_root):
     """Read the pinned source from Git or a byte-identical SDK source mirror."""
-    if name.startswith("libcore/"):
-        project = "libcore"
-        source_root = next(root for root in SPARSE_LIBCORE_ROOTS if name.startswith(f"{root}/"))
-        relative = Path(name).relative_to(source_root)
-    else:
-        project = "frameworks/base"
-        source_root = next(root for root in SPARSE_FRAMEWORK_ROOTS if name.startswith(f"{root}/"))
-        relative = Path(name).relative_to(source_root)
     repo = args.aosp_root / project
     git = ("git", "--no-optional-locks", "-C", repo)
     env = {**os.environ, "GIT_NO_LAZY_FETCH": "1"}
@@ -202,7 +209,7 @@ def read_sparse_source(args, name, inputs):
         return local.stdout
     # Only use the SDK source bundle when Git confirms that every byte matches
     # the selected upstream blob.
-    mirror = args.sdk_sources / relative
+    mirror = args.sdk_sources / Path(name).relative_to(source_root)
     data = mirror.read_bytes()
     actual = subprocess.check_output([*git, "hash-object", "--stdin"], input=data, env=env)
     if actual.strip() != blob and name in SPARSE_SOURCE_MIRRORS:
@@ -216,6 +223,17 @@ def read_sparse_source(args, name, inputs):
         raise ValueError(f"{mirror}: does not match {project}/{tree_path} at HEAD")
     inputs.add(mirror)
     return data
+
+
+def read_upstream_java(args, name, inputs):
+    path = args.aosp_root / name
+    if not path.is_file():
+        for project, roots in SPARSE_SOURCE_ROOTS.items():
+            for root in roots:
+                if name.startswith(f"{root}/"):
+                    return read_sparse_source(args, name, inputs, project, root)
+    inputs.add(path)
+    return path.read_bytes()
 
 
 def profile_sources(aosp_root, inputs, manifest=PROFILE / "sources.txt"):
@@ -340,6 +358,13 @@ def stage_java(destination, relative, data):
     file.parent.mkdir(parents=True, exist_ok=True)
     file.write_bytes(data)
     return file
+
+
+def java_base_path(name):
+    source = Path(name)
+    base = LIBCORE_LUNI if source.is_relative_to(LIBCORE_LUNI) else JAVA_BASE
+    relative = source.relative_to(base)
+    return JAVA_BASE_ADAPTERS.get(relative, relative)
 
 
 def pack_framework_resources(linked, destination):
@@ -651,15 +676,9 @@ def build(args, stage):
     java = {}
     for group in ("framework", "java-base", "services"):
         for name in groups[group]:
-            path = args.aosp_root / name
-            if (not name.startswith(("frameworks/base/", "libcore/")) or path.suffix != ".java"):
+            if not name.startswith(UPSTREAM_JAVA_PROJECTS) or not name.endswith(".java"):
                 raise ValueError(f"{manifest}: expected an upstream Java file in [{group}]: {name}")
-            if not path.is_file() and any(name.startswith(f"{directory}/")
-                                          for directory in (*SPARSE_LIBCORE_ROOTS, *SPARSE_FRAMEWORK_ROOTS)):
-                java[name] = read_sparse_source(args, name, inputs)
-            else:
-                inputs.add(path)
-                java[name] = path.read_bytes()
+            java[name] = read_upstream_java(args, name, inputs)
     originals = {name: digest(data) for name, data in java.items()}
     patches = {}
     for name in groups["patches"]:
@@ -675,9 +694,7 @@ def build(args, stage):
         for name in sorted(groups[group]):
             data = java[name]
             if group == "java-base":
-                source = Path(name)
-                base = LIBCORE_LUNI if source.is_relative_to(LIBCORE_LUNI) else JAVA_BASE
-                staged[group].append(stage_java(java_base, source.relative_to(base), data))
+                staged[group].append(stage_java(java_base, java_base_path(name), data))
             else:
                 staged[group].append(stage_java(stage / "upstream", name, data))
             applied = {patch: stat["files"][name] for patch, stat in patches.items()
@@ -810,7 +827,8 @@ def build(args, stage):
     stats.update(added=sum(p["added"] for p in patches.values()),
                  removed=sum(p["removed"] for p in patches.values()),
                  framework_base_java=sum(name.startswith("frameworks/base/")
-                                         for name in groups["framework"]))
+                                         for name in groups["framework"]),
+                 connectivity_java=sum(name.startswith(CONNECTIVITY_PROJECT + "/") for name in java))
     report = {"format_version": 1, "upstream_tag": "android-17.0.0_r1",
               "upstream_files": sorted(records, key=lambda item: item["path"]),
               "upstream_resources": resources, "disabled_resource_flags": resource_flags,

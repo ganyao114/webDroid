@@ -1,0 +1,82 @@
+--- a/frameworks/base/core/java/android/content/res/ResourcesImpl.java
++++ b/frameworks/base/core/java/android/content/res/ResourcesImpl.java
+@@ -39,7 +39,6 @@
+ import android.graphics.drawable.ColorStateListDrawable;
+ import android.graphics.drawable.Drawable;
+ import android.graphics.drawable.DrawableContainer;
+-import android.icu.text.PluralRules;
+ import android.net.Uri;
+ import android.os.Build;
+ import android.os.LocaleList;
+@@ -156,7 +155,6 @@
+     private final DisplayMetrics mMetrics = new DisplayMetrics();
+     private final DisplayAdjustments mDisplayAdjustments;
+ 
+-    private PluralRules mPluralRule;
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     private final Configuration mConfiguration = new Configuration();
+@@ -272,15 +270,6 @@
+         return mDisplayAdjustments.getCompatibilityInfo();
+     }
+ 
+-    private PluralRules getPluralRule() {
+-        synchronized (sSync) {
+-            if (mPluralRule == null) {
+-                mPluralRule = PluralRules.forLocale(mConfiguration.getLocales().get(0));
+-            }
+-            return mPluralRule;
+-        }
+-    }
+-
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     @VisibleForTesting
+     public void getValue(@AnyRes int id, TypedValue outValue, boolean resolveRefs)
+@@ -377,9 +366,8 @@
+ 
+     @NonNull
+     CharSequence getQuantityText(@PluralsRes int id, int quantity) throws NotFoundException {
+-        PluralRules rule = getPluralRule();
+         CharSequence res = mAssets.getResourceBagText(id,
+-                attrForQuantityCode(rule.select(quantity)));
++                embeddedQuantityAttribute(quantity));
+         if (res != null) {
+             return res;
+         }
+@@ -389,18 +377,14 @@
+         }
+         throw new NotFoundException("Plural resource ID #0x" + Integer.toHexString(id)
+                 + " quantity=" + quantity
+-                + " item=" + rule.select(quantity));
+-    }
+-
+-    private static int attrForQuantityCode(String quantityCode) {
+-        switch (quantityCode) {
+-            case PluralRules.KEYWORD_ZERO: return 0x01000005;
+-            case PluralRules.KEYWORD_ONE:  return 0x01000006;
+-            case PluralRules.KEYWORD_TWO:  return 0x01000007;
+-            case PluralRules.KEYWORD_FEW:  return 0x01000008;
+-            case PluralRules.KEYWORD_MANY: return 0x01000009;
+-            default:                       return ID_OTHER;
+-        }
++                + " item=" + (embeddedQuantityAttribute(quantity) == ID_OTHER ? "other" : "one"));
++    }
++
++    private int embeddedQuantityAttribute(int quantity) {
++        // The embedded framework has English cardinal rules and the resource "other" fallback.
++        String language = mConfiguration.getLocales().get(0).getLanguage();
++        return (language.isEmpty() || language.equals("en")) && Math.abs((long) quantity) == 1
++                ? 0x01000006 : ID_OTHER;
+     }
+ 
+     @NonNull
+@@ -650,9 +634,6 @@
+                 flushLayoutCache();
+             }
+             synchronized (sSync) {
+-                if (mPluralRule != null) {
+-                    mPluralRule = PluralRules.forLocale(mConfiguration.getLocales().get(0));
+-                }
+             }
+         } finally {
+             Trace.endSection();

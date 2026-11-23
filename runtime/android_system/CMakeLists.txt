@@ -125,6 +125,7 @@ if(EMSCRIPTEN)
             _wa_system_app_set_framework_res_apk _wa_system_app_install_package_catalog_apk
             _wa_system_app_boot_apk _wa_system_app_tick _wa_system_app_resize
             _wa_system_app_send_back _wa_system_app_state_json _wa_system_app_last_error
+            _wa_system_app_read_webview_file
             _wa_system_sf_init _wa_system_sf_ctx _wa_system_sf_destroy
             _wa_sf_create _wa_sf_destroy _wa_sf_begin _wa_sf_set_layer _wa_sf_remove_layer
             _wa_sf_commit _wa_sf_abort _wa_sf_frame_acquire _wa_sf_frame_release

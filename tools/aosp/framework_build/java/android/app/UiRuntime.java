@@ -110,6 +110,7 @@ public final class UiRuntime {
         private KeyguardManager keyguard;
         private NotificationManager notifications;
         private StorageManager storage;
+        private android.net.ConnectivityManager connectivity;
         private Resources.Theme theme;
         private final ArrayMap<String, ServiceInfo> services;
         private final ArrayList<String> manifestReceivers;
@@ -460,6 +461,10 @@ public final class UiRuntime {
             if (WINDOW_SERVICE.equals(name)) return windows;
             if (USER_SERVICE.equals(name)) return users;
             if (APPWIDGET_SERVICE.equals(name)) return widgets;
+            if (CONNECTIVITY_SERVICE.equals(name)) {
+                if (connectivity == null) connectivity = new android.net.ConnectivityManager(this);
+                return connectivity;
+            }
             if (CLIPBOARD_SERVICE.equals(name)) {
                 if (clipboard == null) clipboard = new ClipboardManager(this, new Handler(getMainLooper()));
                 return clipboard;

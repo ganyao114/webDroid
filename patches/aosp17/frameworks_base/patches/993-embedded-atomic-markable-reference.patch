@@ -1,0 +1,39 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicMarkableReference.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicMarkableReference.java
+@@ -34,11 +34,6 @@
+  */
+ 
+ package java.util.concurrent.atomic;
+-
+-import jdk.internal.invoke.MhUtil;
+-
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+ 
+ /**
+  * An {@code AtomicMarkableReference} maintains an object reference
+@@ -164,7 +159,7 @@
+      * @param newReference the new value for the reference
+      * @param newMark the new value for the mark
+      */
+-    public void set(V newReference, boolean newMark) {
++    public synchronized void set(V newReference, boolean newMark) {
+         Pair<V> current = pair;
+         if (newReference != current.reference || newMark != current.mark)
+             this.pair = Pair.of(newReference, newMark);
+@@ -191,11 +186,9 @@
+              casPair(current, Pair.of(expectedReference, newMark)));
+     }
+ 
+-    // VarHandle mechanics
+-    private static final VarHandle PAIR = MhUtil.findVarHandle(
+-            MethodHandles.lookup(), "pair", Pair.class);
+-
+-    private boolean casPair(Pair<V> cmp, Pair<V> val) {
+-        return PAIR.compareAndSet(this, cmp, val);
++    private synchronized boolean casPair(Pair<V> expected, Pair<V> value) {
++        if (pair != expected) return false;
++        pair = value;
++        return true;
+     }
+ }

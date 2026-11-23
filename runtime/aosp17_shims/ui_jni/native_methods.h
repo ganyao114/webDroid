@@ -48,8 +48,10 @@ struct State {
     uint32_t presented_layer = 0;
     uint32_t staged_layer = 0;
     uint32_t font_generation = 0;
+    wa_sf_vsync_state_t recording_viewport{};
     bool transaction = false;
     bool needs_draw = true;
+    bool overlay_drawn = false;
     int32_t result = WA_SF_OK;
     uint64_t uptime_ns = 0;
     uint64_t last_frame_ns = 0;

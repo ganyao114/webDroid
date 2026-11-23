@@ -1214,35 +1214,6 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
                        {"peek", "()Ljava/lang/Object;"}});
   auto& blocking = cl.Define(kBlockingQueue, kObject, kInterface, {kQueue});
   Abstract(cl, blocking, {{"remainingCapacity", "()I"}});
-  auto& concurrent = cl.Define("Ljava/util/concurrent/ConcurrentLinkedQueue;", kObject, 0,
-      {kQueue, "Ljava/io/Serializable;"});
-  cl.AddMethod(concurrent, "<init>", "()V", 0, NoOp);
-  const Builtin enqueue = [](Runtime& vm, Object* self, Values a) {
-    vm.NonNull(a[0].ref());
-    self->elements.push_back(a[0]);
-    return Value::Int(1);
-  };
-  cl.AddMethod(concurrent, "add", "(Ljava/lang/Object;)Z", 0, enqueue);
-  cl.AddMethod(concurrent, "offer", "(Ljava/lang/Object;)Z", 0, enqueue);
-  cl.AddMethod(concurrent, "peek", "()Ljava/lang/Object;", 0, [](Runtime&, Object* self, Values) {
-    return self->elements.empty() ? Value{} : self->elements.front();
-  });
-  cl.AddMethod(concurrent, "poll", "()Ljava/lang/Object;", 0, [](Runtime&, Object* self, Values) {
-    if (self->elements.empty()) return Value{};
-    Value first = self->elements.front();
-    self->elements.erase(self->elements.begin());
-    return first;
-  });
-  cl.AddMethod(concurrent, "size", "()I", 0, [](Runtime&, Object* self, Values) {
-    return Value::Int(self->elements.size());
-  });
-  cl.AddMethod(concurrent, "isEmpty", "()Z", 0, [](Runtime&, Object* self, Values) {
-    return Value::Int(self->elements.empty());
-  });
-  cl.AddMethod(concurrent, "clear", "()V", 0, [](Runtime&, Object* self, Values) {
-    self->elements.clear();
-    return Value{};
-  });
   auto& node = cl.Define(kNode, kObject, art::kAccFinal);
   auto& item = cl.AddField(node, "item", kObject, false);
   auto& next = cl.AddField(node, "next", kNode, false);
@@ -1458,6 +1429,15 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
   InstallUnmodifiableList(cl);
   auto& collections = cl.Define("Ljava/util/Collections;", kObject, art::kAccFinal);
   InstallUnmodifiableMap(cl, collections);
+  for (const auto& [name, type] : {std::pair{"synchronizedCollection", kCollection},
+                                  {"synchronizedList", kList}, {"synchronizedSet", kSet}}) {
+    const auto signature = std::string("(").append(type).append(")").append(type);
+    cl.AddMethod(collections, name, signature, art::kAccStatic,
+        [name, signature](Runtime& vm, Object*, Values args) {
+          auto& views = vm.linker.Resolve("Ljava/util/EmbeddedSynchronizedCollections;");
+          return vm.Invoke(vm.linker.FindMethod(views, name, signature, true), nullptr, args);
+        });
+  }
   cl.AddMethod(collections, "unmodifiableSet", "(Ljava/util/Set;)Ljava/util/Set;", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) { return WrapReadOnly(vm, "Lwa/runtime/UnmodifiableSet;", a[0]); });
   auto& map_set = cl.Define("Ljava/util/Collections$SetFromMap;", kObject, art::kAccFinal,

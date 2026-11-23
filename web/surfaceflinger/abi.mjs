@@ -10,7 +10,7 @@ export const INPUT_TEXT_SIZE = 256;
 export const CODEC_AU_SIZE = 512 * 1024;
 export const WEBVIEW_TEXT_SIZE = 2048;
 
-export const Flag = Object.freeze({ VISIBLE: 1, CLIP_BOUNDS: 2, OPAQUE: 4, BLUR_BEHIND: 8 });
+export const Flag = Object.freeze({ VISIBLE: 1, CLIP_BOUNDS: 2, OPAQUE: 4, BLUR_BEHIND: 8, INPUT_MODAL: 16 });
 export const Surface = Object.freeze({ DISPLAY_LIST: 1, BITMAP: 2, TEXTURE: 3, WEBVIEW: 4, VIDEO: 5 });
 export const Op = Object.freeze({
   SAVE: 1, RESTORE: 2, TRANSLATE: 3, SCALE: 4, ROTATE: 5, CLIP_RECT: 6, CLIP_ROUND: 7,

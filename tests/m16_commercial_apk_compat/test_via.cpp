@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -48,7 +49,13 @@ struct Label {
 
 struct Frame {
     size_t draws = 0;
+    size_t webviews = 0;
+    bool modal = false;
     std::vector<Label> labels;
+
+    bool Has(std::string_view label) const {
+        return std::ranges::find(labels, label, &Label::text) != labels.end();
+    }
 };
 
 struct Transform {
@@ -68,7 +75,10 @@ Frame ReadFrame(wa_sf_t* scene) {
     Frame frame;
     for (uint32_t i = 0; i < packet->layer_count; ++i) {
         const auto& layer = layers[i];
-        if (!(layer.desc.flags & WA_SF_VISIBLE) || layer.desc.surface_kind != WA_SF_SURFACE_DISPLAY_LIST) continue;
+        if (!(layer.desc.flags & WA_SF_VISIBLE)) continue;
+        frame.modal |= (layer.desc.flags & WA_SF_INPUT_MODAL) != 0;
+        if (layer.desc.surface_kind == WA_SF_SURFACE_IFRAME_WEBVIEW) ++frame.webviews;
+        if (layer.desc.surface_kind != WA_SF_SURFACE_DISPLAY_LIST) continue;
         const auto* list = wa_sf_frame_list(packet, &layer);
         Transform transform{layer.desc.x - layer.desc.scroll_x, layer.desc.y - layer.desc.scroll_y};
         std::vector<Transform> stack;
@@ -126,25 +136,115 @@ Frame ReadFrame(wa_sf_t* scene) {
 }
 
 void PrintFrame(std::string_view step, const Frame& frame) {
-    std::cout << step << ' ' << frame.draws << " draws\n";
+    std::cout << step << ' ' << frame.draws << " draws, " << frame.webviews << " WebView layers\n";
     for (const auto& label : frame.labels) {
         std::cout << label.x << ',' << label.y << ' ' << label.text << '\n';
     }
 }
 
-void Tap(wa_sf_t* scene, const Frame& frame, std::string_view label, int64_t ns) {
-    const auto match = std::ranges::find(frame.labels, label, &Label::text);
-    if (match == frame.labels.end()) throw std::runtime_error("Missing visible label " + std::string(label));
-    for (const auto action : {WA_ACTION_DOWN, WA_ACTION_UP}) {
-        wa_input_event_t event{};
-        event.kind = WA_INPUT_MOTION;
-        event.action = action;
-        event.event_time_ms = ns / 1'000'000.0 + (action == WA_ACTION_UP ? 3 : 1);
-        event.x = match->x;
-        event.y = match->y;
-        Check("Push tap", wa_input_push(wa_sf_input(scene), &event));
+class Browser {
+  public:
+    explicit Browser(wa_sf_t* scene) : scene_(scene) {}
+
+    Frame Advance(const char* step, int frames) {
+        for (int i = 0; i < frames; ++i) {
+            now_ += 16'666'667;
+            Check(step, wa_system_app_tick(now_));
+            PumpWebViews();
+        }
+        return ReadFrame(scene_);
     }
-}
+
+    void Tap(float x, float y) {
+        for (const auto action : {WA_ACTION_DOWN, WA_ACTION_UP}) {
+            Push({.kind = WA_INPUT_MOTION, .action = action, .x = x, .y = y});
+        }
+    }
+
+    void Tap(const Frame& frame, std::string_view label) {
+        const auto match = std::ranges::find(frame.labels, label, &Label::text);
+        if (match == frame.labels.end()) throw std::runtime_error("Missing visible label " + std::string(label));
+        Tap(match->x, match->y);
+    }
+
+    void Type(std::string_view text) {
+        wa_input_event_t event{.kind = WA_INPUT_IME, .action = WA_IME_COMMIT,
+                               .text_len = static_cast<uint32_t>(text.size())};
+        if (text.size() > sizeof(event.text)) throw std::runtime_error("Input is too long");
+        std::ranges::copy(text, event.text);
+        Push(event);
+    }
+
+    void Enter() {
+        for (const auto action : {WA_ACTION_DOWN, WA_ACTION_UP}) {
+            Push({.kind = WA_INPUT_KEY, .action = action, .keycode = 66});
+        }
+    }
+
+    void Back() {
+        if (wa_system_app_send_back() != 1) throw std::runtime_error("Back left Via: " + State());
+    }
+
+    const std::string& url() const { return url_; }
+
+    std::string Document(const char* url) const {
+        const auto size = wa_system_app_read_webview_file(view_, url, nullptr, 0);
+        Check("Read WebView file size", size);
+        std::string content(size, '\0');
+        const auto length = wa_system_app_read_webview_file(view_, url,
+            reinterpret_cast<uint8_t*>(content.data()), content.size());
+        if (length != size) throw std::runtime_error("WebView file changed while reading");
+        return content;
+    }
+
+  private:
+    void Push(wa_input_event_t event) {
+        event.event_time_ms = now_ / 1'000'000.0 + (event.action == WA_ACTION_UP ? 3 : 1);
+        Check("Push input", wa_input_push(wa_sf_input(scene_), &event));
+    }
+
+    void PumpWebViews() {
+        auto& requests = *wa_sf_webview_requests(scene_);
+        std::atomic_ref read(requests.header.read_index), write(requests.header.write_index);
+        for (auto index = read.load(); index != write.load(); read.store(++index)) {
+            const auto& request = requests.entries[index % WA_WEBVIEW_CAPACITY];
+            if (request.action != WA_WEBVIEW_OPEN) continue;
+            if (request.text_len > sizeof(request.text)) throw std::runtime_error("Invalid WebView URL");
+            view_ = request.webview_id;
+            url_.assign(request.text, request.text_len);
+            std::cout << "WebView opened " << url_ << '\n';
+            auto completion = url_;
+            if (url_.starts_with("file:///")) {
+                const auto html = Document(url_.c_str());
+                const auto tag = html.find("<title>");
+                if (tag != html.npos) {
+                    const auto start = tag + 7;
+                    const auto end = html.find("</title>", start);
+                    if (end != html.npos && completion.size() + 1 + end - start <= WA_WEBVIEW_TEXT_CAPACITY) {
+                        completion.push_back('\0');
+                        completion.append(html, start, end - start);
+                    }
+                }
+            }
+            auto& events = *wa_sf_webview_events(scene_);
+            std::atomic_ref loaded(events.header.write_index);
+            const auto event_index = loaded.load();
+            if (event_index - std::atomic_ref(events.header.read_index).load() >= WA_WEBVIEW_CAPACITY) {
+                throw std::runtime_error("WebView completion queue is full");
+            }
+            auto& event = events.entries[event_index % WA_WEBVIEW_CAPACITY];
+            event = {.status = WA_WEBVIEW_PAGE_LOADED, .webview_id = view_,
+                     .text_len = static_cast<uint32_t>(completion.size())};
+            std::memcpy(event.text, completion.data(), completion.size());
+            loaded.store(event_index + 1);
+        }
+    }
+
+    wa_sf_t* scene_;
+    int64_t now_ = 0;
+    uint32_t view_ = 0;
+    std::string url_;
+};
 
 } // namespace
 
@@ -184,26 +284,66 @@ int main(int argc, char** argv) try {
     auto* scene = wa_system_app_sf_ctx();
     const auto first = ReadFrame(scene);
     PrintFrame("First frame", first);
-    int64_t now = 0;
-    for (int64_t frame = 1; frame <= 120; ++frame) {
-        now += 16'666'667;
-        Check("Tick", wa_system_app_tick(now));
-        ReadFrame(scene);
+    Browser browser(scene);
+    const auto consent = browser.Advance("Settle consent screen", 120);
+    if (!consent.Has("Welcome") || !consent.Has("Disagree")) throw std::runtime_error("Via consent is missing");
+    browser.Tap(consent, "Agree");
+    const auto home = browser.Advance("Tick after first-run screen", 120);
+    PrintFrame("Browser home", home);
+    const auto home_url = browser.url();
+    if (home.Has("Welcome") || !home.Has("Homepage") || home.webviews != 1 ||
+        !home_url.starts_with("file:///data/user/0/mark.via/") || !home_url.ends_with(".html")) {
+        throw std::runtime_error("Via did not reach Browser Home: " + State());
     }
-    const auto steady = State();
-    if (Metric(steady, "avgFrameMs") >= 3) throw std::runtime_error(steady);
-    std::cout << "Via Browser " << steady << '\n';
-    Tap(scene, first, "Agree", now);
-    for (int i = 0; i < 60; ++i) {
-        now += 16'666'667;
-        Check("Tick after first-run screen", wa_system_app_tick(now));
+    const auto document = browser.Document(home_url.c_str());
+    if (!document.contains("<input") || !document.contains("<img")) {
+        throw std::runtime_error("Via home is missing the real search box or logo");
     }
-    const auto after_agree = ReadFrame(scene);
-    PrintFrame("After Agree", after_agree);
-    if (std::ranges::find(after_agree.labels, "Welcome", &Label::text) != after_agree.labels.end()) {
-        throw std::runtime_error("Via stayed on its first-run screen");
+    const auto tabs = std::ranges::find(home.labels, "1", &Label::text);
+    if (tabs == home.labels.end()) throw std::runtime_error("Via home is missing its tab counter");
+    const auto open_menu = [&] {
+        browser.Tap(432, tabs->y);
+        auto menu = browser.Advance("Open Via menu", 36);
+        PrintFrame("Browser menu", menu);
+        if (!menu.modal || !menu.Has("Bookmarks") || !menu.Has("History") || !menu.Has("Settings")) {
+            throw std::runtime_error("Via menu is missing its actions");
+        }
+        return menu;
+    };
+    open_menu();
+    browser.Back();
+    const auto dismissed = browser.Advance("Dismiss Via menu", 36);
+    if (dismissed.modal || !dismissed.Has("Homepage") || dismissed.Has("Settings")) {
+        throw std::runtime_error("Menu stayed open");
     }
-    Check("Back", wa_system_app_send_back());
+
+    browser.Tap(open_menu(), "Bookmarks");
+    const auto bookmarks = browser.Advance("Open Via bookmarks", 36);
+    PrintFrame("Bookmarks", bookmarks);
+    if (!bookmarks.Has("Bookmarks") || !bookmarks.Has("Saved pages") || bookmarks.webviews != 0) {
+        throw std::runtime_error("Bookmarks did not open");
+    }
+    browser.Back();
+    const auto returned = browser.Advance("Return from bookmarks", 36);
+    if (!returned.Has("Homepage") || returned.webviews != 1) throw std::runtime_error("Via did not return home");
+
+    browser.Tap(returned, "Homepage");
+    browser.Advance("Focus Via address bar", 16);
+    if (!State().contains("\"imeFocused\":true")) throw std::runtime_error("Via address field did not focus");
+    constexpr std::string_view test_url = "https://example.com/";
+    browser.Type(test_url);
+    browser.Enter();
+    const auto page = browser.Advance("Load URL from Via address bar", 60);
+    PrintFrame("Loaded page", page);
+    if (browser.url() != test_url || page.webviews != 1) throw std::runtime_error("Via did not navigate to the typed URL");
+    browser.Back();
+    const auto final = browser.Advance("Return to Via home", 120);
+    PrintFrame("Home after Back", final);
+    if (!final.Has("Homepage") || final.webviews != 1 || browser.url() != home_url ||
+        !browser.Document(home_url.c_str()).contains("<input")) {
+        throw std::runtime_error("Via did not return from the web page");
+    }
+    std::cout << "Via journey passed " << State() << '\n';
     return 0;
 } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

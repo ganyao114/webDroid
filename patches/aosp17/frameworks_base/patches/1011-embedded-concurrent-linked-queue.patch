@@ -1,0 +1,157 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentLinkedQueue.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentLinkedQueue.java
+@@ -35,8 +35,6 @@
+ 
+ package java.util.concurrent;
+ 
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+ import java.util.AbstractQueue;
+ import java.util.Arrays;
+ import java.util.Collection;
+@@ -190,7 +188,7 @@
+          * item can only be seen after piggy-backing publication via CAS.
+          */
+         Node(E item) {
+-            ITEM.set(this, item);
++            this.item = item;
+         }
+ 
+         /** Constructs a dead dummy node. */
+@@ -199,14 +197,21 @@
+         void appendRelaxed(Node<E> next) {
+             // assert next != null;
+             // assert this.next == null;
+-            NEXT.set(this, next);
+-        }
+-
+-        boolean casItem(E cmp, E val) {
++            this.next = next;
++        }
++
++        synchronized boolean casItem(E cmp, E val) {
+             // assert item == cmp || item == null;
+             // assert cmp != null;
+             // assert val == null;
+-            return ITEM.compareAndSet(this, cmp, val);
++            if (item != cmp) return false;
++            item = val;
++            return true;
++        }
++        synchronized boolean casNext(Node<E> expected, Node<E> update) {
++            if (next != expected) return false;
++            next = update;
++            return true;
+         }
+     }
+ 
+@@ -289,8 +294,8 @@
+      */
+     final void updateHead(Node<E> h, Node<E> p) {
+         // assert h != null && p != null && (h == p || h.item == null);
+-        if (h != p && HEAD.compareAndSet(this, h, p))
+-            NEXT.setRelease(h, h);
++        if (h != p && casHead(h, p))
++            h.next = h;
+     }
+ 
+     /**
+@@ -313,9 +318,9 @@
+         // assert c.item == null;
+         // assert c != p;
+         if (pred != null)
+-            return NEXT.compareAndSet(pred, c, p);
+-        if (HEAD.compareAndSet(this, c, p)) {
+-            NEXT.setRelease(c, c);
++            return pred.casNext(c, p);
++        if (casHead(c, p)) {
++            c.next = c;
+             return true;
+         }
+         return false;
+@@ -340,7 +345,7 @@
+             q = p;
+         }
+         return (tryCasSuccessor(pred, c, q)
+-                && (pred == null || ITEM.get(pred) != null))
++                && (pred == null || pred.item != null))
+             ? pred : p;
+     }
+ 
+@@ -358,12 +363,12 @@
+             Node<E> q = p.next;
+             if (q == null) {
+                 // p is last node
+-                if (NEXT.compareAndSet(p, null, newNode)) {
++                if (p.casNext(null, newNode)) {
+                     // Successful CAS is the linearization point
+                     // for e to become an element of this queue,
+                     // and for newNode to become "live".
+                     if (p != t) // hop two nodes at a time; failure is OK
+-                        TAIL.weakCompareAndSet(this, t, newNode);
++                        casTail(t, newNode);
+                     return true;
+                 }
+                 // Lost CAS race to another thread; re-read next
+@@ -576,15 +581,15 @@
+             Node<E> q = p.next;
+             if (q == null) {
+                 // p is last node
+-                if (NEXT.compareAndSet(p, null, beginningOfTheEnd)) {
++                if (p.casNext(null, beginningOfTheEnd)) {
+                     // Successful CAS is the linearization point
+                     // for all elements to be added to this queue.
+-                    if (!TAIL.weakCompareAndSet(this, t, last)) {
++                    if (!casTail(t, last)) {
+                         // Try a little harder to update tail,
+                         // since we may be adding many elements.
+                         t = tail;
+                         if (last.next == null)
+-                            TAIL.weakCompareAndSet(this, t, last);
++                            casTail(t, last);
+                     }
+                     return true;
+                 }
+@@ -788,7 +793,7 @@
+                 }
+                 // unlink deleted nodes
+                 if ((q = succ(p)) != null)
+-                    NEXT.compareAndSet(pred, p, q);
++                    pred.casNext(p, q);
+             }
+         }
+ 
+@@ -1054,22 +1059,16 @@
+         forEachFrom(action, head);
+     }
+ 
+-    // VarHandle mechanics
+-    private static final VarHandle HEAD;
+-    private static final VarHandle TAIL;
+-    static final VarHandle ITEM;
+-    static final VarHandle NEXT;
+-    static {
+-        try {
+-            MethodHandles.Lookup l = MethodHandles.lookup();
+-            HEAD = l.findVarHandle(ConcurrentLinkedQueue.class, "head",
+-                                   Node.class);
+-            TAIL = l.findVarHandle(ConcurrentLinkedQueue.class, "tail",
+-                                   Node.class);
+-            ITEM = l.findVarHandle(Node.class, "item", Object.class);
+-            NEXT = l.findVarHandle(Node.class, "next", Node.class);
+-        } catch (ReflectiveOperationException e) {
+-            throw new ExceptionInInitializerError(e);
+-        }
++    // The runtime uses Java monitors for the conditional reference updates.
++    private synchronized boolean casHead(Node<E> expected, Node<E> update) {
++        if (head != expected) return false;
++        head = update;
++        return true;
++    }
++
++    private synchronized boolean casTail(Node<E> expected, Node<E> update) {
++        if (tail != expected) return false;
++        tail = update;
++        return true;
+     }
+ }

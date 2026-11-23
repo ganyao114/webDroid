@@ -1,0 +1,200 @@
+--- a/packages/modules/Connectivity/framework/src/android/net/NetworkCapabilities.java
++++ b/packages/modules/Connectivity/framework/src/android/net/NetworkCapabilities.java
+@@ -19,10 +19,7 @@
+ import static com.android.internal.annotations.VisibleForTesting.Visibility.PRIVATE;
+ import static com.android.net.module.util.BitUtils.appendStringRepresentationOfBitMaskToStringBuilder;
+ import static com.android.net.module.util.BitUtils.describeDifferences;
+-import static com.android.net.module.util.FrameworkConnectivityStatsLog.CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED;
+-import static com.android.net.module.util.FrameworkConnectivityStatsLog.CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED__ERROR_TYPE__TYPE_SPECIFIER_REDACTION_REFLECTION_ERROR;
+-
+-import android.annotation.FlaggedApi;
++
+ import android.annotation.IntDef;
+ import android.annotation.LongDef;
+ import android.annotation.NonNull;
+@@ -43,11 +40,8 @@
+ import android.util.Range;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.modules.utils.build.SdkLevel;
+-import com.android.net.flags.Flags;
+ import com.android.net.module.util.BitUtils;
+ import com.android.net.module.util.CollectionUtils;
+-import com.android.net.module.util.FrameworkConnectivityStatsLog;
+ import com.android.net.module.util.NetworkCapabilitiesUtils;
+ 
+ import java.lang.annotation.Retention;
+@@ -756,7 +750,6 @@
+      * networks with this capability unless they explicitly set the NET_CAPABILITY_LOCAL_NETWORK
+      * in their NetworkRequests.
+      */
+-    @FlaggedApi(Flags.FLAG_NET_CAPABILITY_LOCAL_NETWORK)
+     public static final int NET_CAPABILITY_LOCAL_NETWORK = 36;
+ 
+     /**
+@@ -775,7 +768,6 @@
+      * usage on constrained networks, such as disabling network access to apps that are not in the
+      * foreground.
+      */
+-    @FlaggedApi(Flags.FLAG_NET_CAPABILITY_NOT_BANDWIDTH_CONSTRAINED)
+     public static final int NET_CAPABILITY_NOT_BANDWIDTH_CONSTRAINED = 37;
+ 
+     /**
+@@ -802,8 +794,6 @@
+      * self-certified network capabilities. See {@link NetworkRequest} for the self-certification
+      * documentation.
+      */
+-    @FlaggedApi(com.android.tethering.flags.Flags
+-            .FLAG_NET_CAPABILITY_PRIORITIZE_UNIFIED_COMMUNICATIONS)
+     public static final int NET_CAPABILITY_PRIORITIZE_UNIFIED_COMMUNICATIONS = 38;
+ 
+     private static final int MAX_NET_CAPABILITY = NET_CAPABILITY_PRIORITIZE_UNIFIED_COMMUNICATIONS;
+@@ -856,7 +846,7 @@
+                 (1L << NET_CAPABILITY_NOT_RESTRICTED)
+                 | (1L << NET_CAPABILITY_TRUSTED)
+                 | (1L << NET_CAPABILITY_NOT_VPN);
+-        if (SdkLevel.isAtLeastV()) {
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+             defaultCapabilities |= (1L << NET_CAPABILITY_NOT_BANDWIDTH_CONSTRAINED);
+         }
+         DEFAULT_CAPABILITIES = defaultCapabilities;
+@@ -1418,7 +1408,6 @@
+     /**
+      * Indicates this network uses a Satellite transport.
+      */
+-    @FlaggedApi(Flags.FLAG_SUPPORT_TRANSPORT_SATELLITE)
+     public static final int TRANSPORT_SATELLITE = 10;
+ 
+     /** @hide */
+@@ -2930,7 +2919,6 @@
+      * @return
+      */
+     @NonNull
+-    @FlaggedApi(Flags.FLAG_REQUEST_RESTRICTED_WIFI)
+     public Set<Integer> getSubscriptionIds() {
+         return new ArraySet<>(mSubIds);
+     }
+@@ -3659,8 +3647,6 @@
+                 return (long) getApplicableRedactions.invoke(specifier);
+             } catch (IllegalAccessException | InvocationTargetException
+                     | IllegalArgumentException e) {
+-                FrameworkConnectivityStatsLog.write(CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED,
+-                        CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED__ERROR_TYPE__TYPE_SPECIFIER_REDACTION_REFLECTION_ERROR);
+                 Log.wtf(TAG, "Un expected reflection error on specifier " + specifier, e);
+                 return REDACT_ALL;
+             }
+@@ -3702,8 +3688,6 @@
+                 return (NetworkSpecifier) redactLong.invoke(specifier, redactions);
+             } catch (IllegalAccessException | InvocationTargetException
+                     | IllegalArgumentException e) {
+-                FrameworkConnectivityStatsLog.write(CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED,
+-                        CORE_NETWORKING_TERRIBLE_ERROR_OCCURRED__ERROR_TYPE__TYPE_SPECIFIER_REDACTION_REFLECTION_ERROR);
+                 Log.wtf(TAG, "Un expected reflection error on specifier " + specifier, e);
+                 return null;
+             }
+--- a/packages/modules/Connectivity/framework/src/android/net/NetworkInfo.java
++++ b/packages/modules/Connectivity/framework/src/android/net/NetworkInfo.java
+@@ -24,9 +24,9 @@
+ import android.text.TextUtils;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+-import com.android.modules.utils.build.SdkLevel;
+-
+-import java.util.EnumMap;
++import android.os.Build;
++
++import java.util.HashMap;
+ 
+ /**
+  * Describes the status of a network interface.
+@@ -119,8 +119,8 @@
+      * of the elements of the array must correspond to the ordinal values
+      * of <code>DetailedState</code>.
+      */
+-    private static final EnumMap<DetailedState, State> stateMap =
+-        new EnumMap<DetailedState, State>(DetailedState.class);
++    private static final HashMap<DetailedState, State> stateMap =
++        new HashMap<DetailedState, State>();
+ 
+     static {
+         stateMap.put(DetailedState.IDLE, State.DISCONNECTED);
+@@ -184,7 +184,7 @@
+         // S- didn't use to crash when passing null. This plants a timebomb where mState and
+         // some other fields are null, but there may be existing code that relies on this behavior
+         // and doesn't trip the timebomb, so on SdkLevel < T, keep the old behavior. b/145972387
+-        if (null == source && !SdkLevel.isAtLeastT()) return;
++        if (null == source && Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+         synchronized (source) {
+             mNetworkType = source.mNetworkType;
+             mSubtype = source.mSubtype;
+@@ -515,7 +515,7 @@
+             // Catch both the case where detailedState is null and the case where it's some
+             // unknown value. This is clearly incorrect usage, but S- didn't use to crash (at
+             // least immediately) so keep the old behavior on older frameworks for safety.
+-            if (null == mState && SdkLevel.isAtLeastT()) {
++            if (null == mState && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                 throw new NullPointerException("Unknown DetailedState : " + detailedState);
+             }
+         }
+--- a/packages/modules/Connectivity/framework/src/android/net/NetworkRequest.java
++++ b/packages/modules/Connectivity/framework/src/android/net/NetworkRequest.java
+@@ -35,7 +35,6 @@
+ import static android.net.NetworkCapabilities.RES_ID_UNSET;
+ import static android.net.NetworkCapabilities.TRANSPORT_TEST;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.RequiresPermission;
+@@ -51,7 +50,6 @@
+ import android.text.TextUtils;
+ import android.util.Range;
+ 
+-import com.android.net.flags.Flags;
+ 
+ import java.util.Arrays;
+ import java.util.List;
+@@ -641,7 +639,6 @@
+          * @param subIds A {@code Set} that represents subscription IDs.
+          */
+         @NonNull
+-        @FlaggedApi(Flags.FLAG_REQUEST_RESTRICTED_WIFI)
+         public Builder setSubscriptionIds(@NonNull Set<Integer> subIds) {
+             mNetworkCapabilities.setSubscriptionIds(subIds);
+             return this;
+@@ -900,7 +897,6 @@
+      * @return Set of Integer values for this instance.
+      */
+     @NonNull
+-    @FlaggedApi(Flags.FLAG_REQUEST_RESTRICTED_WIFI)
+     public Set<Integer> getSubscriptionIds() {
+         // No need to make a defensive copy here as NC#getSubscriptionIds() already returns
+         // a new set.
+--- a/frameworks/base/core/java/android/net/NetworkSpecifier.java
++++ b/frameworks/base/core/java/android/net/NetworkSpecifier.java
+@@ -18,9 +18,7 @@
+ 
+ import static android.annotation.SystemApi.Client.PRIVILEGED_APPS;
+ 
+-import static com.android.net.thread.platform.flags.Flags.FLAG_THREAD_MOBILE_ENABLED;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.annotation.SystemApi;
+@@ -117,7 +115,6 @@
+      * @see #getApplicableRedactions()
+      * @hide
+      */
+-    @FlaggedApi(FLAG_THREAD_MOBILE_ENABLED)
+     @SystemApi(client = PRIVILEGED_APPS)
+     @Nullable
+     public NetworkSpecifier redact(long redactions) {
+@@ -139,7 +136,6 @@
+      * @see #redact(long)
+      * @hide
+      */
+-    @FlaggedApi(FLAG_THREAD_MOBILE_ENABLED)
+     @SystemApi(client = PRIVILEGED_APPS)
+     public long getApplicableRedactions() {
+         return NetworkCapabilities.REDACT_NONE;

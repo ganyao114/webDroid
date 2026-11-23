@@ -1,0 +1,23 @@
+--- a/frameworks/base/core/java/android/webkit/WebView.java
++++ b/frameworks/base/core/java/android/webkit/WebView.java
+@@ -2698,6 +2698,7 @@
+         private String mDefaultTextEncodingName = "UTF-8";
+         private boolean mDomStorageEnabled;
+         private int mForceDark = FORCE_DARK_AUTO;
++        private boolean mAlgorithmicDarkeningAllowed;
+         private boolean mJavaScriptCanOpenWindowsAutomatically;
+         private boolean mLoadWithOverviewMode;
+         private boolean mLoadsImagesAutomatically = true;
+@@ -2734,6 +2735,12 @@
+         @Override public boolean getDomStorageEnabled() { return mDomStorageEnabled; }
+         @Override public void setDomStorageEnabled(boolean value) { mDomStorageEnabled = value; }
+         @Override public int getForceDark() { return mForceDark; }
++        @Override public void setAlgorithmicDarkeningAllowed(boolean allow) {
++            mAlgorithmicDarkeningAllowed = allow;
++        }
++        @Override public boolean isAlgorithmicDarkeningAllowed() {
++            return mAlgorithmicDarkeningAllowed;
++        }
+         @Override public void setForceDark(int value) { mForceDark = value; }
+         @Override public boolean getJavaScriptCanOpenWindowsAutomatically() { return mJavaScriptCanOpenWindowsAutomatically; }
+         @Override public void setJavaScriptCanOpenWindowsAutomatically(boolean value) { mJavaScriptCanOpenWindowsAutomatically = value; }
