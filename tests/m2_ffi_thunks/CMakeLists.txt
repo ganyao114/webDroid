@@ -19,7 +19,7 @@ endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(WA_ANDROID_NDK_BIN
-    "/Users/swift/Library/Android/sdk/ndk/29.0.13846066/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+    "$ENV{HOME}/Library/Android/sdk/ndk/29.0.13846066/toolchains/llvm/prebuilt/darwin-x86_64/bin"
     CACHE PATH "Directory containing the Android NDK 29 Clang drivers")
 set(ndk_jni_header "${WA_ANDROID_NDK_BIN}/../sysroot/usr/include/jni.h")
 set(oracle_source "${CMAKE_CURRENT_LIST_DIR}/ndk_layout_oracle.c")

@@ -10,7 +10,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 endif()
 
 set(WA_ANDROID_NDK_BIN
-    "/Users/swift/Library/Android/sdk/ndk/29.0.13846066/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+    "$ENV{HOME}/Library/Android/sdk/ndk/29.0.13846066/toolchains/llvm/prebuilt/darwin-x86_64/bin"
     CACHE PATH "Directory containing the Android NDK 29 clang drivers")
 set(WA_NODE_EXECUTABLE "/opt/homebrew/bin/node" CACHE FILEPATH "Node.js for Wasm validation")
 

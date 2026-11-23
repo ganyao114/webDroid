@@ -6,7 +6,7 @@ set(WA_ANDROID_JAR "${WA_ANDROID_SDK}/platforms/android-36/android.jar"
     CACHE FILEPATH "SDK 36 Android API")
 set(WA_JAVAC_EXECUTABLE "/usr/bin/javac" CACHE FILEPATH "Java compiler")
 set(WA_ANDROID_NDK_BIN
-    "/Users/swift/Library/Android/sdk/ndk/29.0.13846066/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+    "$ENV{HOME}/Library/Android/sdk/ndk/29.0.13846066/toolchains/llvm/prebuilt/darwin-x86_64/bin"
     CACHE PATH "Directory containing the Android NDK 29 clang drivers")
 find_program(WA_NODE_EXECUTABLE node HINTS /opt/homebrew/bin NO_CMAKE_FIND_ROOT_PATH REQUIRED)
 find_program(WA_JAR_EXECUTABLE jar NO_CMAKE_FIND_ROOT_PATH REQUIRED)

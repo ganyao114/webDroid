@@ -1,6 +1,7 @@
 include_guard(GLOBAL)
 
-set(AOSP17_SOURCE_DIR "/Volumes/Data2/wasm-android/third_party/aosp17"
+get_filename_component(_wa_default_aosp17 "${CMAKE_CURRENT_LIST_DIR}/../third_party/aosp17" ABSOLUTE)
+set(AOSP17_SOURCE_DIR "${_wa_default_aosp17}"
     CACHE PATH "Read-only android-17.0.0_r1 source checkouts")
 set(WA_ANDROID_SDK "$ENV{HOME}/Library/Android/sdk" CACHE PATH "Android SDK directory")
 set(_art "${AOSP17_SOURCE_DIR}/art")
