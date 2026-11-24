@@ -179,6 +179,8 @@ export class ForegroundApk {
     };
   }
 
+  pixels() { return this.#java?.pixels() ?? null; }
+
   async holdFrame() {
     if (this.#java) return this.#java.holdFrame();
     this.#held = true;

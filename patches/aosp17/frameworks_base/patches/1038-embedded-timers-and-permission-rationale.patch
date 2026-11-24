@@ -1,0 +1,106 @@
+--- a/libcore/ojluni/src/main/java/java/util/Timer.java
++++ b/libcore/ojluni/src/main/java/java/util/Timer.java
+@@ -24,11 +24,9 @@
+  */
+ 
+ package java.util;
+-import dalvik.annotation.optimization.ReachabilitySensitive;
+ import java.util.Date;
+ import java.util.concurrent.atomic.AtomicInteger;
+-import java.lang.ref.Cleaner.Cleanable;
+-import jdk.internal.ref.CleanerFactory;
++import java.lang.ref.WeakReference;
+ 
+ 
+ /**
+@@ -98,24 +96,15 @@
+      * and the timer thread consumes, executing timer tasks as appropriate,
+      * and removing them from the queue when they're obsolete.
+      */
+-    // Android-added: @ReachabilitySensitive
+-    // Otherwise the finalizer may cancel the Timer in the middle of a
+-    // sched() call.
+-    @ReachabilitySensitive
+     private final TaskQueue queue = new TaskQueue();
+ 
+     /**
+      * The timer thread.
+      */
+-    // Android-added: @ReachabilitySensitive
+-    @ReachabilitySensitive
+     private final TimerThread thread = new TimerThread(queue);
+ 
+     /**
+-     * An object of this class is registered with a Cleaner as the cleanup
+-     * handler for this Timer object.  This causes the execution thread to
+-     * exit gracefully when there are no live references to the Timer object
+-     * and no tasks in the timer queue.
++     * Cancels further scheduling and wakes the timer thread.
+      */
+     private static class ThreadReaper implements Runnable {
+         private final TaskQueue queue;
+@@ -134,7 +123,7 @@
+         }
+     }
+ 
+-    private final Cleanable cleanup;
++    private final ThreadReaper cleanup;
+ 
+     /**
+      * This ID is used to generate thread names.
+@@ -190,8 +179,8 @@
+      * @since 1.5
+      */
+     public Timer(String name, boolean isDaemon) {
+-        var threadReaper = new ThreadReaper(queue, thread);
+-        this.cleanup = CleanerFactory.cleaner().register(this, threadReaper);
++        this.cleanup = new ThreadReaper(queue, thread);
++        thread.timer = new WeakReference<>(this);
+         thread.setName(name);
+         thread.setDaemon(isDaemon);
+         thread.start();
+@@ -464,7 +453,7 @@
+     public void cancel() {
+         synchronized(queue) {
+             queue.clear();
+-            cleanup.clean();
++            cleanup.run();
+         }
+     }
+ 
+@@ -530,6 +519,7 @@
+      * thread would never go away.
+      */
+     private TaskQueue queue;
++    WeakReference<Timer> timer;
+ 
+     TimerThread(TaskQueue queue) {
+         this.queue = queue;
+@@ -558,8 +548,14 @@
+                 boolean taskFired;
+                 synchronized(queue) {
+                     // Wait for queue to become non-empty
+-                    while (queue.isEmpty() && newTasksMayBeScheduled)
+-                        queue.wait();
++                    while (queue.isEmpty() && newTasksMayBeScheduled) {
++                        // Reap an idle worker after its timer becomes unreachable.
++                        if (timer.get() == null) {
++                            newTasksMayBeScheduled = false;
++                            break;
++                        }
++                        queue.wait(1000);
++                    }
+                     if (queue.isEmpty())
+                         break; // Queue is empty and will forever remain; die
+ 
+--- a/frameworks/base/core/java/android/app/Activity.java
++++ b/frameworks/base/core/java/android/app/Activity.java
+@@ -5232,7 +5232,7 @@
+      */
+     @Override
+     public boolean shouldShowRequestPermissionRationale(@NonNull String permission) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        return false;
+     }
+ 
+     /**

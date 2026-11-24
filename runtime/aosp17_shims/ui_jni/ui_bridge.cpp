@@ -675,12 +675,13 @@ void UiBridge::LaunchActivity(interp::Vm& vm, const ActivityConfig& config) {
         Value::Ref(roots.Hold(vm.NewString(config.class_name))),
         Value::Ref(roots.Hold(vm.NewString(config.locale))),
         Value::Ref(roots.Hold(vm.NewString(config.framework_resource_apk))),
+        Value::Ref(config.native_library_dir.empty() ? nullptr : roots.Hold(vm.NewString(config.native_library_dir))),
         Value::Int(config.density_dpi),
         Value::Int(config.width),
         Value::Int(config.height),
     };
     vm.CallStatic(detail::kRuntime, "launch",
-                  "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;III)V",
+                  "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;III)V",
                   arguments);
 }
 

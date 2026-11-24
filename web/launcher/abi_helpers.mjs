@@ -15,6 +15,21 @@ const compositorExports = [
 
 export const frameTimeNs = timestamp => BigInt(Math.max(0, Math.round(timestamp * 1e6)));
 
+let apkFileSequence = 0;
+
+// MEMFS keeps a view of caller-owned JS bytes outside Wasm linear memory.
+export function withApkFile(module, bytes, call) {
+  const name = `wa-browser-apk-${++apkFileSequence}`;
+  const path = `/tmp/${name}`;
+  module.FS.createDataFile('/tmp', name, bytes, true, false, true);
+  try {
+    return call(path);
+  } finally {
+    // Installation moves the file to the Android process's backing path.
+    if (module.FS.analyzePath(path).exists) module.FS.unlink(path);
+  }
+}
+
 export class LauncherAbi {
   #scratch = 0;
   #created = false;
@@ -117,7 +132,14 @@ export class LauncherAbi {
       this.#check('set_framework_res_apk', this.#call('set_framework_res_apk', data, size)));
   }
 
-  installApk(name, bytes) { this.#apk('install_apk', name, bytes); }
+  installApk(name, bytes) {
+    if (!this.module.FS || !this.module._wa_system_launcher_install_apk_file) {
+      this.#apk('install_apk', name, bytes);
+      return;
+    }
+    withApkFile(this.module, bytes, path => this.#withString(name, filename => this.#withString(path, file =>
+      this.#check('install_apk_file', this.#call('install_apk_file', filename, file)))));
+  }
   loadSystemUiApk(name, bytes) { this.#apk('load_systemui_apk', name, bytes); }
   bootApk(name, bytes) {
     this.#apk('stage_apk', name, bytes);

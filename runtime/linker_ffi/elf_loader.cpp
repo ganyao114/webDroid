@@ -4,12 +4,14 @@
 #include "softmmu_internal.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstring>
 #include <limits>
 #include <new>
 #include <optional>
 #include <type_traits>
+#include <utility>
 
 namespace wa::dbt {
 namespace {
@@ -130,8 +132,8 @@ int64_t ReadSleb(Bytes& bytes) {
     throw GuestFault{WA_ERR_INVALID};
 }
 
-bool Contains(Bytes bytes, uint64_t offset, uint64_t length) {
-    return offset <= bytes.size() && length <= bytes.size() - offset;
+bool Contains(uint64_t size, uint64_t offset, uint64_t length) {
+    return offset <= size && length <= size - offset;
 }
 
 template <typename T> T Read(Bytes bytes, uint64_t offset) {
@@ -217,7 +219,7 @@ template <typename Word> class Loader {
     using Symbol = std::conditional_t<Is32, Symbol32, Symbol64>;
 
   public:
-    Loader(wa_dbt* dbt, Bytes file, uint64_t bias) : dbt(dbt), file(file), bias(bias) {}
+    Loader(wa_dbt* dbt, const ElfFile& file, uint64_t bias) : dbt(dbt), file(file), bias(bias) {}
 
     int32_t Inspect(ElfInfo& info, bool include_symbols) {
         auto status = ParseProgramHeaders();
@@ -290,8 +292,8 @@ template <typename Word> class Loader {
         if (!image.phdr) {
             phdr_storage.emplace(*dbt, image.phnum * sizeof(Program));
             image.phdr = phdr_storage->address;
-            CheckGuest(wa_softmmu_write(dbt->mmu, image.phdr, file.data() + phoff,
-                                       image.phnum * sizeof(Program)));
+            const auto headers = FileBytes(phoff, image.phnum * sizeof(Program), program_headers);
+            CheckGuest(wa_softmmu_write(dbt->mmu, image.phdr, headers.data(), headers.size()));
         }
         dbt->images.push_back(std::move(image));
         ++dbt->image_loads;
@@ -322,10 +324,34 @@ template <typename Word> class Loader {
     }
 
   private:
+    struct FileRange {
+        uint64_t offset, size;
+    };
+
+    Bytes FileBytes(uint64_t offset, uint64_t size, std::vector<uint8_t>& storage) const {
+        if (!size) return {};
+        if (!Contains(file.size, offset, size) || !std::in_range<size_t>(size))
+            throw GuestFault{WA_ERR_INVALID};
+        if (!file.read) return file.bytes.subspan(offset, size);
+        storage.resize(size);
+        if (file.read(file.user, file.file_id, storage.data(), storage.size(), offset) !=
+                static_cast<int64_t>(size))
+            throw GuestFault{WA_ERR_FAULT};
+        return storage;
+    }
+
+    template <typename T> T FileValue(uint64_t offset) const {
+        if (!file.read) return Read<T>(file.bytes, offset);
+        T value;
+        if (file.read(file.user, file.file_id, &value, sizeof(value), offset) != sizeof(value))
+            throw GuestFault{WA_ERR_FAULT};
+        return value;
+    }
+
     int32_t ParseProgramHeaders() {
-        if (file.size() < sizeof(ElfHeader<Word>))
+        if (file.size < sizeof(ElfHeader<Word>))
             return WA_ERR_INVALID;
-        const auto header = Read<ElfHeader<Word>>(file, 0);
+        const auto header = FileValue<ElfHeader<Word>>(0);
         if (std::memcmp(header.ident,
                         "\x7f"
                         "ELF",
@@ -334,16 +360,17 @@ template <typename Word> class Loader {
             header.version != 1 || header.type != ET_DYN ||
             header.machine != (Is32 ? EM_ARM : EM_AARCH64) || header.ehsize != sizeof(header) ||
             header.phentsize != sizeof(Program) ||
-            !Contains(file, header.phoff, uint64_t{header.phnum} * sizeof(Program)))
+            !Contains(file.size, header.phoff, uint64_t{header.phnum} * sizeof(Program)))
             return WA_ERR_INVALID;
 
         phoff = header.phoff;
         image.phnum = header.phnum;
+        const auto headers = FileBytes(phoff, header.phnum * sizeof(Program), program_headers);
         for (uint64_t i = 0; i < header.phnum; ++i) {
-            const auto ph = Read<Program>(file, header.phoff + i * sizeof(Program));
+            const auto ph = Read<Program>(headers, i * sizeof(Program));
             if (ph.type != PT_LOAD && ph.type != PT_DYNAMIC && ph.type != PT_TLS && ph.type != PT_ARM_EXIDX)
                 continue;
-            if (ph.filesz > ph.memsz || !Contains(file, ph.offset, ph.filesz) ||
+            if (ph.filesz > ph.memsz || !Contains(file.size, ph.offset, ph.filesz) ||
                 ph.vaddr >= WA_HOST_STUB_BASE - bias ||
                 ph.memsz > WA_HOST_STUB_BASE - bias - ph.vaddr)
                 return WA_ERR_INVALID;
@@ -391,18 +418,17 @@ template <typename Word> class Loader {
         }
         if (image.exidx_count && !InMemory(image.exidx - bias, uint64_t{image.exidx_count} * 8, PF_R))
             return WA_ERR_INVALID;
-        const auto bytes = FileAt(dynamic->vaddr);
-        return bytes.size() >= dynamic->filesz && bytes.data() == file.data() + dynamic->offset
+        const auto range = FileAt(dynamic->vaddr);
+        return range.size >= dynamic->filesz && range.offset == dynamic->offset
                    ? WA_OK
                    : WA_ERR_INVALID;
     }
 
-    Bytes FileAt(uint64_t vaddr) const {
+    FileRange FileAt(uint64_t vaddr) const {
         for (const auto& segment : segments) {
             if (vaddr >= segment.vaddr && vaddr - segment.vaddr < segment.filesz) {
                 const auto delta = vaddr - segment.vaddr;
-                return file.subspan(static_cast<size_t>(segment.offset + delta),
-                                    static_cast<size_t>(segment.filesz - delta));
+                return {segment.offset + delta, segment.filesz - delta};
             }
         }
         return {};
@@ -436,10 +462,12 @@ template <typename Word> class Loader {
     int32_t ParseDynamic() {
         if (dynamic->filesz % sizeof(Dynamic<Word>))
             return WA_ERR_INVALID;
+        std::vector<uint8_t> storage;
+        const auto entries = FileBytes(dynamic->offset, dynamic->filesz, storage);
         std::vector<uint64_t> needed_offsets;
         bool terminated = false;
         for (uint64_t i = 0; i < dynamic->filesz; i += sizeof(Dynamic<Word>)) {
-            const auto entry = Read<Dynamic<Word>>(file, dynamic->offset + i);
+            const auto entry = Read<Dynamic<Word>>(entries, i);
             if (entry.tag == DT_NULL) {
                 terminated = true;
                 break;
@@ -453,9 +481,9 @@ template <typename Word> class Loader {
             return WA_ERR_INVALID;
 
         const auto max_strings = FileAt(Tag(DT_STRTAB));
-        if (Tag(DT_STRSZ) > max_strings.size() || (Tag(DT_STRSZ) && !tags.contains(DT_STRTAB)))
+        if (Tag(DT_STRSZ) > max_strings.size || (Tag(DT_STRSZ) && !tags.contains(DT_STRTAB)))
             return WA_ERR_INVALID;
-        strings = max_strings.first(static_cast<size_t>(Tag(DT_STRSZ)));
+        strings = FileBytes(max_strings.offset, Tag(DT_STRSZ), string_storage);
         for (const auto offset : needed_offsets) {
             const auto name = StringAt(offset);
             if (!name || name->empty())
@@ -474,28 +502,27 @@ template <typename Word> class Loader {
     std::optional<uint64_t> SymbolCount() const {
         if (tags.contains(DT_HASH)) {
             const auto hash = FileAt(Tag(DT_HASH));
-            if (!Contains(hash, 0, 8))
+            if (!Contains(hash.size, 0, 8))
                 return std::nullopt;
-            const auto buckets = Read<uint32_t>(hash, 0);
-            const auto chains = Read<uint32_t>(hash, 4);
-            if (!Contains(hash, 8, (uint64_t{buckets} + chains) * sizeof(uint32_t)))
+            const auto [buckets, chains] = FileValue<std::array<uint32_t, 2>>(hash.offset);
+            if (!Contains(hash.size, 8, (uint64_t{buckets} + chains) * sizeof(uint32_t)))
                 return std::nullopt;
             return chains;
         }
         if (!tags.contains(DT_GNU_HASH))
             return std::nullopt;
         const auto hash = FileAt(Tag(DT_GNU_HASH));
-        if (!Contains(hash, 0, 16))
+        if (!Contains(hash.size, 0, 16))
             return std::nullopt;
-        const auto count = Read<uint32_t>(hash, 0);
-        const auto first = Read<uint32_t>(hash, 4);
-        const auto bloom_count = Read<uint32_t>(hash, 8);
+        const auto [count, first, bloom_count, shift] = FileValue<std::array<uint32_t, 4>>(hash.offset);
         const auto buckets = 16 + uint64_t{bloom_count} * sizeof(Word);
-        if (!Contains(hash, buckets, uint64_t{count} * 4))
+        if (!Contains(hash.size, buckets, uint64_t{count} * 4))
             return std::nullopt;
+        std::vector<uint8_t> storage;
+        const auto bucket_bytes = FileBytes(hash.offset + buckets, uint64_t{count} * 4, storage);
         uint32_t last_bucket = 0;
         for (uint64_t i = 0; i < count; ++i) {
-            const auto index = Read<uint32_t>(hash, buckets + i * 4);
+            const auto index = Read<uint32_t>(bucket_bytes, i * 4);
             if (index && index < first)
                 return std::nullopt;
             last_bucket = std::max(last_bucket, index);
@@ -505,8 +532,8 @@ template <typename Word> class Loader {
         // GNU hash lays out each bucket's symbols consecutively in dynsym.
         const auto chains = buckets + uint64_t{count} * 4;
         auto cursor = chains + uint64_t{last_bucket - first} * 4;
-        for (uint64_t index = last_bucket; Contains(hash, cursor, 4); ++index, cursor += 4) {
-            if (Read<uint32_t>(hash, cursor) & 1)
+        for (uint64_t index = last_bucket; Contains(hash.size, cursor, 4); ++index, cursor += 4) {
+            if (FileValue<uint32_t>(hash.offset + cursor) & 1)
                 return index + 1;
         }
         return std::nullopt;
@@ -534,9 +561,9 @@ template <typename Word> class Loader {
         const auto count = SymbolCount();
         const auto bytes = FileAt(Tag(DT_SYMTAB));
         if (Tag(DT_SYMENT) != sizeof(Symbol) || !count || !*count ||
-            *count > bytes.size() / sizeof(Symbol) || strings.empty())
+            *count > bytes.size / sizeof(Symbol) || strings.empty())
             return WA_ERR_INVALID;
-        symbols = bytes.first(static_cast<size_t>(*count) * sizeof(Symbol));
+        symbols = FileBytes(bytes.offset, *count * sizeof(Symbol), symbol_storage);
         for (uint64_t i = 1; i < *count; ++i) {
             const auto symbol = Read<Symbol>(symbols, i * sizeof(Symbol));
             const auto binding = symbol.info >> 4;
@@ -728,8 +755,10 @@ template <typename Word> class Loader {
 
     template <typename Relocation> int32_t ApplyTable(uint64_t vaddr, uint64_t length) const {
         if (!length) return WA_OK;
-        const auto table = FileAt(vaddr);
-        if (length % sizeof(Relocation) || length > table.size()) return WA_ERR_INVALID;
+        const auto range = FileAt(vaddr);
+        if (length % sizeof(Relocation) || length > range.size) return WA_ERR_INVALID;
+        std::vector<uint8_t> storage;
+        const auto table = FileBytes(range.offset, length, storage);
         for (uint64_t i = 0; i < length; i += sizeof(Relocation)) {
             const auto reloc = Read<Relocation>(table, i);
             int32_t status;
@@ -745,9 +774,11 @@ template <typename Word> class Loader {
     int32_t ApplyRelr(uint64_t tag, uint64_t size_tag, uint64_t entry_tag) const {
         const auto size = Tag(size_tag);
         if (!size) return WA_OK;
-        const auto bytes = FileAt(Tag(tag));
+        const auto range = FileAt(Tag(tag));
         if (!tags.contains(tag) || Tag(entry_tag) != sizeof(Word) ||
-            size % sizeof(Word) || size > bytes.size()) return WA_ERR_INVALID;
+            size % sizeof(Word) || size > range.size) return WA_ERR_INVALID;
+        std::vector<uint8_t> storage;
+        const auto bytes = FileBytes(range.offset, size, storage);
 
         constexpr auto relative = Is32 ? R_ARM_RELATIVE : R_AARCH64_RELATIVE;
         constexpr size_t coverage = sizeof(Word) * 8 - 1;
@@ -778,10 +809,12 @@ template <typename Word> class Loader {
         enum { GroupInfo = 1, GroupOffset = 2, GroupAddend = 4, HasAddend = 8 };
         const auto size = Tag(size_tag);
         if (!size) return WA_OK;
-        auto bytes = FileAt(Tag(tag));
-        if (!tags.contains(tag) || size < 4 || size > bytes.size() ||
-            std::memcmp(bytes.data(), "APS2", 4)) return WA_ERR_INVALID;
-        bytes = bytes.subspan(4, size - 4);
+        const auto range = FileAt(Tag(tag));
+        if (!tags.contains(tag) || size < 4 || size > range.size) return WA_ERR_INVALID;
+        std::vector<uint8_t> storage;
+        auto bytes = FileBytes(range.offset, size, storage);
+        if (std::memcmp(bytes.data(), "APS2", 4)) return WA_ERR_INVALID;
+        bytes = bytes.subspan(4);
         try {
             auto count = ReadSleb(bytes);
             auto offset = ReadSleb(bytes);
@@ -882,7 +915,7 @@ template <typename Word> class Loader {
     }
 
     wa_dbt* dbt;
-    Bytes file;
+    const ElfFile& file;
     uint64_t bias;
     uint64_t alignment = WA_PAGE_SIZE;
     std::string* error = nullptr;
@@ -890,6 +923,7 @@ template <typename Word> class Loader {
     std::optional<Segment> dynamic, tls;
     uint64_t phoff = 0, tls_alignment = 1;
     std::map<uint64_t, uint64_t> tags;
+    std::vector<uint8_t> program_headers, string_storage, symbol_storage;
     Bytes strings, symbols;
     std::vector<std::string_view> needed;
     LoadedImage image;
@@ -900,18 +934,36 @@ template <typename Word> class Loader {
 
 int32_t wa::dbt::InspectElf(wa_guest_arch_t arch, std::span<const uint8_t> bytes, ElfInfo& info,
                             bool include_symbols) {
-    if (arch == WA_ARCH_ARM32) return Loader<uint32_t>{nullptr, bytes, 0}.Inspect(info, include_symbols);
-    if (arch == WA_ARCH_ARM64) return Loader<uint64_t>{nullptr, bytes, 0}.Inspect(info, include_symbols);
+    return InspectElf(arch, ElfFile(bytes), info, include_symbols);
+}
+
+int32_t wa::dbt::InspectElf(wa_guest_arch_t arch, const ElfFile& file, ElfInfo& info,
+                           bool include_symbols) {
+    try {
+        if (arch == WA_ARCH_ARM32) return Loader<uint32_t>{nullptr, file, 0}.Inspect(info, include_symbols);
+        if (arch == WA_ARCH_ARM64) return Loader<uint64_t>{nullptr, file, 0}.Inspect(info, include_symbols);
+    } catch (const GuestFault& fault) {
+        return fault.status;
+    }
     return WA_ERR_INVALID;
 }
 
 int32_t wa::dbt::LoadElf(wa_dbt& dbt, uint32_t file_id, std::span<const uint8_t> bytes, uint64_t bias,
                          std::string_view name, uint64_t& base, std::string* error) {
-    if (bytes.empty() || bias >= WA_HOST_STUB_BASE || (bias & kPageMask)) return WA_ERR_INVALID;
+    return LoadElf(dbt, file_id, ElfFile(bytes), bias, name, base, error);
+}
+
+int32_t wa::dbt::LoadElf(wa_dbt& dbt, uint32_t file_id, const ElfFile& file, uint64_t bias,
+                        std::string_view name, uint64_t& base, std::string* error) {
+    if (!file.size || bias >= WA_HOST_STUB_BASE || (bias & kPageMask)) return WA_ERR_INVALID;
     std::lock_guard lock(dbt.mutex);
-    if (dbt.arch == WA_ARCH_ARM32)
-        return Loader<uint32_t>{&dbt, bytes, bias}.Load(file_id, name, base, error);
-    return Loader<uint64_t>{&dbt, bytes, bias}.Load(file_id, name, base, error);
+    try {
+        if (dbt.arch == WA_ARCH_ARM32)
+            return Loader<uint32_t>{&dbt, file, bias}.Load(file_id, name, base, error);
+        return Loader<uint64_t>{&dbt, file, bias}.Load(file_id, name, base, error);
+    } catch (const GuestFault& fault) {
+        return fault.status;
+    }
 }
 
 void wa::dbt::HideElf(wa_dbt& dbt, uint64_t base) {

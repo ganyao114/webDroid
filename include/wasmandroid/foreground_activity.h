@@ -23,6 +23,9 @@ int32_t wa_system_app_install_package_catalog_apk(const char* name, const uint8_
                                                 size_t size);
 int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t size,
                                const char* activity_class_or_null);
+// Browser MEMFS inputs are moved into session-owned backing files.
+int32_t wa_system_app_install_package_catalog_apk_file(const char* name, const char* path);
+int32_t wa_system_app_boot_apk_file(const char* name, const char* path, const char* activity_class_or_null);
 
 // Input goes through wa_sf_input(). A busy scene can be retried on the next vsync.
 int32_t wa_system_app_tick(int64_t frame_time_ns);

@@ -8,6 +8,9 @@
 #include "native_methods.h"
 #include "ui_bridge.h"
 #include "ziparchive/zip_archive.h"
+#ifdef WA_FOREGROUND_TESTING
+#include "foreground_test_access.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -503,7 +506,8 @@ struct Session {
             state += ",\"nativeAbi\":" + Quote(native.abi) +
                 ",\"nativeLibraries\":" + std::to_string(native.libraries) +
                 ",\"nativeHostCalls\":" + std::to_string(native.calls) +
-                ",\"nativeCallbacks\":" + std::to_string(native.callbacks);
+                ",\"nativeCallbacks\":" + std::to_string(native.callbacks) +
+                ",\"nativeFileFaults\":" + std::to_string(native.file_faults);
         }
 #ifdef __EMSCRIPTEN__
         state += ",\"wasmLinearBytes\":" + std::to_string(emscripten_get_heap_size()) +
@@ -520,7 +524,10 @@ struct Session {
     std::map<uint32_t, WebViewLayer> webviews;
     Vm vm{wa::interp::Options{.gc_interval = 4096, .verify_dex = true, .capture_exception_stack = true,
         .sandboxed_files = true,
-        .system_properties = {{"org.wasmandroid.foreground", "true"}}}};
+        .system_properties = {{"org.wasmandroid.foreground", "true"}, {"os.arch", "aarch64"},
+            {"ro.product.cpu.abilist", "arm64-v8a,armeabi-v7a"},
+            {"ro.product.cpu.abilist64", "arm64-v8a"},
+            {"ro.product.cpu.abilist32", "armeabi-v7a"}}}};
     wa::ui_jni::UiBridge ui;
     std::vector<StoppedActivity> activity_stack;
     std::string package_name, activity_class, activity_descriptor, application_class,
@@ -659,6 +666,17 @@ bool SelectActivity(const ApkComponent& activity, std::string_view requested) {
 
 } // namespace
 
+#ifdef WA_FOREGROUND_TESTING
+int32_t wa::system::RunForegroundProbe(ForegroundProbe probe, char* out, size_t cap) {
+    return Running("Probe foreground VM", [&](Session& s) -> int32_t {
+        ScopedHandleScope roots(s.vm);
+        auto* activity = roots.Hold(s.Activity());
+        if (!activity) return WA_ERR_NOENT;
+        return CopyText(probe(s.vm, activity), out, cap);
+    });
+}
+#endif
+
 int32_t wa_system_app_create(int32_t width, int32_t height, int32_t dpi, const char* locale) {
     return Api("Create foreground process", [&]() -> int32_t {
         if (session) return WA_ERR_BUSY;
@@ -732,92 +750,128 @@ int32_t wa_system_app_install_package_catalog_apk(const char* name, const uint8_
     });
 }
 
+int32_t wa_system_app_install_package_catalog_apk_file(const char* name, const char* path) {
+    return Prepared("Index catalog APK file", [&](Session& s) -> int32_t {
+        if (!name || !*name || !path || !*path) return WA_ERR_INVALID;
+        Package package;
+        package.mount = std::make_unique<MountedApk>(MountedApk::BrowserFile{}, path);
+        const auto status = wa::system::ReadLauncherPackage(package.mount->path(), s.locale.c_str(),
+            s.display.density_dpi, package.manifest);
+        if (status != WA_OK) return status;
+        const auto key = package.manifest.package;
+        s.catalog.insert_or_assign(key, std::move(package));
+        return WA_OK;
+    });
+}
+
+namespace {
+
+int32_t BootForeground(Session& s, Package package, const char* activity) {
+    struct BootTimer {
+        double& elapsed;
+        Clock::time_point start = Clock::now();
+        ~BootTimer() { elapsed = MillisecondsSince(start); }
+    } timer{s.boot_ms};
+    const auto& pkg = package.manifest.package;
+    const auto requested = wa::system::ActivityClassName(pkg, activity ? activity : "");
+    const auto chosen = std::ranges::find_if(package.manifest.activities,
+        [&](const auto& candidate) { return SelectActivity(candidate, requested); });
+    if (chosen == package.manifest.activities.end()) return WA_ERR_NOENT;
+    s.activity_class = chosen->name;
+    s.activity_descriptor = Descriptor(chosen->name);
+    s.launch_activity = s.activity_class;
+    s.launch_descriptor = s.activity_descriptor;
+    s.package_name = pkg;
+    s.application_class = package.manifest.application.empty() ? "android.app.Application" :
+        package.manifest.application;
+    s.application_descriptor = Descriptor(s.application_class);
+    s.icon_resource = chosen->icon ? chosen->icon : package.manifest.icon;
+    const std::string apk_path = package.mount->path();
+    s.catalog.insert_or_assign(s.package_name, std::move(package));
+    s.boot_attempted = true;
+
+    s.vm.MountReadOnlyHostFile(apk_path);
+    s.vm.LoadApkDexFiles(apk_path);
+    const auto native_library_dir = wa::system::MountGuestApkLibraries(s.vm, apk_path, s.package_name);
+    const auto prefix = apk_path + '!';
+    if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))
+        throw std::invalid_argument("Launcher activity is absent from the APK DEX files");
+    for (const auto& file : s.vm.GetDexStats().files) {
+        if (!file.location.starts_with(prefix)) continue;
+        ++s.dex_files;
+        s.dex_classes += file.class_definitions;
+    }
+    s.ui.RegisterNatives(s.vm);
+    s.natives_registered = true;
+    s.ui.BindSurfaceFlinger(s.scene.get(), kActivityLayer);
+    RegisterWebView(s);
+    RegisterClock(s, prefix);
+    s.ui.SetPackageCallbacks({
+        .query_activities = [&s](const auto& intent) { return s.Query(intent); },
+        .get_application = [&s](auto pkg, auto flags, auto user) {
+            return s.GetApplication(pkg, flags, user);
+        },
+    });
+    s.ui.LaunchActivity(s.vm, {.apk_path = apk_path, .class_name = s.activity_class,
+        .locale = s.locale, .density_dpi = static_cast<int32_t>(s.display.density_dpi),
+        .width = static_cast<int32_t>(s.display.viewport_w),
+        .height = static_cast<int32_t>(s.display.viewport_h),
+        .framework_resource_apk = s.framework_resources->path(), .native_library_dir = native_library_dir});
+    s.on_create = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onCreate",
+                                                   "(Landroid/os/Bundle;)V").returned;
+    s.on_start = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onStart", "()V").returned;
+    s.on_resume = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onResume", "()V").returned;
+    {
+        ScopedHandleScope roots(s.vm);
+        auto* current = roots.Hold(s.Activity());
+        if (!current) throw std::runtime_error("Activity finished during launch");
+        // SystemUI owns the bars outside the foreground scene.
+        auto* window = roots.Hold(s.vm.CallVirtual(current, "getWindow", "()Landroid/view/Window;").ref());
+        const std::array fit{Value::Int(0)};
+        s.vm.CallVirtual(window, "setDecorFitsSystemWindows", "(Z)V", fit);
+        auto* app = roots.Hold(s.vm.CallVirtual(current, "getApplication",
+                                               "()Landroid/app/Application;").ref());
+        auto* cls = roots.Hold(s.vm.CallVirtual(app, "getClass", "()Ljava/lang/Class;").ref());
+        s.application_class = s.vm.StringUtf8(s.vm.CallVirtual(cls, "getName",
+                                                                "()Ljava/lang/String;").ref());
+        s.application_descriptor = Descriptor(s.application_class);
+        s.ReadIcon(current);
+    }
+    const int32_t frame = s.Draw(0);
+    if (frame != WA_OK) return frame;
+    s.vm.Collect();
+    s.booted = true;
+    return WA_OK;
+}
+
+} // namespace
+
 int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t size, const char* activity) {
     return Prepared("Boot foreground APK", [&](Session& s) -> int32_t {
         if (!name || !*name || !bytes || !size || !s.framework_loaded || !s.fallback_loaded ||
             !s.framework_resources)
             return WA_ERR_INVALID;
 
-        struct BootTimer {
-            double& elapsed;
-            Clock::time_point start = Clock::now();
-            ~BootTimer() { elapsed = MillisecondsSince(start); }
-        } timer{s.boot_ms};
         Package package;
         const auto status = wa::system::ReadLauncherPackage({bytes, size}, s.locale.c_str(),
                                                             s.display.density_dpi, package.manifest);
         if (status != WA_OK) return status;
-        const auto& pkg = package.manifest.package;
-        const auto requested = wa::system::ActivityClassName(pkg, activity ? activity : "");
-        const auto chosen = std::ranges::find_if(package.manifest.activities,
-            [&](const auto& candidate) { return SelectActivity(candidate, requested); });
-        if (chosen == package.manifest.activities.end()) return WA_ERR_NOENT;
-        s.activity_class = chosen->name;
-        s.activity_descriptor = Descriptor(chosen->name);
-        s.launch_activity = s.activity_class;
-        s.launch_descriptor = s.activity_descriptor;
-        s.package_name = pkg;
-        s.application_class = package.manifest.application.empty() ? "android.app.Application" :
-            package.manifest.application;
-        s.application_descriptor = Descriptor(s.application_class);
-        s.icon_resource = chosen->icon ? chosen->icon : package.manifest.icon;
         package.mount = std::make_unique<MountedApk>(std::span(bytes, size));
-        const std::string apk_path = package.mount->path();
-        s.catalog.insert_or_assign(s.package_name, std::move(package));
-        s.boot_attempted = true;
+        return BootForeground(s, std::move(package), activity);
+    });
+}
 
-        s.vm.MountReadOnlyHostFile(apk_path);
-        s.vm.LoadApkDexFiles(apk_path);
-        s.vm.SetGuestNativeSource(wa::system::OpenGuestNativeApk, s.catalog.at(s.package_name).mount.get());
-        const auto prefix = apk_path + '!';
-        if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))
-            throw std::invalid_argument("Launcher activity is absent from the APK DEX files");
-        for (const auto& file : s.vm.GetDexStats().files) {
-            if (!file.location.starts_with(prefix)) continue;
-            ++s.dex_files;
-            s.dex_classes += file.class_definitions;
-        }
-        s.ui.RegisterNatives(s.vm);
-        s.natives_registered = true;
-        s.ui.BindSurfaceFlinger(s.scene.get(), kActivityLayer);
-        RegisterWebView(s);
-        RegisterClock(s, prefix);
-        s.ui.SetPackageCallbacks({
-            .query_activities = [&s](const auto& intent) { return s.Query(intent); },
-            .get_application = [&s](auto pkg, auto flags, auto user) {
-                return s.GetApplication(pkg, flags, user);
-            },
-        });
-        s.ui.LaunchActivity(s.vm, {.apk_path = apk_path, .class_name = s.activity_class,
-            .locale = s.locale, .density_dpi = static_cast<int32_t>(s.display.density_dpi),
-            .width = static_cast<int32_t>(s.display.viewport_w),
-            .height = static_cast<int32_t>(s.display.viewport_h),
-            .framework_resource_apk = s.framework_resources->path()});
-        s.on_create = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onCreate",
-                                                       "(Landroid/os/Bundle;)V").returned;
-        s.on_start = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onStart", "()V").returned;
-        s.on_resume = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onResume", "()V").returned;
-        {
-            ScopedHandleScope roots(s.vm);
-            auto* current = roots.Hold(s.Activity());
-            if (!current) throw std::runtime_error("Activity finished during launch");
-            // SystemUI owns the bars outside the foreground scene.
-            auto* window = roots.Hold(s.vm.CallVirtual(current, "getWindow", "()Landroid/view/Window;").ref());
-            const std::array fit{Value::Int(0)};
-            s.vm.CallVirtual(window, "setDecorFitsSystemWindows", "(Z)V", fit);
-            auto* app = roots.Hold(s.vm.CallVirtual(current, "getApplication",
-                                                   "()Landroid/app/Application;").ref());
-            auto* cls = roots.Hold(s.vm.CallVirtual(app, "getClass", "()Ljava/lang/Class;").ref());
-            s.application_class = s.vm.StringUtf8(s.vm.CallVirtual(cls, "getName",
-                                                                    "()Ljava/lang/String;").ref());
-            s.application_descriptor = Descriptor(s.application_class);
-            s.ReadIcon(current);
-        }
-        const int32_t frame = s.Draw(0);
-        if (frame != WA_OK) return frame;
-        s.vm.Collect();
-        s.booted = true;
-        return WA_OK;
+int32_t wa_system_app_boot_apk_file(const char* name, const char* path, const char* activity) {
+    return Prepared("Boot foreground APK file", [&](Session& s) -> int32_t {
+        if (!name || !*name || !path || !*path || !s.framework_loaded || !s.fallback_loaded ||
+            !s.framework_resources)
+            return WA_ERR_INVALID;
+        Package package;
+        package.mount = std::make_unique<MountedApk>(MountedApk::BrowserFile{}, path);
+        const auto status = wa::system::ReadLauncherPackage(package.mount->path(), s.locale.c_str(),
+            s.display.density_dpi, package.manifest);
+        if (status != WA_OK) return status;
+        return BootForeground(s, std::move(package), activity);
     });
 }
 

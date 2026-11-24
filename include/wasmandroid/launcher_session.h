@@ -45,6 +45,7 @@ int32_t wa_system_launcher_set_framework_res_apk(const uint8_t* apk_bytes, size_
 // PackageManager / LauncherApps. Optional label/icon fallback overrides are
 // ignored when the APK manifest supplies real strings/icons.
 int32_t wa_system_launcher_install_apk(const char* name, const uint8_t* apk_bytes, size_t apk_len);
+int32_t wa_system_launcher_install_apk_file(const char* name, const char* path);
 
 // Mounts the upstream com.android.systemui package before boot. Its DEX and
 // resources are used to inflate the real phone bars into the Launcher window.

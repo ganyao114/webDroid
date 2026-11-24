@@ -2,6 +2,7 @@
 
 #include "apk_dex.h"
 #include "apk_manifest.h"
+#include "apk_entry_reader.h"
 #include "elf_image.h"
 #include "system_internal.h"
 #include "wasmandroid/libkern.h"
@@ -486,13 +487,10 @@ int32_t wa::system::ReadApkManifest(std::span<const uint8_t> bytes, ApkManifest&
     }
 }
 
-int32_t wa::system::ReadLauncherPackage(std::span<const uint8_t> bytes, const char* locale,
-                                        int density, LauncherPackage& out) {
-    if (bytes.empty() || !std::in_range<ptrdiff_t>(bytes.size()))
-        return WA_ERR_INVALID;
-    std::shared_ptr<Archive> archive;
-    // This method copies metadata out of the resource table before returning.
-    const auto assets = OpenAssets(bytes, archive, /*copy_input=*/false);
+namespace {
+
+int32_t IndexLauncherPackage(const android::ApkAssetsPtr& assets, const char* locale,
+                             int density, wa::system::LauncherPackage& out) {
     AssetManager2 manager;
     if (!assets || !manager.SetApkAssets({assets}))
         return WA_ERR_INVALID;
@@ -503,11 +501,28 @@ int32_t wa::system::ReadLauncherPackage(std::span<const uint8_t> bytes, const ch
     configuration.sdkVersion = 37;
     manager.SetConfigurations({configuration});
     Manifest manifest;
-    LauncherPackage indexed;
+    wa::system::LauncherPackage indexed;
     if (!ParseManifest(manager, manifest, &indexed))
         return WA_ERR_INVALID;
     out = std::move(indexed);
     return WA_OK;
+}
+
+} // namespace
+
+int32_t wa::system::ReadLauncherPackage(std::span<const uint8_t> bytes, const char* locale,
+                                        int density, LauncherPackage& out) {
+    if (bytes.empty() || !std::in_range<ptrdiff_t>(bytes.size()))
+        return WA_ERR_INVALID;
+    std::shared_ptr<Archive> archive;
+    // This method copies metadata out of the resource table before returning.
+    return IndexLauncherPackage(OpenAssets(bytes, archive, /*copy_input=*/false), locale, density, out);
+}
+
+int32_t wa::system::ReadLauncherPackage(const char* path, const char* locale, int density,
+                                        LauncherPackage& out) {
+    if (!path || !*path) return WA_ERR_INVALID;
+    return IndexLauncherPackage(android::ApkAssets::Load(path), locale, density, out);
 }
 
 struct wa_system_apk {
@@ -567,47 +582,75 @@ const wa_system_apk_info_t* wa_system_apk_info(const wa_system_apk_t* apk) {
     return apk ? &apk->info : nullptr;
 }
 
+namespace {
+
+int32_t FindLegacyCube(ZipArchiveHandle zip, std::span<const uint8_t> bytes, std::string_view package,
+                       decltype(wa_system_apk::native)& candidates, std::string& library_name) {
+    const bool cube_package = package == "org.wasmandroid.cube" || package == "com.wasmandroid.cube";
+    for (size_t i = 0; i < kRunnableAbis.size(); ++i) {
+        const auto prefix = std::string("lib/") + kRunnableAbis[i] + "/";
+        void* cookie = nullptr;
+        if (StartIteration(zip, &cookie, prefix, ".so") != kSuccess)
+            return WA_ERR_INVALID;
+        const std::unique_ptr<void, decltype(&EndIteration)> iteration(cookie, EndIteration);
+        ZipEntry64 entry{};
+        std::string_view path;
+        while (Next(cookie, &entry, &path) == kSuccess) {
+            const auto name = path.substr(prefix.size());
+            if (!name.starts_with("lib") || name.contains('/') || !entry.uncompressed_length) continue;
+            bool match = cube_package && name.starts_with("libndk_gles3_cube");
+            if (!match) {
+                wa::system::ApkEntryReader file(zip, entry, bytes);
+                wa::dbt::ElfInfo elf;
+                const auto arch = i == 0 ? WA_ARCH_ARM32 : WA_ARCH_ARM64;
+                match = wa::dbt::InspectElf(arch, file.Elf(), elf, true) == WA_OK &&
+                    std::ranges::binary_search(elf.exports, "wa_demo_init") &&
+                    std::ranges::binary_search(elf.exports, "wa_demo_render_frame");
+            }
+            if (!match) continue;
+            candidates[i] = entry;
+            if (library_name.empty()) library_name = name.substr(3, name.size() - 6);
+            break;
+        }
+    }
+    return candidates[0] || candidates[1];
+}
+
+int32_t IsLegacyCubeApkFile(const char* path, std::string_view expected_package) {
+    wa::system::LauncherPackage info;
+    const auto status = wa::system::ReadLauncherPackage(path, "en-US", 160, info);
+    if (status != WA_OK || info.package != expected_package) return WA_ERR_INVALID;
+    ZipArchiveHandle handle = nullptr;
+    const auto opened = OpenArchive(path, &handle);
+    const std::unique_ptr<ZipArchive, decltype(&CloseArchive)> zip(handle, CloseArchive);
+    if (opened != kSuccess) return WA_ERR_INVALID;
+    decltype(wa_system_apk::native) candidates;
+    std::string library_name;
+    return FindLegacyCube(zip.get(), {}, info.package, candidates, library_name);
+}
+
+} // namespace
+
+extern "C" int32_t wa_system_apk_is_legacy_cube_file(const char* path, const char* package) {
+    if (!path || !package) return WA_ERR_INVALID;
+    try {
+        return IsLegacyCubeApkFile(path, package);
+    } catch (const std::bad_alloc&) {
+        return WA_ERR_NOMEM;
+    } catch (const std::exception&) {
+        return WA_ERR_INVALID;
+    }
+}
+
 int32_t wa_system_apk_is_legacy_cube(wa_system_apk_t* apk) {
     if (!apk) return WA_ERR_INVALID;
     if (apk->legacy_cube) return *apk->legacy_cube;
     try {
         decltype(apk->native) candidates;
-        const auto& package = apk->manifest.package;
-        const bool cube_package = package == "org.wasmandroid.cube" || package == "com.wasmandroid.cube";
         std::string library_name;
-        for (size_t i = 0; i < kRunnableAbis.size(); ++i) {
-            const auto prefix = std::string("lib/") + kRunnableAbis[i] + "/";
-            void* cookie = nullptr;
-            if (StartIteration(apk->archive->zip.get(), &cookie, prefix, ".so") != kSuccess)
-                return WA_ERR_INVALID;
-            const std::unique_ptr<void, decltype(&EndIteration)> iteration(cookie, EndIteration);
-            ZipEntry64 entry{};
-            std::string_view path;
-            while (Next(cookie, &entry, &path) == kSuccess) {
-                const auto name = path.substr(prefix.size());
-                if (!name.starts_with("lib") || name.contains('/') || !entry.uncompressed_length) continue;
-                bool match = cube_package && name.starts_with("libndk_gles3_cube");
-                if (!match) {
-                    auto bytes = apk->archive->Stored(entry);
-                    std::unique_ptr<uint8_t[]> extracted;
-                    if (bytes.empty()) {
-                        extracted = apk->archive->Extract(entry);
-                        if (!extracted) continue;
-                        bytes = {extracted.get(), static_cast<size_t>(entry.uncompressed_length)};
-                    }
-                    wa::dbt::ElfInfo elf;
-                    const auto arch = i == 0 ? WA_ARCH_ARM32 : WA_ARCH_ARM64;
-                    match = wa::dbt::InspectElf(arch, bytes, elf, true) == WA_OK &&
-                        std::ranges::binary_search(elf.exports, "wa_demo_init") &&
-                        std::ranges::binary_search(elf.exports, "wa_demo_render_frame");
-                }
-                if (!match) continue;
-                candidates[i] = entry;
-                if (library_name.empty()) library_name = name.substr(3, name.size() - 6);
-                break;
-            }
-        }
-        const bool legacy = candidates[0] || candidates[1];
+        const auto legacy = FindLegacyCube(apk->archive->zip.get(), apk->archive->bytes,
+            apk->manifest.package, candidates, library_name);
+        if (legacy < 0) return legacy;
         if (legacy) {
             apk->native = std::move(candidates);
             apk->manifest.library = std::move(library_name);

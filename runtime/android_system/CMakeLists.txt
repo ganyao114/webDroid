@@ -10,7 +10,7 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
     include(UpstreamLauncher.cmake)
     option(WA_VERIFY_LAUNCHER_DEX "Verify the system APK DEX files during Launcher boot" ON)
     # Compile AOSP translation units independently of SwiftVM's fmt.
-    add_library(wa_android_system_apk OBJECT apk_loader.cpp apk_dex.cpp)
+    add_library(wa_android_system_apk OBJECT apk_loader.cpp apk_dex.cpp apk_entry_reader.cpp)
     target_include_directories(wa_android_system_apk PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../../include" ../linker_ffi)
     target_link_libraries(wa_android_system_apk PRIVATE aosp17_libandroidfw aosp17_art_hgraph)
@@ -49,6 +49,11 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
         PRIVATE ../linker_ffi ../../tools/ffi_gen/generated)
     target_link_libraries(wa_android_system_foreground PUBLIC wa_hal_surfaceflinger
         PRIVATE wa_android_system_apk aosp17_ui_jni aosp17_libandroidfw wa_linker_ffi wa_hal_browser)
+    if(BUILD_TESTING)
+        target_compile_definitions(wa_android_system_foreground PRIVATE WA_FOREGROUND_TESTING=1)
+        target_sources(wa_android_system_foreground PRIVATE
+            ../../tests/m19_vlc_main_libvlc/vlc_probe.cpp)
+    endif()
 endif()
 
 if(EMSCRIPTEN)
@@ -63,8 +68,8 @@ if(EMSCRIPTEN)
         -sUSE_WEBGL2=1 -sFULL_ES3=1 -sOFFSCREENCANVAS_SUPPORT=1 -sSHARED_MEMORY=1
         -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=1048576
         -sABORTING_MALLOC=0
-        -sEXPORTED_RUNTIME_METHODS=HEAPU8,wasmMemory
     )
+    set(runtime_methods HEAPU8,wasmMemory)
     set(exports
         _malloc _free _wa_dbt_free_buffer
         _wa_system_load _wa_system_destroy _wa_system_demo_init _wa_system_demo_render_frame
@@ -78,6 +83,7 @@ if(EMSCRIPTEN)
         _wa_jit_registry_publish
     )
     if(TARGET wa_android_system_apk)
+        string(APPEND runtime_methods ",FS")
         target_link_libraries(android_system PRIVATE wa_android_system_apk wa_android_system_binder
             wa_android_system_foreground)
         add_dependencies(android_system wa_upstream_launcher_assets)
@@ -96,6 +102,7 @@ if(EMSCRIPTEN)
             __android_log_write=wa_hal_log_write __android_log_print=wa_hal_log_print)
         list(APPEND exports
             _wa_system_open_apk _wa_system_close_apk _wa_system_apk_info _wa_system_apk_is_legacy_cube
+            _wa_system_apk_is_legacy_cube_file
             _wa_system_apk_compile_dex _wa_system_apk_dex_stats
             _wa_system_apk_load_native _wa_system_apk_set_backing_file)
         list(APPEND exports
@@ -114,7 +121,7 @@ if(EMSCRIPTEN)
             _wa_system_launcher_create _wa_system_launcher_destroy _wa_system_launcher_sf_ctx
             _wa_system_launcher_load_framework_dex _wa_system_launcher_load_framework_fallback_dex
             _wa_system_launcher_set_framework_res_apk
-            _wa_system_launcher_install_apk _wa_system_launcher_load_systemui_apk
+            _wa_system_launcher_install_apk _wa_system_launcher_install_apk_file _wa_system_launcher_load_systemui_apk
             _wa_system_launcher_boot_apk _wa_system_launcher_stage_apk
             _wa_system_launcher_boot_staged_apk _wa_system_launcher_tick
             _wa_system_launcher_resize _wa_system_launcher_pause _wa_system_launcher_resume
@@ -126,7 +133,8 @@ if(EMSCRIPTEN)
             _wa_system_app_create _wa_system_app_destroy _wa_system_app_sf_ctx
             _wa_system_app_load_framework_dex _wa_system_app_load_framework_fallback_dex
             _wa_system_app_set_framework_res_apk _wa_system_app_install_package_catalog_apk
-            _wa_system_app_boot_apk _wa_system_app_tick _wa_system_app_resize
+            _wa_system_app_install_package_catalog_apk_file
+            _wa_system_app_boot_apk _wa_system_app_boot_apk_file _wa_system_app_tick _wa_system_app_resize
             _wa_system_app_send_back _wa_system_app_state_json _wa_system_app_last_error
             _wa_system_app_read_webview_file
             _wa_system_sf_init _wa_system_sf_ctx _wa_system_sf_destroy
@@ -139,13 +147,14 @@ if(EMSCRIPTEN)
             _wa_sf_codec_requests _wa_sf_codec_events _wa_sf_webview_requests _wa_sf_webview_events
             _wa_canvas_begin _wa_canvas_draw_color _wa_canvas_end)
         if(BUILD_TESTING)
-            list(APPEND exports _wa_canvas_measure_text)
+            list(APPEND exports _wa_canvas_measure_text _wa_test_vlc_abi _wa_test_vlc_labels _wa_test_vlc_media)
         endif()
     else()
         target_link_options(android_system PRIVATE -sFILESYSTEM=0)
     endif()
     list(JOIN exports "," exports)
-    target_link_options(android_system PRIVATE "-sEXPORTED_FUNCTIONS=${exports}")
+    target_link_options(android_system PRIVATE "-sEXPORTED_FUNCTIONS=${exports}"
+        "-sEXPORTED_RUNTIME_METHODS=${runtime_methods}")
 else()
     add_library(wa_android_system STATIC system_entry.cpp)
     target_include_directories(wa_android_system PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -183,4 +192,5 @@ if(BUILD_TESTING AND TARGET wa_android_system_apk)
     add_subdirectory(../../tests/m17_hybrid_art_ndk "${CMAKE_BINARY_DIR}/tests/m17_hybrid_art_ndk")
     add_subdirectory(../../tests/m18_bionic_libcpp_pthread "${CMAKE_BINARY_DIR}/tests/m18_bionic_libcpp_pthread")
     add_subdirectory(../../tests/m18_vlc_framework_compat "${CMAKE_BINARY_DIR}/tests/m18_vlc_framework_compat")
+    add_subdirectory(../../tests/m19_vlc_main_libvlc "${CMAKE_BINARY_DIR}/tests/m19_vlc_main_libvlc")
 endif()

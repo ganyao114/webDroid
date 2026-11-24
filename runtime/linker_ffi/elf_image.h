@@ -23,9 +23,26 @@ struct ElfInfo {
     std::vector<std::string> exports;
 };
 
+// The memory form serves callers that already have a contiguous ELF. The
+// reader form lets APK-backed callers inspect only the ELF metadata they use.
+struct ElfFile {
+    explicit ElfFile(std::span<const uint8_t> bytes) : bytes(bytes), size(bytes.size()) {}
+    ElfFile(uint64_t size, wa_page_read_fn read, void* user, uint32_t file_id)
+        : size(size), read(read), user(user), file_id(file_id) {}
+
+    std::span<const uint8_t> bytes;
+    uint64_t size;
+    wa_page_read_fn read = nullptr;
+    void* user = nullptr;
+    uint32_t file_id = 0;
+};
+
 int32_t InspectElf(wa_guest_arch_t arch, std::span<const uint8_t> bytes, ElfInfo& info,
                    bool include_symbols = false);
+int32_t InspectElf(wa_guest_arch_t arch, const ElfFile& file, ElfInfo& info, bool include_symbols = false);
 int32_t LoadElf(wa_dbt& dbt, uint32_t file_id, std::span<const uint8_t> bytes, uint64_t bias,
+                std::string_view name, uint64_t& base, std::string* error = nullptr);
+int32_t LoadElf(wa_dbt& dbt, uint32_t file_id, const ElfFile& file, uint64_t bias,
                 std::string_view name, uint64_t& base, std::string* error = nullptr);
 
 // Image handles are SoftMMU base addresses, with zero denoting the global scope.

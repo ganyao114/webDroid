@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <dirent.h>
+#include <functional>
 #include <optional>
 #include <set>
 
@@ -129,6 +130,7 @@ struct BionicState {
     std::map<uint64_t, GuestDirectory> directories;
     std::map<std::string, uint64_t, std::less<>> strings;
     std::map<std::string, uint64_t, std::less<>> environment;
+    std::function<std::optional<std::span<const uint8_t>>(std::string_view)> read_guest_file;
     std::map<int, std::array<uint64_t, 3>> signals;
     std::set<uint64_t> locales;
     uint64_t stdio = 0, environ = 0, environ_array = 0, localeconv = 0, setlocale = 0;
@@ -188,6 +190,7 @@ uint64_t ErrnoAddress(wa_dbt& dbt);
 void SetErrno(wa_dbt& dbt, int guest_error);
 void PosixResult(wa_host_call_ctx_t& ctx, int64_t result);
 int HostFd(const wa_dbt& dbt, uint64_t descriptor);
+int OpenMountedFile(std::span<const uint8_t> bytes, int flags);
 int AdoptFd(wa_dbt& dbt, int host, bool owned = true, int minimum = 0);
 int CloseFd(wa_dbt& dbt, int descriptor);
 void StorePipe(wa_host_call_ctx_t& ctx, int read_end, int write_end, uint64_t destination);

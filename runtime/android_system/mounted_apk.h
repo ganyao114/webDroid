@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cerrno>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string_view>
 #include <unistd.h>
 
 namespace wa::system {
@@ -32,6 +34,21 @@ class MountedApk {
         if (close(fd) != 0) {
             unlink(path_);
             throw std::runtime_error("Cannot close APK backing file");
+        }
+    }
+
+    struct BrowserFile {};
+    MountedApk(BrowserFile, const char* path) {
+        constexpr std::string_view prefix = "/tmp/wa-browser-apk-";
+        const std::string_view name(path ? path : "");
+        if (!name.starts_with(prefix) || name.size() == prefix.size() ||
+                name.substr(prefix.size()).find_first_not_of("0123456789") != name.npos)
+            throw std::invalid_argument("Invalid browser APK backing path");
+        const int fd = mkstemp(path_);
+        if (fd < 0) throw std::runtime_error("Cannot reserve APK backing file");
+        if (close(fd) != 0 || std::rename(path, path_) != 0) {
+            unlink(path_);
+            throw std::runtime_error("Cannot take ownership of browser APK backing file");
         }
     }
 

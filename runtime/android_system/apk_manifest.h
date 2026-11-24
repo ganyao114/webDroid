@@ -42,5 +42,6 @@ std::string ActivityClassName(std::string_view package, std::string_view name);
 int32_t ReadApkManifest(std::span<const uint8_t> bytes, ApkManifest& out);
 int32_t ReadLauncherPackage(std::span<const uint8_t> bytes, const char* locale, int density,
                             LauncherPackage& out);
+int32_t ReadLauncherPackage(const char* path, const char* locale, int density, LauncherPackage& out);
 
 } // namespace wa::system

@@ -717,7 +717,7 @@
 +
      public static final boolean is64Bit() {
 -        return VMRuntime.getRuntime().is64Bit();
-+        return false;
++        return "aarch64".equals(System.getProperty("os.arch", "aarch64"));
      }
  
      /**

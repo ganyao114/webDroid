@@ -22,6 +22,36 @@
 #endif
 
 namespace wa::dbt {
+
+int OpenMountedFile(std::span<const uint8_t> bytes, int flags) {
+    if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) {
+        errno = EROFS;
+        return -1;
+    }
+    if (flags & O_DIRECTORY) {
+        errno = ENOTDIR;
+        return -1;
+    }
+    // Give Bionic's descriptor operations a private, seekable snapshot of data
+    // from the VM filesystem. File-backed APK entries use the ELF reader.
+    char path[] = "/tmp/wa-native-file-XXXXXX";
+    const int backing = mkstemp(path);
+    if (backing < 0) return -1;
+    while (!bytes.empty()) {
+        const auto count = write(backing, bytes.data(), bytes.size());
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) break;
+        bytes = bytes.subspan(count);
+    }
+    if (!bytes.empty()) errno = EIO;
+    const int fd = bytes.empty() ? open(path, flags) : -1;
+    const int error = errno;
+    close(backing);
+    unlink(path);
+    errno = error;
+    return fd;
+}
+
 namespace {
 
 constexpr int kAtCwd = -100;
@@ -39,6 +69,23 @@ std::string Path(const wa_host_call_ctx_t& ctx, uint64_t address, int directory 
         path = ctx.dbt->bionic->cwd + "/" + path;
     }
     return path;
+}
+
+std::optional<std::span<const uint8_t>> MountedFile(const wa_host_call_ctx_t& ctx,
+                                                    std::string_view path) {
+    const auto& read = ctx.dbt->bionic->read_guest_file;
+    return read && path.starts_with('/') ? read(path) : std::nullopt;
+}
+
+bool StatMountedFile(const wa_host_call_ctx_t& ctx, std::string_view path, struct stat& result) {
+    const auto data = MountedFile(ctx, path);
+    if (!data) return false;
+    result.st_mode = S_IFREG | 0444;
+    result.st_nlink = 1;
+    result.st_size = data->size();
+    result.st_blksize = WA_PAGE_SIZE;
+    result.st_blocks = (data->size() + 511) / 512;
+    return true;
 }
 
 struct Flag {
@@ -78,7 +125,11 @@ template <Open op> void OpenFile(wa_host_call_ctx_t& ctx) {
         return Fail(ctx, ENOTSUP);
     const auto path = Path(ctx, ctx.args[at ? 1 : 0], fd);
     const auto mode = checked ? 0 : static_cast<mode_t>(ctx.args[at ? 3 : 2]);
-    PosixResult(ctx, AdoptFd(*ctx.dbt, openat(fd, path.c_str(), OpenFlags(flags), mode)));
+    const auto host_flags = OpenFlags(flags);
+    const auto mounted = MountedFile(ctx, path);
+    const auto result = mounted ? OpenMountedFile(*mounted, host_flags) :
+        openat(fd, path.c_str(), host_flags, mode);
+    PosixResult(ctx, AdoptFd(*ctx.dbt, result));
 }
 
 bool TransferEvent(wa_host_call_ctx_t& ctx, int descriptor, uint64_t address, uint64_t count,
@@ -286,11 +337,14 @@ template <Stat op> void StatCall(wa_host_call_ctx_t& ctx) {
         const auto flags = ctx.args[3];
         if ((flags & 0x1000) && path.empty())
             status = fstat(fd, &result);
+        else if (StatMountedFile(ctx, path, result))
+            status = 0;
         else
             status = fstatat(fd, path.c_str(), &result, flags & 0x100 ? AT_SYMLINK_NOFOLLOW : 0);
     } else {
         const auto path = Path(ctx, ctx.args[0]);
-        status = op == Stat::Link ? lstat(path.c_str(), &result) : stat(path.c_str(), &result);
+        status = StatMountedFile(ctx, path, result) ? 0 :
+            op == Stat::Link ? lstat(path.c_str(), &result) : stat(path.c_str(), &result);
     }
     PosixResult(ctx, status);
     if (!status)
@@ -370,8 +424,14 @@ template <FilePath op> void PathCall(wa_host_call_ctx_t& ctx) {
     const auto path = Path(ctx, ctx.args[at ? 1 : 0], fd);
     const auto p = path.c_str();
     int64_t result = 0;
-    if constexpr (op == FilePath::Access)
+    if constexpr (op == FilePath::Access) {
+        if (MountedFile(ctx, path)) {
+            if (ctx.args[1] & (W_OK | X_OK)) return Fail(ctx, EACCES);
+            ctx.ret0 = 0;
+            return;
+        }
         result = access(p, ctx.args[1]);
+    }
     if constexpr (op == FilePath::Unlink)
         result = unlink(p);
     if constexpr (op == FilePath::Mkdir)

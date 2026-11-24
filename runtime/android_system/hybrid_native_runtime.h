@@ -5,7 +5,7 @@
 
 namespace wa::system {
 
-std::unique_ptr<interp::GuestNativeLibraries> OpenGuestNativeApk(JNIEnv* env, const void* mounted_apk);
+std::string MountGuestApkLibraries(interp::Vm& vm, const std::string& apk_path, std::string_view package);
 
 enum class NativeProbeAction { Lookup, CallString, CallJniOnLoad };
 struct NativeProbeRequest {

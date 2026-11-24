@@ -1,0 +1,45 @@
+--- a/frameworks/base/core/java/android/os/Environment.java
++++ b/frameworks/base/core/java/android/os/Environment.java
+@@ -542,6 +542,15 @@
+         return candidate.equals(root) || candidate.startsWith(root + "/") ? MEDIA_MOUNTED : MEDIA_UNKNOWN;
+     }
+ 
++    public static boolean isExternalStorageManager() {
++        return isExternalStorageManager(getExternalStorageDirectory());
++    }
++
++    public static boolean isExternalStorageManager(@NonNull File path) {
++        // The embedded runtime only exposes scoped storage volumes.
++        return false;
++    }
++
+     /**
+      * Append path segments to each given base path, returning result.
+      *
+--- a/frameworks/base/core/java/android/app/Activity.java
++++ b/frameworks/base/core/java/android/app/Activity.java
+@@ -5140,7 +5140,23 @@
+      */
+     public final void requestPermissions(@NonNull String[] permissions, int requestCode,
+             int deviceId) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        if (requestCode < 0) {
++            throw new IllegalArgumentException("requestCode should be >= 0");
++        }
++        if (mHasCurrentPermissionsRequest) {
++            onRequestPermissionsResult(requestCode, new String[0], new int[0], deviceId);
++            return;
++        }
++        final String[] requested = permissions.clone();
++        final int[] results = new int[requested.length];
++        for (int i = 0; i < requested.length; i++) {
++            results[i] = checkSelfPermission(requested[i]);
++        }
++        mHasCurrentPermissionsRequest = true;
++        mHandler.post(() -> {
++            mHasCurrentPermissionsRequest = false;
++            onRequestPermissionsResult(requestCode, requested, results, deviceId);
++        });
+     }
+ 
+     @NonNull

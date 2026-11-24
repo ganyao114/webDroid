@@ -283,6 +283,7 @@ export class LauncherHost {
   state() { return this.#session?.ready ? this.#session.abi.state() : null; }
   labels() { return this.#session?.ready ? sceneLabels(this.#module, this.#session.scene) : []; }
   appLabels() { return this.#active?.foreground.labels() ?? []; }
+  appPixels() { return this.#active?.foreground.pixels() ?? null; }
 
   installApk(filename, bytes) {
     if (!this.#session?.ready) throw new Error('Launcher3 is still starting');

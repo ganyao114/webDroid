@@ -58,6 +58,7 @@ struct GuestNativeStats {
   size_t libraries = 0;
   uint64_t calls = 0;
   uint64_t callbacks = 0;
+  uint64_t file_faults = 0;
 };
 
 // The embedder supplies the APK namespace. ART continues to use its existing
@@ -72,7 +73,8 @@ class GuestNativeLibraries {
   virtual void Shutdown() noexcept = 0;
 };
 
-using GuestNativeFactory = std::unique_ptr<GuestNativeLibraries> (*)(JNIEnv*, const void*);
+using GuestNativeFactory = std::unique_ptr<GuestNativeLibraries> (*)(
+    JNIEnv*, const std::shared_ptr<const void>&);
 
 struct Options {
   size_t gc_interval = 1024;  // In allocations. Zero enables explicit collection only.
@@ -130,6 +132,9 @@ class Vm {
   void LoadFallbackDexFile(std::string location, std::vector<uint8_t> bytes);
   // Copies an immutable file into this VM's guest filesystem.
   void MountReadOnlyFile(std::string_view path, std::span<const uint8_t> bytes);
+  // Read a mounted file at an offset. The callback returns bytes read or a negative error.
+  using FileReader = std::function<int64_t(void*, size_t, uint64_t)>;
+  void MountReadOnlyFile(std::string_view path, uint64_t size, FileReader reader);
   // Opens a host-owned immutable file at the same guest path, without copying it.
   void MountReadOnlyHostFile(const std::string& path);
   // The view is available for memory-backed files until a guest write or removal.
@@ -145,8 +150,9 @@ class Vm {
   // Supply a typed adapter before RegisterNatives for additional JNI libraries.
   void AddNativeAdapter(void* function, NativeThunk adapter);
   JNIEnv* JniEnv();
-  // The source must live until this VM is destroyed. It is opened on the first library lookup.
-  void SetGuestNativeSource(GuestNativeFactory factory, const void* source);
+  // The source is opened on the first library lookup.
+  void SetGuestNativeSource(GuestNativeFactory factory, std::shared_ptr<const void> source);
+  void SetSystemProperty(std::string_view name, std::string_view value);
   GuestNativeStats GetGuestNativeStats() const;
   void ReleaseGuestNativeSource() noexcept;
 

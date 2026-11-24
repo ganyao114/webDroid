@@ -95,6 +95,8 @@ frameworks/base/core/java/android/widget/EdgeEffect.java
 frameworks/base/core/java/android/widget/Filter.java
 frameworks/base/core/java/android/widget/Filterable.java
 frameworks/base/core/java/android/widget/FrameLayout.java
+frameworks/base/core/java/android/widget/ViewAnimator.java
+frameworks/base/core/java/android/widget/ViewFlipper.java
 frameworks/base/core/java/android/widget/GridView.java
 frameworks/base/core/java/android/widget/HeaderViewListAdapter.java
 frameworks/base/core/java/android/widget/HorizontalScrollView.java
@@ -120,6 +122,7 @@ frameworks/base/core/java/android/widget/WrapperListAdapter.java
 
 # Embedded widgets and input method client
 frameworks/base/core/java/android/view/inputmethod/InputMethodManager.java
+frameworks/base/core/java/android/view/inputmethod/CompletionInfo.java
 frameworks/base/core/java/android/widget/RemoteCollectionItemsAdapter.java
 frameworks/base/core/java/android/widget/RemoteViews.java
 
@@ -133,6 +136,7 @@ frameworks/base/core/java/android/view/HandlerActionQueue.java
 frameworks/base/core/java/android/view/RoundScrollbarRenderer.java
 frameworks/base/core/java/android/view/TouchDelegate.java
 frameworks/base/core/java/android/view/View.java
+frameworks/base/core/java/android/view/PointerIcon.java
 frameworks/base/core/java/android/view/ViewGroup.java
 frameworks/base/core/java/android/view/ViewRootImpl.java
 frameworks/base/core/java/android/view/ViewGroupOverlay.java
@@ -405,6 +409,7 @@ frameworks/base/graphics/java/android/graphics/FrameInfo.java
 frameworks/base/core/java/android/widget/Button.java
 frameworks/base/core/java/android/widget/EditText.java
 frameworks/base/core/java/android/widget/TextView.java
+frameworks/base/core/java/android/widget/AutoCompleteTextView.java
 
 frameworks/base/core/java/android/util/Patterns.java
 frameworks/base/core/java/android/util/TimeFormatException.java
@@ -464,6 +469,7 @@ frameworks/base/core/java/android/service/notification/StatusBarNotification.jav
 frameworks/base/core/java/android/view/textclassifier/EntityConfidence.java
 frameworks/base/core/java/android/view/textclassifier/TextLinks.java
 frameworks/base/media/java/android/media/AudioAttributes.java
+frameworks/base/media/java/android/media/AudioDeviceCallback.java
 
 # Activity overlays, menus and software-backed surfaces.
 frameworks/base/core/java/android/app/ActionBar.java
@@ -837,6 +843,8 @@ libcore/ojluni/src/main/java/java/util/concurrent/locks/ReadWriteLock.java
 libcore/ojluni/src/main/java/java/util/concurrent/locks/ReentrantReadWriteLock.java
 libcore/ojluni/src/main/java/sun/nio/cs/StreamEncoder.java
 libcore/ojluni/src/main/java/sun/net/util/IPAddressUtil.java
+libcore/ojluni/src/main/java/java/util/Timer.java
+libcore/ojluni/src/main/java/java/util/TimerTask.java
 
 [services]
 frameworks/base/services/core/java/com/android/server/IntentResolver.java
@@ -1192,3 +1200,8 @@ patches/1033-embedded-weak-hash-map.patch
 patches/1034-embedded-component-state.patch
 patches/1035-embedded-connectivity-requests.patch
 patches/1036-embedded-database-migration.patch
+patches/1037-embedded-storage-and-permission-requests.patch
+patches/1038-embedded-timers-and-permission-rationale.patch
+patches/1039-embedded-pointer-icons.patch
+patches/1040-embedded-context-device.patch
+patches/1041-embedded-auto-complete.patch

@@ -1,0 +1,48 @@
+--- a/frameworks/base/core/java/android/widget/AutoCompleteTextView.java
++++ b/frameworks/base/core/java/android/widget/AutoCompleteTextView.java
+@@ -44,7 +44,6 @@
+ import android.view.inspector.InspectableProperty;
+ import android.window.OnBackInvokedCallback;
+ import android.window.OnBackInvokedDispatcher;
+-import android.window.WindowOnBackInvokedDispatcher;
+ 
+ import com.android.internal.R;
+ 
+@@ -1440,9 +1439,7 @@
+         if (dispatcher == null) {
+             return;
+         }
+-        if (WindowOnBackInvokedDispatcher.isOnBackInvokedCallbackEnabled(mPopupContext)) {
+-            dispatcher.unregisterOnBackInvokedCallback(mBackCallback);
+-        }
++        dispatcher.unregisterOnBackInvokedCallback(mBackCallback);
+         mBackCallbackRegistered = false;
+     }
+ 
+@@ -1454,10 +1451,8 @@
+         if (dispatcher == null) {
+             return;
+         }
+-        if (WindowOnBackInvokedDispatcher.isOnBackInvokedCallbackEnabled(mPopupContext)) {
+-            dispatcher.registerOnBackInvokedCallback(
+-                    OnBackInvokedDispatcher.PRIORITY_OVERLAY, mBackCallback);
+-        }
++        dispatcher.registerOnBackInvokedCallback(
++                OnBackInvokedDispatcher.PRIORITY_OVERLAY, mBackCallback);
+         mBackCallbackRegistered = true;
+     }
+ 
+--- a/frameworks/base/core/java/android/widget/TextView.java
++++ b/frameworks/base/core/java/android/widget/TextView.java
+@@ -11564,6 +11564,11 @@
+         sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED);
+     }
+ 
++    /** Called when the input method commits an offered text completion. */
++    public void onCommitCompletion(android.view.inputmethod.CompletionInfo text) {
++        // intentionally empty
++    }
++
+     /**
+      * Adds a TextWatcher to the list of those whose methods are called
+      * whenever this TextView's text changes.

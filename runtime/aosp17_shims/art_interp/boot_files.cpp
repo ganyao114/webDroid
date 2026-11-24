@@ -132,16 +132,16 @@ std::span<Value> Buffer(Runtime& vm, Values args) {
   return std::span(bytes).subspan(offset, length);
 }
 
-size_t ReadHostFile(Runtime& vm, Runtime::FileHandle& handle, std::span<Value> buffer) {
+size_t ReadMountedFile(Runtime& vm, Runtime::FileHandle& handle, std::span<Value> buffer) {
   std::array<uint8_t, 4096> bytes;
   size_t total = 0;
   while (total < buffer.size()) {
     const auto size = std::min(bytes.size(), buffer.size() - total);
-    const auto count = pread(fileno(handle.file->backing.get()), bytes.data(), size, handle.position);
-    if (count < 0 && errno == EINTR) continue;
-    if (count < 0) vm.Fail("Ljava/io/IOException;", "Cannot read mounted file");
+    const auto count = handle.file->reader(bytes.data(), size, handle.position);
+    if (count < 0 || static_cast<uint64_t>(count) > size)
+      vm.Fail("Ljava/io/IOException;", "Cannot read mounted file");
     if (count == 0) break;
-    for (ssize_t i = 0; i < count; ++i) buffer[total + i] = Value::Int(static_cast<int8_t>(bytes[i]));
+    for (int64_t i = 0; i < count; ++i) buffer[total + i] = Value::Int(static_cast<int8_t>(bytes[i]));
     handle.position += count;
     total += count;
   }
@@ -181,8 +181,8 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
     const auto size = handle.file->Size();
     if (handle.position >= size) return Value::Int(-1);
     const auto count = std::min<uint64_t>(buffer.size(), size - handle.position);
-    if (handle.file->backing) {
-      const auto read = ReadHostFile(vm, handle, buffer.first(count));
+    if (handle.file->reader) {
+      const auto read = ReadMountedFile(vm, handle, buffer.first(count));
       return Value::Int(read != 0 ? static_cast<int32_t>(read) : -1);
     }
     for (size_t i = 0; i < count; ++i) {
@@ -288,11 +288,43 @@ void MountReadOnly(Runtime& vm, std::string_view name, std::shared_ptr<Runtime::
   }
 }
 
+void MountCpuFiles(Runtime& vm) {
+  const auto mount = [&](std::string_view path, std::string_view data) {
+    MountReadOnly(vm, path, std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{
+        std::vector<uint8_t>(data.begin(), data.end()), NowMillis()}));
+  };
+  std::string cpuinfo = "Processor\t: AArch64 Processor rev 0 (aarch64)\n";
+  for (int core = 0; core < 4; ++core) {
+    cpuinfo += "processor\t: " + std::to_string(core) +
+        "\nBogoMIPS\t: 48.00"
+        "\nFeatures\t: fp asimd evtstrm aes pmull sha1 sha2 crc32"
+        "\nCPU implementer\t: 0x41"
+        "\nCPU architecture: 8"
+        "\nCPU variant\t: 0x0"
+        "\nCPU part\t: 0xd03"
+        "\nCPU revision\t: 0\n\n";
+    const auto cpufreq = "/sys/devices/system/cpu/cpu" + std::to_string(core) + "/cpufreq/";
+    mount(cpufreq + "cpuinfo_max_freq", "2400000\n");
+    mount(cpufreq + "cpuinfo_min_freq", "400000\n");
+    mount(cpufreq + "scaling_cur_freq", "1800000\n");
+  }
+  mount("/proc/cpuinfo", cpuinfo);
+  mount("/sys/devices/system/cpu/possible", "0-3\n");
+  mount("/sys/devices/system/cpu/present", "0-3\n");
+  mount("/sys/devices/system/cpu/online", "0-3\n");
+}
+
 }  // namespace
 
 void Vm::MountReadOnlyFile(std::string_view name, std::span<const uint8_t> bytes) {
   MountReadOnly(*runtime_, name, std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{
       std::vector<uint8_t>(bytes.begin(), bytes.end()), NowMillis()}));
+}
+
+void Vm::MountReadOnlyFile(std::string_view name, uint64_t size, FileReader reader) {
+  if (!reader) throw std::invalid_argument("Missing mounted file reader");
+  MountReadOnly(*runtime_, name, std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{
+      {}, NowMillis(), std::move(reader), size}));
 }
 
 void Vm::MountReadOnlyHostFile(const std::string& path) {
@@ -303,18 +335,25 @@ void Vm::MountReadOnlyHostFile(const std::string& path) {
   if (!backing || fstat(fileno(backing.get()), &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0) {
     throw std::invalid_argument("Cannot open mounted guest file: " + path);
   }
-  MountReadOnly(*runtime_, path, std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{
-      {}, NowMillis(), std::move(backing), static_cast<uint64_t>(status.st_size)}));
+  MountReadOnlyFile(path, static_cast<uint64_t>(status.st_size),
+      [backing = std::move(backing)](void* data, size_t count, uint64_t offset) {
+        ssize_t result;
+        do {
+          result = pread(fileno(backing.get()), data, count, static_cast<off_t>(offset));
+        } while (result < 0 && errno == EINTR);
+        return result;
+      });
 }
 
 std::optional<std::span<const uint8_t>> Vm::ReadGuestFile(std::string_view path) const {
   const auto file = runtime_->guest_files.find(path);
-  if (file == runtime_->guest_files.end() || !file->second || file->second->backing) return std::nullopt;
+  if (file == runtime_->guest_files.end() || !file->second || file->second->reader) return std::nullopt;
   return file->second->bytes;
 }
 
 void InstallFiles(Runtime& vm) {
   vm.guest_files.try_emplace("/tmp", nullptr);
+  if (vm.options.sandboxed_files) MountCpuFiles(vm);
   auto& cl = vm.linker;
   auto& file = cl.Define("Ljava/io/File;", kObject, 0, {"Ljava/io/Serializable;"});
   auto& separator = cl.AddField(file, "separator", kString, true);
@@ -410,6 +449,13 @@ void InstallFiles(Runtime& vm) {
   });
   cl.AddMethod(file, "exists", "()Z", 0, [](Runtime& vm, Object* self, Values) {
     return Value::Int(FileType(vm, self) != Type::not_found);
+  });
+  cl.AddMethod(file, "canRead", "()Z", 0, [](Runtime& vm, Object* self, Values) {
+    const auto path = GuestPath(self->text);
+    if (vm.guest_files.contains(path)) return Value::Int(1);
+    if (vm.options.sandboxed_files || path.empty() ||
+        path.starts_with("/data/") || path.starts_with("/storage/")) return Value::Int(0);
+    return Value::Int(access(EncodeUtf8(self->text, false).c_str(), R_OK) == 0);
   });
   cl.AddMethod(file, "createNewFile", "()Z", 0, [](Runtime& vm, Object* self, Values) {
     return Value::Int(CreateGuestFile(vm, GuestPath(self->text)));

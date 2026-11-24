@@ -1,7 +1,7 @@
 import { encoder, Memory } from '../surfaceflinger/abi.mjs';
 import { createSurfaceFlingerCompositor } from '../surfaceflinger/compositor.mjs';
 import { attachAndroidInput } from '../surfaceflinger/input_ime.mjs';
-import { frameTimeNs } from './abi_helpers.mjs';
+import { frameTimeNs, withApkFile } from './abi_helpers.mjs';
 import { sceneLabels } from './scene_labels.mjs';
 
 const textCapacity = 16 * 1024;
@@ -26,6 +26,14 @@ function withString(module, text, call) {
 
 // Inspect the APK before handing its canvas to the legacy cube worker.
 export function isLegacyCubeApk(module, bytes, packageName) {
+  if (module.FS && module._wa_system_apk_is_legacy_cube_file) {
+    return withApkFile(module, bytes, path => withString(module, path, file =>
+      withString(module, packageName, pkg => {
+        const legacy = module._wa_system_apk_is_legacy_cube_file(file, pkg);
+        if (legacy < 0) throw new Error(`Could not inspect APK ${packageName} (${legacy})`);
+        return legacy === 1;
+      })));
+  }
   const apk = withBytes(module, bytes, (pointer, length) => module._wa_system_open_apk(pointer, length));
   if (!apk) throw new Error('AOSP could not read the APK manifest');
   try {
@@ -79,11 +87,26 @@ class ForegroundActivityAbi {
   }
 
   install(name, bytes) {
+    if (this.module.FS && this.module._wa_system_app_install_package_catalog_apk_file) {
+      withApkFile(this.module, bytes, path => withString(this.module, name, filename =>
+        withString(this.module, path, file => this.#check('install_package_catalog_apk_file',
+          this.#call('install_package_catalog_apk_file', filename, file)))));
+      return;
+    }
     withString(this.module, name, filename => withBytes(this.module, bytes, (pointer, length) =>
       this.#check('install_package_catalog_apk', this.#call('install_package_catalog_apk', filename, pointer, length))));
   }
 
   boot(name, bytes, activity) {
+    if (this.module.FS && this.module._wa_system_app_boot_apk_file) {
+      withApkFile(this.module, bytes, path => withString(this.module, name, filename =>
+        withString(this.module, path, file => {
+          const boot = activityName => this.#check('boot_apk_file',
+            this.#call('boot_apk_file', filename, file, activityName));
+          return activity ? withString(this.module, activity, boot) : boot(0);
+        })));
+      return;
+    }
     withString(this.module, name, filename => withBytes(this.module, bytes, (pointer, length) => {
       const boot = activityName => this.#check('boot_apk', this.#call('boot_apk', filename, pointer, length, activityName));
       return activity ? withString(this.module, activity, boot) : boot(0);
@@ -248,6 +271,8 @@ export class ForegroundJavaApk {
   stats() { return { ...this.#compositor?.stats(), ...this.#state }; }
 
   labels() { return this.#ready && !this.#closed ? sceneLabels(this.#abi.module, this.#abi.scene) : []; }
+
+  pixels() { return this.#ready && !this.#closed ? this.#compositor.pixels() : null; }
 
   holdFrame() { this.#compositor?.stop(); }
 

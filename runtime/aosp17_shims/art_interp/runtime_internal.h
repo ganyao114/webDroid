@@ -375,16 +375,16 @@ struct Runtime {
   GcHeap heap;
   std::unique_ptr<JniBridge> jni;
   GuestNativeFactory guest_native_factory = nullptr;
-  const void* guest_native_source = nullptr;
+  std::shared_ptr<const void> guest_native_source;
   std::unique_ptr<GuestNativeLibraries> guest_native;
   std::unique_ptr<DirectArrays> direct_arrays;
   struct GuestFile {
     std::vector<uint8_t> bytes;
     int64_t last_modified;
-    std::shared_ptr<std::FILE> backing;
+    Vm::FileReader reader;
     uint64_t backing_size = 0;
 
-    uint64_t Size() const { return backing ? backing_size : bytes.size(); }
+    uint64_t Size() const { return reader ? backing_size : bytes.size(); }
   };
   struct FileHandle {
     std::shared_ptr<GuestFile> file;

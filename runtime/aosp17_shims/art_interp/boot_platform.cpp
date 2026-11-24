@@ -430,6 +430,12 @@ void InstallSystem(Runtime& vm) {
       });
 
   Class& reflect_array = cl.Define("Ljava/lang/reflect/Array;", kObject, art::kAccFinal);
+  cl.AddMethod(reflect_array, "getLength", "(Ljava/lang/Object;)I", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        const auto& array = vm.NonNull(a[0].ref());
+        if (!array.type->component) vm.Fail("Ljava/lang/IllegalArgumentException;");
+        return Value::Int(static_cast<int32_t>(array.elements.size()));
+      });
   const Builtin array_instance = [](Runtime& vm, Object*, Values a) {
     const Class& component = *vm.NonNull(a[0].ref()).represented_class;
     if (component.descriptor == "V") vm.Fail("Ljava/lang/IllegalArgumentException;");
@@ -1082,13 +1088,28 @@ void InstallAtomicUpdaters(ClassLinker& cl) {
   }
 }
 
+std::u16string AndroidStackTrace(Runtime& vm, Object* error) {
+  std::u16string result;
+  std::unordered_set<Object*> seen;
+  for (; error && seen.insert(error).second; error = error->payload.ref()) {
+    if (error->type->descriptor == "Ljava/net/UnknownHostException;") return {};
+    if (!result.empty()) result += u"Caused by: ";
+    result += JavaText(vm, error);
+    result += u'\n';
+    if (!error->exception_stack) continue;
+    for (const auto& [method, pc] : *error->exception_stack) {
+      result += DecodeUtf8("\tat " + method->QualifiedName() + " (dex pc " + std::to_string(pc) + ")\n");
+    }
+  }
+  return result;
+}
+
 void InstallAndroid(Runtime& vm) {
   auto& cl = vm.linker;
   const auto print = [](Runtime& vm, Values a, int priority) {
     const auto tag = EncodeUtf8(JavaText(vm, a[0].ref()), false);
     const auto msg = EncodeUtf8(JavaText(vm, a[1].ref()), false);
-    const auto detail = a.size() == 3 && a[2].ref()
-        ? EncodeUtf8(JavaText(vm, a[2].ref()), false) : std::string{};
+    const auto detail = a.size() == 3 ? EncodeUtf8(AndroidStackTrace(vm, a[2].ref()), false) : std::string{};
 #ifdef __EMSCRIPTEN__
     // Keep the Android logcat priority visible alongside browser diagnostics.
     constexpr std::string_view levels = "VDIWEA";
@@ -1100,28 +1121,14 @@ void InstallAndroid(Runtime& vm) {
 #else
     auto* stream = priority >= 6 ? stderr : stdout;
     std::fprintf(stream, "%s: %s\n", tag.c_str(), msg.c_str());
-    if (!detail.empty()) std::fprintf(stream, "%s\n", detail.c_str());
+    if (!detail.empty()) std::fputs(detail.c_str(), stream);
 #endif
     return Value::Int(msg.size());
   };
   for (const auto name : {"Landroid/util/Log;", "Landroid/util/Slog;"}) {
     auto& log = cl.Define(name, kObject, art::kAccFinal);
     cl.AddMethod(log, "getStackTraceString", "(Ljava/lang/Throwable;)Ljava/lang/String;", art::kAccStatic,
-        [](Runtime& vm, Object*, Values a) {
-          std::u16string result;
-          std::unordered_set<Object*> seen;
-          for (auto* error = a[0].ref(); error && seen.insert(error).second; error = error->payload.ref()) {
-            if (error->type->descriptor == "Ljava/net/UnknownHostException;") return StringValue(vm, "");
-            if (!result.empty()) result += u"Caused by: ";
-            result += JavaText(vm, error);
-            result += u'\n';
-            if (!error->exception_stack) continue;
-            for (const auto& [method, pc] : *error->exception_stack) {
-              result += DecodeUtf8("\tat " + method->QualifiedName() + " (dex pc " + std::to_string(pc) + ")\n");
-            }
-          }
-          return StringValue(vm, result);
-        });
+        [](Runtime& vm, Object*, Values a) { return StringValue(vm, AndroidStackTrace(vm, a[0].ref())); });
     cl.AddMethod(log, "isLoggable", "(Ljava/lang/String;I)Z", art::kAccStatic,
         [](Runtime& vm, Object*, Values a) {
           const auto tag = EncodeUtf8(vm.NonNull(a[0].ref()).text, false);
@@ -1149,6 +1156,8 @@ void InstallAndroid(Runtime& vm) {
   const Builtin property = [](Runtime& vm, Object*, Values a) {
     const auto name = EncodeUtf8(vm.NonNull(a[0].ref()).text, false);
     const auto fallback = a.size() == 2 && a[1].ref() ? EncodeUtf8(a[1].ref()->text, false) : std::string{};
+    if (const auto found = vm.system_properties.find(name); found != vm.system_properties.end())
+      return StringValue(vm, found->second.empty() ? fallback : found->second);
     return StringValue(vm, android::base::GetProperty(name, fallback));
   };
   cl.AddMethod(props, "get", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic, property);

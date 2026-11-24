@@ -537,7 +537,7 @@ public final class UiRuntime {
     }
 
     public static void launch(String apkPath, String requested, String locale, String frameworkApk,
-                              int density, int width, int height)
+                              String nativeLibraryDir, int density, int width, int height)
             throws IOException, XmlPullParserException {
         destroy();
         if (Looper.getMainLooper() == null) Looper.prepareMainLooper();
@@ -549,6 +549,7 @@ public final class UiRuntime {
             if (!locales.isEmpty()) LocaleList.setDefault(locales);
             if (width > 0 && height > 0) resources.updateDisplay(width, height, density);
             Manifest manifest = readManifest(resources, apkPath, requested, withFramework ? 1 : 0);
+            manifest.info.nativeLibraryDir = nativeLibraryDir;
             AppContext app = new AppContext(resources, manifest.info, manifest);
             context = app;
             Application.setEmbeddedProcessName(manifest.info.packageName);

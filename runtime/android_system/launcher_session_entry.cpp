@@ -703,6 +703,23 @@ int32_t wa_system_launcher_set_framework_res_apk(const uint8_t* bytes, size_t le
     });
 }
 
+namespace {
+
+int32_t PublishInstalledApp(Session& s, InstalledApp app) {
+    const auto pkg = app.info.package;
+    const bool updated = s.apps.contains(pkg);
+    s.apps.insert_or_assign(pkg, std::move(app));
+    if (s.booted) {
+        auto& vm = s.runtime->vm;
+        wa::interp::ScopedHandleScope roots(vm);
+        const Value args[] = {Value::Ref(roots.Hold(vm.NewString(pkg))), Value::Int(updated)};
+        vm.CallStatic(kUiRuntime, "packageChanged", "(Ljava/lang/String;Z)V", args);
+    }
+    return WA_OK;
+}
+
+} // namespace
+
 int32_t wa_system_launcher_install_apk(const char* name, const uint8_t* bytes, size_t length) {
     return Active("Install APK", [&](Session& s) -> int32_t {
         if (!name || !*name || !bytes || !length) return WA_ERR_INVALID;
@@ -712,16 +729,20 @@ int32_t wa_system_launcher_install_apk(const char* name, const uint8_t* bytes, s
         if (status != WA_OK) return status;
         app.name = name;
         app.mount = std::make_unique<MountedApk>(std::span(bytes, length));
-        const auto pkg = app.info.package;
-        const bool updated = s.apps.contains(pkg);
-        s.apps.insert_or_assign(pkg, std::move(app));
-        if (s.booted) {
-            auto& vm = s.runtime->vm;
-            wa::interp::ScopedHandleScope roots(vm);
-            const Value args[] = {Value::Ref(roots.Hold(vm.NewString(pkg))), Value::Int(updated)};
-            vm.CallStatic(kUiRuntime, "packageChanged", "(Ljava/lang/String;Z)V", args);
-        }
-        return WA_OK;
+        return PublishInstalledApp(s, std::move(app));
+    });
+}
+
+int32_t wa_system_launcher_install_apk_file(const char* name, const char* path) {
+    return Active("Install APK file", [&](Session& s) -> int32_t {
+        if (!name || !*name || !path || !*path) return WA_ERR_INVALID;
+        InstalledApp app;
+        app.name = name;
+        app.mount = std::make_unique<MountedApk>(MountedApk::BrowserFile{}, path);
+        const auto status = wa::system::ReadLauncherPackage(app.mount->path(), s.locale.c_str(),
+            s.display.density_dpi, app.info);
+        if (status != WA_OK) return status;
+        return PublishInstalledApp(s, std::move(app));
     });
 }
 

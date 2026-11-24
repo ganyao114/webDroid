@@ -538,10 +538,14 @@ void Vm::AddNativeAdapter(void* function, NativeThunk adapter) {
 }
 JNIEnv* Vm::JniEnv() { return runtime_->jni->Env(); }
 
-void Vm::SetGuestNativeSource(GuestNativeFactory factory, const void* source) {
+void Vm::SetGuestNativeSource(GuestNativeFactory factory, std::shared_ptr<const void> source) {
   if (runtime_->guest_native_factory) throw std::logic_error("Native APK source is already set");
   runtime_->guest_native_factory = factory;
-  runtime_->guest_native_source = source;
+  runtime_->guest_native_source = std::move(source);
+}
+
+void Vm::SetSystemProperty(std::string_view name, std::string_view value) {
+  runtime_->system_properties.insert_or_assign(std::string(name), std::string(value));
 }
 
 GuestNativeStats Vm::GetGuestNativeStats() const {

@@ -1,0 +1,11 @@
+--- a/frameworks/base/core/java/android/content/Context.java
++++ b/frameworks/base/core/java/android/content/Context.java
+@@ -8821,7 +8821,7 @@
+      * @see #isUiContext()
+      */
+     public int getDeviceId() {
+-        throw new RuntimeException("Not implemented. Must override in a subclass.");
++        return DEVICE_ID_DEFAULT;
+     }
+ 
+     /**
