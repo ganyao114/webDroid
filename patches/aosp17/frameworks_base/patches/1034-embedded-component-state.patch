@@ -1,0 +1,202 @@
+--- a/frameworks/base/core/java/com/android/internal/pm/pkg/component/ParsedProviderUtils.java
++++ b/frameworks/base/core/java/com/android/internal/pm/pkg/component/ParsedProviderUtils.java
+@@ -35,11 +35,12 @@
+ import java.io.IOException;
+ import java.util.ArrayList;
+ import java.util.List;
++import java.util.Set;
+ 
+ /** @hide */
+ public class ParsedProviderUtils {
+     public static List<ProviderInfo> parseEmbeddedProviders(
+-            ApplicationInfo app, Resources res, XmlResourceParser parser)
++            ApplicationInfo app, Resources res, XmlResourceParser parser, Set<String> components)
+             throws IOException, XmlPullParserException {
+         List<ProviderInfo> providers = new ArrayList<>();
+         String process = app.packageName;
+@@ -58,13 +59,34 @@
+                 }
+                 app.processName = process;
+                 inApplication = true;
+-            } else if (inApplication && parser.getDepth() == 3 && "provider".equals(parser.getName())) {
+-                providers.add(parseProvider(app, res, parser, process, permission));
++            } else if (inApplication && parser.getDepth() == 3) {
++                switch (parser.getName()) {
++                    case "provider":
++                        ProviderInfo provider = parseProvider(app, res, parser, process, permission);
++                        components.add(provider.name);
++                        providers.add(provider);
++                        break;
++                    case "activity":
++                    case "activity-alias":
++                    case "receiver":
++                    case "service":
++                        String name = parser.getAttributeValue(
++                                "http://schemas.android.com/apk/res/android", "name");
++                        if (name != null && !name.isEmpty()) {
++                            components.add(componentName(app.packageName, name));
++                        }
++                        break;
++                }
+             }
+         }
+         // PackageManager publishes providers in descending initOrder.
+         providers.sort((left, right) -> Integer.compare(right.initOrder, left.initOrder));
+         return providers;
++    }
++
++    private static String componentName(String pkg, String name) {
++        if (name.startsWith(".")) return pkg + name;
++        return name.indexOf('.') < 0 ? pkg + '.' + name : name;
+     }
+ 
+     private static String processName(String pkg, String fallback, String name) {
+@@ -83,8 +105,7 @@
+             if (name == null || name.isEmpty()) {
+                 throw new XmlPullParserException("<provider> does not include name attribute");
+             }
+-            provider.name = name.startsWith(".") ? app.packageName + name
+-                    : name.indexOf('.') < 0 ? app.packageName + '.' + name : name;
++            provider.name = componentName(app.packageName, name);
+             provider.processName = processName(app.packageName, process,
+                     sa.getString(R.styleable.AndroidManifestProvider_process));
+             provider.authority = sa.getString(R.styleable.AndroidManifestProvider_authorities);
+--- a/frameworks/base/core/java/android/content/pm/PackageManager.java
++++ b/frameworks/base/core/java/android/content/pm/PackageManager.java
+@@ -21,6 +21,7 @@
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.HashMap;
++import java.util.HashSet;
+ 
+ 
+ 
+@@ -6524,6 +6525,10 @@
+                 ? localServices.get(component.getClassName()) : null;
+         if (service == null) throw new NameNotFoundException(component.toShortString());
+         ServiceInfo result = new ServiceInfo(service);
++        result.enabled = isEmbeddedComponentEnabled(result.packageName, result.name, result.enabled);
++        if (!result.enabled && (flags & MATCH_DISABLED_COMPONENTS) == 0) {
++            throw new NameNotFoundException(component.toShortString());
++        }
+         result.metaData = (flags & GET_META_DATA) != 0 && service.metaData != null
+                 ? new Bundle(service.metaData) : null;
+         return result;
+@@ -6569,7 +6574,8 @@
+         for (ProviderInfo provider : embeddedProviders) {
+             if (provider.packageName.equals(component.getPackageName())
+                     && provider.name.equals(component.getClassName())
+-                    && (provider.enabled || (flags.getValue() & MATCH_DISABLED_COMPONENTS) != 0)) {
++                    && (isEmbeddedComponentEnabled(provider.packageName, provider.name, provider.enabled)
++                        || (flags.getValue() & MATCH_DISABLED_COMPONENTS) != 0)) {
+                 return embeddedProviderInfo(provider, flags.getValue());
+             }
+         }
+@@ -8522,7 +8528,8 @@
+     public ProviderInfo resolveContentProvider(@NonNull String authority,
+             @NonNull ComponentInfoFlags flags) {
+         for (ProviderInfo provider : embeddedProviders) {
+-            if (!provider.enabled && (flags.getValue() & MATCH_DISABLED_COMPONENTS) == 0) continue;
++            if (!isEmbeddedComponentEnabled(provider.packageName, provider.name, provider.enabled)
++                    && (flags.getValue() & MATCH_DISABLED_COMPONENTS) == 0) continue;
+             for (String entry : provider.authority.split(";")) {
+                 if (entry.equals(authority)) return embeddedProviderInfo(provider, flags.getValue());
+             }
+@@ -9917,7 +9924,18 @@
+             conditional = true)
+     public void setComponentEnabledSetting(@NonNull ComponentName componentName,
+             @EnabledState int newState, @EnabledFlags int flags) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        final String name = componentNameInPackage(componentName);
++        switch (newState) {
++            case COMPONENT_ENABLED_STATE_DEFAULT:
++                componentStates.remove(name);
++                break;
++            case COMPONENT_ENABLED_STATE_ENABLED:
++            case COMPONENT_ENABLED_STATE_DISABLED:
++                componentStates.put(name, newState);
++                break;
++            default:
++                throw new IllegalArgumentException("Invalid new component state: " + newState);
++        }
+     }
+ 
+     /**
+@@ -9958,7 +9976,26 @@
+      */
+     public @EnabledState int getComponentEnabledSetting(
+             @NonNull ComponentName componentName) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        return componentStates.getOrDefault(componentNameInPackage(componentName),
++                COMPONENT_ENABLED_STATE_DEFAULT);
++    }
++
++    private String componentNameInPackage(ComponentName component) {
++        if (context == null || !context.getPackageName().equals(component.getPackageName())) {
++            throw new SecurityException("Component belongs to another package: " + component);
++        }
++        String name = component.getClassName();
++        if (!localComponents.contains(name)) {
++            throw new IllegalArgumentException("Undeclared component: " + component);
++        }
++        return name;
++    }
++
++    private boolean isEmbeddedComponentEnabled(String pkg, String name, boolean manifestEnabled) {
++        if (context == null || !context.getPackageName().equals(pkg)) return manifestEnabled;
++        int state = componentStates.getOrDefault(name, COMPONENT_ENABLED_STATE_DEFAULT);
++        return state == COMPONENT_ENABLED_STATE_DEFAULT ? manifestEnabled
++                : state == COMPONENT_ENABLED_STATE_ENABLED;
+     }
+ 
+     /**
+@@ -11941,12 +11978,17 @@
+         ComponentName component = intent.getComponent();
+         String pkg = component == null ? intent.getPackage() : component.getPackageName();
+         String activity = component == null ? null : component.getClassName();
++        long catalogFlags = componentStates.isEmpty() ? flags : flags | MATCH_DISABLED_COMPONENTS;
+         Entry[] found = nativeQuery(intent.getAction(), pkg, activity, intent.getDataString(),
+-                intent.getType(), categoryArray(intent), flags, user);
++                intent.getType(), categoryArray(intent), catalogFlags, user);
+         ArrayList<ResolveInfo> result = new ArrayList<>(found.length);
+         for (Entry entry : found) {
+-            if (entry.activity != null && (entry.enabled || (flags & MATCH_DISABLED_COMPONENTS) != 0)) {
+-                result.add(entry.resolveInfo());
++            if (entry.activity == null) continue;
++            boolean enabled = isEmbeddedComponentEnabled(entry.pkg, entry.activity, entry.enabled);
++            if (enabled || (flags & MATCH_DISABLED_COMPONENTS) != 0) {
++                ResolveInfo info = entry.resolveInfo();
++                info.activityInfo.enabled = enabled;
++                result.add(info);
+             }
+         }
+         return result;
+@@ -12011,6 +12053,8 @@
+ 
+     private java.util.Map<String, ServiceInfo> localServices = java.util.Collections.emptyMap();
+     private PackageInfo localVersion;
++    private final Set<String> localComponents = new HashSet<>();
++    private final HashMap<String, Integer> componentStates = new HashMap<>();
+     private List<ProviderInfo> embeddedProviders = java.util.Collections.emptyList();
+     private final java.util.ArrayList<ContentProvider> installedProviders = new java.util.ArrayList<>();
+ 
+@@ -12021,7 +12065,7 @@
+             if (!info.sourceDir.equals(apk.getAssetPath())) continue;
+             try (android.content.res.XmlResourceParser xml = apk.openXml("AndroidManifest.xml")) {
+                 embeddedProviders = com.android.internal.pm.pkg.component.ParsedProviderUtils
+-                        .parseEmbeddedProviders(info, application.getResources(), xml);
++                        .parseEmbeddedProviders(info, application.getResources(), xml, localComponents);
+             } catch (java.io.IOException | org.xmlpull.v1.XmlPullParserException error) {
+                 throw new IllegalStateException("Cannot read provider declarations for " + info.packageName, error);
+             }
+@@ -12042,8 +12086,9 @@
+         }
+     }
+ 
+-    private static ProviderInfo embeddedProviderInfo(ProviderInfo provider, long flags) {
++    private ProviderInfo embeddedProviderInfo(ProviderInfo provider, long flags) {
+         ProviderInfo result = new ProviderInfo(provider);
++        result.enabled = isEmbeddedComponentEnabled(result.packageName, result.name, result.enabled);
+         result.metaData = (flags & GET_META_DATA) != 0 && provider.metaData != null
+                 ? new Bundle(provider.metaData) : null;
+         return result;

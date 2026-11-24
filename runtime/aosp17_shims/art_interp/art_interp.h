@@ -109,6 +109,7 @@ struct MethodStats {
   uint64_t interpreted = 0;
   uint64_t tier1_hits = 0;
   size_t compiled_bytes = 0;
+  uint64_t returned = 0;
 };
 
 // A Java exception is pending in the VM when this is propagated to the host.
@@ -129,7 +130,9 @@ class Vm {
   void LoadFallbackDexFile(std::string location, std::vector<uint8_t> bytes);
   // Copies an immutable file into this VM's guest filesystem.
   void MountReadOnlyFile(std::string_view path, std::span<const uint8_t> bytes);
-  // The returned view is valid until a guest write or removal of the file.
+  // Opens a host-owned immutable file at the same guest path, without copying it.
+  void MountReadOnlyHostFile(const std::string& path);
+  // The view is available for memory-backed files until a guest write or removal.
   std::optional<std::span<const uint8_t>> ReadGuestFile(std::string_view path) const;
   // Adds the numbered DEX entries atomically, in DEX order. DEX files loaded
   // via LoadDexFile or LoadFallbackDexFile form the parent class path.
@@ -161,6 +164,7 @@ class Vm {
   std::vector<std::string> ExceptionStackTrace() const;
   void ClearException();
   void RunShutdownHooks();
+  void RunReadyThreads();
 
   GcStats Collect();
   void CollectIfNeeded();
@@ -169,6 +173,8 @@ class Vm {
                              std::string_view signature);
   MethodStats GetInstanceMethodStats(std::string_view owner, std::string_view name,
                                      std::string_view signature);
+  MethodStats GetLinkedVirtualMethodStats(std::string_view owner, std::string_view name,
+                                         std::string_view signature) const;
   size_t InterpretedMethodCount(std::string_view descriptor) const;
   size_t ExecutedOpcodeCount() const;
   static size_t SupportedOpcodeCount();

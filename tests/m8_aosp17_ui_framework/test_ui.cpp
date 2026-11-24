@@ -49,7 +49,8 @@ void AuditFrameworkNatives(Vm& vm) {
             const auto name = dex->GetTypeDescriptorView(definition.class_idx_);
             const bool art_boot = name == "Ljava/io/FileInputStream;" || name == "Ljava/io/FileOutputStream;" ||
                 name == "Ljava/io/RandomAccessFile;" || name == "Ljava/util/regex/Pattern;" ||
-                name == "Ljava/lang/reflect/Field;" || name == "Ljava/security/MessageDigest$EmbeddedSha1;";
+                name == "Ljava/lang/reflect/Field;" || name == "Ljava/security/MessageDigest$EmbeddedSha1;" ||
+                name == "Lsun/misc/Unsafe;" || name == "Ljava/lang/ThreadGroup;";
             if (!art_boot && !name.starts_with("Landroid/graphics/") &&
                 !name.starts_with("Lcom/android/internal/util/") &&
                 name != "Landroid/text/AndroidCharacter;" && name != "Landroid/text/Hyphenator;" &&
@@ -72,8 +73,8 @@ void AuditFrameworkNatives(Vm& vm) {
         }
     }
     Require(declarations != 0, "The upstream DEX declares native methods");
-    std::cout << "Audited " << declarations << " upstream framework JNI declarations\n";
     Require(missing.empty(), "Unregistered upstream JNI declarations\n" + missing);
+    std::cout << "Audited " << declarations << " upstream framework JNI declarations, 0 unbound native methods\n";
 }
 
 std::vector<uint8_t> ExtractDex(const char* apk) {

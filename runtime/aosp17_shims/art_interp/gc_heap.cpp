@@ -62,6 +62,14 @@ GcStats GcHeap::Collect(Runtime& runtime) {
       for (Value value : frame.slots) mark(value.ref());
     }
   }
+  for (const auto& worker : runtime.workers) {
+    mark(worker.thread);
+    mark(worker.monitor);
+    for (const auto& frame : worker.frames) {
+      for (const auto slot : frame.slots) mark(slot.ref());
+      for (const auto monitor : frame.monitors) mark(monitor.ref());
+    }
+  }
   for (Object* string : runtime.dex_literals) mark(string);
   runtime.linker.VisitRoots(mark);
   runtime.jni->VisitRoots(mark);

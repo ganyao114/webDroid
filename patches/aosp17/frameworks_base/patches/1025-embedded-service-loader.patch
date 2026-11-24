@@ -1,0 +1,324 @@
+--- a/libcore/ojluni/src/main/java/java/util/ServiceLoader.java
++++ b/libcore/ojluni/src/main/java/java/util/ServiceLoader.java
+@@ -34,27 +34,16 @@
+ import java.lang.reflect.InvocationTargetException;
+ import java.lang.reflect.Method;
+ import java.lang.reflect.Modifier;
+-import java.net.URL;
+ import java.nio.charset.StandardCharsets;
+ import java.util.ArrayList;
+-import java.util.Enumeration;
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.NoSuchElementException;
+-import java.net.URLConnection;
+-import java.security.AccessControlContext;
+-import java.security.AccessController;
+-import java.security.PrivilegedAction;
+-import java.security.PrivilegedActionException;
+-import java.security.PrivilegedExceptionAction;
+ import java.util.function.Consumer;
+ import java.util.function.Supplier;
+ import java.util.stream.Stream;
+ import java.util.stream.StreamSupport;
+ 
+-import jdk.internal.misc.VM;
+-import jdk.internal.reflect.CallerSensitive;
+-import jdk.internal.reflect.Reflection;
+ 
+ // Android-changed: JPMS and Security related sections are commented out.
+ /**
+@@ -402,44 +391,9 @@
+      *         module does not use the service type.
+      */
+     @SuppressWarnings("removal")
+-    private ServiceLoader(Class<?> caller, Class<S> svc, ClassLoader cl) {
+-        Objects.requireNonNull(svc);
+-
+-        if (VM.isBooted()) {
+-            checkCaller(caller, svc);
+-            if (cl == null) {
+-                cl = ClassLoader.getSystemClassLoader();
+-            }
+-        } else {
+-
+-            // if we get here then it means that ServiceLoader is being used
+-            // before the VM initialization has completed. At this point then
+-            // only code in the java.base should be executing.
+-            // Android-removed: JPMS is not supported.
+-            /*
+-            Module callerModule = caller.getModule();
+-            Module base = Object.class.getModule();
+-            Module svcModule = svc.getModule();
+-            if (callerModule != base || svcModule != base) {
+-                fail(svc, "not accessible to " + callerModule + " during VM init");
+-            }
+-            */
+-
+-            // restricted to boot loader during startup
+-            cl = null;
+-        }
+-
+-        this.service = svc;
+-        // Android-removed: used in JPMS paths only.
+-        // this.serviceName = svc.getName();
+-        // this.layer = null;
+-        this.loader = cl;
+-        // Android-removed: do not use legacy security code.
+-        /*
+-        this.acc = (System.getSecurityManager() != null)
+-                ? AccessController.getContext()
+-                : null;
+-        */
++    private ServiceLoader(Class<S> svc, ClassLoader cl) {
++        this.service = Objects.requireNonNull(svc);
++        this.loader = cl == null ? ClassLoader.getSystemClassLoader() : cl;
+     }
+ 
+     // Android-removed: JPMS is not supported.
+@@ -468,34 +422,6 @@
+     }
+     */
+ 
+-    /**
+-     * Checks that the given service type is accessible to types in the given
+-     * module, and check that the module declares that it uses the service type.
+-     */
+-    private static void checkCaller(Class<?> caller, Class<?> svc) {
+-        if (caller == null) {
+-            fail(svc, "no caller to check if it declares `uses`");
+-        }
+-
+-        // Check access to the service type
+-        // Module callerModule = caller.getModule();
+-        int mods = svc.getModifiers();
+-        if (!Reflection.verifyMemberAccess(caller, svc, null, mods)) {
+-            // Android-removed: JPMS is not supported.
+-            // fail(svc, "service type not accessible to " + callerModule);
+-            fail(svc, "service type not accessible to " + caller);
+-        }
+-
+-        // If the caller is in a named module then it should "uses" the
+-        // service type
+-        // Android-removed: JPMS is not supported.
+-        /*
+-        if (!callerModule.canUse(svc)) {
+-            fail(svc, callerModule + " does not declare `uses`");
+-        }
+-        */
+-    }
+-
+     private static void fail(Class<?> service, String msg, Throwable cause)
+         throws ServiceConfigurationError
+     {
+@@ -509,10 +435,10 @@
+         throw new ServiceConfigurationError(service.getName() + ": " + msg);
+     }
+ 
+-    private static void fail(Class<?> service, URL u, int line, String msg)
++    private static void fail(Class<?> service, String path, int line, String msg)
+         throws ServiceConfigurationError
+     {
+-        fail(service, u + ":" + line + ": " + msg);
++        fail(service, path + ":" + line + ": " + msg);
+     }
+ 
+     // Android-removed: JPMS is not supported.
+@@ -577,29 +503,13 @@
+      * @throws ServiceConfigurationError if the class does not have
+      *         public no-arg constructor
+      */
+-    @SuppressWarnings("removal")
+     private Constructor<?> getConstructor(Class<?> clazz) {
+-        PrivilegedExceptionAction<Constructor<?>> pa
+-            = new PrivilegedExceptionAction<>() {
+-                @Override
+-                public Constructor<?> run() throws Exception {
+-                    Constructor<?> ctor = clazz.getConstructor();
+-                    // Android-removed: JPMS is not supported.
+-                    // if (inExplicitModule(clazz))
+-                        ctor.setAccessible(true);
+-                    return ctor;
+-                }
+-            };
+-        Constructor<?> ctor = null;
+         try {
+-            ctor = AccessController.doPrivileged(pa);
+-        } catch (Throwable x) {
+-            if (x instanceof PrivilegedActionException)
+-                x = x.getCause();
+-            String cn = clazz.getName();
+-            fail(service, cn + " Unable to get public no-arg constructor", x);
+-        }
+-        return ctor;
++            return clazz.getConstructor();
++        } catch (ReflectiveOperationException error) {
++            fail(service, clazz.getName() + " Unable to get public no-arg constructor", error);
++            return null;
++        }
+     }
+ 
+     /**
+@@ -1068,7 +978,7 @@
+         static final String PREFIX = "META-INF/services/";
+ 
+         Set<String> providerNames = new HashSet<>();  // to avoid duplicates
+-        Enumeration<URL> configs;
++        boolean parsed;
+         Iterator<String> pending;
+ 
+         Provider<T> nextProvider;
+@@ -1080,7 +990,7 @@
+          * Parse a single line from the given configuration file, adding the
+          * name on the line to set of names if not already seen.
+          */
+-        private int parseLine(URL u, BufferedReader r, int lc, Set<String> names)
++        private int parseLine(String path, BufferedReader r, int lc, Set<String> names)
+             throws IOException
+         {
+             String ln = r.readLine();
+@@ -1093,15 +1003,15 @@
+             int n = ln.length();
+             if (n != 0) {
+                 if ((ln.indexOf(' ') >= 0) || (ln.indexOf('\t') >= 0))
+-                    fail(service, u, lc, "Illegal configuration-file syntax");
++                    fail(service, path, lc, "Illegal configuration-file syntax");
+                 int cp = ln.codePointAt(0);
+                 if (!Character.isJavaIdentifierStart(cp))
+-                    fail(service, u, lc, "Illegal provider-class name: " + ln);
++                    fail(service, path, lc, "Illegal provider-class name: " + ln);
+                 int start = Character.charCount(cp);
+                 for (int i = start; i < n; i += Character.charCount(cp)) {
+                     cp = ln.codePointAt(i);
+                     if (!Character.isJavaIdentifierPart(cp) && (cp != '.'))
+-                        fail(service, u, lc, "Illegal provider-class name: " + ln);
++                        fail(service, path, lc, "Illegal provider-class name: " + ln);
+                 }
+                 if (providerNames.add(ln)) {
+                     names.add(ln);
+@@ -1111,23 +1021,20 @@
+         }
+ 
+         /**
+-         * Parse the content of the given URL as a provider-configuration file.
++         * Parse the provider-configuration file exposed by this APK's class loader.
+          */
+-        private Iterator<String> parse(URL u) {
++        private Iterator<String> parse(String path) {
+             Set<String> names = new LinkedHashSet<>(); // preserve insertion order
+-            try {
+-                URLConnection uc = u.openConnection();
+-                uc.setUseCaches(false);
+-                try (InputStream in = uc.getInputStream();
+-                     BufferedReader r
+-                        // = new BufferedReader(new InputStreamReader(in, UTF_8.INSTANCE)))
+-                        = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8)))
+-                {
+-                    int lc = 1;
+-                    while ((lc = parseLine(u, r, lc, names)) >= 0);
++            try (InputStream in = loader.getResourceAsStream(path)) {
++                if (in != null) {
++                    try (BufferedReader r = new BufferedReader(
++                            new InputStreamReader(in, StandardCharsets.UTF_8))) {
++                        int lc = 1;
++                        while ((lc = parseLine(path, r, lc, names)) >= 0) { }
++                    }
+                 }
+             } catch (IOException x) {
+-                fail(service, "Error accessing configuration file", x);
++                fail(service, "Error accessing configuration file " + path, x);
+             }
+             return names.iterator();
+         }
+@@ -1136,36 +1043,11 @@
+          * Loads and returns the next provider class.
+          */
+         private Class<?> nextProviderClass() {
+-            if (configs == null) {
+-                try {
+-                    String fullName = PREFIX + service.getName();
+-                    if (loader == null) {
+-                        configs = ClassLoader.getSystemResources(fullName);
+-                    // Android-removed: platformClassLoader not available on Android.
+-                    // There were no changes in ClassLoaders, keeping old behaviour.
+-                    /*
+-                    } else if (loader == ClassLoaders.platformClassLoader()) {
+-                        // The platform classloader doesn't have a class path,
+-                        // but the boot loader might.
+-                        if (BootLoader.hasClassPath()) {
+-                            configs = BootLoader.findResources(fullName);
+-                        } else {
+-                            configs = Collections.emptyEnumeration();
+-                        }
+-                    */
+-                    } else {
+-                        configs = loader.getResources(fullName);
+-                    }
+-                } catch (IOException x) {
+-                    fail(service, "Error locating configuration files", x);
+-                }
+-            }
+-            while ((pending == null) || !pending.hasNext()) {
+-                if (!configs.hasMoreElements()) {
+-                    return null;
+-                }
+-                pending = parse(configs.nextElement());
+-            }
++            if (!parsed) {
++                parsed = true;
++                pending = parse(PREFIX + service.getName());
++            }
++            if (pending == null || !pending.hasNext()) return null;
+             String cn = pending.next();
+             try {
+                 return Class.forName(cn, false, loader);
+@@ -1564,11 +1446,10 @@
+      *
+      * @revised 9
+      */
+-    @CallerSensitive
+     public static <S> ServiceLoader<S> load(Class<S> service,
+                                             ClassLoader loader)
+     {
+-        return new ServiceLoader<>(Reflection.getCallerClass(), service, loader);
++        return new ServiceLoader<>(service, loader);
+     }
+ 
+     // Android-changed: removed module mentions.
+@@ -1608,10 +1489,9 @@
+      *
+      * @revised 9
+      */
+-    @CallerSensitive
+     public static <S> ServiceLoader<S> load(Class<S> service) {
+         ClassLoader cl = Thread.currentThread().getContextClassLoader();
+-        return new ServiceLoader<>(Reflection.getCallerClass(), service, cl);
++        return new ServiceLoader<>(service, cl);
+     }
+ 
+     // Android-changed: module and platformClassLoader mentions removed.
+@@ -1642,7 +1522,6 @@
+      *
+      * @revised 9
+      */
+-    @CallerSensitive
+     public static <S> ServiceLoader<S> loadInstalled(Class<S> service) {
+         // Android-changed: there is no platformClassLoader, using extension classloader.
+         // ClassLoader cl = ClassLoader.getPlatformClassLoader();
+@@ -1652,7 +1531,7 @@
+             prev = cl;
+             cl = cl.getParent();
+         }
+-        return new ServiceLoader<>(Reflection.getCallerClass(), service, prev);
++        return new ServiceLoader<>(service, prev);
+     }
+ 
+     // Android-removed: JPMS is not supported.
+@@ -1702,7 +1581,6 @@
+      *
+      * @since 9
+      *
+-    @CallerSensitive
+     public static <S> ServiceLoader<S> load(ModuleLayer layer, Class<S> service) {
+         return new ServiceLoader<>(Reflection.getCallerClass(), layer, service);
+     }

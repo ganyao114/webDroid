@@ -1,3 +1,4 @@
+#include "boot.h"
 #include "jni_bridge.h"
 
 #include <algorithm>
@@ -13,6 +14,13 @@ namespace {
 
 struct LoopSuspended {
   std::vector<Runtime::SuspendedFrame> frames;
+};
+
+struct WorkerSuspended {
+  std::vector<Runtime::SuspendedFrame> frames;
+  std::optional<std::chrono::steady_clock::time_point> due;
+  bool interruptible;
+  Object* monitor;
 };
 
 std::vector<uint8_t> ReadDexFile(const std::string& path) {
@@ -54,7 +62,8 @@ std::string EncodeUtf8(std::u16string_view text, bool modified) {
 }
 
 Runtime::Runtime(Options opts)
-    : options(std::move(opts)), linker(*this), jni(std::make_unique<JniBridge>(*this)) {
+    : system_properties(std::move(opts.system_properties)), options(std::move(opts)),
+      linker(*this), jni(std::make_unique<JniBridge>(*this)) {
   InstallBootClasses();
 }
 
@@ -93,41 +102,154 @@ Value Runtime::InvokeSlow(Method& method, Object* receiver, std::span<const Valu
   if (method.compiled) {
     Value result = method.compiled(args);
     ++method.stats.tier1_hits;
+    ++method.stats.returned;
     return result;
   }
-  if (method.builtin) return method.builtin(*this, receiver, args);
-  if (method.IsNative()) return jni->Invoke(method, receiver, args);
-  if (method.IsAbstract()) Fail("Ljava/lang/AbstractMethodError;", method.QualifiedName());
-  if (!method.code) Fail("Ljava/lang/VerifyError;", "Missing code for " + method.QualifiedName());
-  ++method.stats.interpreted;
-  return Interpret(method, receiver, args);
+  Value result;
+  if (method.builtin) {
+    result = method.builtin(*this, receiver, args);
+  } else if (method.IsNative()) {
+    result = jni->Invoke(method, receiver, args);
+  } else {
+    if (method.IsAbstract()) Fail("Ljava/lang/AbstractMethodError;", method.QualifiedName());
+    if (!method.code) Fail("Ljava/lang/VerifyError;", "Missing code for " + method.QualifiedName());
+    ++method.stats.interpreted;
+    result = Interpret(method, receiver, args);
+  }
+  ++method.stats.returned;
+  return result;
+}
+
+std::vector<Runtime::SuspendedFrame> Runtime::CaptureSuspendedFrames(const LoopDispatch& dispatch,
+                                                                    const Object* released_monitor) {
+  std::vector<SuspendedFrame> frames;
+  size_t depth = call_depth;
+  for (auto* frame = active_trace; frame != dispatch.boundary; frame = frame->caller) {
+    constexpr auto monitor = art::kAccSynchronized | art::kAccDeclaredSynchronized;
+    if (!frame || frame->depth != --depth || (frame->method->flags & monitor) ||
+        frame->method->name == "<clinit>" ||
+        std::ranges::any_of(frame->frame_roots.values, [released_monitor](Value held) {
+          return held.ref() != released_monitor;
+        })) {
+      Fail("Ljava/lang/IllegalStateException;", "Cannot suspend across a native or locked frame");
+    }
+    const auto slots = frame->frame_roots.borrowed;
+    frames.push_back({frame->method, *frame->dex_pc, {slots.begin(), slots.end()}, frame->frame_roots.values});
+  }
+  if (frames.empty() || depth != dispatch.depth + 1) {
+    Fail("Ljava/lang/IllegalStateException;", "Missing the caller to suspend");
+  }
+  std::ranges::reverse(frames);
+  return frames;
 }
 
 [[noreturn]] void Runtime::SuspendMainLooper() {
   if (!loop_dispatch) Fail("Ljava/lang/IllegalStateException;", "Main Looper dispatch is unavailable");
-  LoopSuspended suspended;
-  size_t depth = call_depth;
-  for (auto* frame = active_trace; frame != loop_dispatch->boundary; frame = frame->caller) {
-    constexpr auto monitor = art::kAccSynchronized | art::kAccDeclaredSynchronized;
-    if (!frame || frame->depth != --depth || (frame->method->flags & monitor) ||
-        frame->method->name == "<clinit>" || !frame->frame_roots.values.empty()) {
-      Fail("Ljava/lang/IllegalStateException;", "Cannot suspend the main Looper across a native or locked frame");
-    }
-    const auto slots = frame->frame_roots.borrowed;
-    suspended.frames.push_back({frame->method, *frame->dex_pc, {slots.begin(), slots.end()}});
-  }
-  if (suspended.frames.empty() || depth != loop_dispatch->depth + 1) {
-    Fail("Ljava/lang/IllegalStateException;", "Missing the main Looper caller");
-  }
-  std::ranges::reverse(suspended.frames);
-  throw suspended;
+  throw LoopSuspended{CaptureSuspendedFrames(*loop_dispatch)};
 }
 
 Value Runtime::ResumeSuspendedLoop(std::span<const SuspendedFrame> frames) {
-  // The innermost Looper.loop call observes the failed message as a Java throw.
-  if (frames.empty()) throw ManagedException{};
+  if (frames.empty()) {
+    if (exception) throw ManagedException{};
+    return {}; // The suspended park or sleep completed.
+  }
   CallDepth depth(call_depth);
   return Interpret(*frames.front().method, nullptr, {}, frames);
+}
+
+void Runtime::StartThread(Object* thread) {
+  workers.push_back({.thread = thread});
+}
+
+bool Runtime::HasThread(const Object* thread) const {
+  return std::ranges::find(workers, thread, &Worker::thread) != workers.end();
+}
+
+bool Runtime::WakeThread(Object* thread, bool interrupt) {
+  const auto worker = std::ranges::find(workers, thread, &Worker::thread);
+  if (worker == workers.end() || &*worker == active_worker || worker->frames.empty() ||
+      (worker->interruptible && !interrupt)) return false;
+  worker->due = std::chrono::steady_clock::time_point::min();
+  worker->interrupted = worker->interruptible && interrupt;
+  return true;
+}
+
+void Runtime::NotifyWaiters(Object& monitor, bool all) {
+  for (auto& worker : workers) {
+    if (worker.monitor != &monitor || &worker == active_worker) continue;
+    worker.monitor = nullptr;
+    worker.due = std::chrono::steady_clock::time_point::min();
+    if (!all) break;
+  }
+}
+
+[[noreturn]] void Runtime::SuspendWorker(std::optional<int64_t> delay_ns, bool interruptible,
+                                         Object* monitor) {
+  using Clock = std::chrono::steady_clock;
+  std::optional<Clock::time_point> due;
+  if (delay_ns) {
+    const auto now = Clock::now();
+    const auto delay = std::chrono::duration_cast<Clock::duration>(std::chrono::nanoseconds(*delay_ns));
+    due = now + std::min(delay, Clock::time_point::max() - now);
+  }
+  throw WorkerSuspended{CaptureSuspendedFrames(*worker_dispatch, monitor), due, interruptible, monitor};
+}
+
+void Runtime::RunReadyThreads() {
+  if (workers.empty()) return;
+  auto& thread = linker.Resolve("Ljava/lang/Thread;");
+  auto& current = linker.FindField(thread, "currentThread", thread.descriptor, true);
+  auto& default_run = linker.FindMethod(thread, "run", "()V", false);
+  using Clock = std::chrono::steady_clock;
+  const auto now = Clock::now();
+  const LoopDispatch dispatch{active_trace, call_depth};
+  for (auto it = workers.begin(); it != workers.end();) {
+    auto worker = it++;
+    if (!worker->due || *worker->due > now) continue;
+    RootScope roots(*this, {}, current.value.ref());
+    const Value previous = std::exchange(current.value, Value::Ref(worker->thread));
+    active_worker = &*worker;
+    worker->monitor = nullptr;
+    worker_dispatch = &dispatch;
+    struct Reset {
+      Runtime& vm;
+      Field& current;
+      Value previous;
+      ~Reset() {
+        current.value = previous;
+        vm.active_worker = nullptr;
+        vm.worker_dispatch = nullptr;
+      }
+    } reset{*this, current, previous};
+    try {
+      if (!worker->frames.empty()) {
+        if (std::exchange(worker->interrupted, false)) {
+          const auto& flag = linker.FindField(thread, "interrupted", "Z", false);
+          worker->thread->fields[flag.slot] = {};
+          exception = MakeException("Ljava/lang/InterruptedException;", {});
+        }
+        ResumeSuspendedLoop(worker->frames);
+      } else {
+        auto* runnable = worker->thread;
+        auto& run = linker.VirtualMethod(*runnable->type, default_run);
+        if (&run == &default_run) {
+          const auto& target = linker.FindField(thread, "target", "Ljava/lang/Runnable;", false);
+          if (auto* task = runnable->fields[target.slot].ref()) CallVirtual(*this, task, "run", "()V");
+        } else {
+          Invoke(run, runnable, {});
+        }
+      }
+      workers.erase(worker);
+    } catch (WorkerSuspended& suspended) {
+      worker->frames = std::move(suspended.frames);
+      worker->due = suspended.due;
+      worker->interruptible = suspended.interruptible;
+      worker->monitor = suspended.monitor;
+    } catch (...) {
+      workers.erase(worker);
+      throw;
+    }
+  }
 }
 
 Value Runtime::DispatchMainMessage(Object& looper, Value now) {
@@ -480,6 +602,7 @@ void Vm::RunShutdownHooks() {
   auto* runtime = runtime_->linker.FindField(cls, "currentRuntime", cls.descriptor, true).value.ref();
   runtime_->Invoke(runtime_->linker.FindMethod(cls, "runShutdownHooks", "()V", false), runtime, {});
 }
+void Vm::RunReadyThreads() { runtime_->RunReadyThreads(); }
 GcStats Vm::Collect() { return runtime_->heap.Collect(*runtime_); }
 void Vm::CollectIfNeeded() {
   if (!runtime_->gc_paused && runtime_->heap.ShouldCollect(runtime_->options.gc_interval))
@@ -492,6 +615,13 @@ MethodStats Vm::GetMethodStats(std::string_view owner, std::string_view name, st
 MethodStats Vm::GetInstanceMethodStats(std::string_view owner, std::string_view name,
                                        std::string_view signature) {
   return runtime_->linker.FindMethod(runtime_->linker.Resolve(owner), name, signature, false).stats;
+}
+MethodStats Vm::GetLinkedVirtualMethodStats(std::string_view owner, std::string_view name,
+                                            std::string_view signature) const {
+  const auto* cls = runtime_->linker.FindLinkedClass(owner);
+  if (!cls) return {};
+  const auto method = cls->vtable.find(MemberKey(name, signature));
+  return method == cls->vtable.end() ? MethodStats{} : method->second->stats;
 }
 size_t Vm::InterpretedMethodCount(std::string_view descriptor) const {
   const auto* cls = runtime_->linker.FindLinkedClass(descriptor);

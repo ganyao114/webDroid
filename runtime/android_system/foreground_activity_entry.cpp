@@ -3,6 +3,7 @@
 #include "apk_manifest.h"
 #include "art_interp.h"
 #include "hybrid_native_runtime.h"
+#include "jni_bridge.h"
 #include "mounted_apk.h"
 #include "native_methods.h"
 #include "ui_bridge.h"
@@ -40,6 +41,9 @@ using wa::ui_jni::IntentRequest;
 using wa::ui_jni::PackageActivity;
 
 constexpr char kUiRuntime[] = "Landroid/app/UiRuntime;";
+constexpr char kViewRoot[] = "Landroid/view/ViewRootImpl;";
+constexpr char kActivity[] = "Landroid/app/Activity;";
+constexpr char kIntent[] = "Landroid/content/Intent;";
 constexpr int32_t kBack = 4;
 constexpr uint32_t kActivityLayer = 1;
 constexpr uint64_t kMatchDisabled = 0x200;
@@ -154,6 +158,18 @@ struct WebViewLayer {
     bool navigate = false;
 };
 
+struct DeleteGlobalRef {
+    JNIEnv* env;
+    void operator()(jobject value) const { env->DeleteGlobalRef(value); }
+};
+
+using GlobalRef = std::unique_ptr<_jobject, DeleteGlobalRef>;
+
+struct StoppedActivity {
+    GlobalRef activity, root;
+    int32_t request_code;
+};
+
 std::string WebViewFilePath(std::string_view url, std::string_view package) {
     constexpr std::string_view scheme = "file://";
     if (!url.starts_with(scheme) || url.size() > WA_WEBVIEW_TEXT_CAPACITY) return {};
@@ -199,6 +215,104 @@ struct Session {
 
     Object* Activity() {
         return vm.CallStatic(kUiRuntime, "getActivity", "()Landroid/app/Activity;").ref();
+    }
+
+    wa::interp::JniBridge& Jni() { return wa::interp::JniBridge::From(vm.JniEnv()); }
+
+    Value& RuntimeField(std::string_view name, std::string_view signature) {
+        auto& linker = Jni().Vm().linker;
+        return linker.FindField(linker.Resolve(kUiRuntime), name, signature, true).value;
+    }
+
+    Value Member(Object* object, std::string_view name, std::string_view signature) {
+        auto& linker = Jni().Vm().linker;
+        return object->fields[linker.FindField(*object->type, name, signature, false).slot];
+    }
+
+    GlobalRef Keep(Object* object) { return GlobalRef(Jni().Global(object), {vm.JniEnv()}); }
+
+    void SetActive(Object* activity, Object* root, std::string name) {
+        RuntimeField("current", kActivity) = Value::Ref(activity);
+        RuntimeField("root", kViewRoot) = Value::Ref(root);
+        activity_class = std::move(name);
+        activity_descriptor = Descriptor(activity_class);
+        finishing = false;
+    }
+
+    void DestroyStopped(Object* activity, Object* root) {
+        vm.CallVirtual(activity, "performDestroy", "()V");
+        vm.CallVirtual(root, "detach", "()V");
+    }
+
+    void DestroyActivityStack() {
+        while (!activity_stack.empty()) {
+            auto entry = std::move(activity_stack.back());
+            activity_stack.pop_back();
+            DestroyStopped(Jni().Read(entry.activity.get()), Jni().Read(entry.root.get()));
+        }
+    }
+
+    void ApplyActivityRequest() {
+        if (!vm.HasClass("Landroid/app/Activity$EmbeddedLaunch;")) return;
+        ScopedHandleScope roots(vm);
+        auto* current = roots.Hold(Activity());
+        if (!current) return;
+        auto* request = roots.Hold(vm.CallVirtual(current, "pollEmbeddedLaunch",
+            "()Landroid/app/Activity$EmbeddedLaunch;").ref());
+        const bool finish = Member(current, "mEmbeddedFinishPending", "Z").i() != 0;
+        if (!request && !finish) return;
+
+        auto* old_root = roots.Hold(RuntimeField("root", kViewRoot).ref());
+        if (request) {
+            auto* intent = roots.Hold(Member(request, "intent", kIntent).ref());
+            const auto request_code = Member(request, "requestCode", "I").i();
+            auto* component = roots.Hold(vm.CallVirtual(intent, "getComponent",
+                "()Landroid/content/ComponentName;").ref());
+            auto* name = roots.Hold(vm.CallVirtual(component, "getClassName", "()Ljava/lang/String;").ref());
+            auto* context = roots.Hold(RuntimeField("context", "Landroid/app/UiRuntime$AppContext;").ref());
+            auto* resources = roots.Hold(vm.CallVirtual(context, "getResources",
+                "()Landroid/content/res/Resources;").ref());
+            auto* path = roots.Hold(vm.NewString(catalog.at(package_name).mount->path()));
+            auto* manifest = roots.Hold(vm.CallStatic(kUiRuntime, "readManifest",
+                "(Landroid/content/res/Resources;Ljava/lang/String;Ljava/lang/String;I)Landroid/app/UiRuntime$Manifest;",
+                std::array{Value::Ref(resources), Value::Ref(path), Value::Ref(name), Value::Int(1)}).ref());
+            const auto theme = Member(manifest, "theme", "I");
+            auto* next = roots.Hold(vm.CallStatic(kUiRuntime, "nativeCreateActivity",
+                "(Ljava/lang/String;)Landroid/app/Activity;", std::array{Value::Ref(name)}).ref());
+            const bool has_parent = !finish || !activity_stack.empty();
+            auto* root = roots.Hold(vm.CallVirtual(next, "attachEmbeddedRoot",
+                "(Landroid/content/Context;Landroid/content/Intent;IZ)Landroid/view/ViewRootImpl;",
+                std::array{Value::Ref(context), Value::Ref(intent), theme, Value::Int(has_parent)}).ref());
+
+            ui.StopActivity(vm);
+            if (finish) {
+                DestroyStopped(current, old_root);
+            } else {
+                activity_stack.push_back({Keep(current), Keep(old_root), request_code});
+            }
+            SetActive(next, root, vm.StringUtf8(name));
+            vm.CallVirtual(next, "performCreate", "(Landroid/os/Bundle;)V", std::array{Value{}});
+            ui.ResumeActivity(vm);
+            return;
+        }
+
+        if (activity_stack.empty()) throw std::logic_error("The finishing activity has no parent");
+        const auto result_code = Member(current, "mResultCode", "I");
+        const auto result = roots.Hold(Member(current, "mResultData", kIntent));
+        ui.StopActivity(vm);
+        DestroyStopped(current, old_root);
+        auto parent = std::move(activity_stack.back());
+        activity_stack.pop_back();
+        auto* previous = Jni().Read(parent.activity.get());
+        auto* component = roots.Hold(vm.CallVirtual(previous, "getComponentName",
+            "()Landroid/content/ComponentName;").ref());
+        const auto name = vm.StringUtf8(vm.CallVirtual(component, "getClassName", "()Ljava/lang/String;").ref());
+        SetActive(previous, Jni().Read(parent.root.get()), name);
+        if (parent.request_code >= 0) {
+            vm.CallVirtual(previous, "onActivityResult", "(IILandroid/content/Intent;)V",
+                std::array{Value::Int(parent.request_code), result_code, result});
+        }
+        ui.ResumeActivity(vm);
     }
 
     std::vector<PackageActivity> Query(const IntentRequest& intent) const {
@@ -289,6 +403,10 @@ struct Session {
 
     int32_t Draw(uint64_t nanos) {
         vm.CollectIfNeeded();
+        if (!frame_pending) {
+            ApplyActivityRequest();
+            vm.RunReadyThreads();
+        }
         vm.SetGcPaused(true);
         int32_t status;
         size_t events = 0;
@@ -344,30 +462,43 @@ struct Session {
         return WA_SF_OK;
     }
 
-    std::string Describe() const {
+    std::string Describe() {
         const auto gc = vm.HeapStats();
         const auto samples = std::min<size_t>(frames, frame_ms.size());
         const double average = samples ? std::accumulate(frame_ms.begin(), frame_ms.begin() + samples, 0.0)
             / samples : 0.0;
-        char numbers[640];
+        const auto app_create = vm.GetLinkedVirtualMethodStats(application_descriptor, "onCreate", "()V");
+        const auto providers = vm.GetLinkedVirtualMethodStats("Landroid/content/ContentProvider;",
+            "attachInfo", "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V").returned;
+        const auto on_destroy = vm.GetLinkedVirtualMethodStats(activity_descriptor, "onDestroy", "()V").returned;
+        char numbers[1024];
         std::snprintf(numbers, sizeof(numbers),
             ",\"frames\":%u,\"bootMs\":%.3f,\"lastFrameMs\":%.3f,\"avgFrameMs\":%.3f,"
             "\"drawCommands\":%zu,\"inputEventsProcessed\":%zu,\"gcLive\":%zu,\"gcCollections\":%zu,"
             "\"dexFiles\":%zu,\"dexClasses\":%zu,\"iconResource\":%u,\"catalogPackages\":%zu,"
             "\"executedActivityMethods\":%zu,\"executedApplicationMethods\":%zu,"
-            "\"onCreateCalls\":%llu,\"onStartCalls\":%llu,\"onResumeCalls\":%llu",
+            "\"applicationCreateCalls\":%llu,\"applicationCreateReturns\":%llu,\"providersCreated\":%llu,"
+            "\"onCreateCalls\":%llu,\"onStartCalls\":%llu,\"onResumeCalls\":%llu,\"onDestroyCalls\":%llu",
             frames, boot_ms, frames ? frame_ms[(frames - 1) % frame_ms.size()] : 0.0, average,
             draw_commands, input_events, gc.live, gc.collections, dex_files, dex_classes,
             icon_resource, catalog.size(), vm.InterpretedMethodCount(activity_descriptor),
-            vm.InterpretedMethodCount(application_descriptor), on_create, on_start, on_resume);
+            vm.InterpretedMethodCount(application_descriptor),
+            static_cast<unsigned long long>(app_create.invocations),
+            static_cast<unsigned long long>(app_create.returned),
+            static_cast<unsigned long long>(providers),
+            on_create, on_start, on_resume, static_cast<unsigned long long>(on_destroy));
         auto state = std::string("{\"booted\":") + (booted ? "true" : "false") +
             ",\"finishing\":" + (finishing ? "true" : "false") +
             ",\"imeFocused\":" + (ime_focused ? "true" : "false") +
             ",\"package\":" + Quote(package_name) + ",\"activity\":" + Quote(activity_class) +
+            ",\"launchActivity\":" + Quote(launch_activity) +
             ",\"application\":" + Quote(application_class) +
             ",\"iconName\":" + Quote(icon_name) + ",\"iconLoaded\":" + (icon_loaded ? "true" : "false") +
             numbers;
         const auto native = vm.GetGuestNativeStats();
+        const auto loads = vm.GetMethodStats("Ljava/lang/System;", "loadLibrary", "(Ljava/lang/String;)V");
+        state += ",\"nativeLoadCalls\":" + std::to_string(loads.invocations) +
+            ",\"nativeLoadReturns\":" + std::to_string(loads.returned);
         if (!native.abi.empty()) {
             state += ",\"nativeAbi\":" + Quote(native.abi) +
                 ",\"nativeLibraries\":" + std::to_string(native.libraries) +
@@ -391,8 +522,9 @@ struct Session {
         .sandboxed_files = true,
         .system_properties = {{"org.wasmandroid.foreground", "true"}}}};
     wa::ui_jni::UiBridge ui;
+    std::vector<StoppedActivity> activity_stack;
     std::string package_name, activity_class, activity_descriptor, application_class,
-        application_descriptor, icon_name;
+        application_descriptor, launch_activity, launch_descriptor, icon_name;
     uint32_t frames = 0, sequence = 0, icon_resource = 0;
     uint64_t last_time = 0;
     size_t input_events = 0, draw_commands = 0, dex_files = 0, dex_classes = 0;
@@ -538,6 +670,10 @@ int32_t wa_system_app_create(int32_t width, int32_t height, int32_t dpi, const c
 
 void wa_system_app_destroy() {
     if (session && session->natives_registered) {
+        Api("Destroy stopped foreground activities", [] {
+            session->DestroyActivityStack();
+            return WA_OK;
+        });
         Api("Destroy foreground process", [] {
             session->ui.DestroyActivity(session->vm);
             return WA_OK;
@@ -602,7 +738,11 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
             !s.framework_resources)
             return WA_ERR_INVALID;
 
-        const auto start = Clock::now();
+        struct BootTimer {
+            double& elapsed;
+            Clock::time_point start = Clock::now();
+            ~BootTimer() { elapsed = MillisecondsSince(start); }
+        } timer{s.boot_ms};
         Package package;
         const auto status = wa::system::ReadLauncherPackage({bytes, size}, s.locale.c_str(),
                                                             s.display.density_dpi, package.manifest);
@@ -614,6 +754,8 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
         if (chosen == package.manifest.activities.end()) return WA_ERR_NOENT;
         s.activity_class = chosen->name;
         s.activity_descriptor = Descriptor(chosen->name);
+        s.launch_activity = s.activity_class;
+        s.launch_descriptor = s.activity_descriptor;
         s.package_name = pkg;
         s.application_class = package.manifest.application.empty() ? "android.app.Application" :
             package.manifest.application;
@@ -624,7 +766,7 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
         s.catalog.insert_or_assign(s.package_name, std::move(package));
         s.boot_attempted = true;
 
-        s.vm.MountReadOnlyFile(apk_path, {bytes, size});
+        s.vm.MountReadOnlyHostFile(apk_path);
         s.vm.LoadApkDexFiles(apk_path);
         s.vm.SetGuestNativeSource(wa::system::OpenGuestNativeApk, s.catalog.at(s.package_name).mount.get());
         const auto prefix = apk_path + '!';
@@ -651,6 +793,10 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
             .width = static_cast<int32_t>(s.display.viewport_w),
             .height = static_cast<int32_t>(s.display.viewport_h),
             .framework_resource_apk = s.framework_resources->path()});
+        s.on_create = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onCreate",
+                                                       "(Landroid/os/Bundle;)V").returned;
+        s.on_start = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onStart", "()V").returned;
+        s.on_resume = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onResume", "()V").returned;
         {
             ScopedHandleScope roots(s.vm);
             auto* current = roots.Hold(s.Activity());
@@ -669,12 +815,7 @@ int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t si
         }
         const int32_t frame = s.Draw(0);
         if (frame != WA_OK) return frame;
-        s.on_create = s.vm.GetInstanceMethodStats(s.activity_descriptor, "onCreate",
-                                                   "(Landroid/os/Bundle;)V").invocations;
-        s.on_start = s.vm.GetInstanceMethodStats(s.activity_descriptor, "onStart", "()V").invocations;
-        s.on_resume = s.vm.GetInstanceMethodStats(s.activity_descriptor, "onResume", "()V").invocations;
         s.vm.Collect();
-        s.boot_ms = MillisecondsSince(start);
         s.booted = true;
         return WA_OK;
     });
@@ -728,6 +869,7 @@ int32_t wa_system_app_send_back() {
             const Value args[] = {time, Value::Int(action), Value::Int(kBack), Value::Int(0)};
             s.vm.CallStatic(kUiRuntime, "dispatchKey", "(JIII)Z", args);
         }
+        s.ApplyActivityRequest();
         s.ObserveActivity();
         return s.finishing ? 0 : 1;
     });

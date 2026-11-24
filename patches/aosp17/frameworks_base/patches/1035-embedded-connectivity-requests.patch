@@ -1,0 +1,59 @@
+--- a/packages/modules/Connectivity/framework/src/android/net/ConnectivityManager.java
++++ b/packages/modules/Connectivity/framework/src/android/net/ConnectivityManager.java
+@@ -836,6 +836,47 @@
+     }
+ 
+     /**
++     * Request a network to satisfy a set of {@link NetworkCapabilities}.
++     *
++     *
++     * @param request capabilities the network must satisfy
++     * @param networkCallback callback identifying this request
++     */
++    public void requestNetwork(@NonNull NetworkRequest request,
++            @NonNull NetworkCallback networkCallback) {
++        Objects.requireNonNull(request, "request");
++        Objects.requireNonNull(networkCallback, "networkCallback");
++        // The embedded connectivity service cannot bring up a network for a request.
++        synchronized (callbacks) {
++            if (pendingRequests.containsKey(networkCallback)) {
++                throw new IllegalArgumentException("NetworkCallback already has a request");
++            }
++            registerCallback(networkCallback, handler);
++            Runnable unavailable = new Runnable() {
++                @Override public void run() {
++                    synchronized (callbacks) {
++                        if (pendingRequests.get(networkCallback) != this) return;
++                        pendingRequests.remove(networkCallback);
++                        int count = callbacks.get(networkCallback);
++                        if (count == 1) {
++                            callbacks.remove(networkCallback);
++                        } else {
++                            callbacks.put(networkCallback, count - 1);
++                        }
++                        callbackCount--;
++                    }
++                    networkCallback.onUnavailable();
++                }
++            };
++            pendingRequests.put(networkCallback, unavailable);
++            handler.post(unavailable);
++        }
++    }
++
++    private final java.util.HashMap<NetworkCallback, Runnable> pendingRequests =
++            new java.util.HashMap<>();
++
++    /**
+      * Registers to receive notifications about all networks which satisfy the given
+      * {@link NetworkRequest}.  The callbacks will continue to be called until
+      * either the application exits or {@link #unregisterNetworkCallback(NetworkCallback)} is
+@@ -958,6 +999,8 @@
+ 
+         Objects.requireNonNull(networkCallback, "networkCallback");
+         synchronized (callbacks) {
++            Runnable pending = pendingRequests.remove(networkCallback);
++            if (pending != null) handler.removeCallbacks(pending);
+             final Integer count = callbacks.remove(networkCallback);
+             if (count == null) {
+                 if (!networkCallback.wasRegistered) {

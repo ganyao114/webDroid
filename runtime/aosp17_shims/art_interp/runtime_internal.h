@@ -4,6 +4,8 @@
 #include "native_thunk.h"
 
 #include <array>
+#include <chrono>
+#include <cstdio>
 #include <list>
 #include <map>
 #include <set>
@@ -208,6 +210,7 @@ class ClassLinker {
   explicit ClassLinker(Runtime& runtime) : runtime_(runtime) {}
   void LoadDexFile(std::string location, std::vector<uint8_t> bytes, bool fallback = false);
   void LoadApkDexFiles(const std::string& path, bool fallback);
+  std::optional<std::vector<uint8_t>> ReadApkResource(std::string_view name) const;
   DexStats GetDexStats() const;
   std::span<const std::unique_ptr<const art::DexFile>> LoadedDexFiles() const { return dex_files_; }
   std::string DexLocation(std::string_view descriptor) const;
@@ -250,6 +253,7 @@ class ClassLinker {
   void InitializeConstants(Class& cls);
   Runtime& runtime_;
   DexFiles dex_files_;
+  std::vector<std::string> apk_paths_;
   std::unordered_map<std::string_view, DexClass> dex_index_;
   std::unordered_map<std::string, Class, DescriptorHash, std::equal_to<>> classes_;
   std::map<std::string, std::map<std::string, Builtin>, std::less<>> boot_natives_;
@@ -304,6 +308,7 @@ struct Runtime {
     Method* method;
     uint32_t dex_pc;
     std::vector<Value> slots;
+    std::vector<Value> monitors;
   };
   [[gnu::always_inline]] Value Invoke(Method& method, Object* receiver, std::span<const Value> args) {
     if (args.size() + 1 != method.shorty.size())
@@ -318,7 +323,9 @@ struct Runtime {
         (method.stats.invocations + 1 != options.hotness_threshold || !options.install_wasm)) {
       ++method.stats.invocations;
       ++method.stats.interpreted;
-      return Interpret(method, receiver, args);
+      const Value result = Interpret(method, receiver, args);
+      ++method.stats.returned;
+      return result;
     }
     return InvokeSlow(method, receiver, args);
   }
@@ -328,6 +335,13 @@ struct Runtime {
   Value ResumeSuspendedLoop(std::span<const SuspendedFrame> frames);
   Value DispatchMainMessage(Object& looper, Value now);
   [[noreturn]] void SuspendMainLooper();
+  void StartThread(Object* thread);
+  bool HasThread(const Object* thread) const;
+  bool WakeThread(Object* thread, bool interrupt);
+  void NotifyWaiters(Object& monitor, bool all);
+  void RunReadyThreads();
+  [[noreturn]] void SuspendWorker(std::optional<int64_t> delay_ns, bool interruptible,
+                                  Object* monitor = nullptr);
   void Promote(Method& method);
   Object* NewObject(Class& cls, Method& constructor, std::span<const Value> args);
   Object* NewArray(Class& cls, int32_t length);
@@ -355,6 +369,7 @@ struct Runtime {
   std::string ExceptionSummary() const;
   std::vector<std::string> ExceptionStackTrace() const;
 
+  decltype(Options::system_properties) system_properties;
   const Options options;
   ClassLinker linker;
   GcHeap heap;
@@ -366,6 +381,10 @@ struct Runtime {
   struct GuestFile {
     std::vector<uint8_t> bytes;
     int64_t last_modified;
+    std::shared_ptr<std::FILE> backing;
+    uint64_t backing_size = 0;
+
+    uint64_t Size() const { return backing ? backing_size : bytes.size(); }
   };
   struct FileHandle {
     std::shared_ptr<GuestFile> file;
@@ -403,6 +422,19 @@ struct Runtime {
   };
   const LoopDispatch* loop_dispatch = nullptr;
   std::vector<std::vector<SuspendedFrame>> suspended_loops;
+  std::vector<SuspendedFrame> CaptureSuspendedFrames(const LoopDispatch& dispatch,
+                                                      const Object* released_monitor = nullptr);
+  struct Worker {
+    Object* thread;
+    std::vector<SuspendedFrame> frames;
+    std::optional<std::chrono::steady_clock::time_point> due = std::chrono::steady_clock::time_point::min();
+    bool interruptible = false;
+    bool interrupted = false;
+    Object* monitor = nullptr;
+  };
+  std::list<Worker> workers;
+  Worker* active_worker = nullptr;
+  const LoopDispatch* worker_dispatch = nullptr;
   bool gc_paused = false;
   bool inline_caches = true;
 };

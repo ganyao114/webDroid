@@ -1,0 +1,130 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/locks/AbstractQueuedSynchronizer.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/locks/AbstractQueuedSynchronizer.java
+@@ -41,7 +41,7 @@
+ import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.ForkJoinPool;
+ import java.util.concurrent.RejectedExecutionException;
+-import jdk.internal.misc.Unsafe;
++import org.wasmandroid.ui.ThreadContext;
+ 
+ /**
+  * Provides a framework for implementing blocking locks and related
+@@ -473,30 +473,30 @@
+ 
+         // methods for atomic operations
+         final boolean casPrev(Node c, Node v) {  // for cleanQueue
+-            return U.weakCompareAndSetReference(this, PREV, c, v);
++            if (prev != c) return false;
++            prev = v;
++            return true;
+         }
+         final boolean casNext(Node c, Node v) {  // for cleanQueue
+-            return U.weakCompareAndSetReference(this, NEXT, c, v);
++            if (next != c) return false;
++            next = v;
++            return true;
+         }
+         final int getAndUnsetStatus(int v) {     // for signalling
+-            return U.getAndBitwiseAndInt(this, STATUS, ~v);
++            int previous = status;
++            status &= ~v;
++            return previous;
+         }
+         final void setPrevRelaxed(Node p) {      // for off-queue assignment
+-            U.putReference(this, PREV, p);
++            prev = p;
+         }
+         final void setStatusRelaxed(int s) {     // for off-queue assignment
+-            U.putInt(this, STATUS, s);
++            status = s;
+         }
+         final void clearStatus() {               // for reducing unneeded signals
+-            U.putIntOpaque(this, STATUS, 0);
+-        }
+-
+-        private static final long STATUS
+-            = U.objectFieldOffset(Node.class, "status");
+-        private static final long NEXT
+-            = U.objectFieldOffset(Node.class, "next");
+-        private static final long PREV
+-            = U.objectFieldOffset(Node.class, "prev");
++            status = 0;
++        }
++
+     }
+ 
+     // Concrete classes tagged by type
+@@ -567,13 +567,18 @@
+      *         value was not equal to the expected value.
+      */
+     protected final boolean compareAndSetState(int expect, int update) {
+-        return U.compareAndSetInt(this, STATE, expect, update);
++        // Guest bytecode runs cooperatively between park or sleep calls.
++        if (state != expect) return false;
++        state = update;
++        return true;
+     }
+ 
+     // Queuing utilities
+ 
+     private boolean casTail(Node c, Node v) {
+-        return U.compareAndSetReference(this, TAIL, c, v);
++        if (tail != c) return false;
++        tail = v;
++        return true;
+     }
+ 
+     /**
+@@ -594,8 +599,8 @@
+                         return null;
+                     }
+                 }
+-                if (U.compareAndSetReference(this, HEAD, null, h))
+-                    return tail = h;
++                head = h;
++                return tail = h;
+             }
+         }
+     }
+@@ -676,7 +681,7 @@
+             //     emit JFR event
+ 
+             for (long nanos = 1L;;) {
+-                U.park(false, nanos); // must use Unsafe park to sleep
++                ThreadContext.park(false, nanos); // must use Unsafe park to sleep
+                 if (nanos < 1L << 30)            // max about 1 second
+                     nanos <<= 1;
+ 
+@@ -811,7 +816,7 @@
+         for (long nanos = 1L;;) {
+             if (shared ? (tryAcquireShared(arg) >= 0) : tryAcquire(arg))
+                 return 1;
+-            U.park(false, nanos);               // must use Unsafe park to sleep
++            ThreadContext.park(false, nanos);               // must use Unsafe park to sleep
+             if (nanos < 1L << 30)               // max about 1 second
+                 nanos <<= 1;
+         }
+@@ -1671,7 +1676,7 @@
+             // fall through if encountered OutOfMemoryError
+             if (!isHeldExclusively() || !release(savedState = getState()))
+                 throw new IllegalMonitorStateException();
+-            U.park(false, OOME_COND_WAIT_DELAY);
++            ThreadContext.park(false, OOME_COND_WAIT_DELAY);
+             acquireOnOOME(false, savedState);
+             return null;
+         }
+@@ -1976,14 +1981,6 @@
+         }
+     }
+ 
+-    // Unsafe
+-    private static final Unsafe U = Unsafe.getUnsafe();
+-    private static final long STATE
+-        = U.objectFieldOffset(AbstractQueuedSynchronizer.class, "state");
+-    private static final long HEAD
+-        = U.objectFieldOffset(AbstractQueuedSynchronizer.class, "head");
+-    private static final long TAIL
+-        = U.objectFieldOffset(AbstractQueuedSynchronizer.class, "tail");
+     static {
+         Class<?> ensureLoaded = LockSupport.class;
+     }

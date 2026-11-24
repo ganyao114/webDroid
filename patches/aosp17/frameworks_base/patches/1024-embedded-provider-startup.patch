@@ -1,0 +1,657 @@
+--- a/frameworks/base/core/java/com/android/internal/pm/pkg/component/ParsedProviderUtils.java
++++ b/frameworks/base/core/java/com/android/internal/pm/pkg/component/ParsedProviderUtils.java
+@@ -16,370 +16,192 @@
+ 
+ package com.android.internal.pm.pkg.component;
+ 
+-import static com.android.internal.pm.pkg.component.ComponentParseUtils.flag;
+-import static com.android.internal.pm.pkg.parsing.ParsingPackageUtils.RIGID_PARSER;
+-
+-import android.annotation.NonNull;
+-import android.annotation.Nullable;
+-import android.content.IntentFilter;
++import android.content.pm.ApplicationInfo;
+ import android.content.pm.PathPermission;
+ import android.content.pm.ProviderInfo;
+-import android.content.pm.parsing.result.ParseInput;
+-import android.content.pm.parsing.result.ParseResult;
+ import android.content.res.Resources;
+ import android.content.res.TypedArray;
+ import android.content.res.XmlResourceParser;
+-import android.multiuser.Flags;
+ import android.os.Build;
++import android.os.Bundle;
+ import android.os.PatternMatcher;
+-import android.util.Slog;
++import android.util.TypedValue;
+ 
+ import com.android.internal.R;
+-import com.android.internal.pm.pkg.parsing.ParsingPackage;
+-import com.android.internal.pm.pkg.parsing.ParsingUtils;
+-import com.android.internal.util.XmlUtils;
+ 
+ import org.xmlpull.v1.XmlPullParser;
+ import org.xmlpull.v1.XmlPullParserException;
+ 
+ import java.io.IOException;
+-import java.util.Objects;
++import java.util.ArrayList;
++import java.util.List;
+ 
+ /** @hide */
+ public class ParsedProviderUtils {
+-
+-    private static final String TAG = ParsingUtils.TAG;
+-
+-    @NonNull
+-    public static ParseResult<ParsedProvider> parseProvider(String[] separateProcesses,
+-            ParsingPackage pkg, Resources res, XmlResourceParser parser, int flags,
+-            boolean useRoundIcon, @Nullable String defaultSplitName, @NonNull ParseInput input)
++    public static List<ProviderInfo> parseEmbeddedProviders(
++            ApplicationInfo app, Resources res, XmlResourceParser parser)
+             throws IOException, XmlPullParserException {
+-        String authority;
+-        boolean visibleToEphemeral;
+-
+-        final int targetSdkVersion = pkg.getTargetSdkVersion();
+-        final String packageName = pkg.getPackageName();
+-        final ParsedProviderImpl provider = new ParsedProviderImpl();
+-        final String tag = parser.getName();
+-
+-        TypedArray sa = res.obtainAttributes(parser, R.styleable.AndroidManifestProvider);
+-        try {
+-            ParseResult<ParsedProviderImpl> result =
+-                    ParsedMainComponentUtils.parseMainComponent(provider, tag, separateProcesses,
+-                            pkg, sa, flags, useRoundIcon, defaultSplitName, input,
+-                            R.styleable.AndroidManifestProvider_banner,
+-                            R.styleable.AndroidManifestProvider_description,
+-                            R.styleable.AndroidManifestProvider_directBootAware,
+-                            R.styleable.AndroidManifestProvider_enabled,
+-                            R.styleable.AndroidManifestProvider_icon,
+-                            R.styleable.AndroidManifestProvider_label,
+-                            R.styleable.AndroidManifestProvider_logo,
+-                            R.styleable.AndroidManifestProvider_name,
+-                            R.styleable.AndroidManifestProvider_process,
+-                            R.styleable.AndroidManifestProvider_roundIcon,
+-                            R.styleable.AndroidManifestProvider_splitName,
+-                            R.styleable.AndroidManifestProvider_attributionTags,
+-                            R.styleable.AndroidManifestProvider_intentMatchingFlags);
+-            if (result.isError()) {
+-                return input.error(result);
+-            }
+-
+-            authority = sa.getNonConfigurationString(R.styleable.AndroidManifestProvider_authorities, 0);
+-
+-            // For compatibility, applications targeting API level 16 or lower
+-            // should have their content providers exported by default, unless they
+-            // specify otherwise.
+-            provider.setSyncable(sa.getBoolean(
+-                    R.styleable.AndroidManifestProvider_syncable, false))
+-                    .setExported(sa.getBoolean(R.styleable.AndroidManifestProvider_exported,
+-                            targetSdkVersion < Build.VERSION_CODES.JELLY_BEAN_MR1));
+-
+-            String permission = sa.getNonConfigurationString(
+-                    R.styleable.AndroidManifestProvider_permission, 0);
+-            String readPermission = sa.getNonConfigurationString(
+-                    R.styleable.AndroidManifestProvider_readPermission, 0);
+-            if (readPermission == null) {
+-                readPermission = permission;
+-            }
+-            if (readPermission == null) {
+-                provider.setReadPermission(pkg.getPermission());
+-            } else {
+-                provider.setReadPermission(readPermission);
+-            }
+-            String writePermission = sa.getNonConfigurationString(
+-                    R.styleable.AndroidManifestProvider_writePermission, 0);
+-            if (writePermission == null) {
+-                writePermission = permission;
+-            }
+-            if (writePermission == null) {
+-                provider.setWritePermission(pkg.getPermission());
+-            } else {
+-                provider.setWritePermission(writePermission);
+-            }
+-
+-            provider.setGrantUriPermissions(
+-                    sa.getBoolean(R.styleable.AndroidManifestProvider_grantUriPermissions, false))
+-                    .setForceUriPermissions(
+-                            sa.getBoolean(R.styleable.AndroidManifestProvider_forceUriPermissions,
+-                                    false))
+-                    .setMultiProcess(
+-                            sa.getBoolean(R.styleable.AndroidManifestProvider_multiprocess, false))
+-                    .setInitOrder(sa.getInt(R.styleable.AndroidManifestProvider_initOrder, 0))
+-                    .setFlags(provider.getFlags() | flag(ProviderInfo.FLAG_SINGLE_USER,
+-                            R.styleable.AndroidManifestProvider_singleUser, sa));
+-
+-            if (android.app.privatecompute.flags.Flags.enablePccFrameworkSupport()) {
+-                provider.setFlags(provider.getFlags() | flag(ProviderInfo.FLAG_RUN_IN_PCC_SANDBOX,
+-                        R.styleable.AndroidManifestProvider_privateComputeCore, sa));
+-            }
+-
+-            if (Flags.enableSystemUserOnlyForServicesAndProviders()) {
+-                provider.setFlags(provider.getFlags() | flag(ProviderInfo.FLAG_SYSTEM_USER_ONLY,
+-                        R.styleable.AndroidManifestProvider_systemUserOnly, sa));
+-            }
+-            visibleToEphemeral = sa.getBoolean(
+-                    R.styleable.AndroidManifestProvider_visibleToInstantApps, false);
+-            if (visibleToEphemeral) {
+-                provider.setFlags(provider.getFlags() | ProviderInfo.FLAG_VISIBLE_TO_INSTANT_APP);
+-                pkg.setVisibleToInstantApps(true);
+-            }
+-        } finally {
+-            sa.recycle();
+-        }
+-
+-        if (pkg.isSaveStateDisallowed()) {
+-            // A heavy-weight application can not have providers in its main process
+-            if (Objects.equals(provider.getProcessName(), packageName)) {
+-                return input.error("Heavy-weight applications can not have providers"
+-                        + " in main process");
+-            }
+-        }
+-
+-        if (authority == null) {
+-            return input.error("<provider> does not include authorities attribute");
+-        }
+-        if (authority.length() <= 0) {
+-            return input.error("<provider> has empty authorities attribute");
+-        }
+-        provider.setAuthority(authority);
+-
+-        return parseProviderTags(pkg, tag, res, parser, visibleToEphemeral, provider, input);
+-    }
+-
+-    @NonNull
+-    private static ParseResult<ParsedProvider> parseProviderTags(ParsingPackage pkg, String tag,
+-            Resources res, XmlResourceParser parser, boolean visibleToEphemeral,
+-            ParsedProviderImpl provider, ParseInput input)
+-            throws XmlPullParserException, IOException {
++        List<ProviderInfo> providers = new ArrayList<>();
++        String process = app.packageName;
++        String permission = null;
++        boolean inApplication = false;
++        for (int event = parser.next(); event != XmlPullParser.END_DOCUMENT;
++                event = parser.next()) {
++            if (event == XmlPullParser.END_TAG && parser.getDepth() == 2) inApplication = false;
++            if (event != XmlPullParser.START_TAG) continue;
++            if (parser.getDepth() == 2 && "application".equals(parser.getName())) {
++                try (TypedArray sa = res.obtainAttributes(parser, R.styleable.AndroidManifestApplication)) {
++                    process = processName(app.packageName, app.packageName,
++                            sa.getString(R.styleable.AndroidManifestApplication_process));
++                    permission = sa.getString(R.styleable.AndroidManifestApplication_permission);
++                    if (!sa.getBoolean(R.styleable.AndroidManifestApplication_enabled, true)) break;
++                }
++                app.processName = process;
++                inApplication = true;
++            } else if (inApplication && parser.getDepth() == 3 && "provider".equals(parser.getName())) {
++                providers.add(parseProvider(app, res, parser, process, permission));
++            }
++        }
++        // PackageManager publishes providers in descending initOrder.
++        providers.sort((left, right) -> Integer.compare(right.initOrder, left.initOrder));
++        return providers;
++    }
++
++    private static String processName(String pkg, String fallback, String name) {
++        if (name == null || name.isEmpty()) return fallback;
++        return name.startsWith(":") ? pkg + name : name;
++    }
++
++    private static ProviderInfo parseProvider(ApplicationInfo app, Resources res,
++            XmlResourceParser parser, String process, String applicationPermission)
++            throws IOException, XmlPullParserException {
++        final ProviderInfo provider = new ProviderInfo();
++        provider.applicationInfo = app;
++        provider.packageName = app.packageName;
++        try (TypedArray sa = res.obtainAttributes(parser, R.styleable.AndroidManifestProvider)) {
++            final String name = sa.getString(R.styleable.AndroidManifestProvider_name);
++            if (name == null || name.isEmpty()) {
++                throw new XmlPullParserException("<provider> does not include name attribute");
++            }
++            provider.name = name.startsWith(".") ? app.packageName + name
++                    : name.indexOf('.') < 0 ? app.packageName + '.' + name : name;
++            provider.processName = processName(app.packageName, process,
++                    sa.getString(R.styleable.AndroidManifestProvider_process));
++            provider.authority = sa.getString(R.styleable.AndroidManifestProvider_authorities);
++            if (provider.authority == null || provider.authority.isEmpty()) {
++                throw new XmlPullParserException("<provider> does not include authorities attribute");
++            }
++            provider.enabled = sa.getBoolean(R.styleable.AndroidManifestProvider_enabled, true);
++            provider.directBootAware = sa.getBoolean(
++                    R.styleable.AndroidManifestProvider_directBootAware, false);
++            // Applications targeting API 16 or lower export providers by default.
++            provider.exported = sa.getBoolean(R.styleable.AndroidManifestProvider_exported,
++                    app.targetSdkVersion < Build.VERSION_CODES.JELLY_BEAN_MR1);
++            provider.isSyncable = sa.getBoolean(R.styleable.AndroidManifestProvider_syncable, false);
++            provider.grantUriPermissions = sa.getBoolean(
++                    R.styleable.AndroidManifestProvider_grantUriPermissions, false);
++            provider.multiprocess = sa.getBoolean(
++                    R.styleable.AndroidManifestProvider_multiprocess, false);
++            provider.initOrder = sa.getInt(R.styleable.AndroidManifestProvider_initOrder, 0);
++            String permission = sa.getString(R.styleable.AndroidManifestProvider_permission);
++            if (permission == null) permission = applicationPermission;
++            provider.readPermission = sa.getString(R.styleable.AndroidManifestProvider_readPermission);
++            if (provider.readPermission == null) provider.readPermission = permission;
++            provider.writePermission = sa.getString(R.styleable.AndroidManifestProvider_writePermission);
++            if (provider.writePermission == null) provider.writePermission = permission;
++        }
++
+         final int depth = parser.getDepth();
++        final List<PathPermission> pathPermissions = new ArrayList<>();
++        final List<PatternMatcher> grants = new ArrayList<>();
+         int type;
+         while ((type = parser.next()) != XmlPullParser.END_DOCUMENT
+-                && (type != XmlPullParser.END_TAG
+-                || parser.getDepth() > depth)) {
+-            if (type != XmlPullParser.START_TAG) {
+-                continue;
+-            }
+-            if (AconfigFlags.getInstance().skipCurrentElement(pkg, parser)) {
+-                XmlUtils.skipCurrentTag(parser);
+-                continue;
+-            }
+-
+-            String name = parser.getName();
+-            final ParseResult result;
+-            switch (name) {
+-                case "intent-filter":
+-                    ParseResult<ParsedIntentInfoImpl> intentResult = ParsedMainComponentUtils
+-                            .parseIntentFilter(provider, pkg, res, parser, visibleToEphemeral,
+-                                    true /*allowGlobs*/, false /*allowAutoVerify*/,
+-                                    false /*allowImplicitEphemeralVisibility*/,
+-                                    false /*failOnNoActions*/, input);
+-                    result = intentResult;
+-                    if (intentResult.isSuccess()) {
+-                        ParsedIntentInfoImpl intent = intentResult.getResult();
+-                        IntentFilter intentFilter = intent.getIntentFilter();
+-                        provider.setOrder(Math.max(intentFilter.getOrder(), provider.getOrder()));
+-                        provider.addIntent(intent);
++                && (type != XmlPullParser.END_TAG || parser.getDepth() > depth)) {
++            if (type != XmlPullParser.START_TAG || parser.getDepth() != depth + 1) continue;
++            switch (parser.getName()) {
++                case "meta-data":
++                    provider.metaData = parseMetaData(provider.metaData, res, parser);
++                    break;
++                case "grant-uri-permission":
++                    try (TypedArray sa = res.obtainAttributes(parser,
++                            R.styleable.AndroidManifestGrantUriPermission)) {
++                        PatternMatcher pattern = parsePattern(sa,
++                                R.styleable.AndroidManifestGrantUriPermission_pathAdvancedPattern,
++                                R.styleable.AndroidManifestGrantUriPermission_pathPattern,
++                                R.styleable.AndroidManifestGrantUriPermission_pathPrefix,
++                                R.styleable.AndroidManifestGrantUriPermission_pathSuffix,
++                                R.styleable.AndroidManifestGrantUriPermission_path);
++                        if (pattern != null) grants.add(pattern);
+                     }
+                     break;
+-                case "meta-data":
+-                    result = ParsedComponentUtils.addMetaData(provider, pkg, res, parser, input);
+-                    break;
+-                case "property":
+-                    result = ParsedComponentUtils.addProperty(provider, pkg, res, parser, input);
+-                    break;
+-                case "grant-uri-permission": {
+-                    result = parseGrantUriPermission(provider, pkg, res, parser, input);
+-                    break;
+-                }
+-                case "path-permission": {
+-                    result = parsePathPermission(provider, pkg, res, parser, input);
+-                    break;
+-                }
+-                default:
+-                    result = ParsingUtils.unknownTag(tag, pkg, parser, input);
+-                    break;
+-            }
+-
+-            if (result.isError()) {
+-                return input.error(result);
+-            }
+-        }
+-
+-        return input.success(provider);
+-    }
+-
+-    @NonNull
+-    private static ParseResult<ParsedProvider> parseGrantUriPermission(ParsedProviderImpl provider,
+-            ParsingPackage pkg, Resources resources, XmlResourceParser parser, ParseInput input) {
+-        TypedArray sa = resources.obtainAttributes(parser,
+-                R.styleable.AndroidManifestGrantUriPermission);
+-        try {
+-            String name = parser.getName();
+-            // Pattern has priority over pre/suffix over literal path
+-            PatternMatcher pa = null;
+-            String str = sa.getNonConfigurationString(
+-                    R.styleable.AndroidManifestGrantUriPermission_pathAdvancedPattern, 0);
+-            if (str != null) {
+-                pa = new PatternMatcher(str, PatternMatcher.PATTERN_ADVANCED_GLOB);
+-            } else {
+-                str = sa.getNonConfigurationString(
+-                        R.styleable.AndroidManifestGrantUriPermission_pathPattern, 0);
+-                if (str != null) {
+-                    pa = new PatternMatcher(str, PatternMatcher.PATTERN_SIMPLE_GLOB);
+-                } else {
+-                    str = sa.getNonConfigurationString(
+-                            R.styleable.AndroidManifestGrantUriPermission_pathPrefix, 0);
+-                    if (str != null) {
+-                        pa = new PatternMatcher(str, PatternMatcher.PATTERN_PREFIX);
+-                    } else {
+-                        str = sa.getNonConfigurationString(
+-                                R.styleable.AndroidManifestGrantUriPermission_pathSuffix, 0);
+-                        if (str != null) {
+-                            pa = new PatternMatcher(str, PatternMatcher.PATTERN_SUFFIX);
+-                        } else {
+-                            str = sa.getNonConfigurationString(
+-                                    R.styleable.AndroidManifestGrantUriPermission_path, 0);
+-                            if (str != null) {
+-                                pa = new PatternMatcher(str, PatternMatcher.PATTERN_LITERAL);
+-                            }
++                case "path-permission":
++                    try (TypedArray sa = res.obtainAttributes(parser,
++                            R.styleable.AndroidManifestPathPermission)) {
++                        String permission = sa.getString(R.styleable.AndroidManifestPathPermission_permission);
++                        String read = sa.getString(R.styleable.AndroidManifestPathPermission_readPermission);
++                        String write = sa.getString(R.styleable.AndroidManifestPathPermission_writePermission);
++                        if (read == null) read = permission;
++                        if (write == null) write = permission;
++                        if (read == null && write == null) break;
++                        PatternMatcher pattern = parsePattern(sa,
++                                R.styleable.AndroidManifestPathPermission_pathAdvancedPattern,
++                                R.styleable.AndroidManifestPathPermission_pathPattern,
++                                R.styleable.AndroidManifestPathPermission_pathPrefix,
++                                R.styleable.AndroidManifestPathPermission_pathSuffix,
++                                R.styleable.AndroidManifestPathPermission_path);
++                        if (pattern != null) {
++                            pathPermissions.add(new PathPermission(
++                                    pattern.getPath(), pattern.getType(), read, write));
+                         }
+                     }
+-                }
+-            }
+-
+-            if (pa != null) {
+-                provider.addUriPermissionPattern(pa);
+-                provider.setGrantUriPermissions(true);
+-            } else {
+-                if (RIGID_PARSER) {
+-                    return input.error("No path, pathPrefix, or pathPattern for <path-permission>");
+-                }
+-
+-                Slog.w(TAG, "Unknown element under <path-permission>: " + name + " at "
+-                        + pkg.getBaseApkPath() + " " + parser.getPositionDescription());
+-            }
+-
+-            return input.success(provider);
+-        } finally {
+-            sa.recycle();
+-        }
+-    }
+-
+-    @NonNull
+-    private static ParseResult<ParsedProvider> parsePathPermission(ParsedProviderImpl provider,
+-            ParsingPackage pkg, Resources resources, XmlResourceParser parser, ParseInput input) {
+-        TypedArray sa = resources.obtainAttributes(parser,
+-                R.styleable.AndroidManifestPathPermission);
+-        try {
+-            String name = parser.getName();
+-
+-            String permission = sa.getNonConfigurationString(
+-                    R.styleable.AndroidManifestPathPermission_permission, 0);
+-            String readPermission = sa.getNonConfigurationString(
+-                    R.styleable.AndroidManifestPathPermission_readPermission, 0);
+-            if (readPermission == null) {
+-                readPermission = permission;
+-            }
+-            String writePermission = sa.getNonConfigurationString(
+-                    R.styleable.AndroidManifestPathPermission_writePermission, 0);
+-            if (writePermission == null) {
+-                writePermission = permission;
+-            }
+-
+-            boolean havePerm = false;
+-            if (readPermission != null) {
+-                readPermission = readPermission.intern();
+-                havePerm = true;
+-            }
+-            if (writePermission != null) {
+-                writePermission = writePermission.intern();
+-                havePerm = true;
+-            }
+-
+-            if (!havePerm) {
+-                if (RIGID_PARSER) {
+-                    return input.error(
+-                            "No readPermission or writePermission for <path-permission>");
+-                }
+-                Slog.w(TAG, "No readPermission or writePermission for <path-permission>: "
+-                        + name + " at " + pkg.getBaseApkPath() + " "
+-                        + parser.getPositionDescription());
+-                return input.success(provider);
+-            }
+-
+-            // Advanced has priority over simply over prefix over literal
+-            PathPermission pa = null;
+-            String path = sa.getNonConfigurationString(R.styleable.AndroidManifestPathPermission_pathAdvancedPattern, 0);
+-            if (path != null) {
+-                pa = new PathPermission(path, PatternMatcher.PATTERN_ADVANCED_GLOB, readPermission,
+-                        writePermission);
+-            } else {
+-                path = sa.getNonConfigurationString(R.styleable.AndroidManifestPathPermission_pathPattern, 0);
+-                if (path != null) {
+-                    pa = new PathPermission(path, PatternMatcher.PATTERN_SIMPLE_GLOB,
+-                            readPermission, writePermission);
+-                } else {
+-                    path = sa.getNonConfigurationString(
+-                            R.styleable.AndroidManifestPathPermission_pathPrefix, 0);
+-                    if (path != null) {
+-                        pa = new PathPermission(path, PatternMatcher.PATTERN_PREFIX, readPermission,
+-                                writePermission);
+-                    } else {
+-                        path = sa.getNonConfigurationString(
+-                                R.styleable.AndroidManifestPathPermission_pathSuffix, 0);
+-                        if (path != null) {
+-                            pa = new PathPermission(path, PatternMatcher.PATTERN_SUFFIX,
+-                                    readPermission, writePermission);
+-                        } else {
+-                            path = sa.getNonConfigurationString(
+-                                    R.styleable.AndroidManifestPathPermission_path, 0);
+-                            if (path != null) {
+-                                pa = new PathPermission(path, PatternMatcher.PATTERN_LITERAL,
+-                                        readPermission, writePermission);
+-                            }
+-                        }
+-                    }
+-                }
+-            }
+-
+-            if (pa != null) {
+-                provider.addPathPermission(pa);
+-            } else {
+-                if (RIGID_PARSER) {
+-                    return input.error(
+-                            "No path, pathPrefix, or pathPattern for <path-permission>");
+-                }
+-
+-                Slog.w(TAG, "No path, pathPrefix, or pathPattern for <path-permission>: "
+-                        + name + " at " + pkg.getBaseApkPath()
+-                        + " "
+-                        + parser.getPositionDescription());
+-            }
+-
+-            return input.success(provider);
+-        } finally {
+-            sa.recycle();
++                    break;
++            }
++        }
++        if (!grants.isEmpty()) {
++            provider.uriPermissionPatterns = grants.toArray(new PatternMatcher[0]);
++            provider.grantUriPermissions = true;
++        }
++        if (!pathPermissions.isEmpty()) provider.pathPermissions = pathPermissions.toArray(new PathPermission[0]);
++        return provider;
++    }
++
++    private static PatternMatcher parsePattern(TypedArray sa, int advanced, int glob,
++            int prefix, int suffix, int literal) {
++        // A pattern takes precedence over prefix/suffix and literal paths.
++        String path = sa.getString(advanced);
++        if (path != null) return new PatternMatcher(path, PatternMatcher.PATTERN_ADVANCED_GLOB);
++        path = sa.getString(glob);
++        if (path != null) return new PatternMatcher(path, PatternMatcher.PATTERN_SIMPLE_GLOB);
++        path = sa.getString(prefix);
++        if (path != null) return new PatternMatcher(path, PatternMatcher.PATTERN_PREFIX);
++        path = sa.getString(suffix);
++        if (path != null) return new PatternMatcher(path, PatternMatcher.PATTERN_SUFFIX);
++        path = sa.getString(literal);
++        return path == null ? null : new PatternMatcher(path, PatternMatcher.PATTERN_LITERAL);
++    }
++
++    private static Bundle parseMetaData(Bundle data, Resources res, XmlResourceParser parser) {
++        try (TypedArray sa = res.obtainAttributes(parser, R.styleable.AndroidManifestMetaData)) {
++            String name = sa.getString(R.styleable.AndroidManifestMetaData_name);
++            if (name == null) return data;
++            if (data == null) data = new Bundle();
++            int resource = sa.getResourceId(R.styleable.AndroidManifestMetaData_resource, 0);
++            if (resource != 0) {
++                data.putInt(name, resource);
++                return data;
++            }
++            TypedValue value = sa.peekValue(R.styleable.AndroidManifestMetaData_value);
++            if (value == null) return data;
++            if (value.type == TypedValue.TYPE_STRING) {
++                data.putString(name, value.coerceToString().toString());
++            } else if (value.type == TypedValue.TYPE_INT_BOOLEAN) {
++                data.putBoolean(name, value.data != 0);
++            } else if (value.type >= TypedValue.TYPE_FIRST_INT && value.type <= TypedValue.TYPE_LAST_INT) {
++                data.putInt(name, value.data);
++            } else if (value.type == TypedValue.TYPE_FLOAT) {
++                data.putFloat(name, value.getFloat());
++            }
++            return data;
+         }
+     }
+ }
+--- a/frameworks/base/core/java/android/app/Application.java
++++ b/frameworks/base/core/java/android/app/Application.java
+@@ -336,6 +336,14 @@
+     @UnsupportedAppUsage
+     /* package */ final void attach(Context context) {
+         attachBaseContext(context);
++        if (Boolean.getBoolean("org.wasmandroid.foreground")) {
++            getPackageManager().installEmbeddedProviders(this);
++        }
++    }
++
++    @Override
++    public Context getApplicationContext() {
++        return this;
+     }
+ 
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+--- a/frameworks/base/core/java/android/content/pm/PackageManager.java
++++ b/frameworks/base/core/java/android/content/pm/PackageManager.java
+@@ -52,6 +52,7 @@
+ import android.compat.annotation.EnabledSince;
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.content.ComponentName;
++import android.content.ContentProvider;
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.IntentFilter;
+@@ -6556,7 +6557,7 @@
+     @NonNull
+     public ProviderInfo getProviderInfo(@NonNull ComponentName component,
+             int flags) throws NameNotFoundException {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        return getProviderInfo(component, ComponentInfoFlags.of(flags));
+     }
+ 
+     /**
+@@ -6565,8 +6566,14 @@
+     @NonNull
+     public ProviderInfo getProviderInfo(@NonNull ComponentName component,
+             @NonNull ComponentInfoFlags flags) throws NameNotFoundException {
+-        throw new UnsupportedOperationException(
+-                "getProviderInfo not implemented in subclass");
++        for (ProviderInfo provider : embeddedProviders) {
++            if (provider.packageName.equals(component.getPackageName())
++                    && provider.name.equals(component.getClassName())
++                    && (provider.enabled || (flags.getValue() & MATCH_DISABLED_COMPONENTS) != 0)) {
++                return embeddedProviderInfo(provider, flags.getValue());
++            }
++        }
++        throw new NameNotFoundException(component.toShortString());
+     }
+ 
+     /**
+@@ -8505,7 +8512,7 @@
+     @Nullable
+     public ProviderInfo resolveContentProvider(@NonNull String authority,
+             int flags) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        return resolveContentProvider(authority, ComponentInfoFlags.of(flags));
+     }
+ 
+     /**
+@@ -8514,8 +8521,13 @@
+     @Nullable
+     public ProviderInfo resolveContentProvider(@NonNull String authority,
+             @NonNull ComponentInfoFlags flags) {
+-        throw new UnsupportedOperationException(
+-                "resolveContentProvider not implemented in subclass");
++        for (ProviderInfo provider : embeddedProviders) {
++            if (!provider.enabled && (flags.getValue() & MATCH_DISABLED_COMPONENTS) == 0) continue;
++            for (String entry : provider.authority.split(";")) {
++                if (entry.equals(authority)) return embeddedProviderInfo(provider, flags.getValue());
++            }
++        }
++        return null;
+     }
+ 
+     /**
+@@ -11999,6 +12011,44 @@
+ 
+     private java.util.Map<String, ServiceInfo> localServices = java.util.Collections.emptyMap();
+     private PackageInfo localVersion;
++    private List<ProviderInfo> embeddedProviders = java.util.Collections.emptyList();
++    private final java.util.ArrayList<ContentProvider> installedProviders = new java.util.ArrayList<>();
++
++    /** @hide */
++    public void installEmbeddedProviders(Context application) {
++        final ApplicationInfo info = application.getApplicationInfo();
++        for (android.content.res.ApkAssets apk : application.getAssets().getApkAssets()) {
++            if (!info.sourceDir.equals(apk.getAssetPath())) continue;
++            try (android.content.res.XmlResourceParser xml = apk.openXml("AndroidManifest.xml")) {
++                embeddedProviders = com.android.internal.pm.pkg.component.ParsedProviderUtils
++                        .parseEmbeddedProviders(info, application.getResources(), xml);
++            } catch (java.io.IOException | org.xmlpull.v1.XmlPullParserException error) {
++                throw new IllegalStateException("Cannot read provider declarations for " + info.packageName, error);
++            }
++            break;
++        }
++
++        // Publish the metadata before any provider looks itself up from attachInfo or onCreate.
++        for (ProviderInfo provider : embeddedProviders) {
++            if (!provider.enabled || !info.processName.equals(provider.processName)) continue;
++            try {
++                ContentProvider instance = ContentProvider.class.cast(
++                        Class.forName(provider.name).getDeclaredConstructor().newInstance());
++                instance.attachInfo(application, provider);
++                installedProviders.add(instance);
++            } catch (ReflectiveOperationException error) {
++                throw new IllegalStateException("Cannot instantiate provider " + provider.name, error);
++            }
++        }
++    }
++
++    private static ProviderInfo embeddedProviderInfo(ProviderInfo provider, long flags) {
++        ProviderInfo result = new ProviderInfo(provider);
++        result.metaData = (flags & GET_META_DATA) != 0 && provider.metaData != null
++                ? new Bundle(provider.metaData) : null;
++        return result;
++    }
++
+     private Context context;
+     private PackageInstaller installer;
+     private final HashMap<List<Object>, Resources> packageResources = new HashMap<>();

@@ -1,0 +1,21 @@
+--- a/libcore/ojluni/src/main/java/java/lang/ThreadGroup.java
++++ b/libcore/ojluni/src/main/java/java/lang/ThreadGroup.java
+@@ -1096,10 +1096,8 @@
+                 Thread.getDefaultUncaughtExceptionHandler();
+             if (ueh != null) {
+                 ueh.uncaughtException(t, e);
+-            } else if (!(e instanceof ThreadDeath)) {
+-                System.err.print("Exception in thread \""
+-                                 + t.getName() + "\" ");
+-                e.printStackTrace(System.err);
++            } else {
++                reportEmbeddedUncaughtException(e);
+             }
+         }
+     }
+@@ -1128,4 +1126,5 @@
+     public String toString() {
+         return getClass().getName() + "[name=" + getName() + ",maxpri=" + maxPriority + "]";
+     }
++    private static native void reportEmbeddedUncaughtException(Throwable error);
+ }

@@ -1,0 +1,767 @@
+--- a/libcore/ojluni/src/main/java/sun/misc/Unsafe.java
++++ b/libcore/ojluni/src/main/java/sun/misc/Unsafe.java
+@@ -25,15 +25,7 @@
+ 
+ package sun.misc;
+ 
+-import dalvik.annotation.compat.VersionCodes;
+-import dalvik.annotation.optimization.FastNative;
+-import dalvik.system.VMRuntime;
+-
+-import jdk.internal.vm.annotation.IntrinsicCandidate;
+-import sun.reflect.Reflection;
+-
+ import java.lang.reflect.Field;
+-import java.lang.reflect.Modifier;
+ 
+ /**
+  * A collection of methods for performing low-level, unsafe operations.
+@@ -48,7 +40,6 @@
+     private static final Unsafe THE_ONE = new Unsafe();
+ 
+     private static final Unsafe theUnsafe = THE_ONE;
+-    private static final jdk.internal.misc.Unsafe theInternalUnsafe = jdk.internal.misc.Unsafe.getUnsafe();
+     public static final int INVALID_FIELD_OFFSET   = -1;
+ 
+     /**
+@@ -60,86 +51,13 @@
+      * Gets the unique instance of this class. This is only allowed in
+      * very limited situations.
+      */
+-    public static Unsafe getUnsafe() {
+-        Class<?> caller = Reflection.getCallerClass();
+-        /*
+-         * Only code on the bootclasspath is allowed to get at the
+-         * Unsafe instance.
+-         */
+-        ClassLoader calling = (caller == null) ? null : caller.getClassLoader();
+-        if ((calling != null) && (calling != Unsafe.class.getClassLoader())) {
+-            throw new SecurityException("Unsafe access denied");
+-        }
+-
+-        return THE_ONE;
+-    }
+-
+-    // Android-added: allow existing apps to get offset of record fields for compat purposes.
+-    private static boolean forbidObtainingRecordFieldOffsets() {
+-        return VMRuntime.getSdkVersion() > VersionCodes.BAKLAVA &&
+-                VMRuntime.getRuntime().getTargetSdkVersion() > VersionCodes.BAKLAVA;
+-    }
+-
+-    /**
+-     * Gets the raw byte offset from the start of an object's memory to
+-     * the memory used to store the indicated instance field.
+-     *
+-     * @param f non-{@code null}; the field in question, which must be an
+-     * instance field
+-     * @return the offset to the field
+-     */
+-    public long objectFieldOffset(Field f) {
+-        if (f == null) {
+-            throw new NullPointerException();
+-        }
+-        Class<?> declaringClass = f.getDeclaringClass();
+-        if (Modifier.isStatic(f.getModifiers())) {
+-            throw new IllegalArgumentException("valid for instance fields only");
+-        }
+-        if (declaringClass.isHidden()) {
+-            throw new UnsupportedOperationException("can't get field offset on a hidden class: " + f);
+-        }
+-        // Android-changed: compat check added.
+-        // if (declaringClass.isRecord()) {
+-        if (forbidObtainingRecordFieldOffsets() && declaringClass.isRecord()) {
+-            throw new UnsupportedOperationException("can't get field offset on a record class: " + f);
+-        }
+-        return theInternalUnsafe.objectFieldOffset(f);
+-    }
+-
+-    /**
+-     * Gets the offset from the start of an array object's memory to
+-     * the memory used to store its initial (zeroeth) element.
+-     *
+-     * @param clazz non-{@code null}; class in question; must be an array class
+-     * @return the offset to the initial element
+-     */
+-    public int arrayBaseOffset(Class clazz) {
+-        Class<?> component = clazz.getComponentType();
+-        if (component == null) {
+-            throw new IllegalArgumentException("Valid for array classes only: " + clazz);
+-        }
+-        return getArrayBaseOffsetForComponentType(component);
+-    }
+-
+-    /**
+-     * Gets the size of each element of the given array class.
+-     *
+-     * @param clazz non-{@code null}; class in question; must be an array class
+-     * @return &gt; 0; the size of each element of the array
+-     */
+-    public int arrayIndexScale(Class clazz) {
+-      Class<?> component = clazz.getComponentType();
+-      if (component == null) {
+-          throw new IllegalArgumentException("Valid for array classes only: " + clazz);
+-      }
+-      return getArrayIndexScaleForComponentType(component);
+-    }
+-
+-    @FastNative
+-    private static native int getArrayBaseOffsetForComponentType(Class component_class);
+-    @FastNative
+-    private static native int getArrayIndexScaleForComponentType(Class component_class);
++    public static native Unsafe getUnsafe();
++
++    public native long objectFieldOffset(Field f);
++
++    public native int arrayBaseOffset(Class clazz);
++
++    public native int arrayIndexScale(Class clazz);
+ 
+     /**
+      * Performs a compare-and-set operation on an {@code int}
+@@ -153,7 +71,6 @@
+      * @return {@code true} if the new value was in fact stored, and
+      * {@code false} if not
+      */
+-    @FastNative
+     public native boolean compareAndSwapInt(Object obj, long offset,
+             int expectedValue, int newValue);
+ 
+@@ -169,7 +86,6 @@
+      * @return {@code true} if the new value was in fact stored, and
+      * {@code false} if not
+      */
+-    @FastNative
+     public native boolean compareAndSwapLong(Object obj, long offset,
+             long expectedValue, long newValue);
+ 
+@@ -185,7 +101,6 @@
+      * @return {@code true} if the new value was in fact stored, and
+      * {@code false} if not
+      */
+-    @FastNative
+     public native boolean compareAndSwapObject(Object obj, long offset,
+             Object expectedValue, Object newValue);
+ 
+@@ -197,7 +112,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @return the retrieved value
+      */
+-    @FastNative
+     public native int getIntVolatile(Object obj, long offset);
+ 
+     /**
+@@ -208,7 +122,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @param newValue the value to store
+      */
+-    @FastNative
+     public native void putIntVolatile(Object obj, long offset, int newValue);
+ 
+     /**
+@@ -219,7 +132,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @return the retrieved value
+      */
+-    @FastNative
+     public native long getLongVolatile(Object obj, long offset);
+ 
+     /**
+@@ -230,7 +142,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @param newValue the value to store
+      */
+-    @FastNative
+     public native void putLongVolatile(Object obj, long offset, long newValue);
+ 
+     /**
+@@ -241,7 +152,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @return the retrieved value
+      */
+-    @FastNative
+     public native Object getObjectVolatile(Object obj, long offset);
+ 
+     /**
+@@ -252,7 +162,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @param newValue the value to store
+      */
+-    @FastNative
+     public native void putObjectVolatile(Object obj, long offset,
+             Object newValue);
+ 
+@@ -263,7 +172,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @return the retrieved value
+      */
+-    @FastNative
+     public native int getInt(Object obj, long offset);
+ 
+     /**
+@@ -273,7 +181,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @param newValue the value to store
+      */
+-    @FastNative
+     public native void putInt(Object obj, long offset, int newValue);
+ 
+     /**
+@@ -283,7 +190,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @param newValue the value to store
+      */
+-    @FastNative
+     public native void putOrderedInt(Object obj, long offset, int newValue);
+ 
+     /**
+@@ -293,7 +199,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @return the retrieved value
+      */
+-    @FastNative
+     public native long getLong(Object obj, long offset);
+ 
+     /**
+@@ -303,7 +208,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @param newValue the value to store
+      */
+-    @FastNative
+     public native void putLong(Object obj, long offset, long newValue);
+ 
+     /**
+@@ -313,7 +217,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @param newValue the value to store
+      */
+-    @FastNative
+     public native void putOrderedLong(Object obj, long offset, long newValue);
+ 
+     /**
+@@ -323,7 +226,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @return the retrieved value
+      */
+-    @FastNative
+     public native Object getObject(Object obj, long offset);
+ 
+     /**
+@@ -333,7 +235,6 @@
+      * @param offset offset to the field within {@code obj}
+      * @param newValue the value to store
+      */
+-    @FastNative
+     public native void putObject(Object obj, long offset, Object newValue);
+ 
+     /**
+@@ -343,489 +244,8 @@
+      * @param offset offset to the field within {@code obj}
+      * @param newValue the value to store
+      */
+-    @FastNative
+     public native void putOrderedObject(Object obj, long offset,
+             Object newValue);
+-
+-    /**
+-     * Gets a {@code boolean} field from the given object.
+-     *
+-     * @param obj non-{@code null}; object containing boolean field
+-     * @param offset offset to the field within {@code obj}
+-     * @return the retrieved value
+-     */
+-    @FastNative
+-    public native boolean getBoolean(Object obj, long offset);
+-
+-    /**
+-     * Stores a {@code boolean} field into the given object.
+-     *
+-     * @param obj non-{@code null}; object containing boolean field
+-     * @param offset offset to the field within {@code obj}
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putBoolean(Object obj, long offset, boolean newValue);
+-
+-    /**
+-     * Gets a {@code byte} field from the given object.
+-     *
+-     * @param obj non-{@code null}; object containing byte field
+-     * @param offset offset to the field within {@code obj}
+-     * @return the retrieved value
+-     */
+-    @FastNative
+-    public native byte getByte(Object obj, long offset);
+-
+-    /**
+-     * Stores a {@code byte} field into the given object.
+-     *
+-     * @param obj non-{@code null}; object containing byte field
+-     * @param offset offset to the field within {@code obj}
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putByte(Object obj, long offset, byte newValue);
+-
+-    /**
+-     * Gets a {@code char} field from the given object.
+-     *
+-     * @param obj non-{@code null}; object containing char field
+-     * @param offset offset to the field within {@code obj}
+-     * @return the retrieved value
+-     */
+-    @FastNative
+-    public native char getChar(Object obj, long offset);
+-
+-    /**
+-     * Stores a {@code char} field into the given object.
+-     *
+-     * @param obj non-{@code null}; object containing char field
+-     * @param offset offset to the field within {@code obj}
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putChar(Object obj, long offset, char newValue);
+-
+-    /**
+-     * Gets a {@code short} field from the given object.
+-     *
+-     * @param obj non-{@code null}; object containing short field
+-     * @param offset offset to the field within {@code obj}
+-     * @return the retrieved value
+-     */
+-    @FastNative
+-    public native short getShort(Object obj, long offset);
+-
+-    /**
+-     * Stores a {@code short} field into the given object.
+-     *
+-     * @param obj non-{@code null}; object containing short field
+-     * @param offset offset to the field within {@code obj}
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putShort(Object obj, long offset, short newValue);
+-
+-    /**
+-     * Gets a {@code float} field from the given object.
+-     *
+-     * @param obj non-{@code null}; object containing float field
+-     * @param offset offset to the field within {@code obj}
+-     * @return the retrieved value
+-     */
+-    @FastNative
+-    public native float getFloat(Object obj, long offset);
+-
+-    /**
+-     * Stores a {@code float} field into the given object.
+-     *
+-     * @param obj non-{@code null}; object containing float field
+-     * @param offset offset to the field within {@code obj}
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putFloat(Object obj, long offset, float newValue);
+-
+-    /**
+-     * Gets a {@code double} field from the given object.
+-     *
+-     * @param obj non-{@code null}; object containing double field
+-     * @param offset offset to the field within {@code obj}
+-     * @return the retrieved value
+-     */
+-    @FastNative
+-    public native double getDouble(Object obj, long offset);
+-
+-    /**
+-     * Stores a {@code double} field into the given object.
+-     *
+-     * @param obj non-{@code null}; object containing double field
+-     * @param offset offset to the field within {@code obj}
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putDouble(Object obj, long offset, double newValue);
+-
+-    /**
+-     * Parks the calling thread for the specified amount of time,
+-     * unless the "permit" for the thread is already available (due to
+-     * a previous call to {@link #unpark}. This method may also return
+-     * spuriously (that is, without the thread being told to unpark
+-     * and without the indicated amount of time elapsing).
+-     *
+-     * <p>See {@link java.util.concurrent.locks.LockSupport} for more
+-     * in-depth information of the behavior of this method.</p>
+-     *
+-     * @param absolute whether the given time value is absolute
+-     * milliseconds-since-the-epoch ({@code true}) or relative
+-     * nanoseconds-from-now ({@code false})
+-     * @param time the (absolute millis or relative nanos) time value
+-     */
+-
+-    public native void park(boolean absolute, long time);
+-    /**
+-     * Unparks the given object, which must be a {@link Thread}.
+-     *
+-     * <p>See {@link java.util.concurrent.locks.LockSupport} for more
+-     * in-depth information of the behavior of this method.</p>
+-     *
+-     * @param obj non-{@code null}; the object to unpark
+-     */
+-    @FastNative
+-    public native void unpark(Object obj);
+-
+-    /**
+-     * Allocates an instance of the given class without running the constructor.
+-     * The class' <clinit> will be run, if necessary.
+-     */
+-    public native Object allocateInstance(Class<?> c);
+-
+-    /**
+-     * Gets the size of the address value, in bytes.
+-     *
+-     * @return the size of the address, in bytes
+-     */
+-    @FastNative
+-    public native int addressSize();
+-
+-    /**
+-     * Gets the size of the memory page, in bytes.
+-     *
+-     * @return the size of the page
+-     */
+-    @FastNative
+-    public native int pageSize();
+-
+-    /**
+-     * Allocates a memory block of size {@code bytes}.
+-     *
+-     * @param bytes size of the memory block
+-     * @return address of the allocated memory
+-     */
+-    @FastNative
+-    public native long allocateMemory(long bytes);
+-
+-    /**
+-     * Frees previously allocated memory at given address.
+-     *
+-     * @param address address of the freed memory
+-     */
+-    @FastNative
+-    public native void freeMemory(long address);
+-
+-    /**
+-     * Fills given memory block with a given value.
+-     *
+-     * @param address address of the memoory block
+-     * @param bytes length of the memory block, in bytes
+-     * @param value fills memory with this value
+-     */
+-    @FastNative
+-    public native void setMemory(long address, long bytes, byte value);
+-
+-    /**
+-     * Gets {@code byte} from given address in memory.
+-     *
+-     * @param address address in memory
+-     * @return {@code byte} value
+-     */
+-    @FastNative
+-    public native byte getByte(long address);
+-
+-    /**
+-     * Stores a {@code byte} into the given memory address.
+-     *
+-     * @param address address in memory where to store the value
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putByte(long address, byte x);
+-
+-    /**
+-     * Gets {@code short} from given address in memory.
+-     *
+-     * @param address address in memory
+-     * @return {@code short} value
+-     */
+-    @FastNative
+-    public native short getShort(long address);
+-
+-    /**
+-     * Stores a {@code short} into the given memory address.
+-     *
+-     * @param address address in memory where to store the value
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putShort(long address, short x);
+-
+-    /**
+-     * Gets {@code char} from given address in memory.
+-     *
+-     * @param address address in memory
+-     * @return {@code char} value
+-     */
+-    @FastNative
+-    public native char getChar(long address);
+-
+-    /**
+-     * Stores a {@code char} into the given memory address.
+-     *
+-     * @param address address in memory where to store the value
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putChar(long address, char x);
+-
+-    /**
+-     * Gets {@code int} from given address in memory.
+-     *
+-     * @param address address in memory
+-     * @return {@code int} value
+-     */
+-    @FastNative
+-    public native int getInt(long address);
+-
+-    /**
+-     * Stores a {@code int} into the given memory address.
+-     *
+-     * @param address address in memory where to store the value
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putInt(long address, int x);
+-
+-
+-    /**
+-     * Gets {@code long} from given address in memory.
+-     *
+-     * @param address address in memory
+-     * @return {@code long} value
+-     */
+-    @FastNative
+-    public native long getLong(long address);
+-
+-    /**
+-     * Stores a {@code long} into the given memory address.
+-     *
+-     * @param address address in memory where to store the value
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putLong(long address, long x);
+-
+-    /**
+-     * Gets {@code long} from given address in memory.
+-     *
+-     * @param address address in memory
+-     * @return {@code long} value
+-     */
+-    @FastNative
+-    public native float getFloat(long address);
+-
+-    /**
+-     * Stores a {@code float} into the given memory address.
+-     *
+-     * @param address address in memory where to store the value
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putFloat(long address, float x);
+-
+-    /**
+-     * Gets {@code double} from given address in memory.
+-     *
+-     * @param address address in memory
+-     * @return {@code double} value
+-     */
+-    @FastNative
+-    public native double getDouble(long address);
+-
+-    /**
+-     * Stores a {@code double} into the given memory address.
+-     *
+-     * @param address address in memory where to store the value
+-     * @param newValue the value to store
+-     */
+-    @FastNative
+-    public native void putDouble(long address, double x);
+-
+-    /**
+-     * Copies given memory block to a primitive array.
+-     *
+-     * @param srcAddr address to copy memory from
+-     * @param dst address to copy memory to
+-     * @param dstOffset offset in {@code dst}
+-     * @param bytes number of bytes to copy
+-     */
+-    @FastNative
+-    public native void copyMemoryToPrimitiveArray(long srcAddr,
+-            Object dst, long dstOffset, long bytes);
+-
+-    /**
+-     * Treat given primitive array as a continuous memory block and
+-     * copy it to given memory address.
+-     *
+-     * @param src primitive array to copy data from
+-     * @param srcOffset offset in {@code src} to copy from
+-     * @param dstAddr memory address to copy data to
+-     * @param bytes number of bytes to copy
+-     */
+-    @FastNative
+-    public native void copyMemoryFromPrimitiveArray(Object src, long srcOffset,
+-            long dstAddr, long bytes);
+-
+-    /**
+-     * Sets all bytes in a given block of memory to a copy of another block.
+-     *
+-     * @param srcAddr address of the source memory to be copied from
+-     * @param dstAddr address of the destination memory to copy to
+-     * @param bytes number of bytes to copy
+-     */
+-    @FastNative
+-    public native void copyMemory(long srcAddr, long dstAddr, long bytes);
+-
+-
+-    // The following contain CAS-based Java implementations used on
+-    // platforms not supporting native instructions
+-
+-    /**
+-     * Atomically adds the given value to the current value of a field
+-     * or array element within the given object {@code o}
+-     * at the given {@code offset}.
+-     *
+-     * @param o object/array to update the field/element in
+-     * @param offset field/element offset
+-     * @param delta the value to add
+-     * @return the previous value
+-     * @since 1.8
+-     */
+-    @IntrinsicCandidate
+-    public final int getAndAddInt(Object o, long offset, int delta) {
+-        int v;
+-        do {
+-            v = getIntVolatile(o, offset);
+-        } while (!compareAndSwapInt(o, offset, v, v + delta));
+-        return v;
+-    }
+-
+-    /**
+-     * Atomically adds the given value to the current value of a field
+-     * or array element within the given object {@code o}
+-     * at the given {@code offset}.
+-     *
+-     * @param o object/array to update the field/element in
+-     * @param offset field/element offset
+-     * @param delta the value to add
+-     * @return the previous value
+-     * @since 1.8
+-     */
+-    @IntrinsicCandidate
+-    public final long getAndAddLong(Object o, long offset, long delta) {
+-        long v;
+-        do {
+-            v = getLongVolatile(o, offset);
+-        } while (!compareAndSwapLong(o, offset, v, v + delta));
+-        return v;
+-    }
+-
+-    /**
+-     * Atomically exchanges the given value with the current value of
+-     * a field or array element within the given object {@code o}
+-     * at the given {@code offset}.
+-     *
+-     * @param o object/array to update the field/element in
+-     * @param offset field/element offset
+-     * @param newValue new value
+-     * @return the previous value
+-     * @since 1.8
+-     */
+-    @IntrinsicCandidate
+-    public final int getAndSetInt(Object o, long offset, int newValue) {
+-        int v;
+-        do {
+-            v = getIntVolatile(o, offset);
+-        } while (!compareAndSwapInt(o, offset, v, newValue));
+-        return v;
+-    }
+-
+-    /**
+-     * Atomically exchanges the given value with the current value of
+-     * a field or array element within the given object {@code o}
+-     * at the given {@code offset}.
+-     *
+-     * @param o object/array to update the field/element in
+-     * @param offset field/element offset
+-     * @param newValue new value
+-     * @return the previous value
+-     * @since 1.8
+-     */
+-    @IntrinsicCandidate
+-    public final long getAndSetLong(Object o, long offset, long newValue) {
+-        long v;
+-        do {
+-            v = getLongVolatile(o, offset);
+-        } while (!compareAndSwapLong(o, offset, v, newValue));
+-        return v;
+-    }
+-
+-    /**
+-     * Atomically exchanges the given reference value with the current
+-     * reference value of a field or array element within the given
+-     * object {@code o} at the given {@code offset}.
+-     *
+-     * @param o object/array to update the field/element in
+-     * @param offset field/element offset
+-     * @param newValue new value
+-     * @return the previous value
+-     * @since 1.8
+-     */
+-    @IntrinsicCandidate
+-    public final Object getAndSetObject(Object o, long offset, Object newValue) {
+-        Object v;
+-        do {
+-            v = getObjectVolatile(o, offset);
+-        } while (!compareAndSwapObject(o, offset, v, newValue));
+-        return v;
+-    }
+-
+-
+-    /**
+-     * Ensures that loads before the fence will not be reordered with loads and
+-     * stores after the fence; a "LoadLoad plus LoadStore barrier".
+-     *
+-     * Corresponds to C11 atomic_thread_fence(memory_order_acquire)
+-     * (an "acquire fence").
+-     *
+-     * A pure LoadLoad fence is not provided, since the addition of LoadStore
+-     * is almost always desired, and most current hardware instructions that
+-     * provide a LoadLoad barrier also provide a LoadStore barrier for free.
+-     * @since 1.8
+-     */
+-    @IntrinsicCandidate
+-    @FastNative
+-    public native void loadFence();
+ 
+     /**
+      * Ensures that loads and stores before the fence will not be reordered with
+@@ -839,20 +259,5 @@
+      * provide a StoreStore barrier also provide a LoadStore barrier for free.
+      * @since 1.8
+      */
+-    @IntrinsicCandidate
+-    @FastNative
+     public native void storeFence();
+-
+-    /**
+-     * Ensures that loads and stores before the fence will not be reordered
+-     * with loads and stores after the fence.  Implies the effects of both
+-     * loadFence() and storeFence(), and in addition, the effect of a StoreLoad
+-     * barrier.
+-     *
+-     * Corresponds to C11 atomic_thread_fence(memory_order_seq_cst).
+-     * @since 1.8
+-     */
+-    @IntrinsicCandidate
+-    @FastNative
+-    public native void fullFence();
+ }
