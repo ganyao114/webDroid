@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -34,24 +35,32 @@ void Require(bool condition, std::string_view message) {
         throw std::runtime_error(std::string(message));
 }
 
-void AuditFrameworkNatives(Vm& vm) {
+void AuditFrameworkNatives(Vm& vm, std::string_view upstream, std::string_view fallback) {
     auto& linker = wa::interp::JniBridge::From(vm.JniEnv()).Vm().linker;
-    const auto* graphics_dex = linker.Resolve("Landroid/graphics/Bitmap;").dex;
-    Require(graphics_dex != nullptr, "The JNI audit requires the upstream framework DEX");
     const auto archive = [](std::string_view name) { return name.substr(0, name.rfind('!')); };
-    const auto primary = archive(graphics_dex->GetLocation());
+    std::unordered_set<std::string_view> classes;
+    uint32_t primary_methods = 0;
     size_t declarations = 0;
     std::string missing;
     for (const auto& dex : linker.LoadedDexFiles()) {
-        if (archive(dex->GetLocation()) != primary) continue;
+        const std::string_view location = dex->GetLocation();
+        const auto owner = archive(location);
+        if (owner != upstream && owner != fallback) continue;
+        if (owner == upstream && (location == owner || location.ends_with("!classes.dex"))) {
+            primary_methods = dex->NumMethodIds();
+        }
         for (uint32_t i = 0; i < dex->NumClassDefs(); ++i) {
             const auto& definition = dex->GetClassDef(i);
             const auto name = dex->GetTypeDescriptorView(definition.class_idx_);
+            Require(classes.insert(name).second, "Duplicate framework DEX class " + std::string(name));
+            if (owner != upstream) continue;
             const bool art_boot = name == "Ljava/io/FileInputStream;" || name == "Ljava/io/FileOutputStream;" ||
                 name == "Ljava/io/RandomAccessFile;" || name == "Ljava/util/regex/Pattern;" ||
-                name == "Ljava/lang/reflect/Field;" || name == "Ljava/security/MessageDigest$EmbeddedSha1;" ||
-                name == "Lsun/misc/Unsafe;" || name == "Ljava/lang/ThreadGroup;";
-            if (!art_boot && !name.starts_with("Landroid/graphics/") &&
+                name == "Ljava/lang/reflect/Field;" || name == "Ljava/security/MessageDigest$EmbeddedDigest;" ||
+                name == "Lsun/misc/Unsafe;" || name == "Ljava/lang/ThreadGroup;" ||
+                name == "Ljava/util/zip/CRC32;" || name == "Landroid/net/LocalSocketImpl;";
+            const bool package_manager = name == "Landroid/content/pm/PackageManager;";
+            if (!art_boot && !package_manager && !name.starts_with("Landroid/graphics/") &&
                 !name.starts_with("Lcom/android/internal/util/") &&
                 name != "Landroid/text/AndroidCharacter;" && name != "Landroid/text/Hyphenator;" &&
                 name != "Landroid/view/MotionEvent;" && name != "Landroid/view/KeyEvent;")
@@ -72,9 +81,12 @@ void AuditFrameworkNatives(Vm& vm) {
             }
         }
     }
+    Require(primary_methods > 0 && primary_methods <= 65'535,
+            "Primary framework DEX method IDs " + std::to_string(primary_methods));
     Require(declarations != 0, "The upstream DEX declares native methods");
     Require(missing.empty(), "Unregistered upstream JNI declarations\n" + missing);
-    std::cout << "Audited " << declarations << " upstream framework JNI declarations, 0 unbound native methods\n";
+    std::cout << "Audited " << declarations << " upstream framework JNI declarations, 0 unbound native methods, "
+              << "0 duplicate DEX classes, " << primary_methods << " primary DEX method IDs\n";
 }
 
 std::vector<uint8_t> ExtractDex(const char* apk) {
@@ -359,19 +371,33 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     vm.LoadDexFile(upstream);
     vm.LoadFallbackDexFile(framework);
     vm.LoadDexFile(std::string(apk) + "!classes.dex", ExtractDex(apk));
+    vm.SetSystemProperty("org.wasmandroid.foreground", "true");
     std::unique_ptr<wa_sf_t, decltype(&wa_sf_destroy)> sf(wa_sf_create(), wa_sf_destroy);
     Require(sf != nullptr, "SurfaceFlinger allocation");
     wa::ui_jni::UiBridge bridge;
     bridge.BindSurfaceFlinger(sf.get(), kLayer);
     bridge.RegisterNatives(vm);
-    AuditFrameworkNatives(vm);
+    AuditFrameworkNatives(vm, upstream, framework);
+    {
+        wa::interp::ScopedHandleScope scope(vm);
+        auto* local = scope.Hold(vm.NewObject("Ljava/lang/ThreadLocal;", "()V"));
+        Require(!vm.CallVirtual(local, "get", "()Ljava/lang/Object;").ref(),
+                "ThreadLocal initializes the current thread before its first use");
+    }
     const std::array<uint8_t, 4> mounted{0x10, 0x23, 0x45, 0x67};
     vm.MountReadOnlyFile("/data/mounted.bin", mounted);
     Require(ReadInt(vm, "verifyFileStreams") == 1, "Guest stream and read-only file operations");
     Require(ReadInt(vm, "verifyReadWriteLock") == 1, "Cooperative locks preserve hold counts and park permits");
+    Require(ReadInt(vm, "verifyForkJoin") == 1, "ForkJoin workers join, complete, and compensate for blocking");
+    Require(ReadInt(vm, "verifyLocalSockets") == 1, "Guest local sockets bind, transfer streams, and release addresses");
+    Require(ReadInt(vm, "verifyCrc32") == 1, "Upstream CRC32 handles single bytes and read-only buffers");
     Require(ReadInt(vm, "verifyRegex") == 1, "Upstream regex captures and Unicode classes use the guest backend");
     Require(ReadInt(vm, "verifyFieldReflection") == 1, "Field reflection reads DEX metadata and respects final fields");
-    Require(ReadInt(vm, "verifyDigest") == 1, "Upstream digest API uses the guest SHA-1 implementation");
+    vm.SetAndroidTargetSdkVersion(34);
+    Require(ReadInt(vm, "verifyLegacyFieldReflection") == 1, "Legacy Android apps can reflectively update static final fields");
+    vm.SetAndroidTargetSdkVersion(0);
+    Require(ReadInt(vm, "verifyBigInteger") == 1, "BigInteger performs pure Java multiplication, division and modular exponentiation");
+    Require(ReadInt(vm, "verifyDigest") == 1, "Guest digest API matches SHA-1, MD5, and SHA-256 test vectors");
     Require(ReadInt(vm, "verifyJson") == 1, "Upstream JSON serializes and reads nested values");
     Require(ReadInt(vm, "verifyEmbeddedUrl") == 1, "URL resolves paths and reports unavailable transports as I/O errors");
 
@@ -632,12 +658,13 @@ int main(int argc, char** argv) {
             << "Usage: test_aosp17_ui_framework UPSTREAM.dex CORE.dex APP.apk PLATFORM_RESOURCES.apk\n";
         return 2;
     }
-    Vm vm({.gc_interval = 137});
+    Vm vm({.gc_interval = 137, .capture_exception_stack = true});
     try {
         Run(vm, argv[1], argv[2], argv[3], argv[4]);
         return 0;
     } catch (const wa::interp::ManagedException&) {
         std::cerr << vm.ExceptionSummary() << '\n';
+        for (const auto& frame : vm.ExceptionStackTrace()) std::cerr << frame << '\n';
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
     }

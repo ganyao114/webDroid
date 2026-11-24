@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 
 namespace wa::system {
@@ -133,9 +135,7 @@ class HybridNativeRuntime {
         if (jni) {
             dbt_->bionic->read_guest_file = [&vm = jni->Vm()](std::string_view path)
                 -> std::optional<std::span<const uint8_t>> {
-                const auto file = vm.guest_files.find(path);
-                if (file == vm.guest_files.end() || !file->second || file->second->reader) return std::nullopt;
-                return file->second->bytes;
+                return vm.ReadGuestFile(path);
             };
             jni_ = std::make_unique<HybridJniBridge>(*jni, *dbt_, mmu_.get(), arch);
         }
@@ -167,6 +167,33 @@ class HybridNativeRuntime {
                               library.error.empty() ? library.java_error : library.error});
         }
         return images;
+    }
+
+    std::string ProcessMaps() const {
+        std::ostringstream text;
+        text << std::hex << std::setfill('0');
+        const auto range = [&](uint64_t address, size_t length, uint64_t offset, uint32_t prot,
+                               std::string_view path) {
+            text << std::setw(8) << address << '-' << std::setw(8) << address + length << ' '
+                 << ((prot & WA_PROT_READ) ? 'r' : '-') << ((prot & WA_PROT_WRITE) ? 'w' : '-')
+                 << ((prot & WA_PROT_EXEC) ? 'x' : '-') << "p " << std::setw(8) << offset
+                 << " 00:00 0";
+            if (!path.empty()) text << ' ' << path;
+            text << '\n';
+        };
+        for (const auto& image : dbt_->images) {
+            const auto path = apk_.path + "!/" + EntryName(arch_, image.filename);
+            for (const auto& mapping : image.mappings) {
+                const auto rounded = dbt::AlignUp(mapping.valid, WA_PAGE_SIZE);
+                if (rounded) range(mapping.address, rounded, mapping.offset, mapping.prot, path);
+                if (mapping.length > rounded)
+                    range(mapping.address + rounded, mapping.length - rounded, 0, mapping.prot, {});
+            }
+        }
+        const auto& main = dbt_->bionic->main;
+        if (main.stack_base)
+            range(main.stack_base + WA_PAGE_SIZE, main.stack_size, 0, WA_PROT_READ | WA_PROT_WRITE, "[stack]");
+        return text.str();
     }
 
     std::string LoadForJava(std::string_view name) {
@@ -552,6 +579,10 @@ class ApkNativeLibraries final : public interp::GuestNativeLibraries {
         return runtime_ ? runtime_->Images() : std::vector<interp::GuestNativeImage>{};
     }
 
+    std::string ProcessMaps() const override {
+        return runtime_ ? runtime_->ProcessMaps() : std::string{};
+    }
+
     void Shutdown() noexcept override {
         if (runtime_) runtime_->Shutdown();
     }
@@ -574,6 +605,7 @@ class ApkNativeLibraries final : public interp::GuestNativeLibraries {
 
 std::string MountGuestApkLibraries(interp::Vm& vm, const std::string& apk_path, std::string_view package) {
     auto archive = std::make_shared<ApkArchive>(apk_path);
+    vm.SetSystemProperty("java.class.path", apk_path);
     for (const auto arch : kArchitectures) {
         const auto libraries = archive->Libraries(arch);
         if (libraries.empty()) continue;
@@ -590,6 +622,7 @@ std::string MountGuestApkLibraries(interp::Vm& vm, const std::string& apk_path, 
             return std::make_unique<ApkNativeLibraries>(env, std::static_pointer_cast<const ApkArchive>(source));
         }, std::move(archive));
         vm.SetSystemProperty("os.arch", arch == WA_ARCH_ARM64 ? "aarch64" : "arm");
+        vm.SetSystemProperty("org.wasmandroid.nativeLibraryDir", dir);
         return dir;
     }
     return {};

@@ -9,12 +9,12 @@
 namespace wa::dbt {
 namespace {
 
-template <bool FromVaList> void LogPrint(wa_host_call_ctx_t& ctx) {
+template <bool FromVaList, unsigned Offset = 0> void LogPrint(wa_host_call_ctx_t& ctx) {
     const GuestMemory memory(ctx);
-    const auto tag = ctx.args[1] ? memory.String(ctx.args[1], 255, true) : "Android";
-    const auto output = FormatGuest(ctx, ctx.args[2], 3,
-                                    FromVaList ? std::optional(ctx.args[3]) : std::nullopt, 4095);
-    std::fprintf(ctx.args[0] >= 6 ? stderr : stdout, "[%s] %s\n", tag.c_str(), output.c_str());
+    const auto tag = ctx.args[Offset + 1] ? memory.String(ctx.args[Offset + 1], 255, true) : "Android";
+    const auto output = FormatGuest(ctx, ctx.args[Offset + 2], Offset + 3,
+                                    FromVaList ? std::optional(ctx.args[Offset + 3]) : std::nullopt, 4095);
+    std::fprintf(ctx.args[Offset] >= 6 ? stderr : stdout, "[%s] %s\n", tag.c_str(), output.c_str());
     ctx.ret0 = 1;
 }
 
@@ -62,6 +62,15 @@ void Abort(wa_host_call_ctx_t& ctx) {
 
 void AbortMessage(wa_host_call_ctx_t& ctx) {
     ctx.dbt->bionic->abort_message = GuestMemory(ctx).String(ctx.args[0], 4096, true);
+}
+
+void LogAssert(wa_host_call_ctx_t& ctx) {
+    const GuestMemory mem(ctx);
+    const auto tag = ctx.args[1] ? mem.String(ctx.args[1], 255, true) : "Android";
+    const auto message = ctx.args[2] ? FormatGuest(ctx, ctx.args[2], 3, std::nullopt, 4095) :
+        ctx.args[0] ? "Assertion failed: " + mem.String(ctx.args[0], 4095, true) : "Assertion failed";
+    ctx.dbt->bionic->abort_message = '[' + tag + "] " + message;
+    Abort(ctx);
 }
 
 void RegisterAtFork(wa_host_call_ctx_t&) {
@@ -121,6 +130,8 @@ void RegisterSupplementalBuiltins(wa_dbt& dbt) {
         {"__android_log_write", Dispatch<LogWrite>},
         {"__android_log_print", Dispatch<LogPrint<false>>},
         {"__android_log_vprint", Dispatch<LogPrint<true>>},
+        {"__android_log_buf_print", Dispatch<LogPrint<false, 1>>},
+        {"__android_log_assert", Dispatch<LogAssert>},
     };
     Register(dbt, "liblog.so", log);
     const Builtin libc[] = {

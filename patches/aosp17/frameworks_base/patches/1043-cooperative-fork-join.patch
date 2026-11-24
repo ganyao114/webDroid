@@ -1,0 +1,685 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinPool.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinPool.java
+@@ -36,13 +36,6 @@
+ package java.util.concurrent;
+ 
+ import java.lang.Thread.UncaughtExceptionHandler;
+-import java.lang.reflect.Field;
+-import java.security.AccessController;
+-import java.security.AccessControlContext;
+-import java.security.Permission;
+-import java.security.Permissions;
+-import java.security.PrivilegedAction;
+-import java.security.ProtectionDomain;
+ import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.Collections;
+@@ -53,9 +46,6 @@
+ import java.util.concurrent.locks.ReentrantLock;
+ import java.util.concurrent.locks.Condition;
+ 
+-import jdk.internal.access.SharedSecrets;
+-import jdk.internal.misc.Unsafe;
+-import jdk.internal.vm.SharedThreadContainer;
+ 
+ // Android-changed: Substituted @systemProperty tag with @code.
+ /**
+@@ -941,20 +931,6 @@
+ 
+     // Static utilities
+ 
+-    /**
+-     * If there is a security manager, makes sure caller has
+-     * permission to modify threads.
+-     */
+-    @SuppressWarnings("removal")
+-    private static void checkPermission() {
+-        SecurityManager security; RuntimePermission perm;
+-        if ((security = System.getSecurityManager()) != null) {
+-            if ((perm = modifyThreadPermission) == null)
+-                modifyThreadPermission = perm = // races OK
+-                    new RuntimePermission("modifyThread");
+-            security.checkPermission(perm);
+-        }
+-    }
+ 
+     // Nested classes
+ 
+@@ -991,66 +967,7 @@
+     static final class DefaultForkJoinWorkerThreadFactory
+         implements ForkJoinWorkerThreadFactory {
+         public final ForkJoinWorkerThread newThread(ForkJoinPool pool) {
+-            // Android-changed: Android has no real SecurityManager and policy.
+-            // boolean isCommon = (pool.workerNamePrefix == null);
+-            // if (isCommon && JLA.allowSecurityManager())
+-            //     return newCommonWithACC(pool);
+-            // else
+-            //     return newRegularWithACC(pool);
+-            return newRegularWithACC(pool);
+-        }
+-
+-        /*
+-         * Create and use static AccessControlContexts only if there
+-         * is a SecurityManager. (These can be removed if/when
+-         * SecurityManagers are removed from platform.) The ACCs are
+-         * immutable and equivalent even when racily initialized, so
+-         * they don't require locking, although with the chance of
+-         * needlessly duplicate construction.
+-         */
+-        @SuppressWarnings("removal")
+-        static volatile AccessControlContext regularACC, commonACC;
+-
+-        private static final JavaLangAccess JLA = SharedSecrets.getJavaLangAccess();
+-
+-        @SuppressWarnings("removal")
+-        static ForkJoinWorkerThread newRegularWithACC(ForkJoinPool pool) {
+-            AccessControlContext acc = regularACC;
+-            if (acc == null) {
+-                Permissions ps = new Permissions();
+-                ps.add(new RuntimePermission("getClassLoader"));
+-                ps.add(new RuntimePermission("setContextClassLoader"));
+-                regularACC = acc =
+-                    new AccessControlContext(new ProtectionDomain[] {
+-                            new ProtectionDomain(null, ps) });
+-            }
+-            return AccessController.doPrivileged(
+-                new PrivilegedAction<>() {
+-                    public ForkJoinWorkerThread run() {
+-                        return new ForkJoinWorkerThread(null, pool, true, false);
+-                    }}, acc);
+-        }
+-
+-        @SuppressWarnings("removal")
+-        static ForkJoinWorkerThread newCommonWithACC(ForkJoinPool pool) {
+-            AccessControlContext acc = commonACC;
+-            if (acc == null) {
+-                Permissions ps = new Permissions();
+-                ps.add(new RuntimePermission("getClassLoader"));
+-                ps.add(new RuntimePermission("setContextClassLoader"));
+-                ps.add(new RuntimePermission("modifyThread"));
+-                ps.add(new RuntimePermission("enableContextClassLoaderOverride"));
+-                ps.add(new RuntimePermission("modifyThreadGroup"));
+-                commonACC = acc =
+-                    new AccessControlContext(new ProtectionDomain[] {
+-                            new ProtectionDomain(null, ps) });
+-            }
+-            return AccessController.doPrivileged(
+-                new PrivilegedAction<>() {
+-                    public ForkJoinWorkerThread run() {
+-                        return new ForkJoinWorkerThread.
+-                            InnocuousForkJoinWorkerThread(pool);
+-                    }}, acc);
++            return new ForkJoinWorkerThread(null, pool, true, false);
+         }
+     }
+ 
+@@ -1066,41 +983,35 @@
+         final ForkJoinWorkerThread owner; // owning thread or null if shared
+ 
+         // fields otherwise causing more unnecessary false-sharing cache misses
+-        @jdk.internal.vm.annotation.Contended("w")
+         int top;                   // index of next slot for push
+-        @jdk.internal.vm.annotation.Contended("w")
+         volatile int access;       // values 0, 1 (locked), PARKED, STOP
+-        @jdk.internal.vm.annotation.Contended("w")
+         volatile int phase;        // versioned, negative if inactive
+-        @jdk.internal.vm.annotation.Contended("w")
+         volatile int source;       // source queue id in topLevelExec
+-        @jdk.internal.vm.annotation.Contended("w")
+         int nsteals;               // number of steals from other queues
+ 
+-        // Support for atomic operations
+-        private static final Unsafe U;
+-        private static final long ACCESS;
+-        private static final long PHASE;
+-        private static final long ABASE;
+-        private static final int  ASHIFT;
+-
++        // Guest workers only switch at explicit scheduler calls. Queue field
++        // and slot updates below run without yielding.
+         static ForkJoinTask<?> getAndClearSlot(ForkJoinTask<?>[] a, int i) {
+-            return (ForkJoinTask<?>)
+-                U.getAndSetReference(a, ((long)i << ASHIFT) + ABASE, null);
++            ForkJoinTask<?> task = a[i];
++            a[i] = null;
++            return task;
+         }
+         static boolean casSlotToNull(ForkJoinTask<?>[] a, int i,
+                                      ForkJoinTask<?> c) {
+-            return U.compareAndSetReference(a, ((long)i << ASHIFT) + ABASE,
+-                                            c, null);
++            if (a[i] != c) return false;
++            a[i] = null;
++            return true;
+         }
+         final void forcePhaseActive() {    // clear sign bit
+-            U.getAndBitwiseAndInt(this, PHASE, 0x7fffffff);
++            phase &= 0x7fffffff;
+         }
+         final int getAndSetAccess(int v) {
+-            return U.getAndSetInt(this, ACCESS, v);
++            int previous = access;
++            access = v;
++            return previous;
+         }
+         final void releaseAccess() {
+-            U.putIntRelease(this, ACCESS, 0);
++            access = 0;
+         }
+ 
+         /**
+@@ -1192,12 +1103,10 @@
+                     }
+                     else {
+                         while (b == (b = base)) {
+-                            U.loadFence();
+                             Thread.onSpinWait(); // spin to reduce memory traffic
+                         }
+                     }
+                 } while (p - b > 0);
+-                U.storeStoreFence(); // for timely index updates
+             }
+             return t;
+         }
+@@ -1265,12 +1174,10 @@
+                     break;                        // currently impossible
+                 int k = (cap - 1) & b, nb = b + 1, nk = (cap - 1) & nb;
+                 ForkJoinTask<?> t = a[k];
+-                U.loadFence();                    // for re-reads
+                 if (b != (b = base))              // inconsistent
+                     ;
+                 else if (t != null && casSlotToNull(a, k, t)) {
+                     base = nb;
+-                    U.storeFence();
+                     if (pool != null && a[nk] != null)
+                         pool.signalWork();        // propagate
+                     return t;
+@@ -1294,13 +1201,11 @@
+                 for (;;) {
+                     int k = (cap - 1) & b, nb = b + 1;
+                     ForkJoinTask<?> t = a[k];
+-                    U.loadFence();                // for re-reads
+                     if (b != (b = base))
+                         ;                         // inconsistent
+                     else if (t != null) {
+                         if (casSlotToNull(a, k, t)) {
+                             base = nb;
+-                            U.storeStoreFence();
+                             return t;
+                         }
+                         break;                   // contended
+@@ -1428,7 +1333,6 @@
+                         break;
+                     int k = (cap - 1) & b, nb = b + 1, nk = (cap - 1) & nb;
+                     ForkJoinTask<?> t = a[k];
+-                    U.loadFence();                     // for re-reads
+                     if (base != b)
+                         ;
+                     else if (blocker.isReleasable())
+@@ -1441,7 +1345,6 @@
+                             break;
+                         else if (casSlotToNull(a, k, t)) {
+                             base = nb;
+-                            U.storeStoreFence();
+                             t.doExec();
+                         }
+                     }
+@@ -1471,18 +1374,6 @@
+             config |= CLEAR_TLS;
+         }
+ 
+-        static {
+-            U = Unsafe.getUnsafe();
+-            Class<WorkQueue> klass = WorkQueue.class;
+-            ACCESS = U.objectFieldOffset(klass, "access");
+-            PHASE = U.objectFieldOffset(klass, "phase");
+-            Class<ForkJoinTask[]> aklass = ForkJoinTask[].class;
+-            ABASE = U.arrayBaseOffset(aklass);
+-            int scale = U.arrayIndexScale(aklass);
+-            ASHIFT = 31 - Integer.numberOfLeadingZeros(scale);
+-            if ((scale & (scale - 1)) != 0)
+-                throw new Error("array index scale not a power of two");
+-        }
+     }
+ 
+     // static fields (initialized in static initializer below)
+@@ -1507,11 +1398,6 @@
+      */
+     private static volatile int poolIds;
+ 
+-    /**
+-     * Permission required for callers of methods that may start or
+-     * kill threads. Lazily constructed.
+-     */
+-    static volatile RuntimePermission modifyThreadPermission;
+ 
+ 
+     // Instance fields
+@@ -1528,45 +1414,40 @@
+     final ForkJoinWorkerThreadFactory factory;
+     final UncaughtExceptionHandler ueh;  // per-worker UEH
+     final Predicate<? super ForkJoinPool> saturate;
+-    final SharedThreadContainer container;
+-
+-    @jdk.internal.vm.annotation.Contended("fjpctl") // segregate
++
+     volatile long ctl;                   // main pool control
+-    @jdk.internal.vm.annotation.Contended("fjpctl") // colocate
+     int parallelism;                     // target number of workers
+ 
+-    // Support for atomic operations
+-    private static final Unsafe U;
+-    private static final long CTL;
+-    private static final long RUNSTATE;
+-    private static final long PARALLELISM;
+-    private static final long THREADIDS;
+-    private static final Object POOLIDS_BASE;
+-    private static final long POOLIDS;
+-
+     private boolean compareAndSetCtl(long c, long v) {
+-        return U.compareAndSetLong(this, CTL, c, v);
++        if (ctl != c) return false;
++        ctl = v;
++        return true;
+     }
+     private long compareAndExchangeCtl(long c, long v) {
+-        return U.compareAndExchangeLong(this, CTL, c, v);
++        long previous = ctl;
++        if (previous == c) ctl = v;
++        return previous;
+     }
+     private long getAndAddCtl(long v) {
+-        return U.getAndAddLong(this, CTL, v);
++        long previous = ctl;
++        ctl += v;
++        return previous;
+     }
+     private int getAndBitwiseOrRunState(int v) {
+-        return U.getAndBitwiseOrInt(this, RUNSTATE, v);
++        int previous = runState;
++        runState |= v;
++        return previous;
+     }
+     private long incrementThreadIds() {
+-        return U.getAndAddLong(this, THREADIDS, 1L);
+-    }
+-    private static int getAndAddPoolIds(int x) {
+-        return U.getAndAddInt(POOLIDS_BASE, POOLIDS, x);
++        return threadIds++;
+     }
+     private int getAndSetParallelism(int v) {
+-        return U.getAndSetInt(this, PARALLELISM, v);
++        int previous = parallelism;
++        parallelism = v;
++        return previous;
+     }
+     private int getParallelismOpaque() {
+-        return U.getIntOpaque(this, PARALLELISM);
++        return parallelism;
+     }
+ 
+     // Creating, registering, and deregistering workers
+@@ -1585,7 +1466,7 @@
+         try {
+             if (runState >= 0 &&  // avoid construction if terminating
+                 fac != null && (wt = fac.newThread(this)) != null) {
+-                container.start(wt);
++                wt.start();
+                 return true;
+             }
+         } catch (Throwable rex) {
+@@ -1644,7 +1525,6 @@
+                             if ((q = qs[j]) != null)    // shared queues may move
+                                 as[q.config & am] = q;
+                         }
+-                        U.storeFence();                 // fill before publish
+                         queues = as;
+                     }
+                 }
+@@ -1791,7 +1671,6 @@
+     private boolean hasTasks(boolean submissionsOnly) {
+         int step = submissionsOnly ? 2 : 1;
+         for (int checkSum = 0;;) { // repeat until stable (normally twice)
+-            U.loadFence();
+             WorkQueue[] qs = queues;
+             int n = (qs == null) ? 0 : qs.length, sum = 0;
+             for (int i = 0; i < n; i += step) {
+@@ -1844,7 +1723,6 @@
+                 int src = j | SRC, b = q.base;
+                 int k = (cap - 1) & b, nb = b + 1, nk = (cap - 1) & nb;
+                 ForkJoinTask<?> t = a[k];
+-                U.loadFence();                  // for re-reads
+                 if (q.base != b)                // inconsistent
+                     return prevSrc;
+                 else if (t != null && WorkQueue.casSlotToNull(a, k, t)) {
+@@ -2057,7 +1935,6 @@
+                         int sq = q.source, b = q.base;
+                         int k = (cap - 1) & b, nb = b + 1;
+                         ForkJoinTask<?> t = a[k];
+-                        U.loadFence();                // for re-reads
+                         boolean eligible = true;      // check steal chain
+                         for (int d = n, v = sq;;) {   // may be cyclic; bound
+                             WorkQueue p;
+@@ -2131,7 +2008,6 @@
+                     poll: for (int src = j | SRC, b = q.base;;) {
+                         int k = (cap - 1) & b, nb = b + 1;
+                         ForkJoinTask<?> t = a[k];
+-                        U.loadFence();                // for re-reads
+                         if (b != (b = q.base))
+                             ;                         // stale
+                         else if ((s = task.status) < 0)
+@@ -2206,7 +2082,6 @@
+                             break;
+                         int k = (cap - 1) & b, nb = b + 1, nk = (cap - 1) & nb;
+                         ForkJoinTask<?> t = a[k];
+-                        U.loadFence();      // for re-reads
+                         if (q.base != b || q.array != a || a[k] != t)
+                             ;
+                         else if (t == null) {
+@@ -2371,7 +2246,6 @@
+     private <T> ForkJoinTask<T> poolSubmit(boolean signalIfEmpty,
+                                            ForkJoinTask<T> task) {
+         WorkQueue q; Thread t; ForkJoinWorkerThread wt;
+-        U.storeStoreFence();  // ensure safely publishable
+         if (task == null) throw new NullPointerException();
+         if (((t = Thread.currentThread()) instanceof ForkJoinWorkerThread) &&
+             (wt = (ForkJoinWorkerThread)t).pool == this)
+@@ -2545,7 +2419,6 @@
+             if ((cond = termination) != null)
+                 cond.signalAll();
+             lock.unlock();
+-            container.close();
+         }
+         return true;
+     }
+@@ -2715,7 +2588,6 @@
+                         Predicate<? super ForkJoinPool> saturate,
+                         long keepAliveTime,
+                         TimeUnit unit) {
+-        checkPermission();
+         int p = parallelism;
+         if (p <= 0 || p > MAX_CAP || p > maximumPoolSize || keepAliveTime <= 0L)
+             throw new IllegalArgumentException();
+@@ -2727,18 +2599,17 @@
+         this.saturate = saturate;
+         this.config = asyncMode ? FIFO : 0;
+         this.keepAlive = Math.max(unit.toMillis(keepAliveTime), TIMEOUT_SLOP);
+-        int corep = Math.clamp(corePoolSize, p, MAX_CAP);
+-        int maxSpares = Math.clamp(maximumPoolSize - p, 0, MAX_CAP);
+-        int minAvail = Math.clamp(minimumRunnable, 0, MAX_CAP);
++        int corep = Math.min(Math.max(corePoolSize, p), MAX_CAP);
++        int maxSpares = Math.min(Math.max(maximumPoolSize - p, 0), MAX_CAP);
++        int minAvail = Math.min(Math.max(minimumRunnable, 0), MAX_CAP);
+         this.bounds = (long)(minAvail & SMASK) | (long)(maxSpares << SWIDTH) |
+             ((long)corep << 32);
+         int size = 1 << (33 - Integer.numberOfLeadingZeros(p - 1));
+         this.registrationLock = new ReentrantLock();
+         this.queues = new WorkQueue[size];
+-        String pid = Integer.toString(getAndAddPoolIds(1) + 1);
++        String pid = Integer.toString(++poolIds);
+         String name = "ForkJoinPool-" + pid;
+         this.workerNamePrefix = name + "-worker-";
+-        this.container = SharedThreadContainer.create(name);
+     }
+ 
+     /**
+@@ -2760,7 +2631,7 @@
+             String ms = System.getProperty
+                 ("java.util.concurrent.ForkJoinPool.common.maximumSpares");
+             if (ms != null)
+-                maxSpares = Math.clamp(Integer.parseInt(ms), 0, MAX_CAP);
++                maxSpares = Math.min(Math.max(Integer.parseInt(ms), 0), MAX_CAP);
+             String sf = System.getProperty
+                 ("java.util.concurrent.ForkJoinPool.common.threadFactory");
+             String sh = System.getProperty
+@@ -2790,7 +2661,6 @@
+         this.workerNamePrefix = null;
+         this.registrationLock = new ReentrantLock();
+         this.queues = new WorkQueue[size];
+-        this.container = SharedThreadContainer.create("ForkJoinPool.commonPool");
+     }
+ 
+     /**
+@@ -2933,7 +2803,6 @@
+      * @since 20
+      */
+     public <T> ForkJoinTask<T> externalSubmit(ForkJoinTask<T> task) {
+-        U.storeStoreFence();  // ensure safely publishable
+         task.markPoolSubmission();
+         WorkQueue q = submissionQueue(true);
+         q.push(task, this, true);
+@@ -2988,7 +2857,6 @@
+             throw new IllegalArgumentException();
+         if ((config & PRESET_SIZE) != 0)
+             throw new UnsupportedOperationException("Cannot override System property");
+-        checkPermission();
+         return getAndSetParallelism(size);
+     }
+ 
+@@ -3458,7 +3326,6 @@
+      *         java.lang.RuntimePermission}{@code ("modifyThread")}
+      */
+     public void shutdown() {
+-        checkPermission();
+         tryTerminate(false, true);
+     }
+ 
+@@ -3481,7 +3348,6 @@
+      *         java.lang.RuntimePermission}{@code ("modifyThread")}
+      */
+     public List<Runnable> shutdownNow() {
+-        checkPermission();
+         tryTerminate(true, true);
+         return Collections.emptyList();
+     }
+@@ -3812,28 +3678,8 @@
+     }
+ 
+     static {
+-        U = Unsafe.getUnsafe();
+-        Class<ForkJoinPool> klass = ForkJoinPool.class;
+-        try {
+-            Field poolIdsField = klass.getDeclaredField("poolIds");
+-            POOLIDS_BASE = U.staticFieldBase(poolIdsField);
+-            POOLIDS = U.staticFieldOffset(poolIdsField);
+-        } catch (NoSuchFieldException e) {
+-            throw new ExceptionInInitializerError(e);
+-        }
+-        CTL = U.objectFieldOffset(klass, "ctl");
+-        RUNSTATE = U.objectFieldOffset(klass, "runState");
+-        PARALLELISM = U.objectFieldOffset(klass, "parallelism");
+-        THREADIDS = U.objectFieldOffset(klass, "threadIds");
+-
+-        defaultForkJoinWorkerThreadFactory =
+-            new DefaultForkJoinWorkerThreadFactory();
+-        @SuppressWarnings("removal")
+-        ForkJoinPool p = common = (System.getSecurityManager() == null) ?
+-            new ForkJoinPool((byte)0) :
+-            AccessController.doPrivileged(new PrivilegedAction<>() {
+-                    public ForkJoinPool run() {
+-                        return new ForkJoinPool((byte)0); }});
++        defaultForkJoinWorkerThreadFactory = new DefaultForkJoinWorkerThreadFactory();
++        common = new ForkJoinPool((byte)0);
+         // allow access to non-public methods
+         // BEGIN Android-removed: SharedSecrets usage
+         /*
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinTask.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinTask.java
+@@ -41,7 +41,6 @@
+ import java.util.List;
+ import java.util.RandomAccess;
+ import java.util.concurrent.locks.LockSupport;
+-import jdk.internal.misc.Unsafe;
+ 
+ // BEGIN android-note
+ // removed java 9 code
+@@ -243,13 +242,9 @@
+             this.ex = ex;
+         }
+         final boolean casNext(Aux c, Aux v) { // used only in cancellation
+-            return U.compareAndSetReference(this, NEXT, c, v);
+-        }
+-        private static final Unsafe U;
+-        private static final long NEXT;
+-        static {
+-            U = Unsafe.getUnsafe();
+-            NEXT = U.objectFieldOffset(Aux.class, "next");
++            if (next != c) return false;
++            next = v;
++            return true;
+         }
+     }
+ 
+@@ -279,18 +274,21 @@
+     volatile int status;                // accessed directly by pool and workers
+     private transient volatile Aux aux; // either waiters or thrown Exception
+ 
+-    // Support for atomic operations
+-    private static final Unsafe U;
+-    private static final long STATUS;
+-    private static final long AUX;
++    // Guest workers cannot yield during these updates.
+     private int getAndBitwiseOrStatus(int v) {
+-        return U.getAndBitwiseOrInt(this, STATUS, v);
++        int previous = status;
++        status |= v;
++        return previous;
+     }
+     private boolean casStatus(int c, int v) {
+-        return U.compareAndSetInt(this, STATUS, c, v);
++        if (status != c) return false;
++        status = v;
++        return true;
+     }
+     private boolean casAux(Aux c, Aux v) {
+-        return U.compareAndSetReference(this, AUX, c, v);
++        if (aux != c) return false;
++        aux = v;
++        return true;
+     }
+ 
+     /**
+@@ -475,7 +473,7 @@
+                         Aux next = a.next;
+                         if (a == node) {
+                             if (trail != null)
+-                                trail.casNext(trail, next);
++                                trail.casNext(a, next);
+                             else if (casAux(a, next))
+                                 break outer; // cannot be re-encountered
+                             break;           // restart
+@@ -627,7 +625,6 @@
+     public final ForkJoinTask<V> fork() {
+         Thread t; ForkJoinWorkerThread wt;
+         ForkJoinPool p; ForkJoinPool.WorkQueue q;
+-        U.storeStoreFence();  // ensure safely publishable
+         if ((t = Thread.currentThread()) instanceof ForkJoinWorkerThread) {
+             p = (wt = (ForkJoinWorkerThread)t).pool;
+             q = wt.workQueue;
+@@ -1614,9 +1611,6 @@
+     }
+ 
+     static {
+-        U = Unsafe.getUnsafe();
+-        STATUS = U.objectFieldOffset(ForkJoinTask.class, "status");
+-        AUX = U.objectFieldOffset(ForkJoinTask.class, "aux");
+         Class<?> dep1 = LockSupport.class; // ensure loaded
+         Class<?> dep2 = Aux.class;
+     }
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinWorkerThread.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinWorkerThread.java
+@@ -35,9 +35,6 @@
+ 
+ package java.util.concurrent;
+ 
+-import java.security.AccessController;
+-import java.security.PrivilegedAction;
+-import java.security.ProtectionDomain;
+ 
+ /**
+  * A thread managed by a {@link ForkJoinPool}, which executes
+@@ -208,7 +205,7 @@
+      */
+     static final class InnocuousForkJoinWorkerThread extends ForkJoinWorkerThread {
+         /** The ThreadGroup for all InnocuousForkJoinWorkerThreads */
+-        private static final ThreadGroup innocuousThreadGroup;
++        private static final ThreadGroup innocuousThreadGroup = createGroup();
+         // Android-removed: AccessControlContext removal from JDK 25 brought forward.
+         // @SuppressWarnings("removal")
+         // private static final AccessControlContext innocuousACC;
+@@ -244,22 +241,5 @@
+                 group = p;
+             return new ThreadGroup(group, "InnocuousForkJoinWorkerThreadGroup");
+         }
+-        static {
+-            @SuppressWarnings("removal")
+-            SecurityManager sm = System.getSecurityManager();
+-            @SuppressWarnings("removal")
+-            ThreadGroup g = innocuousThreadGroup =
+-                (sm == null) ? createGroup() :
+-                AccessController.doPrivileged(new PrivilegedAction<>() {
+-                        public ThreadGroup run() {
+-                            return createGroup(); }});
+-            // Android-removed: AccessControlContext removal from JDK 25.
+-            // @SuppressWarnings("removal")
+-            // AccessControlContext a = innocuousACC =
+-            //     (sm == null) ? createACC() :
+-            //     AccessController.doPrivileged(new PrivilegedAction<>() {
+-            //             public AccessControlContext run() {
+-            //                 return createACC(); }});
+-        }
+     }
+ }
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/CountedCompleter.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/CountedCompleter.java
+@@ -35,7 +35,6 @@
+ 
+ package java.util.concurrent;
+ 
+-import jdk.internal.misc.Unsafe;
+ 
+ /**
+  * A {@link ForkJoinTask} with a completion action performed when
+@@ -539,7 +538,7 @@
+      * @param delta the value to add
+      */
+     public final void addToPendingCount(int delta) {
+-        U.getAndAddInt(this, PENDING, delta);
++        pending += delta;
+     }
+ 
+     /**
+@@ -551,12 +550,14 @@
+      * @return {@code true} if successful
+      */
+     public final boolean compareAndSetPendingCount(int expected, int count) {
+-        return U.compareAndSetInt(this, PENDING, expected, count);
++        if (pending != expected) return false;
++        pending = count;
++        return true;
+     }
+ 
+     // internal-only weak version
+     final boolean weakCompareAndSetPendingCount(int expected, int count) {
+-        return U.weakCompareAndSetInt(this, PENDING, expected, count);
++        return compareAndSetPendingCount(expected, count);
+     }
+ 
+     /**
+@@ -777,16 +778,4 @@
+     @Override
+     protected void setRawResult(T t) { }
+ 
+-    /*
+-     * This class uses jdk-internal Unsafe for atomics and special
+-     * memory modes, rather than VarHandles, to avoid initialization
+-     * dependencies in other jdk components that require early
+-     * parallelism.
+-     */
+-    private static final Unsafe U;
+-    private static final long PENDING;
+-    static {
+-        U = Unsafe.getUnsafe();
+-        PENDING = U.objectFieldOffset(CountedCompleter.class, "pending");
+-    }
+ }

@@ -71,6 +71,6 @@ set_target_properties(aosp17_framework_core PROPERTIES
     WA_FRAMEWORK_DEX "${AOSP17_FRAMEWORK_DEX}" WA_FRAMEWORK_CLASSES "${AOSP17_FRAMEWORK_CLASSES}")
 
 set(_wa_ui_native "${_wa_ui_root}/runtime/aosp17_shims/ui_jni")
-_wa_art_static(aosp17_ui_jni "${_wa_ui_native}" ui_bridge.cpp canvas.cpp path_data.cpp bitmap.cpp)
+_wa_art_static(aosp17_ui_jni "${_wa_ui_native}" ui_bridge.cpp canvas.cpp path_data.cpp bitmap.cpp apk_signing.cpp)
 target_include_directories(aosp17_ui_jni PUBLIC "${_wa_ui_native}")
 target_link_libraries(aosp17_ui_jni PUBLIC aosp17_art_interp wa_hal_surfaceflinger PRIVATE aosp17_core_jni aosp17_zlib)

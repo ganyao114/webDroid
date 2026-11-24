@@ -1,0 +1,35 @@
+--- a/frameworks/base/core/java/android/os/Looper.java
++++ b/frameworks/base/core/java/android/os/Looper.java
+@@ -74,7 +74,8 @@
+     private static final String TAG = "Looper";
+ 
+     // Guest workers take turns on the host thread with their own logical Thread identity.
+-    private static Looper sPreparedLooper;
++    @UnsupportedAppUsage
++    static final ThreadLocal<Looper> sThreadLocal = new ThreadLocal<>();
+     private static Looper sDispatchingLooper;
+     private static final ArrayList<Looper> sWorkers = new ArrayList<>();
+     @UnsupportedAppUsage
+@@ -132,7 +133,7 @@
+         if (myLooper() != null) {
+             throw new RuntimeException("Only one Looper may be created per thread");
+         }
+-        sPreparedLooper = new Looper(quitAllowed, Thread.currentThread());
++        sThreadLocal.set(new Looper(quitAllowed, Thread.currentThread()));
+     }
+ 
+     /**
+@@ -400,8 +401,11 @@
+      * null if the calling thread is not associated with a Looper.
+      */
+     public static @Nullable Looper myLooper() {
+-        Looper looper = sDispatchingLooper != null ? sDispatchingLooper : sPreparedLooper;
+-        return looper != null && looper.mThread == Thread.currentThread() ? looper : null;
++        Looper looper = sDispatchingLooper;
++        if (looper != null && looper.mThread == Thread.currentThread()) {
++            return looper;
++        }
++        return sThreadLocal.get();
+     }
+ 
+     /**

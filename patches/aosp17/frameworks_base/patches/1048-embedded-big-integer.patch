@@ -1,0 +1,338 @@
+--- a/libcore/ojluni/src/main/java/java/math/BigInteger.java
++++ b/libcore/ojluni/src/main/java/java/math/BigInteger.java
+@@ -42,9 +42,7 @@
+ 
+ import jdk.internal.math.DoubleConsts;
+ import jdk.internal.math.FloatConsts;
+-import jdk.internal.vm.annotation.IntrinsicCandidate;
+-
+-import libcore.math.NativeBN;
++
+ /**
+  * Immutable arbitrary-precision integers.  All operations behave as if
+  * BigIntegers were represented in two's-complement notation (like Java's
+@@ -1597,110 +1595,18 @@
+ 
+         int xlen = mag.length;
+ 
+-        // BEGIN Android-changed: Fall back to the boringssl implementation for
+-        // large arguments.
+-        final int BORINGSSL_MUL_THRESHOLD = 50;
+-
+-        if (val == this && xlen > MULTIPLY_SQUARE_THRESHOLD
+-                && xlen < BORINGSSL_MUL_THRESHOLD) {
+-            return square();
+-        }
+-
+-        int ylen = val.mag.length;
+-
+         int resultSign = signum == val.signum ? 1 : -1;
+-        if ((xlen < BORINGSSL_MUL_THRESHOLD) || (ylen < BORINGSSL_MUL_THRESHOLD)) {
+-            if (val.mag.length == 1) {
+-                return multiplyByInt(mag,val.mag[0], resultSign);
+-            }
+-            if (mag.length == 1) {
+-                return multiplyByInt(val.mag,mag[0], resultSign);
+-            }
+-            int[] result = multiplyToLen(mag, xlen,
+-                                         val.mag, ylen, null);
+-            result = trustedStripLeadingZeroInts(result);
+-            return new BigInteger(result, resultSign);
+-        } else {
+-            long xBN = 0, yBN = 0, resultBN = 0;
+-            try {
+-                xBN = bigEndInts2NewBN(mag, /* neg= */false);
+-                yBN = bigEndInts2NewBN(val.mag, /* neg= */false);
+-                resultBN = NativeBN.BN_new();
+-                NativeBN.BN_mul(resultBN, xBN, yBN);
+-                return new BigInteger(resultSign, bn2BigEndInts(resultBN));
+-            } finally {
+-                NativeBN.BN_free(xBN);
+-                NativeBN.BN_free(yBN);
+-                NativeBN.BN_free(resultBN);
+-            }
+-
+-            /*
+-            if ((xlen < TOOM_COOK_THRESHOLD) && (ylen < TOOM_COOK_THRESHOLD)) {
+-                return multiplyKaratsuba(this, val);
+-            } else {
+-                //
+-                // In "Hacker's Delight" section 2-13, p.33, it is explained
+-                // that if x and y are unsigned 32-bit quantities and m and n
+-                // are their respective numbers of leading zeros within 32 bits,
+-                // then the number of leading zeros within their product as a
+-                // 64-bit unsigned quantity is either m + n or m + n + 1. If
+-                // their product is not to overflow, it cannot exceed 32 bits,
+-                // and so the number of leading zeros of the product within 64
+-                // bits must be at least 32, i.e., the leftmost set bit is at
+-                // zero-relative position 31 or less.
+-                //
+-                // From the above there are three cases:
+-                //
+-                //     m + n    leftmost set bit    condition
+-                //     -----    ----------------    ---------
+-                //     >= 32    x <= 64 - 32 = 32   no overflow
+-                //     == 31    x >= 64 - 32 = 32   possible overflow
+-                //     <= 30    x >= 64 - 31 = 33   definite overflow
+-                //
+-                // The "possible overflow" condition cannot be detected by
+-                // examning data lengths alone and requires further calculation.
+-                //
+-                // By analogy, if 'this' and 'val' have m and n as their
+-                // respective numbers of leading zeros within 32*MAX_MAG_LENGTH
+-                // bits, then:
+-                //
+-                //     m + n >= 32*MAX_MAG_LENGTH        no overflow
+-                //     m + n == 32*MAX_MAG_LENGTH - 1    possible overflow
+-                //     m + n <= 32*MAX_MAG_LENGTH - 2    definite overflow
+-                //
+-                // Note however that if the number of ints in the result
+-                // were to be MAX_MAG_LENGTH and mag[0] < 0, then there would
+-                // be overflow. As a result the leftmost bit (of mag[0]) cannot
+-                // be used and the constraints must be adjusted by one bit to:
+-                //
+-                //     m + n >  32*MAX_MAG_LENGTH        no overflow
+-                //     m + n == 32*MAX_MAG_LENGTH        possible overflow
+-                //     m + n <  32*MAX_MAG_LENGTH        definite overflow
+-                //
+-                // The foregoing leading zero-based discussion is for clarity
+-                // only. The actual calculations use the estimated bit length
+-                // of the product as this is more natural to the internal
+-                // array representation of the magnitude which has no leading
+-                // zero elements.
+-                //
+-                if (!isRecursion) {
+-                    // The bitLength() instance method is not used here as we
+-                    // are only considering the magnitudes as non-negative. The
+-                    // Toom-Cook multiplication algorithm determines the sign
+-                    // at its end from the two signum values.
+-                    if ((long)bitLength(mag, mag.length) +
+-                        (long)bitLength(val.mag, val.mag.length) >
+-                        32L*MAX_MAG_LENGTH) {
+-                        reportOverflow();
+-                    }
+-                }
+-
+-                return multiplyToomCook3(this, val);
+-            }
+-            */
+-        // END Android-changed: Fall back to the boringssl implementation for
+-        // large arguments.
+-        }
++        if (val.mag.length == 1) {
++            return multiplyByInt(mag, val.mag[0], resultSign);
++        }
++        if (xlen == 1) {
++            return multiplyByInt(val.mag, mag[0], resultSign);
++        }
++        if ((long) bitLength(mag, xlen) + bitLength(val.mag, val.mag.length) > 32L * MAX_MAG_LENGTH + 1) {
++            reportOverflow();
++        }
++        int[] result = multiplyToLen(mag, xlen, val.mag, val.mag.length, null);
++        return new BigInteger(trustedStripLeadingZeroInts(result), resultSign);
+     }
+ 
+     private static BigInteger multiplyByInt(int[] x, int y, int sign) {
+@@ -1805,7 +1711,6 @@
+         return implMultiplyToLen(x, xlen, y, ylen, z);
+     }
+ 
+-    @IntrinsicCandidate
+     private static int[] implMultiplyToLen(int[] x, int xlen, int[] y, int ylen, int[] z) {
+         int xstart = xlen - 1;
+         int ystart = ylen - 1;
+@@ -2204,7 +2109,6 @@
+      /**
+       * Java Runtime may use intrinsic for this method.
+       */
+-     @IntrinsicCandidate
+      private static final int[] implSquareToLen(int[] x, int len, int[] z, int zlen) {
+         /*
+          * The algorithm used here is adapted from Colin Plumb's C library.
+@@ -2340,10 +2244,6 @@
+     // Division
+ 
+ 
+-    // BEGIN Android-changed: Fall back to boringssl for large problems.
+-    private static final int BORINGSSL_DIV_THRESHOLD = 40;
+-    private static final int BORINGSSL_DIV_OFFSET = 20;
+-
+     /**
+      * Returns a BigInteger whose value is {@code (this / val)}.
+      *
+@@ -2352,21 +2252,8 @@
+      * @throws ArithmeticException if {@code val} is zero.
+      */
+     public BigInteger divide(BigInteger val) {
+-        /*
+-        if (val.mag.length < BURNIKEL_ZIEGLER_THRESHOLD ||
+-                mag.length - val.mag.length < BURNIKEL_ZIEGLER_OFFSET) {
+-        */
+-        if (mag.length < BORINGSSL_DIV_THRESHOLD ||
+-                mag.length - val.mag.length < BORINGSSL_DIV_OFFSET) {
+-            return divideKnuth(val);
+-        } else {
+-            /*
+-            return divideBurnikelZiegler(val);
+-            */
+-            return divideAndRemainder(val)[0];
+-        }
+-    }
+-    // END Android-changed: Fall back to boringssl for large problems.
++        return divideKnuth(val);
++    }
+ 
+ 
+     /**
+@@ -2398,40 +2285,7 @@
+      * @throws ArithmeticException if {@code val} is zero.
+      */
+     public BigInteger[] divideAndRemainder(BigInteger val) {
+-        // BEGIN Android-changed: Fall back to boringssl for large problems.
+-        /*
+-        if (val.mag.length < BURNIKEL_ZIEGLER_THRESHOLD ||
+-                mag.length - val.mag.length < BURNIKEL_ZIEGLER_OFFSET) {
+-         */
+-        if (val.mag.length < BORINGSSL_DIV_THRESHOLD ||
+-                mag.length < BORINGSSL_DIV_OFFSET ||
+-                mag.length - val.mag.length < BORINGSSL_DIV_OFFSET) {
+-            return divideAndRemainderKnuth(val);
+-        } else {
+-            /*
+-            return divideAndRemainderBurnikelZiegler(val);
+-            */
+-            int quotSign = signum == val.signum ? 1 : -1;  // 0 divided doesn't get here.
+-            long xBN = 0, yBN = 0, quotBN = 0, remBN = 0;
+-            try {
+-                xBN = bigEndInts2NewBN(mag, /* neg= */false);
+-                yBN = bigEndInts2NewBN(val.mag, /* neg= */false);
+-                quotBN = NativeBN.BN_new();
+-                remBN = NativeBN.BN_new();
+-                NativeBN.BN_div(quotBN, remBN, xBN, yBN);
+-                BigInteger quotient = new BigInteger(quotSign, bn2BigEndInts(quotBN));
+-                        // The sign of a zero quotient is fixed by the constructor.
+-                BigInteger remainder = new BigInteger(signum, bn2BigEndInts(remBN));
+-                BigInteger[] result = {quotient, remainder};
+-                return result;
+-            } finally {
+-                NativeBN.BN_free(xBN);
+-                NativeBN.BN_free(yBN);
+-                NativeBN.BN_free(quotBN);
+-                NativeBN.BN_free(remBN);
+-            }
+-        }
+-        // END Android-changed: Fall back to boringssl for large problems.
++        return divideAndRemainderKnuth(val);
+     }
+ 
+     /** Long division */
+@@ -2455,21 +2309,7 @@
+      * @throws ArithmeticException if {@code val} is zero.
+      */
+     public BigInteger remainder(BigInteger val) {
+-        // BEGIN Android-changed: Fall back to boringssl for large problems.
+-        /*
+-        if (val.mag.length < BURNIKEL_ZIEGLER_THRESHOLD ||
+-                mag.length - val.mag.length < BURNIKEL_ZIEGLER_OFFSET) {
+-         */
+-        if (val.mag.length < BORINGSSL_DIV_THRESHOLD ||
+-                mag.length - val.mag.length < BORINGSSL_DIV_THRESHOLD) {
+-            return remainderKnuth(val);
+-        } else {
+-            /*
+-            return remainderBurnikelZiegler(val);
+-            */
+-            return divideAndRemainder(val)[1];
+-        }
+-        // END Android-changed: Fall back to boringssl for large problems.
++        return remainderKnuth(val);
+     }
+ 
+     /** Long division */
+@@ -2825,35 +2665,6 @@
+         return (result.signum >= 0 ? result : result.add(m));
+     }
+ 
+-    // BEGIN Android-added: Support fallback to boringssl where it makes sense.
+-    // The conversion itself takes linear time, so this only makes sense for largish superlinear
+-    // operations.
+-
+-    private static int[] reverse(int[] arg) {
+-      int len = arg.length;
+-      int[] result = new int[len];
+-      for (int i = 0; i < len; ++i) {
+-        result[i] = arg[len - i - 1];
+-      }
+-      return result;
+-    }
+-
+-    private static long /* BN */ bigEndInts2NewBN(int[] beArray, boolean neg) {
+-      // The input is an array of ints arranged in big-endian order, i.e. most significant int
+-      // first. BN deals with big-endian or little-endian byte arrays, so we need to reverse order.
+-      int[] leArray = reverse(beArray);
+-      long resultBN = NativeBN.BN_new();
+-      NativeBN.litEndInts2bn(leArray, leArray.length, neg, resultBN);
+-      return resultBN;
+-    }
+-
+-    private int[] bn2BigEndInts(long bn) {
+-      return reverse(NativeBN.bn2litEndInts(bn));
+-    }
+-
+-    // END Android-added: Support fallback to boringssl.
+-
+-
+     /**
+      * Returns a BigInteger whose value is
+      * <code>(this<sup>exponent</sup> mod m)</code>.  (Unlike {@code pow}, this
+@@ -2891,28 +2702,6 @@
+         BigInteger base = (this.signum < 0 || this.compareTo(m) >= 0
+                            ? this.mod(m) : this);
+         BigInteger result;
+-        // BEGIN Android-added: Fall back to the boringssl implementation, which
+-        // is usually faster.
+-        final int BORINGSSL_MOD_EXP_THRESHOLD = 3;
+-        if (m.mag.length >= BORINGSSL_MOD_EXP_THRESHOLD) {
+-            long baseBN = 0, expBN = 0, modBN = 0, resultBN = 0;
+-            try {
+-                baseBN = bigEndInts2NewBN(base.mag, /* neg= */false);
+-                expBN = bigEndInts2NewBN(exponent.mag, /* neg= */false);
+-                modBN = bigEndInts2NewBN(m.mag, /* neg= */false);
+-                resultBN = NativeBN.BN_new();
+-                NativeBN.BN_mod_exp(resultBN, baseBN, expBN, modBN);
+-                result = new BigInteger(1, bn2BigEndInts(resultBN));
+-                        // The sign of a zero result is fixed by the constructor.
+-                return (invertResult ? result.modInverse(m) : result);
+-            } finally {
+-                NativeBN.BN_free(baseBN);
+-                NativeBN.BN_free(expBN);
+-                NativeBN.BN_free(modBN);
+-                NativeBN.BN_free(resultBN);
+-            }
+-        }
+-        // END Android-added: Fall back to the boringssl implementation.
+         if (m.testBit(0)) { // odd modulus
+             result = base.oddModPow(exponent, m);
+         } else {
+@@ -3017,13 +2806,11 @@
+ 
+     // These methods are intended to be replaced by virtual machine
+     // intrinsics.
+-    @IntrinsicCandidate
+     private static int[] implMontgomeryMultiply(int[] a, int[] b, int[] n, int len,
+                                          long inv, int[] product) {
+         product = multiplyToLen(a, len, b, len, product);
+         return montReduce(product, n, len, (int)inv);
+     }
+-    @IntrinsicCandidate
+     private static int[] implMontgomerySquare(int[] a, int[] n, int len,
+                                        long inv, int[] product) {
+         product = squareToLen(a, len, product);
+@@ -3355,7 +3142,6 @@
+     /**
+      * Java Runtime may use intrinsic for this method.
+      */
+-    @IntrinsicCandidate
+     private static int implMulAdd(int[] out, int[] in, int offset, int len, int k) {
+         long kLong = k & LONG_MASK;
+         long carry = 0;

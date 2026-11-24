@@ -341,6 +341,7 @@ struct Runtime {
   bool WakeThread(Object* thread, bool interrupt);
   void NotifyWaiters(Object& monitor, bool all);
   void RunReadyThreads();
+  std::optional<std::chrono::steady_clock::time_point> NextThreadWakeup() const;
   [[noreturn]] void SuspendWorker(std::optional<int64_t> delay_ns, bool interruptible,
                                   Object* monitor = nullptr);
   void Promote(Method& method);
@@ -372,6 +373,7 @@ struct Runtime {
 
   decltype(Options::system_properties) system_properties;
   const Options options;
+  uint32_t target_sdk_version = 0;
   ClassLinker linker;
   GcHeap heap;
   std::unique_ptr<JniBridge> jni;
@@ -385,6 +387,7 @@ struct Runtime {
     int64_t last_modified;
     Vm::FileReader reader;
     uint64_t backing_size = 0;
+    Vm::FileSnapshot snapshot;
 
     uint64_t Size() const { return reader ? backing_size : bytes.size(); }
   };
@@ -398,6 +401,7 @@ struct Runtime {
   // An empty pointer denotes a directory. Open descriptors keep unlinked files alive.
   std::map<std::string, std::shared_ptr<GuestFile>, std::less<>> guest_files{{"/", {}}};
   std::set<std::string, std::less<>> read_only_paths;
+  std::optional<std::span<const uint8_t>> ReadGuestFile(std::string_view path) const;
   std::unordered_map<const Object*, FileHandle> file_handles;
   std::unordered_map<const Object*, std::shared_ptr<const void>> regex_programs;
   int32_t next_file_descriptor = 3;

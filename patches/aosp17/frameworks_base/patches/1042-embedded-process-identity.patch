@@ -1,6 +1,6 @@
 --- a/frameworks/base/core/java/android/app/Application.java
 +++ b/frameworks/base/core/java/android/app/Application.java
-@@ -336,7 +336,13 @@
+@@ -336,7 +336,10 @@
      @UnsupportedAppUsage
      /* package */ final void attach(Context context) {
 +        if (Boolean.getBoolean("org.wasmandroid.foreground")) {
@@ -10,20 +10,32 @@
 +            setEmbeddedProcessName(name);
 +        }
          attachBaseContext(context);
-         if (Boolean.getBoolean("org.wasmandroid.foreground")) {
-             getPackageManager().installEmbeddedProviders(this);
-         }
+-        if (Boolean.getBoolean("org.wasmandroid.foreground")) {
+-            getPackageManager().installEmbeddedProviders(this);
+-        }
      }
 --- a/frameworks/base/core/java/android/app/ActivityManager.java
 +++ b/frameworks/base/core/java/android/app/ActivityManager.java
-@@ -3899,4 +3899,9 @@
+@@ -3899,4 +3899,11 @@
       */
      public List<RunningAppProcessInfo> getRunningAppProcesses() {
 -        throw new UnsupportedOperationException("No platform service in the embedded runtime");
 +        String name = Application.getProcessName();
++        if (name == null) name = mContext.getApplicationInfo().processName;
 +        if (name == null) return null;
 +        RunningAppProcessInfo process = new RunningAppProcessInfo(
 +                name, Process.myPid(), new String[] {mContext.getPackageName()});
 +        process.uid = Process.myUid();
++        process.importance = RunningAppProcessInfo.IMPORTANCE_FOREGROUND;
 +        return java.util.Collections.singletonList(process);
      }
+--- a/frameworks/base/core/java/android/content/Context.java
++++ b/frameworks/base/core/java/android/content/Context.java
+@@ -5049,6 +5049,7 @@
+         if (type == android.app.WallpaperManager.class) return WALLPAPER_SERVICE;
+         if (type == android.view.accessibility.AccessibilityManager.class) return ACCESSIBILITY_SERVICE;
+         if (type == android.app.SearchManager.class) return SEARCH_SERVICE;
++        if (type == android.app.ActivityManager.class) return ACTIVITY_SERVICE;
+         if (type == null) return null;
+         switch (type.getName()) {
+             case "android.content.ClipboardManager":

@@ -1,0 +1,252 @@
+--- a/frameworks/base/core/java/android/content/pm/PackageManager.java
++++ b/frameworks/base/core/java/android/content/pm/PackageManager.java
+@@ -5855,6 +5855,20 @@
+         result.applicationInfo = new ApplicationInfo(getApplicationInfo(packageName, 0));
+         result.packageName = packageName;
+         if ((flags.getValue() & GET_META_DATA) == 0) result.applicationInfo.metaData = null;
++        if ((flags.getValue() & (GET_SIGNATURES | GET_SIGNING_CERTIFICATES)) != 0) {
++            byte[][] certificates = nativeApkSigners(packageName, context.getUserId());
++            if (certificates != null && certificates.length != 0) {
++                Signature[] signers = new Signature[certificates.length];
++                for (int i = 0; i < signers.length; i++) {
++                    signers[i] = new Signature(certificates[i]);
++                }
++                if ((flags.getValue() & GET_SIGNATURES) != 0) result.signatures = signers;
++                if ((flags.getValue() & GET_SIGNING_CERTIFICATES) != 0) {
++                    result.signingInfo = new SigningInfo(SigningInfo.VERSION_SIGNING_BLOCK_V2,
++                            java.util.Arrays.asList(signers), null, null);
++                }
++            }
++        }
+         if (localVersion != null && packageName.equals(context.getPackageName())) {
+             result.setLongVersionCode(localVersion.getLongVersionCode());
+             result.versionName = localVersion.versionName;
+@@ -12038,6 +12052,8 @@
+ 
+     private static native Entry nativeApplication(String pkg, long flags, int user);
+ 
++    private static native byte[][] nativeApkSigners(String pkg, int user);
++
+     private static native boolean nativeLaunch(String action, String pkg, String activity, String data,
+                                                String mime, String[] categories, int flags, int user);
+     /** Creates the package manager for the embedded APK catalog. @hide */
+--- a/frameworks/base/core/java/android/content/pm/Signature.java
++++ b/frameworks/base/core/java/android/content/pm/Signature.java
+@@ -21,8 +21,6 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.util.apk.ApkSignatureVerifierMetrics;
+-import android.util.apk.ApkSignatureVerifierMetrics.VerificationResult;
+ 
+ import com.android.internal.util.ArrayUtils;
+ import com.android.modules.utils.TypedXmlSerializer;
+@@ -45,7 +43,6 @@
+  * <p>
+  * This class name is slightly misleading, since it's not actually a signature.
+  */
+-@android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class Signature implements Parcelable {
+     private final byte[] mSignature;
+     private int mHashCode;
+@@ -314,26 +311,17 @@
+      * @hide
+      */
+     public static boolean areExactMatch(SigningDetails ad, SigningDetails bd) {
+-        if (android.security.Flags.apkPqcHybridSigning()) {
++        if (ad.isV32Hybrid() || bd.isV32Hybrid()) {
+             if (ad.isV32Hybrid() != bd.isV32Hybrid()) {
+-                ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(
+-                        ad.getSignatureSchemeVersion(), ad.getSignatureSchemeMinorVersion(),
+-                        VerificationResult.VERIFICATION_V32_SIGNATURE_SCHEME_MISMATCH);
+                 return false;
+             }
+             if (ad.isV32Hybrid()) {
+                 if (!areExactArraysMatch(ad.getSignatures(), bd.getSignatures())) {
+-                    ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(
+-                            ad.getSignatureSchemeVersion(), ad.getSignatureSchemeMinorVersion(),
+-                            VerificationResult.VERIFICATION_V32_PQC_KEY_MISMATCH);
+                     return false;
+                 }
+                 Signature adClassical = ad.getV32ClassicalHybridSigner();
+                 Signature bdClassical = bd.getV32ClassicalHybridSigner();
+                 if (adClassical == null || !adClassical.equals(bdClassical)) {
+-                    ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(
+-                            ad.getSignatureSchemeVersion(), ad.getSignatureSchemeMinorVersion(),
+-                            VerificationResult.VERIFICATION_V32_CLASSICAL_KEY_MISMATCH);
+                     return false;
+                 }
+                 return true;
+@@ -375,27 +363,18 @@
+      */
+     public static boolean areEffectiveMatch(SigningDetails a, SigningDetails b)
+             throws CertificateException {
+-        if (android.security.Flags.apkPqcHybridSigning()) {
++        if (a.isV32Hybrid() || b.isV32Hybrid()) {
+             if (a.isV32Hybrid() != b.isV32Hybrid()) {
+-                ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(
+-                        a.getSignatureSchemeVersion(), a.getSignatureSchemeMinorVersion(),
+-                        VerificationResult.VERIFICATION_V32_SIGNATURE_SCHEME_MISMATCH);
+                 return false;
+             }
+             if (a.isV32Hybrid()) {
+                 if (!areEffectiveArraysMatch(a.getSignatures(), b.getSignatures())) {
+-                    ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(
+-                            a.getSignatureSchemeVersion(), a.getSignatureSchemeMinorVersion(),
+-                            VerificationResult.VERIFICATION_V32_PQC_KEY_MISMATCH);
+                     return false;
+                 }
+                 Signature aClassical = a.getV32ClassicalHybridSigner();
+                 Signature bClassical = b.getV32ClassicalHybridSigner();
+                 if (aClassical == null || bClassical == null
+                         || !areEffectiveMatch(aClassical, bClassical)) {
+-                    ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(
+-                            a.getSignatureSchemeVersion(), a.getSignatureSchemeMinorVersion(),
+-                            VerificationResult.VERIFICATION_V32_CLASSICAL_KEY_MISMATCH);
+                     return false;
+                 }
+                 return true;
+--- a/frameworks/base/core/java/android/content/pm/SigningDetails.java
++++ b/frameworks/base/core/java/android/content/pm/SigningDetails.java
+@@ -24,9 +24,7 @@
+ import android.text.TextUtils;
+ import android.util.ArraySet;
+ import android.util.PackageUtils;
+-import android.util.Slog;
+-import android.util.apk.ApkSignatureVerifierMetrics;
+-import android.util.apk.ApkSignatureVerifierMetrics.VerificationResult;
++import android.util.Log;
+ 
+ import com.android.internal.annotations.VisibleForTesting;
+ import com.android.internal.util.DataClass;
+@@ -402,7 +400,7 @@
+             return new SigningDetails(new Signature[]{new Signature(mSignatures[0])},
+                     mSignatureSchemeVersion, mergedSignatures.toArray(new Signature[0]));
+         } catch (CertificateException e) {
+-            Slog.e(TAG, "Caught an exception creating the merged lineage: ", e);
++            Log.e(TAG, "Caught an exception creating the merged lineage: ", e);
+             return this;
+         }
+     }
+@@ -645,9 +643,7 @@
+             }
+         }
+ 
+-        if (!android.security.Flags.apkPqcHybridSigning() || !matchFound) {
+-            return matchFound;
+-        }
++        if (!matchFound) return false;
+ 
+         // If either app is currently signed with a hybrid configuration, the platform must ensure
+         // that neither app is reusing just one of the hybrid keys. If an app's lineage contains one
+@@ -678,8 +674,6 @@
+         }
+ 
+         if (reuseDetected) {
+-            ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(mSignatureSchemeVersion,
+-                    mSignatureSchemeMinorVersion, VerificationResult.VERIFICATION_V32_KEY_REUSE);
+             return false;
+         }
+         return true;
+@@ -752,19 +746,7 @@
+         }
+         // If a match was not found above, then the oldDetails would fail any potential hybrid
+         // checks below as well.
+-        if (!android.security.Flags.apkPqcHybridSigning() || !matchFound) {
+-            if (android.security.Flags.apkPqcHybridSigning()) {
+-                // If this is a hybrid update package that doesn't have the current signing identity
+-                // of the existing package on the device in its lineage, then log to track potential
+-                // update failures from the hybrid block.
+-                if (isV32Hybrid() && (flags & CertCapabilities.INSTALLED_DATA) != 0) {
+-                    ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(mSignatureSchemeVersion,
+-                            mSignatureSchemeMinorVersion,
+-                            VerificationResult.VERIFICATION_V32_UPDATE_SIGNATURE_MISMATCH);
+-                }
+-            }
+-            return matchFound;
+-        }
++        if (!matchFound) return false;
+         // If either this or the oldDetails is a hybrid signature, then ensure that either both
+         // hybrid keys are present, or that any match is not from just one of the hybrid signers;
+         // this prevents the compromise of a single hybrid signer from granting capabilities to an
+@@ -790,18 +772,6 @@
+             // A match was already found with the current signer, ensure that there is also a match
+             // for the classical signer.
+             if (!hasCertificate(oldDetails.getV32ClassicalHybridSigner(), flags)) {
+-                int verificationResult;
+-                if ((flags & CertCapabilities.INSTALLED_DATA) != 0) {
+-                    verificationResult =
+-                            VerificationResult.VERIFICATION_V32_MISSING_CLASSICAL_INSTALLED_DATA;
+-                } else if ((flags & CertCapabilities.ROLLBACK) != 0) {
+-                    verificationResult =
+-                            VerificationResult.VERIFICATION_V32_MISSING_CLASSICAL_ROLLBACK;
+-                } else {
+-                    verificationResult = VerificationResult.VERIFICATION_V32_MISSING_CLASSICAL;
+-                }
+-                ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(mSignatureSchemeVersion,
+-                        mSignatureSchemeMinorVersion, verificationResult);
+                 return false;
+             }
+         }
+@@ -853,27 +823,7 @@
+         }
+ 
+         if (reuseDetected) {
+-            int verificationResult;
+-            if ((flags & CertCapabilities.INSTALLED_DATA) != 0) {
+-                verificationResult = VerificationResult.VERIFICATION_V32_KEY_REUSE_INSTALLED_DATA;
+-            } else if ((flags & CertCapabilities.ROLLBACK) != 0) {
+-                verificationResult = VerificationResult.VERIFICATION_V32_KEY_REUSE_ROLLBACK;
+-            } else {
+-                verificationResult = VerificationResult.VERIFICATION_V32_KEY_REUSE;
+-            }
+-            ApkSignatureVerifierMetrics.logSigningKeyPolicyFailure(mSignatureSchemeVersion,
+-                    mSignatureSchemeMinorVersion, verificationResult);
+             return false;
+-        }
+-        // This point should only be reached if the current signing identity of the oldDetails does
+-        // not match that of this instance; if this is an INSTALLED_DATA or ROLLBACK, report the
+-        // signing key change.
+-        if ((flags & CertCapabilities.INSTALLED_DATA) != 0) {
+-            ApkSignatureVerifierMetrics.logSigningKeyChangeSuccess(mSignatureSchemeVersion,
+-                    mSignatureSchemeMinorVersion, true, false);
+-        } else if ((flags & CertCapabilities.ROLLBACK) != 0) {
+-            ApkSignatureVerifierMetrics.logSigningKeyChangeSuccess(mSignatureSchemeVersion,
+-                    mSignatureSchemeMinorVersion, false, true);
+         }
+         return true;
+     }
+--- a/frameworks/base/core/java/android/content/pm/SigningInfo.java
++++ b/frameworks/base/core/java/android/content/pm/SigningInfo.java
+@@ -18,7 +18,6 @@
+ 
+ import static android.content.pm.SigningDetails.SignatureSchemeVersion;
+ 
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -90,7 +89,6 @@
+      * <a href="https://source.android.com/docs/security/features/apksigning#schemes">APK signing
+      * schemas</a>
+      */
+-    @FlaggedApi(Flags.FLAG_ARCHIVING)
+     public SigningInfo(@SignatureSchemeVersion int schemeVersion,
+             @Nullable Collection<Signature> apkContentsSigners,
+             @Nullable Collection<PublicKey> publicKeys,
+@@ -205,7 +203,6 @@
+      * <a href="https://source.android.com/docs/security/features/apksigning#schemes">APK signing
+      * schemas</a>
+      */
+-    @FlaggedApi(Flags.FLAG_ARCHIVING)
+     public @SignatureSchemeVersion int getSchemeVersion() {
+         return mSigningDetails.getSignatureSchemeVersion();
+     }
+@@ -213,7 +210,6 @@
+     /**
+      * Returns the public keys for the signing certificates.
+      */
+-    @FlaggedApi(Flags.FLAG_ARCHIVING)
+     public @NonNull Collection<PublicKey> getPublicKeys() {
+         return mSigningDetails.getPublicKeys();
+     }

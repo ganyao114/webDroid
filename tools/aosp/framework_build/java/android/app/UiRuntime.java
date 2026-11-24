@@ -110,6 +110,7 @@ public final class UiRuntime {
         private KeyguardManager keyguard;
         private NotificationManager notifications;
         private StorageManager storage;
+        private ActivityManager activities;
         private android.net.ConnectivityManager connectivity;
         private Resources.Theme theme;
         private final ArrayMap<String, ServiceInfo> services;
@@ -459,6 +460,10 @@ public final class UiRuntime {
         @Override public Object getSystemService(String name) {
             if (DISPLAY_SERVICE.equals(name)) return displays;
             if (WINDOW_SERVICE.equals(name)) return windows;
+            if (ACTIVITY_SERVICE.equals(name)) {
+                if (activities == null) activities = new ActivityManager(this, new Handler(getMainLooper()));
+                return activities;
+            }
             if (USER_SERVICE.equals(name)) return users;
             if (APPWIDGET_SERVICE.equals(name)) return widgets;
             if (CONNECTIVITY_SERVICE.equals(name)) {
@@ -552,8 +557,11 @@ public final class UiRuntime {
             manifest.info.nativeLibraryDir = nativeLibraryDir;
             AppContext app = new AppContext(resources, manifest.info, manifest);
             context = app;
-            Application.setEmbeddedProcessName(manifest.info.packageName);
+            Application.setEmbeddedProcessName(manifest.info.processName);
             app.application = createApplication(app, manifest.application);
+            if (Boolean.getBoolean("org.wasmandroid.foreground")) {
+                app.application.getPackageManager().installEmbeddedProviders(app.application);
+            }
             app.application.onCreate();
             Activity activity = nativeCreateActivity(manifest.activity);
             ComponentName component = new ComponentName(manifest.info.packageName, manifest.activity);
@@ -601,6 +609,7 @@ public final class UiRuntime {
             if (!"manifest".equals(xml.getName())) throw new XmlPullParserException("APK has no manifest");
             result.info.packageName = xml.getAttributeValue(null, "package");
             if (result.info.packageName == null) throw new XmlPullParserException("Manifest has no package name");
+            result.info.processName = result.info.packageName;
             int versionCode = xml.getAttributeIntValue(XmlValues.ANDROID, "versionCode", 0);
             int versionCodeMajor = xml.getAttributeIntValue(XmlValues.ANDROID, "versionCodeMajor", 0);
             result.packageInfo.setLongVersionCode(PackageInfo.composeLongVersionCode(versionCodeMajor, versionCode));
@@ -617,6 +626,10 @@ public final class UiRuntime {
                 if (xml.getDepth() == 2 && "application".equals(xml.getName())) {
                     String application = xml.getAttributeValue(XmlValues.ANDROID, "name");
                     if (application != null) result.application = fullName(result.info.packageName, application);
+                    String process = xml.getAttributeValue(XmlValues.ANDROID, "process");
+                    if (process != null && !process.isEmpty()) {
+                        result.info.processName = process.startsWith(":") ? result.info.packageName + process : process;
+                    }
                     result.info.icon = xml.getAttributeResourceValue(XmlValues.ANDROID, "icon", 0);
                     if (xml.getAttributeBooleanValue(XmlValues.ANDROID, "supportsRtl", false)) {
                         result.info.flags |= ApplicationInfo.FLAG_SUPPORTS_RTL;

@@ -6,6 +6,7 @@ frameworks/base/core/java/android/os/ConditionVariable.java
 frameworks/base/core/java/com/android/internal/pm/pkg/component/ParsedProviderUtils.java
 frameworks/base/telephony/java/android/telephony/SubscriptionManager.java
 frameworks/base/telephony/java/android/telephony/TelephonyManager.java
+frameworks/base/core/java/android/telephony/PhoneStateListener.java
 frameworks/base/core/java/android/os/FileUtils.java
 frameworks/base/core/java/android/window/OnBackInvokedDispatcher.java
 frameworks/base/core/java/android/window/WindowOnBackInvokedDispatcher.java
@@ -166,6 +167,11 @@ frameworks/base/core/java/android/os/BaseBundle.java
 frameworks/base/core/java/android/os/Bundle.java
 frameworks/base/core/java/android/os/Handler.java
 frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
+frameworks/base/core/java/android/os/AsyncTask.java
+libcore/dalvik/src/main/java/dalvik/system/ZipPathValidator.java
+libcore/dalvik/src/main/java/dalvik/system/BaseDexClassLoader.java
+libcore/dalvik/src/main/java/dalvik/system/DexPathList.java
+libcore/dalvik/src/main/java/dalvik/system/PathClassLoader.java
 frameworks/base/core/java/android/os/LocaleList.java
 frameworks/base/core/java/android/os/Looper.java
 frameworks/base/core/java/android/os/Message.java
@@ -345,6 +351,15 @@ frameworks/base/core/java/android/content/SharedPreferences.java
 frameworks/base/core/java/android/content/pm/ActivityInfo.java
 frameworks/base/core/java/android/content/pm/Attribution.java
 frameworks/base/core/java/android/content/pm/PackageInfo.java
+frameworks/base/core/java/android/content/pm/Signature.java
+frameworks/base/core/java/android/content/pm/SigningDetails.java
+frameworks/base/core/java/android/content/pm/SigningInfo.java
+frameworks/base/core/java/android/util/PackageUtils.java
+frameworks/base/core/java/android/net/Credentials.java
+frameworks/base/core/java/android/net/LocalServerSocket.java
+frameworks/base/core/java/android/net/LocalSocket.java
+frameworks/base/core/java/android/net/LocalSocketAddress.java
+frameworks/base/core/java/android/net/LocalSocketImpl.java
 frameworks/base/core/java/android/content/pm/UsesPermissionPurposeInfo.java
 frameworks/base/core/java/android/content/pm/ApplicationInfo.java
 frameworks/base/core/java/android/content/pm/ComponentInfo.java
@@ -612,6 +627,15 @@ org/ccil/cowan/tagsoup/Scanner.java
 org/ccil/cowan/tagsoup/Schema.java
 
 [java-base]
+libcore/ojluni/src/main/java/java/lang/InternalError.java
+libcore/ojluni/src/main/java/java/util/zip/Checksum.java
+libcore/ojluni/src/main/java/java/util/zip/ZipException.java
+libcore/ojluni/src/main/java/java/util/zip/CRC32.java
+libcore/ojluni/src/main/java/java/net/SocketTimeoutException.java
+libcore/ojluni/src/main/java/java/math/BigInteger.java
+libcore/ojluni/src/main/java/java/math/BitSieve.java
+libcore/ojluni/src/main/java/java/math/MutableBigInteger.java
+libcore/ojluni/src/main/java/java/math/SignedMutableBigInteger.java
 libcore/ojluni/src/main/java/java/lang/annotation/AnnotationFormatError.java
 libcore/ojluni/src/main/java/java/lang/annotation/AnnotationTypeMismatchException.java
 libcore/ojluni/src/main/java/java/lang/annotation/IncompleteAnnotationException.java
@@ -622,6 +646,12 @@ libcore/ojluni/src/main/java/java/lang/ThreadGroup.java
 libcore/ojluni/src/main/java/java/lang/StackTraceElement.java
 libcore/ojluni/src/main/java/java/util/BitSet.java
 libcore/ojluni/src/main/java/java/util/concurrent/PriorityBlockingQueue.java
+libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinPool.java
+libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinTask.java
+libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinWorkerThread.java
+libcore/ojluni/src/main/java/java/util/concurrent/RecursiveAction.java
+libcore/ojluni/src/main/java/java/util/concurrent/RecursiveTask.java
+libcore/ojluni/src/main/java/java/util/concurrent/CountedCompleter.java
 libcore/ojluni/src/main/java/java/util/concurrent/locks/AbstractQueuedSynchronizer.java
 libcore/ojluni/src/main/java/java/util/concurrent/Semaphore.java
 libcore/ojluni/src/main/java/sun/misc/Unsafe.java
@@ -659,6 +689,7 @@ libcore/ojluni/src/main/java/java/text/AttributedCharacterIterator.java
 libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicMarkableReference.java
 libcore/ojluni/src/main/java/java/util/Date.java
 libcore/ojluni/src/main/java/java/io/ByteArrayInputStream.java
+libcore/ojluni/src/main/java/java/io/BufferedInputStream.java
 libcore/ojluni/src/main/java/java/io/ObjectStreamField.java
 libcore/ojluni/src/main/java/java/io/BufferedWriter.java
 libcore/ojluni/src/main/java/java/io/StringWriter.java
@@ -997,7 +1028,6 @@ patches/913-atomic-field-updaters.patch
 patches/914-copy-on-write-runtime-boundary.patch
 patches/915-cooperative-completion-stages.patch
 patches/916-collector-boot-library-boundary.patch
-patches/917-cooperative-countdown-latch.patch
 patches/918-sequential-stream-runtime.patch
 patches/919-timeunit-lazy-chrono-unit.patch
 
@@ -1206,3 +1236,14 @@ patches/1039-embedded-pointer-icons.patch
 patches/1040-embedded-context-device.patch
 patches/1041-embedded-auto-complete.patch
 patches/1042-embedded-process-identity.patch
+patches/1043-cooperative-fork-join.patch
+patches/1044-embedded-apk-signers.patch
+patches/1045-embedded-md5-and-sha256.patch
+patches/1046-cooperative-local-stream-sockets.patch
+patches/1047-embedded-crc32.patch
+patches/1048-embedded-big-integer.patch
+patches/1049-cooperative-buffered-input.patch
+patches/1050-restore-looper-thread-local.patch
+patches/1051-embedded-async-task.patch
+patches/1052-embedded-phone-state-listener.patch
+patches/1053-embedded-dex-class-loader.patch

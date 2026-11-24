@@ -53,12 +53,18 @@ struct CondWait {
 };
 
 struct GuestCpu;
+struct GuestSignalStack {
+    uint64_t address = 0, size = 0;
+    uint32_t flags = 2; // Linux SS_DISABLE.
+};
+
 struct GuestThread {
     uint64_t id = 1;
     uint64_t stack_base = 0, stack_size = 1 << 20, active_sp = 0, steps_left = 0;
     uint64_t errno_address = 0, thread_pointer = 0, result = 0, joiner = 0;
     uint64_t host_entry = 0;
     uint64_t locale = 0, signal_mask = 0, pending_signals = 0;
+    GuestSignalStack signal_stack;
     int policy = 0, priority = 0, nice = 0, egl_error = 0x3000;
     bool dumpable = true;
     std::string name = "guest";
@@ -116,6 +122,7 @@ struct GuestDirectory {
 };
 
 struct SharedFilePage;
+struct PosixRegex;
 struct GuestMappingPage {
     uint8_t prot;
     bool can_write = true;
@@ -138,6 +145,7 @@ struct BionicState {
     std::map<uint64_t, GuestMappingPage> map_pages;
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::weak_ptr<SharedFilePage>> map_file_pages;
     std::map<uint64_t, GuestDirectory> directories;
+    std::map<uint64_t, std::shared_ptr<PosixRegex>> regexes;
     std::map<std::string, uint64_t, std::less<>> strings;
     std::map<std::string, uint64_t, std::less<>> environment;
     std::function<std::optional<std::span<const uint8_t>>(std::string_view)> read_guest_file;

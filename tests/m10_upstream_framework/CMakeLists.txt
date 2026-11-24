@@ -34,7 +34,7 @@ if(TARGET aosp17_ui_jni)
 else()
     set(ui_jni aosp17_upstream_ui_jni)
     set(ui_native "${repo}/runtime/aosp17_shims/ui_jni")
-    _wa_art_static(${ui_jni} "${ui_native}" ui_bridge.cpp canvas.cpp path_data.cpp bitmap.cpp)
+    _wa_art_static(${ui_jni} "${ui_native}" ui_bridge.cpp canvas.cpp path_data.cpp bitmap.cpp apk_signing.cpp)
     target_include_directories(${ui_jni} PUBLIC "${ui_native}")
     target_link_libraries(${ui_jni} PUBLIC aosp17_art_interp wa_hal_surfaceflinger
         PRIVATE aosp17_core_jni aosp17_zlib)

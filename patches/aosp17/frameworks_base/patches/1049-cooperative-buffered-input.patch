@@ -1,0 +1,63 @@
+--- a/libcore/ojluni/src/main/java/java/io/BufferedInputStream.java
++++ b/libcore/ojluni/src/main/java/java/io/BufferedInputStream.java
+@@ -24,9 +24,6 @@
+  */
+ 
+ package java.io;
+-import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+-import jdk.internal.util.ArraysSupport;
+-
+ /**
+  * A {@code BufferedInputStream} adds
+  * functionality to another input stream-namely,
+@@ -60,16 +57,14 @@
+      */
+     protected volatile byte buf[];
+ 
+-    /**
+-     * Atomic updater to provide compareAndSet for buf. This is
+-     * necessary because closes can be asynchronous. We use nullness
+-     * of buf[] as primary indicator that this stream is closed. (The
+-     * "in" field is also nulled out on close.)
+-     */
+-    private static final
+-        AtomicReferenceFieldUpdater<BufferedInputStream, byte[]> bufUpdater =
+-        AtomicReferenceFieldUpdater.newUpdater
+-        (BufferedInputStream.class,  byte[].class, "buf");
++    private boolean compareAndSetBuffer(byte[] oldBuffer, byte[] newBuffer) {
++        // The guest scheduler cannot switch threads between these field accesses.
++        if (buf != oldBuffer) {
++            return false;
++        }
++        buf = newBuffer;
++        return true;
++    }
+ 
+     /**
+      * The index one greater than the index of the last valid byte in
+@@ -217,14 +212,10 @@
+                 markpos = -1;   /* buffer got too big, invalidate mark */
+                 pos = 0;        /* drop buffer contents */
+             } else {            /* grow buffer */
+-                int nsz = ArraysSupport.newLength(pos,
+-                        1,  /* minimum growth */
+-                        pos /* preferred growth */);
+-                if (nsz > marklimit)
+-                    nsz = marklimit;
++                int nsz = (int) Math.min(2L * pos, marklimit);
+                 byte[] nbuf = new byte[nsz];
+                 System.arraycopy(buffer, 0, nbuf, 0, pos);
+-                if (!bufUpdater.compareAndSet(this, buffer, nbuf)) {
++                if (!compareAndSetBuffer(buffer, nbuf)) {
+                     // Can't replace buf if there was an async close.
+                     // Note: This would need to be changed if fill()
+                     // is ever made accessible to multiple threads.
+@@ -469,7 +460,7 @@
+     public void close() throws IOException {
+         byte[] buffer;
+         while ( (buffer = buf) != null) {
+-            if (bufUpdater.compareAndSet(this, buffer, null)) {
++            if (compareAndSetBuffer(buffer, null)) {
+                 InputStream input = in;
+                 in = null;
+                 if (input != null)

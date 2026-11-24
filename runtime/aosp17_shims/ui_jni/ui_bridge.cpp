@@ -1,3 +1,4 @@
+#include "apk_signing.h"
 #include "native_methods.h"
 #include "jni_bridge.h"
 
@@ -294,6 +295,35 @@ jobject GetApplication(JNIEnv* env, jclass, jstring pkg, jlong flags, jint user)
         if (!ctor)
             return nullptr;
         return NewEntry(env, type, ctor, *info);
+    });
+}
+
+jobjectArray GetApkSigners(JNIEnv* env, jclass, jstring pkg, jint user) {
+    return CallSafely(env, [&]() -> jobjectArray {
+        State* state = GetState(env);
+        if (!state || !state->packages.get_application) return nullptr;
+        const auto name = Utf8(env, pkg);
+        if (env->ExceptionCheck()) return nullptr;
+        const auto info = state->packages.get_application(name, 0, user);
+        if (!info) return nullptr;
+        const auto signers = ReadApkV2Signers(info->apk_path);
+        if (signers.empty()) return nullptr;
+        const auto byte_array = env->FindClass("[B");
+        if (!byte_array) return nullptr;
+        auto result = env->NewObjectArray(static_cast<jsize>(signers.size()), byte_array, nullptr);
+        if (!result) return nullptr;
+        for (jsize i = 0; i < static_cast<jsize>(signers.size()); ++i) {
+            const auto& signer = signers[i];
+            if (signer.size() > INT32_MAX) return nullptr;
+            const auto size = static_cast<jsize>(signer.size());
+            auto bytes = env->NewByteArray(size);
+            if (!bytes) return nullptr;
+            env->SetByteArrayRegion(bytes, 0, size, reinterpret_cast<const jbyte*>(signer.data()));
+            if (!env->ExceptionCheck()) env->SetObjectArrayElement(result, i, bytes);
+            env->DeleteLocalRef(bytes);
+            if (env->ExceptionCheck()) return nullptr;
+        }
+        return result;
     });
 }
 
@@ -604,6 +634,8 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
                                            "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/"
                                            "String;Ljava/lang/String;Ljava/lang/String;"
                                            "[Ljava/lang/String;II)Z"));
+    detail::RegisterIfDeclared(vm, "android/content/pm/PackageManager",
+        Method<detail::GetApkSigners>(vm, "nativeApkSigners", "(Ljava/lang/String;I)[[B"));
     Register(vm, "java/lang/Enum",
              Method<detail::DeclaringEnumClass>(vm, "declaringClass",
                                                 "(Ljava/lang/Class;)Ljava/lang/Class;"),

@@ -4,7 +4,9 @@
 
 #include <cerrno>
 #include <climits>
+#include <exception>
 #include <fcntl.h>
+#include <ftw.h>
 #include <poll.h>
 #include <sys/file.h>
 #include <sys/ioctl.h>
@@ -324,6 +326,69 @@ void WriteStat(GuestMemory mem, uint64_t address, const struct stat& st) {
     }
 }
 
+struct FileTreeWalk {
+    wa_host_call_ctx_t& ctx;
+    size_t prefix;
+    std::exception_ptr error;
+};
+
+thread_local FileTreeWalk* current_walk = nullptr;
+
+int VisitFile(const char* path, const struct stat* stat, int type, struct FTW* position) {
+    auto& walk = *current_walk;
+    try {
+        int guest_type;
+        switch (type) {
+        case FTW_F: guest_type = 0; break;
+        case FTW_D: guest_type = 1; break;
+        case FTW_DNR: guest_type = 2; break;
+        case FTW_DP: guest_type = 3; break;
+        case FTW_NS: guest_type = 4; break;
+        case FTW_SL: guest_type = 5; break;
+        case FTW_SLN: guest_type = 6; break;
+        default: return -1;
+        }
+        auto& dbt = *walk.ctx.dbt;
+        const GuestMemory mem(walk.ctx);
+        const std::string_view full_path(path);
+        const auto prefix = std::min(walk.prefix, full_path.size());
+        const auto name = full_path.substr(prefix);
+        GuestBuffer guest_path(dbt, name.size() + 1), guest_stat(dbt, 128), guest_position(dbt, 8);
+        mem.Write(guest_path.address, name.data(), name.size() + 1);
+        const struct stat empty{};
+        WriteStat(mem, guest_stat.address, stat && type != FTW_NS ? *stat : empty);
+        mem.Write<int32_t>(guest_position.address, std::max<int64_t>(0, position->base - int64_t(prefix)));
+        mem.Write<int32_t>(guest_position.address + 4, position->level);
+        const uint64_t args[] = {guest_path.address, guest_stat.address,
+                                 static_cast<uint64_t>(guest_type), guest_position.address};
+        uint64_t result;
+        CheckGuest(wa_dbt_call(&dbt, walk.ctx.args[1], args, std::size(args), &result));
+        return static_cast<int32_t>(result);
+    } catch (...) {
+        walk.error = std::current_exception();
+        return -1;
+    }
+}
+
+void WalkFiles(wa_host_call_ctx_t& ctx) {
+    const auto flags = ctx.args[3];
+    if (flags & ~0xfu || static_cast<int32_t>(ctx.args[2]) <= 0)
+        return Fail(ctx, EINVAL);
+    if (flags & 8) // FTW_CHDIR changes the process-wide working directory on the host.
+        return Fail(ctx, ENOTSUP);
+    const auto path = Path(ctx, ctx.args[0]);
+    const auto prefix = path.size() - GuestMemory(ctx).String(ctx.args[0]).size();
+    FileTreeWalk walk{ctx, prefix, {}};
+    const auto previous = std::exchange(current_walk, &walk);
+    const auto result = nftw(path.c_str(), VisitFile, static_cast<int32_t>(ctx.args[2]),
+                            (flags & 1 ? FTW_PHYS : 0) | (flags & 2 ? FTW_MOUNT : 0) |
+                            (flags & 4 ? FTW_DEPTH : 0));
+    current_walk = previous;
+    if (walk.error)
+        std::rethrow_exception(walk.error);
+    PosixResult(ctx, result);
+}
+
 enum class Stat { File, Link, Descriptor, At };
 template <Stat op> void StatCall(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
@@ -416,6 +481,7 @@ enum class FilePath {
     Realpath,
     Chdir,
     Pathconf,
+    Utime,
     Utimes,
     UtimensAt
 };
@@ -501,13 +567,14 @@ template <FilePath op> void PathCall(wa_host_call_ctx_t& ctx) {
         }
         return;
     }
-    if constexpr (op == FilePath::Utimes || op == FilePath::UtimensAt) {
+    if constexpr (op == FilePath::Utime || op == FilePath::Utimes || op == FilePath::UtimensAt) {
+        constexpr bool seconds_only = op == FilePath::Utime;
         const auto source = ctx.args[at ? 2 : 1];
         struct timespec times[2]{};
         if (source) {
             for (size_t i = 0; i < 2; ++i) {
-                const auto address = source + i * mem.width() * 2;
-                const auto fraction = SignedWord(mem, mem.ReadWord(address + mem.width()));
+                const auto address = source + i * mem.width() * (seconds_only ? 1 : 2);
+                const auto fraction = seconds_only ? 0 : SignedWord(mem, mem.ReadWord(address + mem.width()));
                 if (!at && (fraction < 0 || fraction >= 1000000))
                     return Fail(ctx, EINVAL);
                 times[i].tv_sec = SignedWord(mem, mem.ReadWord(address));
@@ -562,6 +629,18 @@ void Mkstemp(wa_host_call_ctx_t& ctx) {
     PosixResult(ctx, guest);
     if (guest >= 0)
         mem.Write(ctx.args[0], path.c_str() + path.size() - length, length + 1);
+}
+
+void Mkdtemp(wa_host_call_ctx_t& ctx) {
+    const GuestMemory mem(ctx);
+    auto path = Path(ctx, ctx.args[0]);
+    const auto length = mem.String(ctx.args[0]).size();
+    if (!mkdtemp(path.data())) {
+        SetErrno(*ctx.dbt, GuestErrno(errno));
+        return;
+    }
+    mem.Write(ctx.args[0], path.c_str() + path.size() - length, length + 1);
+    ctx.ret0 = ctx.args[0];
 }
 
 void Tempnam(wa_host_call_ctx_t& ctx) {
@@ -1223,11 +1302,14 @@ void RegisterFiles(wa_dbt& dbt) {
         PATH(realpath, Realpath),
         PATH(chdir, Chdir),
         PATH(pathconf, Pathconf),
+        PATH(utime, Utime),
         PATH(utimes, Utimes),
         PATH(utimensat, UtimensAt),
         {"getcwd", Dispatch<Getcwd>},
         {"mkstemp", Dispatch<Mkstemp>},
         {"mkstemp64", Dispatch<Mkstemp>},
+        {"mkdtemp", Dispatch<Mkdtemp>},
+        {"nftw", Dispatch<WalkFiles>},
         {"tempnam", Dispatch<Tempnam>},
         DIR(opendir, Open),
         DIR(fdopendir, FdOpen),

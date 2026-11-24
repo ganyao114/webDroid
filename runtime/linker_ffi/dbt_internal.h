@@ -21,6 +21,12 @@ struct HostSymbol {
     uint64_t address;
 };
 
+struct ElfMapping {
+    uint64_t address, offset;
+    size_t length, valid;
+    uint32_t prot;
+};
+
 struct LoadedImage {
     uint64_t base = 0;
     uint64_t bias = 0, phdr = 0, name_address = 0, exidx = 0;
@@ -28,6 +34,8 @@ struct LoadedImage {
     uint64_t tls_id = 0, tls_offset = 0, tls_size = 0;
     std::vector<uint8_t> tls_initial;
     std::vector<std::pair<uint64_t, uint64_t>> segments;
+    std::vector<ElfMapping> mappings;
+    std::string filename;
     std::string soname;
     std::vector<std::string> needed;
     std::map<std::string, uint64_t, std::less<>> exports;

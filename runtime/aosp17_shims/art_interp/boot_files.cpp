@@ -83,6 +83,15 @@ Object& Descriptor(Runtime& vm, Object* stream) {
   return vm.NonNull(stream->fields[field.slot].ref());
 }
 
+Object* NewGuestDescriptor(Runtime& vm, std::string_view exhaustion = "Ljava/io/IOException;") {
+  if (vm.next_file_descriptor == INT32_MAX)
+    vm.Fail(exhaustion, "File descriptors exhausted");
+  auto& type = vm.linker.Resolve("Ljava/io/FileDescriptor;");
+  auto& ctor = vm.linker.FindMethod(type, "<init>", "(I)V", false);
+  const Value number = Value::Int(vm.next_file_descriptor++);
+  return vm.NewObject(type, ctor, {&number, 1});
+}
+
 Value Open(Runtime& vm, Object* name_object, bool readable, bool writable, bool append, bool truncate) {
   constexpr auto kMissing = "Ljava/io/FileNotFoundException;";
   const auto& name = vm.NonNull(name_object).text;
@@ -98,16 +107,18 @@ Value Open(Runtime& vm, Object* name_object, bool readable, bool writable, bool 
       vm.Fail(kMissing, EncodeUtf8(name, false));
     }
   }
-  if (vm.next_file_descriptor == INT32_MAX) vm.Fail(kMissing, "File descriptors exhausted");
-  auto& type = vm.linker.Resolve("Ljava/io/FileDescriptor;");
-  auto& ctor = vm.linker.FindMethod(type, "<init>", "(I)V", false);
-  const Value number = Value::Int(vm.next_file_descriptor++);
-  auto* descriptor = vm.NewObject(type, ctor, {&number, 1});
+  auto* descriptor = NewGuestDescriptor(vm, kMissing);
   if (entry == vm.guest_files.end()) {
     entry = vm.guest_files.emplace(path,
         std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{{}, NowMillis()})).first;
   }
-  vm.file_handles.emplace(descriptor, Runtime::FileHandle{entry->second, 0, readable, writable, append});
+  auto file = entry->second;
+  if (file->snapshot) {
+    const auto contents = file->snapshot();
+    file = std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{
+        std::vector<uint8_t>(contents.begin(), contents.end()), file->last_modified});
+  }
+  vm.file_handles.emplace(descriptor, Runtime::FileHandle{std::move(file), 0, readable, writable, append});
   if (truncate) {
     entry->second->bytes.clear();
     entry->second->last_modified = NowMillis();
@@ -327,6 +338,12 @@ void Vm::MountReadOnlyFile(std::string_view name, uint64_t size, FileReader read
       {}, NowMillis(), std::move(reader), size}));
 }
 
+void Vm::MountReadOnlyGeneratedFile(std::string_view name, FileSnapshot snapshot) {
+  if (!snapshot) throw std::invalid_argument("Missing mounted file generator");
+  MountReadOnly(*runtime_, name, std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{
+      .last_modified = NowMillis(), .snapshot = std::move(snapshot)}));
+}
+
 void Vm::MountReadOnlyHostFile(const std::string& path) {
   std::shared_ptr<std::FILE> backing(std::fopen(path.c_str(), "rb"), [](std::FILE* file) {
     if (file) std::fclose(file);
@@ -346,15 +363,26 @@ void Vm::MountReadOnlyHostFile(const std::string& path) {
 }
 
 std::optional<std::span<const uint8_t>> Vm::ReadGuestFile(std::string_view path) const {
-  const auto file = runtime_->guest_files.find(path);
-  if (file == runtime_->guest_files.end() || !file->second || file->second->reader) return std::nullopt;
-  return file->second->bytes;
+  return runtime_->ReadGuestFile(path);
+}
+
+std::optional<std::span<const uint8_t>> Runtime::ReadGuestFile(std::string_view path) const {
+  const auto entry = guest_files.find(path);
+  if (entry == guest_files.end() || !entry->second || entry->second->reader) return std::nullopt;
+  auto& file = *entry->second;
+  if (file.snapshot) {
+    const auto contents = file.snapshot();
+    file.bytes.assign(contents.begin(), contents.end());
+  }
+  return file.bytes;
 }
 
 void InstallFiles(Runtime& vm) {
   vm.guest_files.try_emplace("/tmp", nullptr);
   if (vm.options.sandboxed_files) MountCpuFiles(vm);
   auto& cl = vm.linker;
+  cl.AddBootNative("Landroid/net/LocalSocketImpl;", "newSocketDescriptor", "()Ljava/io/FileDescriptor;",
+      [](Runtime& vm, Object*, Values) { return Value::Ref(NewGuestDescriptor(vm)); });
   auto& file = cl.Define("Ljava/io/File;", kObject, 0, {"Ljava/io/Serializable;"});
   auto& separator = cl.AddField(file, "separator", kString, true);
   auto& path_separator = cl.AddField(file, "pathSeparator", kString, true);
@@ -502,7 +530,8 @@ void InstallFiles(Runtime& vm) {
   });
   cl.AddMethod(file, "length", "()J", 0, [](Runtime& vm, Object* self, Values) {
     const auto entry = vm.guest_files.find(GuestPath(self->text));
-    return Value::Long(entry != vm.guest_files.end() && entry->second ? entry->second->Size() : 0);
+    return Value::Long(entry != vm.guest_files.end() && entry->second && !entry->second->snapshot
+        ? entry->second->Size() : 0);
   });
   cl.AddMethod(file, "lastModified", "()J", 0, [](Runtime& vm, Object* self, Values) {
     const auto entry = vm.guest_files.find(GuestPath(self->text));

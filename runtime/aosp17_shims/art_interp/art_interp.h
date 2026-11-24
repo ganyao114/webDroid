@@ -80,6 +80,7 @@ class GuestNativeLibraries {
   virtual std::optional<Value> Invoke(Method& method, Object* receiver, std::span<const Value> args) = 0;
   virtual GuestNativeStats Stats() const = 0;
   virtual std::vector<GuestNativeImage> Images() const = 0;
+  virtual std::string ProcessMaps() const = 0;
   virtual void Shutdown() noexcept = 0;
 };
 
@@ -145,9 +146,12 @@ class Vm {
   // Read a mounted file at an offset. The callback returns bytes read or a negative error.
   using FileReader = std::function<int64_t(void*, size_t, uint64_t)>;
   void MountReadOnlyFile(std::string_view path, uint64_t size, FileReader reader);
+  // Capture generated contents each time the guest opens the file.
+  using FileSnapshot = std::function<std::string()>;
+  void MountReadOnlyGeneratedFile(std::string_view path, FileSnapshot snapshot);
   // Opens a host-owned immutable file at the same guest path, without copying it.
   void MountReadOnlyHostFile(const std::string& path);
-  // The view is available for memory-backed files until a guest write or removal.
+  // The view stays valid until the file changes or its generated contents are read again.
   std::optional<std::span<const uint8_t>> ReadGuestFile(std::string_view path) const;
   // Adds the numbered DEX entries atomically, in DEX order. DEX files loaded
   // via LoadDexFile or LoadFallbackDexFile form the parent class path.
@@ -163,8 +167,10 @@ class Vm {
   // The source is opened on the first library lookup.
   void SetGuestNativeSource(GuestNativeFactory factory, std::shared_ptr<const void> source);
   void SetSystemProperty(std::string_view name, std::string_view value);
+  void SetAndroidTargetSdkVersion(uint32_t version);
   GuestNativeStats GetGuestNativeStats() const;
   std::vector<GuestNativeImage> GetGuestNativeImages() const;
+  std::string GuestNativeProcessMaps() const;
   void SetGuestLibraryObserver(std::function<void(std::string_view)> observer);
   void ReleaseGuestNativeSource() noexcept;
 

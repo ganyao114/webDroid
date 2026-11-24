@@ -56,9 +56,10 @@ Then open `http://127.0.0.1:8090/web/shell/index.html` in Chrome/Edge with WebGP
 With the local `third_party/commercial_apks/weixin8080_arm64.apk` in place, run
 `ctest --test-dir build-host -R '^test_m20_wechat_compat$' -V` to see the cold-boot
 trace. The test verifies all 18 DEX files, the Tinker constructor and inline
-fence checkpoint, and the guest process identity. A stopped boot records its
-exception and lifecycle counters. The test exits successfully with a skip
-record when the APK is absent.
+fence, ForkJoinPool construction, the running app identity, and the v2 signing
+certificate returned by both PackageManager signing flags. It records the
+loaded ARM64 images, the exception stack, and the lifecycle counters. CTest
+marks the test skipped when the APK is absent.
 
 Pass `--require-ui` to the test command printed by CTest to require a completed
 boot with draw text and non-blank decor pixels. Pass `--probe-mmkv` for an
@@ -66,14 +67,18 @@ isolated run of the APK's ARM64 MMKV library that writes, syncs, closes, and
 reopens a temporary store. `--probe-core` also loads STLport, CSO, and xlog in
 that process. Each mode reports its library mappings and JNI counters.
 
-The cold boot reaches `MMApplicationLike.onBaseContextAttached` after the
-constructor and the inline fence return. It stops in `fi5.n0.d` at DEX PC 15
-while allocating `java.util.concurrent.ForkJoinPool`. The upstream class needs
-the JDK-internal Unsafe and thread-container sources, which are outside the
-current libcore sparse checkout, and integration with the cooperative guest
-thread scheduler. The manifest has 28 providers in the main process and
-three assigned to named processes. Provider startup, `Application.onCreate`,
-and the first activity frame are downstream of the observed stop.
+The cold boot constructs its ForkJoinPool and passes the coroutine dispatcher
+setup. `libmmkv.so`, `libwechatcrash.so`, `libtrace-canary.so`, and `libcso.log.so`
+finish `JNI_OnLoad` in the WeChat process. The Tencent Matrix
+`libmatrix-jnihook.so` then fails its `dalvik.system.VMRuntime` lookup during
+`JNI_OnLoad`. The library's hook expects ART's `setHiddenApiExemptions` method
+and native method metadata. The resulting `JniHookJni.jniPlaceHolder()`
+`UnsatisfiedLinkError` surfaces in `JniHookJni.b` at DEX PC 0. Attachment has
+yet to return, so provider startup, `Application.onCreate`, and activity
+rendering remain pending. The APK declares 27 main-process providers and three
+assigned to other processes. The framework smoke fixture verifies that main
+providers run after attachment and before `Application.onCreate`, and that
+providers assigned to another process are skipped.
 
 ### WeChat 8.0.80 memory budget for Phase 10B
 

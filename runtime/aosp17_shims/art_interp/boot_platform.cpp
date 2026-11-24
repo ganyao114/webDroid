@@ -467,6 +467,7 @@ void InstallSystem(Runtime& vm) {
 const Field& InstallThread(Runtime& vm) {
   auto& cl = vm.linker;
   constexpr auto kThread = "Ljava/lang/Thread;";
+  constexpr auto kGroup = "Ljava/lang/ThreadGroup;";
   constexpr auto kHandler = "Ljava/lang/Thread$UncaughtExceptionHandler;";
   constexpr auto kString = "Ljava/lang/String;";
   auto& handler = cl.Define(kHandler, kObject, art::kAccInterface | art::kAccAbstract);
@@ -487,6 +488,7 @@ const Field& InstallThread(Runtime& vm) {
   auto& exception_handler = cl.AddField(thread, "uncaughtExceptionHandler", kHandler, false);
   auto& default_handler = cl.AddField(thread, "defaultUncaughtExceptionHandler", kHandler, true);
   auto& loader = cl.AddField(thread, "contextClassLoader", "Ljava/lang/ClassLoader;", false);
+  auto& group = cl.AddField(thread, "group", kGroup, false);
   cl.AddMethod(thread, "<clinit>", "()V", art::kAccStatic,
       [&thread, &main, &current, &name, &id, &priority, &started](Runtime& vm, Object*, Values) {
     auto* object = vm.heap.Allocate(vm, thread);
@@ -497,7 +499,8 @@ const Field& InstallThread(Runtime& vm) {
     object->fields[started.slot] = Value::Int(1);
     return Value{};
   });
-  const auto ctor = [&name, &id, &target, &next_id, &priority, &daemon, &current](Runtime& vm, Object* self, Values a) {
+  const auto ctor = [&name, &id, &target, &next_id, &priority, &daemon, &current, &group, &loader](
+      Runtime& vm, Object* self, Values a) {
     const auto thread_id = next_id.value.j();
     if (thread_id == INT64_MAX) vm.Fail("Ljava/lang/OutOfMemoryError;", "Thread IDs exhausted");
     next_id.value = Value::Long(thread_id + 1);
@@ -505,6 +508,8 @@ const Field& InstallThread(Runtime& vm) {
     auto* parent = current.value.ref();
     self->fields[priority.slot] = parent->fields[priority.slot];
     self->fields[daemon.slot] = parent->fields[daemon.slot];
+    self->fields[group.slot] = parent->fields[group.slot];
+    self->fields[loader.slot] = parent->fields[loader.slot];
     if (!a.empty()) self->fields[target.slot] = a[0];
     self->fields[name.slot] = a.size() == 2 ? Value::Ref(&vm.NonNull(a[1].ref()))
                                          : StringValue(vm, "Thread-" + std::to_string(thread_id - 2));
@@ -515,6 +520,13 @@ const Field& InstallThread(Runtime& vm) {
   }
   cl.AddMethod(thread, "<init>", "(Ljava/lang/String;)V", 0,
       [ctor](Runtime& vm, Object* self, Values a) { return ctor(vm, self, std::array{Value{}, a[0]}); });
+  const Builtin group_ctor = [ctor, &group](Runtime& vm, Object* self, Values a) {
+    ctor(vm, self, a.subspan(1, 2));
+    if (a[0].ref()) self->fields[group.slot] = a[0];
+    return Value{};
+  };
+  cl.AddMethod(thread, "<init>", "(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;J)V", 0, group_ctor);
+  cl.AddMethod(thread, "<init>", "(Ljava/lang/ThreadGroup;Ljava/lang/Runnable;Ljava/lang/String;JZ)V", 0, group_ctor);
   cl.AddMethod(thread, "currentThread", "()Ljava/lang/Thread;", art::kAccStatic,
       [&current](Runtime&, Object*, Values) { return current.value; });
   auto& context = cl.Define("Lorg/wasmandroid/ui/ThreadContext;", kObject, art::kAccFinal);
@@ -584,20 +596,37 @@ const Field& InstallThread(Runtime& vm) {
           return Value{};
         }
         const auto time = args[1].j();
+        std::optional<int64_t> delay_ns;
         if (args[0].i()) {
           const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::system_clock::now().time_since_epoch()).count();
-          if (time > now) {
-            const auto millis = time - now;
-            if (vm.active_worker) vm.SuspendWorker(std::min<int64_t>(millis, INT64_MAX / 1'000'000) * 1'000'000, false);
-            std::this_thread::sleep_for(std::chrono::milliseconds(millis));
-          }
+          if (time <= now) return Value{};
+          delay_ns = std::min<int64_t>(time - now, INT64_MAX / 1'000'000) * 1'000'000;
         } else if (time > 0) {
-          if (vm.active_worker) vm.SuspendWorker(time, false);
-          std::this_thread::sleep_for(std::chrono::nanoseconds(time));
-        } else if (time == 0) {
-          if (vm.active_worker) vm.SuspendWorker(std::nullopt, false);
+          delay_ns = time;
+        } else if (time < 0) {
+          return Value{};
+        }
+        if (vm.active_worker) vm.SuspendWorker(delay_ns, false);
+        // A foreground caller can be waiting for a task on a guest worker.
+        // Dispatch it here so the host thread can make progress before the next frame.
+        using Clock = std::chrono::steady_clock;
+        const auto wakeup = vm.NextThreadWakeup();
+        if (!wakeup && !delay_ns) {
           vm.Fail("Ljava/lang/IllegalStateException;", "The cooperative guest cannot park indefinitely");
+        }
+        const auto now = Clock::now();
+        const auto max_delay = Clock::time_point::max() - now;
+        const auto delay = delay_ns
+            ? std::min(max_delay, std::chrono::duration_cast<Clock::duration>(
+                                      std::chrono::nanoseconds(*delay_ns)))
+            : max_delay;
+        const auto deadline = now + delay;
+        const auto until = wakeup ? std::min(*wakeup, deadline) : deadline;
+        if (until > now) std::this_thread::sleep_until(until);
+        if (wakeup && *wakeup <= deadline) {
+          vm.RunReadyThreads();
+          active.fields[park_permit.slot] = {};
         }
         return Value{};
       });
@@ -684,24 +713,24 @@ const Field& InstallThread(Runtime& vm) {
         self->fields[loader.slot] = a[0];
         return Value{};
       });
-  constexpr auto group = "Ljava/lang/ThreadGroup;";
-  const Builtin main_group = [](Runtime& vm, Object*, Values) {
-    if (!vm.linker.HasClass(group)) return Value{};
-    auto& type = vm.linker.Resolve(group);
+  const Builtin get_group = [&group](Runtime& vm, Object* self, Values) {
+    if (const auto declared = self->fields[group.slot]; declared.ref()) return declared;
+    if (!vm.linker.HasClass(kGroup)) return Value{};
+    auto& type = vm.linker.Resolve(kGroup);
     vm.linker.Initialize(type);
-    return vm.linker.FindField(type, "mainThreadGroup", group, true).value;
+    return vm.linker.FindField(type, "mainThreadGroup", kGroup, true).value;
   };
-  cl.AddMethod(thread, "getThreadGroup", "()Ljava/lang/ThreadGroup;", 0, main_group);
-  cl.AddBootNative(group, "reportEmbeddedUncaughtException", "(Ljava/lang/Throwable;)V",
+  cl.AddMethod(thread, "getThreadGroup", "()Ljava/lang/ThreadGroup;", 0, get_group);
+  cl.AddBootNative(kGroup, "reportEmbeddedUncaughtException", "(Ljava/lang/Throwable;)V",
       [](Runtime& vm, Object*, Values args) -> Value {
         vm.exception = &vm.NonNull(args[0].ref());
         throw ManagedException{};
       });
   cl.AddMethod(thread, "getUncaughtExceptionHandler", "()Ljava/lang/Thread$UncaughtExceptionHandler;", 0,
-      [&exception_handler, &default_handler, main_group](Runtime& vm, Object* self, Values) {
+      [&exception_handler, &default_handler, get_group](Runtime& vm, Object* self, Values) {
         const auto handler = self->fields[exception_handler.slot];
         if (handler.ref()) return handler;
-        const auto fallback = main_group(vm, self, {});
+        const auto fallback = get_group(vm, self, {});
         return fallback.ref() ? fallback : default_handler.value;
       });
   cl.AddMethod(thread, "setUncaughtExceptionHandler", "(Ljava/lang/Thread$UncaughtExceptionHandler;)V", 0,

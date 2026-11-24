@@ -1,0 +1,70 @@
+--- a/libcore/ojluni/src/main/java/java/util/zip/CRC32.java
++++ b/libcore/ojluni/src/main/java/java/util/zip/CRC32.java
+@@ -25,13 +25,9 @@
+ 
+ package java.util.zip;
+ 
+-import java.lang.ref.Reference;
+ import java.nio.ByteBuffer;
+ import java.util.Objects;
+ 
+-import sun.nio.ch.DirectBuffer;
+-import dalvik.annotation.optimization.CriticalNative;
+-import jdk.internal.vm.annotation.IntrinsicCandidate;
+ 
+ /**
+  * A class that can be used to compute the CRC-32 of a data stream.
+@@ -108,13 +104,7 @@
+         int rem = limit - pos;
+         if (rem <= 0)
+             return;
+-        if (buffer.isDirect()) {
+-            try {
+-                crc = updateByteBuffer(crc, ((DirectBuffer)buffer).address(), pos, rem);
+-            } finally {
+-                Reference.reachabilityFence(buffer);
+-            }
+-        } else if (buffer.hasArray()) {
++        if (buffer.hasArray()) {
+             crc = updateBytes(crc, buffer.array(), pos + buffer.arrayOffset(), rem);
+         } else {
+             byte[] b = new byte[Math.min(buffer.remaining(), 4096)];
+@@ -143,8 +133,6 @@
+         return (long)crc & 0xffffffffL;
+     }
+ 
+-    @CriticalNative
+-    @IntrinsicCandidate
+     private static native int update(int crc, int b);
+ 
+     private static int updateBytes(int crc, byte[] b, int off, int len) {
+@@ -152,7 +140,6 @@
+         return updateBytes0(crc, b, off, len);
+     }
+ 
+-    @IntrinsicCandidate
+     private static native int updateBytes0(int crc, byte[] b, int off, int len);
+ 
+     private static void updateBytesCheck(byte[] b, int off, int len) {
+@@ -172,21 +159,4 @@
+         }
+     }
+ 
+-    private static int updateByteBuffer(int alder, long addr,
+-                                        int off, int len) {
+-        updateByteBufferCheck(addr);
+-        return updateByteBuffer0(alder, addr, off, len);
+-    }
+-
+-    @IntrinsicCandidate
+-    private static native int updateByteBuffer0(int alder, long addr,
+-                                                int off, int len);
+-
+-    private static void updateByteBufferCheck(long addr) {
+-        // Performs only a null check because bounds checks
+-        // are not easy to do on raw addresses.
+-        if (addr == 0L) {
+-            throw new NullPointerException();
+-        }
+-    }
+ }

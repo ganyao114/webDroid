@@ -1,5 +1,6 @@
 package org.wasmandroid.uismoke;
 
+import java.io.BufferedInputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
@@ -9,6 +10,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.RandomAccessFile;
+import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.security.MessageDigest;
@@ -16,6 +18,10 @@ import java.security.NoSuchAlgorithmException;
 
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.Application;
+import android.content.ContentProvider;
+import android.content.ContentValues;
+import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
@@ -26,10 +32,15 @@ import android.content.pm.ResolveInfo;
 import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
+import android.database.Cursor;
 import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.VectorDrawable;
 import android.os.Bundle;
+import android.net.LocalServerSocket;
+import android.net.LocalSocket;
+import android.net.LocalSocketAddress;
+import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -60,11 +71,17 @@ import java.net.URL;
 import java.net.URISyntaxException;
 import java.util.HashSet;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountedCompleter;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RecursiveAction;
+import java.util.concurrent.RecursiveTask;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -74,6 +91,7 @@ import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.zip.CRC32;
 import java.util.stream.IntStream;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -85,6 +103,54 @@ public final class SmokeActivity extends Activity {
     private static int lifecycle;
     private static boolean shutdownHookRan;
     private static final int REFLECTED_VALUE = 17;
+    private static final Object LEGACY_FIELD = new Object();
+    private static int providerOrder;
+
+    public static final class SmokeApplication extends Application {
+        @Override protected void attachBaseContext(Context base) {
+            super.attachBaseContext(base);
+            providerOrder = 1;
+        }
+
+        @Override public void onCreate() {
+            if (Boolean.getBoolean("org.wasmandroid.foreground") && providerOrder != 3) {
+                throw new IllegalStateException("Main-process providers must finish before Application.onCreate");
+            }
+        }
+    }
+
+    public abstract static class TestProvider extends ContentProvider {
+        @Override public Cursor query(Uri uri, String[] projection, String selection,
+                String[] selectionArgs, String sortOrder) { return null; }
+        @Override public String getType(Uri uri) { return null; }
+        @Override public Uri insert(Uri uri, ContentValues values) { return null; }
+        @Override public int delete(Uri uri, String selection, String[] args) { return 0; }
+        @Override public int update(Uri uri, ContentValues values, String selection, String[] args) { return 0; }
+    }
+
+    public static final class DefaultProvider extends TestProvider {
+        @Override public boolean onCreate() {
+            if (providerOrder != 1 || !(getContext().getApplicationContext() instanceof SmokeApplication)) {
+                throw new IllegalStateException("Default provider requires an attached application");
+            }
+            providerOrder = 2;
+            return true;
+        }
+    }
+
+    public static final class ExplicitProvider extends TestProvider {
+        @Override public boolean onCreate() {
+            if (providerOrder != 2) throw new IllegalStateException("Provider initOrder is incorrect");
+            providerOrder = 3;
+            return true;
+        }
+    }
+
+    public static final class RemoteProvider extends TestProvider {
+        @Override public boolean onCreate() {
+            throw new IllegalStateException("Remote provider entered the main process");
+        }
+    }
     private TextView headline;
     private TileView tile;
     private int clicks, animationUpdates, handled;
@@ -390,6 +456,12 @@ public final class SmokeActivity extends Activity {
                 return 0;
             }
         }
+        try (BufferedInputStream input = new BufferedInputStream(new FileInputStream(file), 2)) {
+            input.mark(9);
+            if (input.readNBytes(9).length != 9) return 0;
+            input.reset();
+            if (input.read() != 'c' || input.skip(7) != 7 || input.read() != 0x78 || input.read() != -1) return 0;
+        }
         try (RandomAccessFile input = new RandomAccessFile("/data/mounted.bin", "r")) {
             byte[] bytes = new byte[3];
             input.seek(1);
@@ -429,6 +501,108 @@ public final class SmokeActivity extends Activity {
         Looper.getMainLooper().dispatchDueMessages(SystemClock.uptimeMillis() + 2000);
         return value.isDone() && value.get() == 42 && cancelled.isCancelled() && executor.isTerminated() ? 1 : 0;
     }
+
+    public static int verifyForkJoin() throws Exception {
+        ForkJoinPool common = ForkJoinPool.commonPool();
+        AtomicInteger counter = new AtomicInteger();
+        common.execute(counter::incrementAndGet);
+        var action = new RecursiveAction() {
+            @Override protected void compute() { counter.addAndGet(2); }
+        };
+        action.fork().join();
+        if (common != ForkJoinPool.commonPool() ||
+                !common.awaitQuiescence(1, TimeUnit.SECONDS) || counter.get() != 3) return 0;
+
+        ForkJoinPool pool = new ForkJoinPool(1);
+        RecursiveTask<Integer> parent = new RecursiveTask<Integer>() {
+            @Override protected Integer compute() {
+                var child = new RecursiveTask<Integer>() {
+                    @Override protected Integer compute() { return 21; }
+                };
+                return getPool() == pool ? child.fork().join() * 2 : 0;
+            }
+        };
+        if (pool.invoke(parent) != 42) return 0;
+
+        var completer = new CountedCompleter<Void>() {
+            @Override public void compute() {
+                setPendingCount(1);
+                new CountedCompleter<Void>(this) {
+                    @Override public void compute() {
+                        counter.incrementAndGet();
+                        tryComplete();
+                    }
+                }.fork();
+                tryComplete();
+            }
+        };
+        pool.submit(completer).get(1, TimeUnit.SECONDS);
+        Semaphore ready = new Semaphore(0);
+        var blocked = pool.submit(() -> {
+            pool.execute(ready::release);
+            ForkJoinPool.managedBlock(new ForkJoinPool.ManagedBlocker() {
+                @Override public boolean isReleasable() { return ready.tryAcquire(); }
+                @Override public boolean block() throws InterruptedException {
+                    ready.acquire();
+                    return true;
+                }
+            });
+            return counter.get();
+        });
+        if (blocked.get(1, TimeUnit.SECONDS) != 4) return 0;
+        pool.shutdown();
+        return pool.awaitTermination(1, TimeUnit.SECONDS) ? 1 : 0;
+    }
+
+    public static int verifyLocalSockets() throws Exception {
+        String name = "ui-framework-smoke";
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicInteger reply = new AtomicInteger(-1);
+        try (LocalServerSocket listener = new LocalServerSocket(name)) {
+            try (LocalServerSocket duplicate = new LocalServerSocket(name)) {
+                throw new IllegalStateException("A second listener acquired the same address");
+            } catch (IOException expected) {
+                // The address stays bound until the first listener closes.
+            }
+            new Thread(() -> {
+                try (LocalSocket client = new LocalSocket()) {
+                    client.connect(new LocalSocketAddress(name));
+                    client.getOutputStream().write(73);
+                    client.shutdownOutput();
+                    reply.set(client.getInputStream().read());
+                } catch (IOException error) {
+                    throw new IllegalStateException(error);
+                } finally {
+                    finished.countDown();
+                }
+            }).start();
+            try (LocalSocket socket = listener.accept()) {
+                if (socket.getInputStream().read() != 73)
+                    throw new IllegalStateException("Listener did not receive the client's byte");
+                if (socket.getInputStream().read() != -1)
+                    throw new IllegalStateException("Listener did not observe the client's shutdownOutput");
+                socket.getOutputStream().write(91);
+                if (!finished.await(1, TimeUnit.SECONDS))
+                    throw new IllegalStateException("Client did not resume after the listener wrote");
+                if (reply.get() != 91)
+                    throw new IllegalStateException("Client did not receive the listener's byte");
+            }
+        }
+        try (LocalServerSocket rebound = new LocalServerSocket(name)) {
+            return rebound.getFileDescriptor().valid() ? 1 : 0;
+        }
+    }
+
+    public static int verifyCrc32() {
+        CRC32 checksum = new CRC32();
+        checksum.update('1');
+        ByteBuffer rest = ByteBuffer.wrap("23456789".getBytes()).asReadOnlyBuffer();
+        checksum.update(rest);
+        if (rest.hasRemaining() || checksum.getValue() != 0xcbf43926L) return 0;
+        checksum.reset();
+        return checksum.getValue() == 0 ? 1 : 0;
+    }
+
     public static int verifyNestedLooper() {
         Looper main = Looper.getMainLooper();
         Handler handler = new Handler(main);
@@ -492,6 +666,25 @@ public final class SmokeActivity extends Activity {
             return 1;
         }
     }
+    public static int verifyLegacyFieldReflection() throws ReflectiveOperationException {
+        var field = SmokeActivity.class.getDeclaredField("LEGACY_FIELD");
+        field.setAccessible(true);
+        Object original = field.get(null);
+        Object replacement = new Object();
+        field.set(null, replacement);
+        boolean changed = field.get(null) == replacement && LEGACY_FIELD == replacement;
+        field.set(null, original);
+        return changed ? 1 : 0;
+    }
+
+    public static int verifyBigInteger() {
+        BigInteger a = BigInteger.ONE.shiftLeft(3201).add(BigInteger.valueOf(23));
+        BigInteger b = BigInteger.ONE.shiftLeft(1733).add(BigInteger.valueOf(17));
+        BigInteger[] quotient = a.multiply(b).add(BigInteger.valueOf(123)).divideAndRemainder(b);
+        return quotient[0].equals(a) && quotient[1].intValueExact() == 123
+                && BigInteger.valueOf(7).modPow(BigInteger.valueOf(37), BigInteger.valueOf(101)).intValue() == 35
+                ? 1 : 0;
+    }
     public static int verifyEmbeddedPackage() throws PackageManager.NameNotFoundException {
         String name = active.getPackageName();
         PackageManager manager = active.getPackageManager();
@@ -508,8 +701,22 @@ public final class SmokeActivity extends Activity {
         byte[] expected = {(byte) 0x84, (byte) 0x98, 0x3e, 0x44, 0x1c, 0x3b, (byte) 0xd2, 0x6e,
                 (byte) 0xba, (byte) 0xae, 0x4a, (byte) 0xa1, (byte) 0xf9, 0x51, 0x29, (byte) 0xe5,
                 (byte) 0xe5, 0x46, 0x70, (byte) 0xf1};
-        if (!MessageDigest.isEqual(digest.digest(), expected) || digest.getDigestLength() != expected.length) return 0;
-        return MessageDigest.isEqual(clone.digest(data), expected) ? 1 : 0;
+        if (!MessageDigest.isEqual(digest.digest(), expected) || digest.getDigestLength() != expected.length) {
+            throw new IllegalStateException("SHA-1 streaming vector");
+        }
+        if (!MessageDigest.isEqual(clone.digest(data), expected)) {
+            throw new IllegalStateException("Cloned SHA-1 state");
+        }
+        byte[] abc = {'a', 'b', 'c'};
+        UUID uuid = UUID.nameUUIDFromBytes(abc);
+        if (!uuid.equals(new UUID(0x900150983cd23fb0L, 0x96963f7d28e17f72L))) {
+            throw new IllegalStateException("MD5 name-based UUID: " + uuid);
+        }
+        byte[] sha256 = {(byte) 0xba, 0x78, 0x16, (byte) 0xbf, (byte) 0x8f, 0x01, (byte) 0xcf, (byte) 0xea,
+                0x41, 0x41, 0x40, (byte) 0xde, 0x5d, (byte) 0xae, 0x22, 0x23,
+                (byte) 0xb0, 0x03, 0x61, (byte) 0xa3, (byte) 0x96, 0x17, 0x7a, (byte) 0x9c,
+                (byte) 0xb4, 0x10, (byte) 0xff, 0x61, (byte) 0xf2, 0x00, 0x15, (byte) 0xad};
+        return MessageDigest.isEqual(MessageDigest.getInstance("SHA-256").digest(abc), sha256) ? 1 : 0;
     }
     public static int verifyJson() throws JSONException {
         JSONObject data = new JSONObject("{\"items\":[7,{\"name\":\"first\"}]}");

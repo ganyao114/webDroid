@@ -777,6 +777,46 @@ int32_t wa_system_app_install_package_catalog_apk_file(const char* name, const c
 
 namespace {
 
+void MountProcessFiles(Vm& vm, const std::string& process) {
+    const auto mount = [&](std::string_view file, std::string_view data) {
+        const auto bytes = std::span(reinterpret_cast<const uint8_t*>(data.data()), data.size());
+        vm.MountReadOnlyFile("/proc/self/" + std::string(file), bytes);
+        vm.MountReadOnlyFile("/proc/1/" + std::string(file), bytes);
+    };
+    mount("cmdline", std::string_view(process.c_str(), process.size() + 1));
+    mount("cgroup", "0::/\n");
+    // Linux truncates the comm field to 15 bytes. cmdline retains the package process name.
+    auto comm = process.substr(0, 15);
+    std::ranges::replace(comm, '\n', '?');
+    mount("status", "Name:\t" + comm + "\nState:\tR (running)\nTgid:\t1\nPid:\t1\nPPid:\t0\n"
+        "TracerPid:\t0\nUid:\t10000\t10000\t10000\t10000\nGid:\t10000\t10000\t10000\t10000\n");
+    std::string stat = "1 (" + comm + ") R";
+    for (int field = 4; field <= 52; ++field) {
+        const int value = field == 5 || field == 6 || field == 20 ? 1 :
+            field == 18 ? 20 : field == 8 ? -1 : 0;
+        stat += ' ' + std::to_string(value);
+    }
+    mount("stat", stat + '\n');
+    const auto maps = [&vm] { return vm.GuestNativeProcessMaps(); };
+    vm.MountReadOnlyGeneratedFile("/proc/self/maps", maps);
+    vm.MountReadOnlyGeneratedFile("/proc/1/maps", maps);
+    vm.MountReadOnlyGeneratedFile("/proc/meminfo", [&vm] {
+        // Report the guest's capacity and known runtime allocations in KiB.
+#ifdef __EMSCRIPTEN__
+        const auto total = emscripten_get_heap_size() / 1024;
+        const auto used = reinterpret_cast<uintptr_t>(sbrk(0)) / 1024;
+#else
+        constexpr size_t total = 256 * 1024;
+        size_t used = 0;
+        for (const auto& dex : vm.GetDexStats().files) used += dex.bytes / 1024;
+#endif
+        const auto free = std::to_string(total - std::min<size_t>(used, total));
+        return "MemTotal:\t" + std::to_string(total) + " kB\nMemFree:\t" + free +
+            " kB\nMemAvailable:\t" + free +
+            " kB\nBuffers:\t0 kB\nCached:\t0 kB\nSwapTotal:\t0 kB\nSwapFree:\t0 kB\n";
+    });
+}
+
 int32_t BootForeground(Session& s, Package package, const char* activity) {
     struct BootTimer {
         double& elapsed;
@@ -799,13 +839,12 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
     s.icon_resource = chosen->icon ? chosen->icon : package.manifest.icon;
     const std::string apk_path = package.mount->path();
     const auto process = package.manifest.process;
+    s.vm.SetAndroidTargetSdkVersion(package.manifest.target_sdk);
     s.catalog.insert_or_assign(s.package_name, std::move(package));
     s.boot_attempted = true;
 
     s.vm.SetSystemProperty("org.wasmandroid.processName", process);
-    const auto cmdline = std::span(reinterpret_cast<const uint8_t*>(process.c_str()), process.size() + 1);
-    s.vm.MountReadOnlyFile("/proc/self/cmdline", cmdline);
-    s.vm.MountReadOnlyFile("/proc/1/cmdline", cmdline);
+    MountProcessFiles(s.vm, process);
     s.vm.MountReadOnlyHostFile(apk_path);
     const auto dex_start = Clock::now();
     s.vm.LoadApkDexFiles(apk_path);

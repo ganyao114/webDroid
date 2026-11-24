@@ -440,6 +440,39 @@ int32_t StateService(ExecutionMemory& memory, Exclusive& exclusive, Arm32State& 
     return WA_OK;
 }
 
+int32_t Arm64Syscall(wa_dbt& dbt, Arm64State& state, uint64_t pc) {
+    // Linux ARM64 exposes these calls with the same arguments as their Bionic thunks.
+    using Call = std::pair<uint64_t, std::string_view>;
+    constexpr Call calls[] = {
+        {57, "close"}, {63, "read"}, {64, "write"}, {113, "clock_gettime"},
+        {132, "sigaltstack"}, {167, "prctl"}, {172, "getpid"}, {178, "gettid"},
+        {215, "munmap"}, {216, "mremap"}, {222, "mmap"}, {226, "mprotect"},
+        {227, "msync"}, {233, "madvise"},
+    };
+    const auto call = std::ranges::find(calls, state.gprs[8], &Call::first);
+    if (call == std::end(calls)) return WA_ERR_NOSYS;
+    const auto symbol = std::ranges::find_if(dbt.hosts, [&](const auto& entry) {
+        return entry.builtin && entry.soname == "libc.so" && entry.name == call->second && entry.function;
+    });
+    if (symbol == dbt.hosts.end()) return WA_ERR_NOSYS;
+
+    wa_host_call_ctx_t context{.dbt = &dbt, .mmu = dbt.mmu, .arch = WA_ARCH_ARM64};
+    std::copy_n(std::begin(state.gprs), 6, context.args);
+    const GuestMemory memory(context);
+    const auto errno_address = dbt.running->errno_address;
+    const int previous_errno = errno_address ? memory.Read<int32_t>(errno_address) : 0;
+    const auto status = InvokeHost(dbt, symbol->address, state.gprs[31], context);
+    if (status != WA_OK) return status;
+    if (context.ret0 == UINT64_MAX) {
+        context.ret0 = -int64_t(memory.Read<int32_t>(ErrnoAddress(dbt)));
+        SetErrno(dbt, previous_errno);
+    }
+    state.gprs[0] = context.ret0;
+    state.pc = pc + 4;
+    state.reservation_valid = 0;
+    return WA_OK;
+}
+
 template <typename State> uint64_t GuestAddress(uint64_t pc) {
     if constexpr (std::is_same_v<State, Arm32State>)
         return rt::arm32::Location{pc}.Address();
@@ -502,6 +535,12 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice)
             return memory.status == WA_OK ? WA_ERR_FAULT : memory.status;
         case StepKind::Service:
             dbt.last_pc = GuestAddress<State>(step.pc);
+            if constexpr (std::is_same_v<State, Arm64State>) {
+                if (step.service == rt::ExitValue(rt::NativeExit::Syscall)) {
+                    if (const auto status = Arm64Syscall(dbt, state, step.pc); status != WA_OK) return status;
+                    break;
+                }
+            }
             if (step.service != rt::ExitValue(rt::NativeExit::StateService)) return WA_ERR_NOSYS;
             if (const auto status = StateService(memory, exclusive, state); status != WA_OK) return status;
             break;

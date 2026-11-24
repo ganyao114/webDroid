@@ -1,0 +1,92 @@
+--- a/frameworks/base/core/java/android/os/AsyncTask.java
++++ b/frameworks/base/core/java/android/os/AsyncTask.java
+@@ -16,7 +16,6 @@
+ 
+ package android.os;
+ 
+-import android.annotation.MainThread;
+ import android.annotation.Nullable;
+ import android.annotation.WorkerThread;
+ import android.compat.annotation.UnsupportedAppUsage;
+@@ -261,8 +260,7 @@
+     static {
+         ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(
+                 CORE_POOL_SIZE, MAXIMUM_POOL_SIZE, KEEP_ALIVE_SECONDS, TimeUnit.SECONDS,
+-                new SynchronousQueue<Runnable>(), sThreadFactory);
+-        threadPoolExecutor.setRejectedExecutionHandler(sRunOnSerialPolicy);
++                new SynchronousQueue<Runnable>(), sThreadFactory, sRunOnSerialPolicy);
+         THREAD_POOL_EXECUTOR = threadPoolExecutor;
+     }
+ 
+@@ -394,7 +392,6 @@
+                     Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND);
+                     //noinspection unchecked
+                     result = doInBackground(mParams);
+-                    Binder.flushPendingCommands();
+                 } catch (Throwable tr) {
+                     mCancelled.set(true);
+                     throw tr;
+@@ -477,7 +474,6 @@
+      * @see #onPostExecute
+      * @see #doInBackground
+      */
+-    @MainThread
+     protected void onPreExecute() {
+     }
+ 
+@@ -497,7 +493,6 @@
+      * @see #onCancelled(Object) 
+      */
+     @SuppressWarnings({"UnusedDeclaration"})
+-    @MainThread
+     protected void onPostExecute(Result result) {
+     }
+ 
+@@ -512,7 +507,6 @@
+      * @see #doInBackground
+      */
+     @SuppressWarnings({"UnusedDeclaration"})
+-    @MainThread
+     protected void onProgressUpdate(Progress... values) {
+     }
+ 
+@@ -531,7 +525,6 @@
+      * @see #isCancelled()
+      */
+     @SuppressWarnings({"UnusedParameters"})
+-    @MainThread
+     protected void onCancelled(Result result) {
+         onCancelled();
+     }    
+@@ -549,7 +542,6 @@
+      * @see #cancel(boolean)
+      * @see #isCancelled()
+      */
+-    @MainThread
+     protected void onCancelled() {
+     }
+ 
+@@ -668,7 +660,6 @@
+      * @see #executeOnExecutor(java.util.concurrent.Executor, Object[])
+      * @see #execute(Runnable)
+      */
+-    @MainThread
+     public final AsyncTask<Params, Progress, Result> execute(Params... params) {
+         return executeOnExecutor(sDefaultExecutor, params);
+     }
+@@ -706,7 +697,6 @@
+      *
+      * @see #execute(Object[])
+      */
+-    @MainThread
+     public final AsyncTask<Params, Progress, Result> executeOnExecutor(Executor exec,
+             Params... params) {
+         if (mStatus != Status.PENDING) {
+@@ -739,7 +729,6 @@
+      * @see #execute(Object[])
+      * @see #executeOnExecutor(java.util.concurrent.Executor, Object[])
+      */
+-    @MainThread
+     public static void execute(Runnable runnable) {
+         sDefaultExecutor.execute(runnable);
+     }

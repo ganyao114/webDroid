@@ -159,15 +159,9 @@ struct PageMapping {
     uint32_t first_bss_byte = WA_PAGE_SIZE;
 };
 
-struct Mapping {
-    uint64_t address, offset;
-    size_t length, valid;
-    uint32_t prot;
-};
-
 struct LoadMappings {
     wa_softmmu_t* mmu;
-    std::vector<Mapping> ranges;
+    std::vector<ElfMapping> ranges;
     size_t mapped = 0;
     bool committed = false;
 
@@ -258,6 +252,7 @@ template <typename Word> class Loader {
 
         if (bias % alignment) return WA_ERR_INVALID;
         if (image.soname.empty()) image.soname = name;
+        image.filename = name;
         image.needed.assign(needed.begin(), needed.end());
         image.base = bias + (segments.front().vaddr & ~kPageMask);
         image.bias = bias;
@@ -285,6 +280,7 @@ template <typename Word> class Loader {
             status = wa_softmmu_read(dbt->mmu, bias + tls->vaddr, image.tls_initial.data(),
                                     image.tls_initial.size());
         if (status != WA_OK) return status;
+        image.mappings = mappings.ranges;
         GuestBuffer name_storage(*dbt, image.soname.size() + 1);
         image.name_address = name_storage.address;
         CheckGuest(wa_softmmu_write(dbt->mmu, image.name_address, image.soname.c_str(), image.soname.size() + 1));

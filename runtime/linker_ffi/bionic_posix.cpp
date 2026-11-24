@@ -7,12 +7,23 @@
 #include <ctime>
 #include <pwd.h>
 #include <random>
+#include <regex.h>
 #include <sys/resource.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <utility>
 
 namespace wa::dbt {
+
+struct PosixRegex {
+    regex_t regex{};
+    bool compiled = false;
+    bool no_subexpressions = false;
+    ~PosixRegex() {
+        if (compiled) regfree(&regex);
+    }
+};
+
 namespace {
 
 using namespace std::chrono;
@@ -336,6 +347,98 @@ void Nice(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = value;
 }
 
+int GuestRegexError(int result) {
+    switch (result) {
+    case 0: return 0;
+    case REG_NOMATCH: return 1;
+    case REG_BADPAT: return 2;
+    case REG_ECOLLATE: return 3;
+    case REG_ECTYPE: return 4;
+    case REG_EESCAPE: return 5;
+    case REG_ESUBREG: return 6;
+    case REG_EBRACK: return 7;
+    case REG_EPAREN: return 8;
+    case REG_EBRACE: return 9;
+    case REG_BADBR: return 10;
+    case REG_ERANGE: return 11;
+    case REG_ESPACE: return 12;
+    case REG_BADRPT: return 13;
+    default: return 16; // REG_INVARG.
+    }
+}
+
+void CompilePosixRegex(wa_host_call_ctx_t& ctx) {
+    const auto flags = static_cast<uint32_t>(ctx.args[2]);
+    if (flags & ~0xfu) {
+        ctx.ret0 = 16;
+        return;
+    }
+    const GuestMemory mem(ctx);
+    const auto pattern = mem.String(ctx.args[1]);
+    auto regex = std::make_shared<PosixRegex>();
+    regex->no_subexpressions = flags & 4;
+    const auto result = regcomp(&regex->regex, pattern.c_str(),
+        (flags & 1 ? REG_EXTENDED : 0) | (flags & 2 ? REG_ICASE : 0) |
+        (flags & 4 ? REG_NOSUB : 0) | (flags & 8 ? REG_NEWLINE : 0));
+    ctx.ret0 = GuestRegexError(result);
+    if (result)
+        return;
+    regex->compiled = true;
+    mem.WriteWord(ctx.args[0] + mem.width(), regex->regex.re_nsub);
+    ctx.dbt->bionic->regexes.insert_or_assign(ctx.args[0], std::move(regex));
+}
+
+void ExecutePosixRegex(wa_host_call_ctx_t& ctx) {
+    const auto& regexes = ctx.dbt->bionic->regexes;
+    const auto regex = regexes.find(ctx.args[0]);
+    const auto flags = static_cast<uint32_t>(ctx.args[4]);
+    if (regex == regexes.end() || flags & ~3u || ctx.args[2] > 4096) {
+        ctx.ret0 = 16;
+        return;
+    }
+    const GuestMemory mem(ctx);
+    const auto input = mem.String(ctx.args[1]);
+    std::vector<regmatch_t> matches(regex->second->no_subexpressions ? 0 : ctx.args[2]);
+    const auto result = regexec(&regex->second->regex, input.c_str(), matches.size(), matches.data(),
+        (flags & 1 ? REG_NOTBOL : 0) | (flags & 2 ? REG_NOTEOL : 0));
+    ctx.ret0 = GuestRegexError(result);
+    if (result)
+        return;
+    auto offset = ctx.args[3];
+    for (const auto& match : matches) {
+        mem.WriteWord(offset, match.rm_so);
+        mem.WriteWord(offset + mem.width(), match.rm_eo);
+        offset += 2 * mem.width();
+    }
+}
+
+void FreePosixRegex(wa_host_call_ctx_t& ctx) {
+    ctx.dbt->bionic->regexes.erase(ctx.args[0]);
+}
+
+void GetPriority(wa_host_call_ctx_t& ctx) {
+    const auto which = static_cast<int32_t>(ctx.args[0]);
+    const auto who = static_cast<uint32_t>(ctx.args[1]);
+    auto& dbt = *ctx.dbt;
+    if (which == 0) { // PRIO_PROCESS, which addresses Linux threads individually.
+        const auto* thread = who ? FindThread(dbt, who) : dbt.running;
+        if (!thread || thread->exited)
+            return Fail(ctx, ESRCH);
+        ctx.ret0 = thread->nice;
+        return;
+    }
+    if (which != 1 && which != 2)
+        return Fail(ctx, EINVAL);
+    if (who && who != (which == 1 ? 1 : 10000))
+        return Fail(ctx, ESRCH);
+    auto best = dbt.bionic->main.nice;
+    for (const auto& [id, thread] : dbt.bionic->threads) {
+        if (!thread.exited)
+            best = std::min(best, thread.nice);
+    }
+    ctx.ret0 = best;
+}
+
 template <bool Max> void Priority(wa_host_call_ctx_t& ctx) {
     if (ctx.args[0] > 2)
         return Fail(ctx, EINVAL);
@@ -391,6 +494,47 @@ void Prctl(wa_host_call_ctx_t& ctx) {
 void UnsupportedProcess(wa_host_call_ctx_t& ctx) {
     Fail(ctx, ENOSYS);
 }
+
+void BaseName(wa_host_call_ctx_t& ctx) {
+    const auto path = ctx.args[0] ? GuestMemory(ctx).String(ctx.args[0]) : std::string{};
+    if (path.empty()) {
+        ctx.ret0 = InternString(*ctx.dbt, ".");
+        return;
+    }
+    const auto last = path.find_last_not_of('/');
+    if (last == path.npos) {
+        ctx.ret0 = InternString(*ctx.dbt, "/");
+        return;
+    }
+    const auto slash = path.rfind('/', last);
+    const auto first = slash == path.npos ? 0 : slash + 1;
+    ctx.ret0 = InternString(*ctx.dbt, std::string_view(path).substr(first, last - first + 1));
+}
+
+void DirName(wa_host_call_ctx_t& ctx) {
+    const auto path = ctx.args[0] ? GuestMemory(ctx).String(ctx.args[0]) : std::string{};
+    const auto last = path.find_last_not_of('/');
+    const auto slash = last == path.npos || last == 0 ? path.npos : path.rfind('/', last - 1);
+    if (slash == path.npos) {
+        ctx.ret0 = InternString(*ctx.dbt, !path.empty() && last == path.npos ? "/" : ".");
+        return;
+    }
+    const auto parent = path.find_last_not_of('/', slash);
+    ctx.ret0 = InternString(*ctx.dbt, parent == path.npos ? "/" : std::string_view(path).substr(0, parent + 1));
+}
+
+void GetProgramName(wa_host_call_ctx_t& ctx) {
+    const auto& read = ctx.dbt->bionic->read_guest_file;
+    if (const auto cmdline = read ? read("/proc/self/cmdline") : std::nullopt;
+        cmdline && !cmdline->empty()) {
+        std::string_view name(reinterpret_cast<const char*>(cmdline->data()), cmdline->size());
+        name = name.substr(0, name.find('\0'));
+        ctx.ret0 = InternString(*ctx.dbt, name.substr(name.rfind('/') + 1));
+        return;
+    }
+    ctx.ret0 = InternString(*ctx.dbt, ctx.dbt->bionic->main.name);
+}
+
 void ExitProcess(wa_host_call_ctx_t& ctx) {
     ctx.dbt->running->result = ctx.args[0];
     throw GuestFault{kThreadExited};
@@ -605,6 +749,31 @@ template <bool Simple> void Sigaction(wa_host_call_ctx_t& ctx) {
     signal = replacement;
 }
 
+void Sigaltstack(wa_host_call_ctx_t& ctx) {
+    constexpr uint32_t kDisabled = 2, kAutodisarm = 1u << 31;
+    constexpr uint64_t kMinSize = 2048;
+    const GuestMemory mem(ctx);
+    auto& stack = ctx.dbt->running->signal_stack;
+    auto next = stack;
+    const auto input = ctx.args[0], output = ctx.args[1];
+    const auto flags_offset = mem.width(), size_offset = 2 * mem.width();
+    if (input) {
+        const auto flags = mem.Read<uint32_t>(input + flags_offset);
+        if (flags != 0 && flags != kDisabled && flags != kAutodisarm) return Fail(ctx, EINVAL);
+        next = {};
+        if (flags != kDisabled) {
+            next = {mem.ReadWord(input), mem.ReadWord(input + size_offset), flags};
+            if (next.size < kMinSize) return Fail(ctx, ENOMEM);
+        }
+    }
+    if (output) {
+        mem.WriteWord(output, stack.address);
+        mem.WriteWord(output + flags_offset, stack.flags);
+        mem.WriteWord(output + size_offset, stack.size);
+    }
+    stack = next;
+}
+
 void Pending(wa_host_call_ctx_t& ctx) {
     GuestMemory(ctx).WriteWord(ctx.args[0], ctx.dbt->running->pending_signals);
 }
@@ -622,6 +791,20 @@ void Raise(wa_host_call_ctx_t& ctx) {
         const uint64_t args[]{signo, 0, 0};
         uint64_t unused;
         CheckGuest(wa_dbt_call(&dbt, handler, args, 3, &unused));
+    }
+}
+
+void Kill(wa_host_call_ctx_t& ctx) {
+    const auto pid = static_cast<int32_t>(ctx.args[0]);
+    const auto signo = static_cast<uint32_t>(ctx.args[1]);
+    if (signo > 64)
+        return Fail(ctx, EINVAL);
+    // There is one process and one process group in this guest namespace.
+    if (pid < -1 || pid > 1)
+        return Fail(ctx, ESRCH);
+    if (signo) {
+        ctx.args[0] = signo;
+        Raise(ctx);
     }
 }
 
@@ -822,6 +1005,10 @@ void RegisterPosix(wa_dbt& dbt) {
         {"gethostname", Dispatch<GetHostname>},
         {"setuid", Dispatch<SetUid>},
         {"nice", Dispatch<Nice>},
+        {"getpriority", Dispatch<GetPriority>},
+        {"regcomp", Dispatch<CompilePosixRegex>},
+        {"regexec", Dispatch<ExecutePosixRegex>},
+        {"regfree", Dispatch<FreePosixRegex>},
         {"prctl", Dispatch<Prctl>},
         {"syscall", Dispatch<Syscall>},
         {"sched_get_priority_min", Dispatch<Priority<false>>},
@@ -835,6 +1022,10 @@ void RegisterPosix(wa_dbt& dbt) {
         {"exit", Dispatch<ExitProcess>},
         {"_exit", Dispatch<ExitProcess>},
         {"fork", Dispatch<UnsupportedProcess>},
+        {"ptrace", Dispatch<UnsupportedProcess>},
+        {"basename", Dispatch<BaseName>},
+        {"dirname", Dispatch<DirName>},
+        {"getprogname", Dispatch<GetProgramName>},
         {"vfork", Dispatch<UnsupportedProcess>},
         {"execvp", Dispatch<UnsupportedProcess>},
         {"execlp", Dispatch<UnsupportedProcess>},
@@ -860,12 +1051,14 @@ void RegisterPosix(wa_dbt& dbt) {
         {"sigdelset", Dispatch<Sigset<SignalSet::Del>>},
         {"sigismember", Dispatch<Sigset<SignalSet::Contains>>},
         {"sigaction", Dispatch<Sigaction<false>>},
+        {"sigaltstack", Dispatch<Sigaltstack>},
         {"signal", Dispatch<Sigaction<true>>},
         {"pthread_sigmask", Dispatch<Sigmask<true>>},
         {"sigprocmask", Dispatch<Sigmask<false>>},
         {"sigpending", Dispatch<Pending>},
         {"sigwait", Dispatch<Sigwait>},
         {"raise", Dispatch<Raise>},
+        {"kill", Dispatch<Kill>},
         {"pthread_kill", Dispatch<PthreadKill>},
     };
     Register(dbt, "libc.so", c);

@@ -38,6 +38,35 @@ size_t AttrStack(const GuestMemory& mem) {
     return 2 * mem.width();
 }
 
+void GetAttributes(wa_host_call_ctx_t& ctx) {
+    const auto* thread = FindThread(*ctx.dbt, ctx.args[0]);
+    if (!thread || thread->exited)
+        return ErrorResult(ctx, ESRCH);
+    const GuestMemory mem(ctx);
+    const auto address = ctx.args[1];
+    Reset(mem, address, mem.width() == 8 ? 56 : 24);
+    mem.Write<uint32_t>(address, thread->detached ? 1 : 0);
+    mem.WriteWord(address + mem.width(), thread->stack_base + WA_PAGE_SIZE);
+    mem.WriteWord(address + AttrStack(mem), thread->stack_size);
+    mem.WriteWord(address + 3 * mem.width(), WA_PAGE_SIZE);
+    mem.Write<int32_t>(address + 4 * mem.width(), thread->policy);
+    mem.Write<int32_t>(address + 4 * mem.width() + sizeof(int32_t), thread->priority);
+}
+
+void GetStackBounds(wa_host_call_ctx_t& ctx) {
+    const GuestMemory mem(ctx);
+    const auto attr = ctx.args[0];
+    mem.WriteWord(ctx.args[1], mem.ReadWord(attr + mem.width()));
+    mem.WriteWord(ctx.args[2], mem.ReadWord(attr + AttrStack(mem)));
+}
+
+void GetThreadId(wa_host_call_ctx_t& ctx) {
+    const auto* thread = FindThread(*ctx.dbt, ctx.args[0]);
+    if (!thread || thread->exited)
+        return Fail(ctx, ESRCH);
+    ctx.ret0 = thread->id;
+}
+
 enum class Attr { Init, Destroy, SetDetach, GetDetach, SetStack, GetStack };
 template <Attr op> void Attributes(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
@@ -624,6 +653,9 @@ void RegisterPthread(wa_dbt& dbt) {
         {"pthread_attr_getdetachstate", Dispatch<Attributes<Attr::GetDetach>>},
         {"pthread_attr_setstacksize", Dispatch<Attributes<Attr::SetStack>>},
         {"pthread_attr_getstacksize", Dispatch<Attributes<Attr::GetStack>>},
+        {"pthread_attr_getstack", Dispatch<GetStackBounds>},
+        {"pthread_getattr_np", Dispatch<GetAttributes>},
+        {"pthread_gettid_np", Dispatch<GetThreadId>},
         {"pthread_mutex_init", Dispatch<MutexCall<Mutex::Init>>},
         {"pthread_mutex_destroy", Dispatch<MutexCall<Mutex::Destroy>>},
         {"pthread_mutex_lock", Dispatch<MutexCall<Mutex::Lock>>},

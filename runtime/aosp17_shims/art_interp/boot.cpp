@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include "base/leb128.h"
+#include "base/sdk_version.h"
 #include "dex/code_item_accessors-inl.h"
 #include "dex/dex_file-inl.h"
 #include "dex/utf.h"
@@ -668,12 +669,20 @@ const art::dex::AnnotationSetItem* FieldAnnotations(const Field& field) {
   return nullptr;
 }
 
+bool IsReflectivelyUnmodifiable(const Runtime& vm, const Field& field) {
+  if (!(field.flags & art::kAccFinal)) return false;
+  if (field.flags & art::kAccMonotonic) return true;
+  // ART preserves reflective static-final writes for apps targeting Android B or older.
+  return field.is_static && !art::IsSdkVersionSetAndAtMost(vm.target_sdk_version, art::SdkVersion::kB);
+}
+
 Value& ReflectiveFieldValue(Runtime& vm, Object& mirror, Object* receiver, bool write) {
   const auto& field = *mirror.reflected_field;
   if (!mirror.payload.i()) {
     CheckReflectiveAccess(vm, *field.owner, field.flags, field.flags & art::kAccPublic, field.name);
   }
-  if (write && (field.flags & art::kAccFinal) && (field.is_static || !mirror.payload.i())) {
+  if (write && (IsReflectivelyUnmodifiable(vm, field) ||
+                ((field.flags & art::kAccFinal) && !mirror.payload.i()))) {
     vm.Fail("Ljava/lang/IllegalAccessException;", field.name);
   }
   if (field.is_static) {
@@ -780,9 +789,8 @@ void InstallFieldReflection(ClassLinker& linker, Class& cls) {
           return Value{};
         });
   }
-  bind("isUnmodifiable0", "()Z", [](Runtime&, Object* self, Values) {
-    const auto& field = *self->reflected_field;
-    return Value::Int(field.is_static && (field.flags & art::kAccFinal));
+  bind("isUnmodifiable0", "()Z", [](Runtime& vm, Object* self, Values) {
+    return Value::Int(IsReflectivelyUnmodifiable(vm, *self->reflected_field));
   });
   bind("hasGenericSignature", "()Z", [](Runtime&, Object* self, Values) {
     const auto& field = *self->reflected_field;
@@ -822,11 +830,28 @@ void InstallReflection(Runtime& vm, Class& cls) {
   cl.AddMethod(annotation_interface, "annotationType", "()Ljava/lang/Class;",
       art::kAccPublic | art::kAccAbstract);
   auto& loader = cl.Define("Ljava/lang/ClassLoader;", kObject, art::kAccAbstract);
+  auto& parent = cl.AddField(loader, "parent", loader.descriptor, false);
   cl.AddMethod(loader, "<init>", "()V", art::kAccProtected, Void);
-  cl.AddMethod(loader, "<init>", "(Ljava/lang/ClassLoader;)V", art::kAccProtected, Void);
+  cl.AddMethod(loader, "<init>", "(Ljava/lang/ClassLoader;)V", art::kAccProtected,
+      [&parent](Runtime&, Object* self, Values args) {
+        self->fields[parent.slot] = args[0];
+        return Value{};
+      });
   auto& class_loader = cl.AddField(cls, "appLoader", loader.descriptor, true);
   const Builtin system_loader = [&loader, &class_loader](Runtime& vm, Object*, Values) {
-    if (!class_loader.value.ref()) {
+    if (class_loader.value.ref()) return class_loader.value;
+    const auto dex_path = vm.system_properties.find("java.class.path");
+    constexpr auto path_loader = "Ldalvik/system/PathClassLoader;";
+    if (dex_path != vm.system_properties.end() && vm.linker.HasClass(path_loader)) {
+      auto& type = vm.linker.Resolve(path_loader);
+      auto& ctor = vm.linker.FindMethod(type, "<init>",
+          "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V", false);
+      RootScope roots(vm);
+      auto path = roots.Hold(StringValue(vm, dex_path->second));
+      const auto lib_dir = vm.system_properties.find("org.wasmandroid.nativeLibraryDir");
+      auto libraries = lib_dir == vm.system_properties.end() ? Value{} : roots.Hold(StringValue(vm, lib_dir->second));
+      class_loader.value = Value::Ref(vm.NewObject(type, ctor, std::array{path, libraries, Value{}}));
+    } else {
       class_loader.value = Value::Ref(vm.heap.Allocate(vm, vm.linker.Resolve(loader.descriptor)));
     }
     return class_loader.value;
@@ -834,7 +859,8 @@ void InstallReflection(Runtime& vm, Class& cls) {
   cl.AddMethod(loader, "getSystemClassLoader", "()Ljava/lang/ClassLoader;", art::kAccStatic, system_loader);
   cl.AddMethod(loader, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;", 0,
       [](Runtime& vm, Object*, Values a) { return Value::Ref(vm.ClassObject(ClassForName(vm, a[0].ref(), false))); });
-  cl.AddMethod(loader, "getParent", "()Ljava/lang/ClassLoader;", 0, Void);
+  cl.AddMethod(loader, "getParent", "()Ljava/lang/ClassLoader;", 0,
+      [&parent](Runtime&, Object* self, Values) { return self->fields[parent.slot]; });
   cl.AddMethod(loader, "getResourceAsStream", "(Ljava/lang/String;)Ljava/io/InputStream;", 0,
       [](Runtime& vm, Object*, Values args) {
         const auto name = EncodeUtf8(vm.NonNull(args[0].ref()).text, false);
@@ -1895,21 +1921,110 @@ void InstallRegex(Runtime& vm) {
   cl.AddBootNative(owner, "matchNative", "(Ljava/lang/String;IIII[I)I", MatchRegex);
 }
 
+void CompressMd5(std::span<Value> state, std::span<const uint32_t, 16> words) {
+  constexpr std::array<uint32_t, 64> constants{
+      0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+      0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+      0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+      0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+      0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+      0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+      0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+      0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391};
+  constexpr std::array shifts{7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21};
+  std::array<uint32_t, 4> hash{};
+  for (size_t i = 0; i < hash.size(); ++i) hash[i] = static_cast<uint32_t>(state[i].bits());
+  auto [a, b, c, d] = hash;
+  for (size_t i = 0; i < constants.size(); ++i) {
+    uint32_t mix;
+    size_t word;
+    if (i < 16) {
+      mix = (b & c) | (~b & d);
+      word = i;
+    } else if (i < 32) {
+      mix = (d & b) | (~d & c);
+      word = (5 * i + 1) & 15;
+    } else if (i < 48) {
+      mix = b ^ c ^ d;
+      word = (3 * i + 5) & 15;
+    } else {
+      mix = c ^ (b | ~d);
+      word = (7 * i) & 15;
+    }
+    const uint32_t next = b + std::rotl(a + mix + constants[i] + words[word], shifts[(i / 16) * 4 + i % 4]);
+    a = d;
+    d = c;
+    c = b;
+    b = next;
+  }
+  const std::array compressed{a, b, c, d};
+  for (size_t i = 0; i < hash.size(); ++i)
+    state[i] = Value::Int(std::bit_cast<int32_t>(hash[i] + compressed[i]));
+}
+
+void CompressSha256(std::span<Value> state, std::span<uint32_t, 64> words) {
+  constexpr std::array<uint32_t, 64> constants{
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2};
+  for (size_t i = 16; i < words.size(); ++i) {
+    const auto x = words[i - 15];
+    const auto y = words[i - 2];
+    words[i] = words[i - 16] + (std::rotr(x, 7) ^ std::rotr(x, 18) ^ (x >> 3)) +
+        words[i - 7] + (std::rotr(y, 17) ^ std::rotr(y, 19) ^ (y >> 10));
+  }
+  std::array<uint32_t, 8> hash{};
+  for (size_t i = 0; i < hash.size(); ++i) hash[i] = static_cast<uint32_t>(state[i].bits());
+  auto [a, b, c, d, e, f, g, h] = hash;
+  for (size_t i = 0; i < words.size(); ++i) {
+    const auto choose = (e & f) ^ (~e & g);
+    const auto majority = (a & b) ^ (a & c) ^ (b & c);
+    const auto first = h + (std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25)) +
+        choose + constants[i] + words[i];
+    const auto second = (std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22)) + majority;
+    h = g;
+    g = f;
+    f = e;
+    e = d + first;
+    d = c;
+    c = b;
+    b = a;
+    a = first + second;
+  }
+  const std::array compressed{a, b, c, d, e, f, g, h};
+  for (size_t i = 0; i < hash.size(); ++i)
+    state[i] = Value::Int(std::bit_cast<int32_t>(hash[i] + compressed[i]));
+}
+
 void InstallMessageDigest(Runtime& vm) {
-  vm.linker.AddBootNative("Ljava/security/MessageDigest$EmbeddedSha1;", "compress", "([I[BI)V",
-      [](Runtime& vm, Object*, Values a) {
+  const Builtin compress = [](Runtime& vm, Object*, Values a) {
         auto& state = vm.NonNull(a[0].ref()).elements;
         const auto& input = vm.NonNull(a[1].ref()).elements;
         const auto offset = static_cast<size_t>(a[2].i());
-        if (state.size() != 5 || offset > input.size() || input.size() - offset < 64) {
-          vm.Fail("Ljava/lang/IndexOutOfBoundsException;", "Invalid SHA-1 block");
+        if ((state.size() != 4 && state.size() != 5 && state.size() != 8) ||
+            offset > input.size() || input.size() - offset < 64) {
+          vm.Fail("Ljava/lang/IndexOutOfBoundsException;", "Invalid digest block");
         }
         std::array<uint32_t, 80> words{};
         for (size_t i = 0; i < 16; ++i) {
           const size_t at = offset + i * 4;
           for (size_t j = 0; j < 4; ++j) {
-            words[i] = (words[i] << 8) | static_cast<uint8_t>(input[at + j].i());
+            const auto index = state.size() == 4 ? at + 3 - j : at + j;
+            words[i] = (words[i] << 8) | static_cast<uint8_t>(input[index].i());
           }
+        }
+        if (state.size() == 4) {
+          CompressMd5(state, std::span(words).first<16>());
+          return Value{};
+        }
+        if (state.size() == 8) {
+          CompressSha256(state, std::span(words).first<64>());
+          return Value{};
         }
         for (size_t i = 16; i < words.size(); ++i) {
           words[i] = std::rotl(words[i - 3] ^ words[i - 8] ^ words[i - 14] ^ words[i - 16], 1);
@@ -1944,7 +2059,41 @@ void InstallMessageDigest(Runtime& vm) {
           state[i] = Value::Int(std::bit_cast<int32_t>(hash[i] + compressed[i]));
         }
         return Value{};
-      });
+      };
+  vm.linker.AddBootNative("Ljava/security/MessageDigest$EmbeddedDigest;", "compress", "([I[BI)V", compress);
+  vm.linker.AddBootNative("Ljava/security/MessageDigest$EmbeddedSha1;", "compress", "([I[BI)V", compress);
+}
+
+constexpr std::array<uint32_t, 256> kCrc32Table = [] {
+  std::array<uint32_t, 256> table{};
+  for (uint32_t i = 0; i < table.size(); ++i) {
+    uint32_t bits = i;
+    for (int bit = 0; bit < 8; ++bit)
+      bits = (bits >> 1) ^ ((bits & 1) ? 0xedb88320u : 0);
+    table[i] = bits;
+  }
+  return table;
+}();
+
+void InstallChecksum(Runtime& vm) {
+  constexpr auto name = "Ljava/util/zip/CRC32;";
+  vm.linker.AddBootNative(name, "update", "(II)I", [](Runtime&, Object*, Values a) {
+    const uint32_t crc = ~static_cast<uint32_t>(a[0].i());
+    const uint32_t next = ~(kCrc32Table[(crc ^ a[1].i()) & 255u] ^ (crc >> 8));
+    return Value::Int(std::bit_cast<int32_t>(next));
+  });
+  vm.linker.AddBootNative(name, "updateBytes0", "(I[BII)I", [](Runtime& vm, Object*, Values a) {
+    const auto& array = vm.NonNull(a[1].ref());
+    const auto offset = a[2].i(), count = a[3].i();
+    if (offset < 0 || count < 0 || static_cast<uint64_t>(offset) + count > vm.ArrayLength(array))
+      vm.Fail("Ljava/lang/ArrayIndexOutOfBoundsException;");
+    uint32_t crc = ~static_cast<uint32_t>(a[0].i());
+    for (int i = 0; i < count; ++i) {
+      const auto byte = vm.ArrayElement(array, offset + i).i();
+      crc = kCrc32Table[(crc ^ byte) & 255u] ^ (crc >> 8);
+    }
+    return Value::Int(std::bit_cast<int32_t>(~crc));
+  });
 }
 
 Value ReplaceRegex(Runtime& vm, Object* self, Values args) {
@@ -2647,6 +2796,17 @@ void InstallStrings(Runtime& vm) {
         });
     cl.AddMethod(builder, "toString", "()Ljava/lang/String;", 0,
         [](Runtime& vm, Object* self, Values) { return StringValue(vm, self->text); });
+    cl.AddMethod(builder, "reverse", std::string("()") + name, 0, [](Runtime&, Object* self, Values) {
+      auto& text = self->text;
+      std::ranges::reverse(text);
+      for (size_t i = 1; i < text.size(); ++i) {
+        if (text[i - 1] >= 0xdc00 && text[i - 1] <= 0xdfff && text[i] >= 0xd800 && text[i] <= 0xdbff) {
+          std::swap(text[i - 1], text[i]);
+          ++i;
+        }
+      }
+      return Value::Ref(self);
+    });
     cl.AddMethod(builder, "setLength", "(I)V", 0, [](Runtime& vm, Object* self, Values a) {
       if (a[0].i() < 0) vm.Fail("Ljava/lang/StringIndexOutOfBoundsException;");
       self->text.resize(a[0].i(), u'\0');
@@ -3340,6 +3500,7 @@ void Runtime::InstallBootClasses() {
   InstallStrings(*this);
   InstallRegex(*this);
   InstallMessageDigest(*this);
+  InstallChecksum(*this);
   InstallNumbers(*this);
   InstallEnumAndReferences(*this);
   InstallUnicodeScript(linker);

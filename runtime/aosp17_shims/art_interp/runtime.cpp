@@ -183,6 +183,14 @@ void Runtime::NotifyWaiters(Object& monitor, bool all) {
   }
 }
 
+std::optional<std::chrono::steady_clock::time_point> Runtime::NextThreadWakeup() const {
+  std::optional<std::chrono::steady_clock::time_point> next;
+  for (const auto& worker : workers) {
+    if (worker.due && (!next || *worker.due < *next)) next = worker.due;
+  }
+  return next;
+}
+
 [[noreturn]] void Runtime::SuspendWorker(std::optional<int64_t> delay_ns, bool interruptible,
                                          Object* monitor) {
   using Clock = std::chrono::steady_clock;
@@ -548,12 +556,18 @@ void Vm::SetSystemProperty(std::string_view name, std::string_view value) {
   runtime_->system_properties.insert_or_assign(std::string(name), std::string(value));
 }
 
+void Vm::SetAndroidTargetSdkVersion(uint32_t version) { runtime_->target_sdk_version = version; }
+
 GuestNativeStats Vm::GetGuestNativeStats() const {
   return runtime_->guest_native ? runtime_->guest_native->Stats() : GuestNativeStats{};
 }
 
 std::vector<GuestNativeImage> Vm::GetGuestNativeImages() const {
   return runtime_->guest_native ? runtime_->guest_native->Images() : std::vector<GuestNativeImage>{};
+}
+
+std::string Vm::GuestNativeProcessMaps() const {
+  return runtime_->guest_native ? runtime_->guest_native->ProcessMaps() : std::string{};
 }
 
 void Vm::SetGuestLibraryObserver(std::function<void(std::string_view)> observer) {

@@ -1,0 +1,85 @@
+--- a/libcore/ojluni/src/main/java/java/security/MessageDigest.java
++++ b/libcore/ojluni/src/main/java/java/security/MessageDigest.java
+@@ -207,7 +207,20 @@
+         Objects.requireNonNull(algorithm, "null algorithm name");
+         if (algorithm.equalsIgnoreCase("SHA-1") || algorithm.equalsIgnoreCase("SHA")
+                 || algorithm.equalsIgnoreCase("SHA1")) {
+-            return new Delegate(new EmbeddedSha1(), algorithm);
++            return new Delegate(new EmbeddedDigest(new int[] {
++                    0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0
++            }, false), algorithm);
++        }
++        if (algorithm.equalsIgnoreCase("MD5")) {
++            return new Delegate(new EmbeddedDigest(new int[] {
++                    0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476
++            }, true), algorithm);
++        }
++        if (algorithm.equalsIgnoreCase("SHA-256") || algorithm.equalsIgnoreCase("SHA256")) {
++            return new Delegate(new EmbeddedDigest(new int[] {
++                    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
++                    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
++            }, false), algorithm);
+         }
+         throw new NoSuchAlgorithmException(algorithm + " not found");
+     }
+@@ -588,21 +601,23 @@
+      */
+ 
+     // The embedded process has no system JCA provider registry.
+-    private static final class EmbeddedSha1 extends MessageDigestSpi implements Cloneable {
+-        private int[] state = new int[5];
++    private static final class EmbeddedDigest extends MessageDigestSpi implements Cloneable {
++        private final int[] initialState;
++        private final boolean littleEndian;
++        private int[] state;
+         private byte[] pending = new byte[64];
+         private long bytes;
+ 
+-        EmbeddedSha1() { engineReset(); }
+-
+-        @Override protected int engineGetDigestLength() { return 20; }
++        EmbeddedDigest(int[] initialState, boolean littleEndian) {
++            this.initialState = initialState;
++            this.littleEndian = littleEndian;
++            state = initialState.clone();
++        }
++
++        @Override protected int engineGetDigestLength() { return state.length * 4; }
+ 
+         @Override protected void engineReset() {
+-            state[0] = 0x67452301;
+-            state[1] = 0xefcdab89;
+-            state[2] = 0x98badcfe;
+-            state[3] = 0x10325476;
+-            state[4] = 0xc3d2e1f0;
++            System.arraycopy(initialState, 0, state, 0, state.length);
+             bytes = 0;
+         }
+ 
+@@ -635,17 +650,22 @@
+             long bits = bytes << 3;
+             engineUpdate((byte) 0x80);
+             while ((bytes & 63) != 56) engineUpdate((byte) 0);
+-            for (int shift = 56; shift >= 0; shift -= 8) engineUpdate((byte) (bits >>> shift));
+-            byte[] result = new byte[20];
++            for (int i = 0; i < 8; i++) {
++                int shift = 8 * (littleEndian ? i : 7 - i);
++                engineUpdate((byte) (bits >>> shift));
++            }
++            byte[] result = new byte[engineGetDigestLength()];
+             for (int i = 0; i < result.length; i++) {
+-                result[i] = (byte) (state[i / 4] >>> (24 - 8 * (i & 3)));
++                int wordByte = i & 3;
++                int shift = 8 * (littleEndian ? wordByte : 3 - wordByte);
++                result[i] = (byte) (state[i / 4] >>> shift);
+             }
+             engineReset();
+             return result;
+         }
+ 
+         @Override public Object clone() throws CloneNotSupportedException {
+-            EmbeddedSha1 copy = (EmbeddedSha1) super.clone();
++            EmbeddedDigest copy = (EmbeddedDigest) super.clone();
+             copy.state = state.clone();
+             copy.pending = pending.clone();
+             return copy;

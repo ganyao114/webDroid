@@ -323,6 +323,14 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest,
             };
             manifest.version_code = versionCode("versionCode");
             manifest.version_major = versionCode("versionCodeMajor");
+        } else if (indexed && depth == 1 && tag == u"uses-sdk") {
+            const auto target = xml->indexOfAttribute(kAndroid, "targetSdkVersion");
+            if (target >= 0) {
+                const auto type = xml->getAttributeDataType(target);
+                if (type == Res_value::TYPE_INT_DEC || type == Res_value::TYPE_INT_HEX) {
+                    indexed->target_sdk = xml->getAttributeData(target);
+                }
+            }
         } else if (depth == 1 && tag == u"application") {
             const auto label = xml->indexOfAttribute(kAndroid, "label");
             if (label >= 0 && xml->getAttributeDataType(label) == Res_value::TYPE_REFERENCE)

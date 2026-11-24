@@ -466,6 +466,7 @@ void ClassLinker::Initialize(Class& cls) {
     case InitState::Failed: runtime_.Fail("Ljava/lang/NoClassDefFoundError;", cls.descriptor, cls.failure);
     case InitState::Uninitialized: break;
   }
+  Link(cls);
   cls.init_state = InitState::Initializing;
   try {
     InitializeConstants(cls);
