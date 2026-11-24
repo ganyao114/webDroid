@@ -26,6 +26,7 @@ bool query_surface(Handle display, Handle surface, int32_t attribute, int32_t& v
 bool destroy_context(Handle display, Handle context);
 bool destroy_surface(Handle display, Handle surface);
 bool terminate(Handle display);
+const char* query_string(Handle display, int32_t name);
 int32_t get_error();
 bool fail(int32_t error);
 

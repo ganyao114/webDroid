@@ -67,6 +67,8 @@ typedef struct wa_host_call_ctx {
     uint64_t fp_bits[8];  // Raw low 64 bits of V0..V7 (ARM64).
     uint64_t fp_ret_bits;
     int32_t has_fp_ret_bits;
+    uint64_t fp_high[8]; // High 64 bits of V0..V7 (ARM64).
+    uint64_t fp_ret_high; // High 64 bits of an AAPCS64 binary128 return.
 } wa_host_call_ctx_t;
 
 typedef int32_t (*wa_host_symbol_fn)(wa_host_call_ctx_t* ctx, void* user);
@@ -86,6 +88,10 @@ void wa_dbt_destroy(wa_dbt_t* dbt);
 // Register a native Wasm host function for virtual DT_NEEDED symbol routing.
 int32_t wa_dbt_register_symbol(wa_dbt_t* dbt, const char* soname_or_null, const char* symbol_name,
                                wa_host_symbol_fn fn, void* user);
+
+// Register a data symbol whose storage already resides in this guest's SoftMMU.
+int32_t wa_dbt_register_data(wa_dbt_t* dbt, const char* soname_or_null, const char* symbol_name,
+                             uint64_t guest_address);
 
 // Load an unmodified Android ELF .so lazily via SoftMMU, apply relocations, and run .init_array.
 int32_t wa_dbt_load_elf(wa_dbt_t* dbt, uint32_t file_id, const uint8_t* elf_bytes, size_t elf_len,

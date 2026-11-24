@@ -1,13 +1,12 @@
-#include "dbt_internal.h"
+#include "bionic_internal.h"
 #include "elf_image.h"
-#include "guest_abi.h"
 
 #include "softmmu_internal.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cmath>
+#include <cerrno>
 #include <cstring>
 #include <new>
 #include <utility>
@@ -25,7 +24,9 @@ int32_t Copy(wa_host_call_ctx_t* ctx, void*) {
     const auto dst = ctx->args[0];
     const auto src = ctx->args[1];
     const auto bytes = ctx->args[2];
-    if (!ValidRange(src, bytes) || !ValidRange(dst, bytes))
+    if (!ValidRange(src, bytes) || !ValidRange(dst, bytes) ||
+        CheckMappedAccess(ctx->dbt, src, bytes, WA_PROT_READ) != WA_OK ||
+        CheckMappedAccess(ctx->dbt, dst, bytes, WA_PROT_WRITE) != WA_OK)
         return WA_ERR_FAULT;
     ctx->ret0 = dst;
     if (dst == src)
@@ -63,15 +64,22 @@ int32_t Fill(wa_softmmu_t* mmu, uint64_t dst, uint64_t bytes, uint8_t value) {
 
 int32_t Set(wa_host_call_ctx_t* ctx, void*) {
     ctx->ret0 = ctx->args[0];
-    return Fill(ctx->mmu, ctx->args[0], ctx->args[2], static_cast<uint8_t>(ctx->args[1]));
+    const auto status = CheckMappedAccess(ctx->dbt, ctx->args[0], ctx->args[2], WA_PROT_WRITE);
+    return status == WA_OK ? Fill(ctx->mmu, ctx->args[0], ctx->args[2], static_cast<uint8_t>(ctx->args[1]))
+                           : status;
 }
 
 int32_t Clear(wa_host_call_ctx_t* ctx, void*) {
-    return Fill(ctx->mmu, ctx->args[0], ctx->args[1], 0);
+    auto fill = *ctx;
+    fill.args[2] = ctx->args[1];
+    fill.args[1] = 0;
+    return Set(&fill, nullptr);
 }
 
 int32_t EabiSet(wa_host_call_ctx_t* ctx, void*) {
-    return Fill(ctx->mmu, ctx->args[0], ctx->args[1], static_cast<uint8_t>(ctx->args[2]));
+    auto fill = *ctx;
+    std::swap(fill.args[1], fill.args[2]);
+    return Set(&fill, nullptr);
 }
 
 int32_t CheckedCopy(wa_host_call_ctx_t* ctx, void*) {
@@ -91,6 +99,7 @@ int32_t StringLength(wa_host_call_ctx_t* ctx, void*) {
     auto address = ctx->args[0];
     while (address < softmmu::kAddressLimit) {
         const auto count = PageRemaining(address);
+        if (CheckMappedAccess(ctx->dbt, address, count, WA_PROT_READ) != WA_OK) return WA_ERR_FAULT;
         const auto status = wa_softmmu_read(ctx->mmu, address, bytes.data(), count);
         if (status != WA_OK)
             return status;
@@ -111,6 +120,8 @@ int32_t StringCompare(wa_host_call_ctx_t* ctx, void* bounded) {
     auto remaining = bounded ? ctx->args[2] : softmmu::kAddressLimit;
     while (remaining && a < softmmu::kAddressLimit && b < softmmu::kAddressLimit) {
         const auto count = std::min<uint64_t>({PageRemaining(a), PageRemaining(b), remaining});
+        if (CheckMappedAccess(ctx->dbt, a, count, WA_PROT_READ) != WA_OK ||
+            CheckMappedAccess(ctx->dbt, b, count, WA_PROT_READ) != WA_OK) return WA_ERR_FAULT;
         auto status = wa_softmmu_read(ctx->mmu, a, left.data(), count);
         if (status == WA_OK)
             status = wa_softmmu_read(ctx->mmu, b, right.data(), count);
@@ -132,19 +143,21 @@ int32_t StringCompare(wa_host_call_ctx_t* ctx, void* bounded) {
 
 int32_t Allocate(wa_host_call_ctx_t* ctx, void*) {
     ctx->ret0 = AllocateGuest(*ctx->dbt, ctx->args[0]);
+    if (!ctx->ret0) SetErrno(*ctx->dbt, GuestErrno(ENOMEM));
     return WA_OK;
 }
 
 int32_t Free(wa_host_call_ctx_t* ctx, void*) {
-    if (ctx->args[0] && !ctx->dbt->allocations.contains(ctx->args[0])) return WA_ERR_FAULT;
+    if (ctx->args[0] && (!ctx->dbt->allocations.contains(ctx->args[0]) ||
+        ctx->dbt->bionic->map_allocations.contains(ctx->args[0]))) return WA_ERR_FAULT;
     FreeGuest(*ctx->dbt, ctx->args[0]);
     return WA_OK;
 }
 
 int32_t Calloc(wa_host_call_ctx_t* ctx, void*) {
     const auto count = ctx->args[0], size = ctx->args[1];
-    if (size && count > UINT64_MAX / size) return WA_OK;
-    ctx->ret0 = AllocateGuest(*ctx->dbt, count * size);
+    if (!size || count <= UINT64_MAX / size) ctx->ret0 = AllocateGuest(*ctx->dbt, count * size);
+    if (!ctx->ret0) SetErrno(*ctx->dbt, GuestErrno(ENOMEM));
     return WA_OK;
 }
 
@@ -153,6 +166,7 @@ int32_t Reallocate(wa_host_call_ctx_t* ctx, void*) {
     const auto old = ctx->args[0], size = ctx->args[1];
     if (!old) {
         ctx->ret0 = AllocateGuest(dbt, size);
+        if (!ctx->ret0) SetErrno(dbt, GuestErrno(ENOMEM));
         return WA_OK;
     }
     const auto found = dbt.allocations.find(old);
@@ -162,7 +176,10 @@ int32_t Reallocate(wa_host_call_ctx_t* ctx, void*) {
         return WA_OK;
     }
     const auto replacement = AllocateGuest(dbt, size);
-    if (!replacement) return WA_OK;
+    if (!replacement) {
+        SetErrno(dbt, GuestErrno(ENOMEM));
+        return WA_OK;
+    }
     wa_host_call_ctx_t copy{.mmu = ctx->mmu, .args = {replacement, old, std::min<uint64_t>(size, found->second.size)}};
     const auto status = Copy(&copy, nullptr);
     if (status != WA_OK) {
@@ -172,23 +189,6 @@ int32_t Reallocate(wa_host_call_ctx_t* ctx, void*) {
     FreeGuest(dbt, old);
     ctx->ret0 = replacement;
     return WA_OK;
-}
-
-template <float (*Math)(float)> int32_t FloatMath(wa_host_call_ctx_t* ctx, void*) {
-    ctx->fret0 = Math(static_cast<float>(ctx->fargs[0]));
-    ctx->has_float_ret = 1;
-    return WA_OK;
-}
-
-int32_t SinCos(wa_host_call_ctx_t* ctx, void*) {
-    const auto value = static_cast<float>(ctx->fargs[0]);
-    const auto sin = ::sinf(value);
-    const auto cos = ::cosf(value);
-    const size_t first_output = ctx->arch == WA_ARCH_ARM32 ? 1 : 0;
-    const auto status = wa_softmmu_write(ctx->mmu, ctx->args[first_output], &sin, sizeof(sin));
-    if (status != WA_OK)
-        return status;
-    return wa_softmmu_write(ctx->mmu, ctx->args[first_output + 1], &cos, sizeof(cos));
 }
 
 // Compare elements in guest memory and keep the array there during the sort.
@@ -309,11 +309,14 @@ int32_t StackCheckFail(wa_host_call_ctx_t*, void*) {
 
 } // namespace
 
-uint64_t AllocateGuest(wa_dbt& dbt, uint64_t size) {
+uint64_t AllocateGuest(wa_dbt& dbt, uint64_t size, uint64_t alignment, uint32_t prot) {
     const auto bytes = std::max<uint64_t>(size, 1);
-    if (bytes > kHeapLimit - kHeapBase) return 0;
+    if (bytes > kHeapLimit - kHeapBase || !std::has_single_bit(alignment) ||
+        alignment > kHeapLimit - kHeapBase) return 0;
+    alignment = std::max<uint64_t>(alignment, WA_PAGE_SIZE);
     const auto mapped_size = static_cast<size_t>(AlignUp(bytes, WA_PAGE_SIZE));
-    for (auto address = dbt.heap_hint; address <= kHeapLimit - mapped_size; address += WA_PAGE_SIZE) {
+    for (auto address = AlignUp(dbt.heap_hint, alignment); address <= kHeapLimit - mapped_size;
+         address = AlignUp(address + WA_PAGE_SIZE, alignment)) {
         const auto next = dbt.allocations.upper_bound(address);
         if (next != dbt.allocations.begin()) {
             const auto& [start, allocation] = *std::prev(next);
@@ -326,7 +329,7 @@ uint64_t AllocateGuest(wa_dbt& dbt, uint64_t size) {
             address = next->first + next->second.mapped_size - WA_PAGE_SIZE;
             continue;
         }
-        const auto status = wa_softmmu_map_anon(dbt.mmu, address, mapped_size, WA_PROT_READ | WA_PROT_WRITE);
+        const auto status = wa_softmmu_map_anon(dbt.mmu, address, mapped_size, prot);
         if (status == WA_ERR_EXIST) continue;
         if (status != WA_OK) return 0;
         try {
@@ -362,6 +365,8 @@ int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name
                      wa_host_symbol_fn function, void* user, bool builtin, uint64_t* address) {
     for (auto& symbol : dbt.hosts) {
         if (symbol.soname == soname && symbol.name == name) {
+            if (!symbol.function)
+                symbol.address = WA_HOST_STUB_BASE + (&symbol - dbt.hosts.data()) * WA_HOST_STUB_STRIDE;
             symbol.function = function;
             symbol.user = user;
             symbol.builtin = builtin;
@@ -377,6 +382,21 @@ int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name
     return WA_OK;
 }
 
+int32_t RegisterData(wa_dbt& dbt, std::string_view soname, std::string_view name,
+                     uint64_t address, bool builtin) {
+    if (!address || address >= WA_HOST_STUB_BASE) return WA_ERR_INVALID;
+    for (auto& symbol : dbt.hosts) {
+        if (symbol.soname == soname && symbol.name == name) {
+            symbol = {std::string(soname), std::string(name), nullptr, nullptr, builtin, address};
+            return WA_OK;
+        }
+    }
+    constexpr auto capacity = (WA_HOST_STUB_LIMIT - WA_HOST_STUB_BASE) / WA_HOST_STUB_STRIDE;
+    if (dbt.hosts.size() == capacity) return WA_ERR_NOMEM;
+    dbt.hosts.push_back({std::string(soname), std::string(name), nullptr, nullptr, builtin, address});
+    return WA_OK;
+}
+
 uint64_t FindVirtualSymbol(const wa_dbt& dbt, std::string_view soname, std::string_view name) {
     for (const auto& entry : dbt.hosts) {
         if ((soname.empty() ? (entry.soname.empty() || entry.soname.ends_with(".so")) : entry.soname == soname)
@@ -386,7 +406,8 @@ uint64_t FindVirtualSymbol(const wa_dbt& dbt, std::string_view soname, std::stri
 }
 
 bool IsVirtualLibrary(const wa_dbt& dbt, std::string_view soname) {
-    return std::ranges::any_of(dbt.hosts, [&](const auto& entry) { return entry.soname == soname; });
+    return std::ranges::find(dbt.virtual_libraries, soname) != dbt.virtual_libraries.end() ||
+           std::ranges::any_of(dbt.hosts, [&](const auto& entry) { return entry.soname == soname; });
 }
 
 bool ResolveImport(const wa_dbt& dbt, std::span<const std::string_view> needed,
@@ -436,7 +457,11 @@ void RegisterBuiltins(wa_dbt& dbt) {
         {"libc.so", "__aeabi_memcpy4", Copy},
         {"libc.so", "__aeabi_memcpy8", Copy},
         {"libc.so", "__aeabi_memmove", Copy},
+        {"libc.so", "__aeabi_memmove4", Copy},
+        {"libc.so", "__aeabi_memmove8", Copy},
         {"libc.so", "__aeabi_memset", EabiSet},
+        {"libc.so", "__aeabi_memset4", EabiSet},
+        {"libc.so", "__aeabi_memset8", EabiSet},
         {"libc.so", "__memcpy_chk", CheckedCopy},
         {"libc.so", "__memmove_chk", CheckedCopy},
         {"libc.so", "__memset_chk", CheckedSet},
@@ -450,11 +475,6 @@ void RegisterBuiltins(wa_dbt& dbt) {
         {"libc.so", "__cxa_atexit", AtExit},
         {"libc.so", "__cxa_finalize", Finalize},
         {"libc.so", "__stack_chk_fail", StackCheckFail},
-        {"libm.so", "sinf", FloatMath<::sinf>},
-        {"libm.so", "cosf", FloatMath<::cosf>},
-        {"libm.so", "tanf", FloatMath<::tanf>},
-        {"libm.so", "sincosf", SinCos},
-        {"libm.so", "sqrtf", FloatMath<::sqrtf>},
     };
     dbt.hosts.reserve(std::size(shims));
     for (const auto& shim : shims)

@@ -43,7 +43,7 @@ constexpr int32_t width_attribute = 0x3057;
 constexpr int32_t context_major_version = 0x3098;
 constexpr int32_t context_minor_version = 0x30fb;
 constexpr int32_t surface_types = 0x0001 | 0x0004; // EGL_PBUFFER_BIT | EGL_WINDOW_BIT
-constexpr int32_t es3_bit = 0x0040;
+constexpr int32_t es_bits = 0x0004 | 0x0040; // OpenGL ES 2 and 3
 constexpr int32_t dont_care = -1;
 
 struct State {
@@ -91,6 +91,18 @@ bool valid_context(Handle context) {
 bool fail(int32_t error) {
     state().error = error;
     return false;
+}
+
+const char* query_string(Handle display, int32_t name) {
+    if (display == 0 && name == 0x3055) return ""; // EGL_EXTENSIONS
+    if (!valid_display(display)) return nullptr;
+    switch (name) {
+    case 0x3053: return "WasmAndroid";  // EGL_VENDOR
+    case 0x3054: return "1.5";         // EGL_VERSION
+    case 0x3055: return "";            // EGL_EXTENSIONS
+    case 0x308d: return "OpenGL_ES";   // EGL_CLIENT_APIS
+    default: fail(bad_parameter); return nullptr;
+    }
 }
 
 int32_t get_error() {
@@ -167,7 +179,7 @@ bool choose_config(Handle display, Attributes attributes, Handle& match) {
             attribute_matches = (value & surface_types) == value;
             break;
         case renderable_type:
-            attribute_matches = (value & es3_bit) == value;
+            attribute_matches = (value & es_bits) == value;
             break;
         default:
             return fail(bad_attribute);
@@ -249,7 +261,7 @@ Handle create_context(Handle display, Handle config, Handle share, Attributes at
             return fail(bad_attribute);
         }
     }
-    if (major != 3 || minor != 0) {
+    if ((major != 2 && major != 3) || minor != 0) {
         return fail(bad_match);
     }
     state().has_context = true;

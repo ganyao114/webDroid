@@ -1,5 +1,7 @@
 #include "gles_host_bridge.h"
 
+#include "bionic_internal.h"
+#include "elf_image.h"
 #include "egl_shim.h"
 #include "gfx_surface.h"
 #include "guest_call.h"
@@ -171,6 +173,28 @@ void egl_query_surface(GuestCall& call) {
     if (egl::query_surface(egl_handle(call, 0), egl_handle(call, 1), call.i32(2), value) &&
         call.write(output, value)) {
         call.result(1);
+    }
+}
+
+void egl_bind_api(GuestCall& call) {
+    if (call.word(0) == 0x30a0) call.result(1);
+    else egl::fail(egl::bad_parameter);
+}
+
+void egl_query_string(GuestCall& call) {
+    if (const auto* value = egl::query_string(egl_handle(call, 0), call.i32(1)))
+        call.result(wa::dbt::InternString(*call.context().dbt, value));
+}
+
+void egl_get_proc_address(GuestCall& call) {
+    std::string name;
+    if (!call.string(call.word(0), name, 256)) return;
+    const auto& dbt = *call.context().dbt;
+    for (const auto* library : {"libGLESv2.so", "libGLESv3.so", "libEGL.so"}) {
+        if (const auto address = wa::dbt::FindVirtualSymbol(dbt, library, name)) {
+            call.result(address);
+            return;
+        }
     }
 }
 
@@ -356,27 +380,72 @@ void draw_elements(GuestCall& call) {
     }
 }
 
-void get_uniform_location(GuestCall& call) {
+template<auto Find> void get_location(GuestCall& call) {
     std::string name;
     if (call.string(call.word(1), name, shader_string_limit)) {
-        call.result(glGetUniformLocation(call.word(0), name.c_str()));
+        call.result(Find(call.word(0), name.c_str()));
     }
 }
 
-void uniform_matrix(GuestCall& call) {
+template <size_t Width, auto Uniform> void uniform_matrix(GuestCall& call) {
     const GLint location = call.i32(0);
     const GLsizei count = call.i32(1);
     const GLboolean transpose = call.word(2);
     const uint64_t address = call.word(3);
-    if (count < 0 || static_cast<size_t>(count) > SIZE_MAX / (16 * sizeof(GLfloat))) {
+    if (count < 0 || static_cast<size_t>(count) > SIZE_MAX / (Width * sizeof(GLfloat))) {
         call.fail(count < 0 ? WA_ERR_INVALID : WA_ERR_OVERFLOW);
         return;
     }
-    const size_t elements = size_t(count) * 16;
+    const size_t elements = size_t(count) * Width;
     const auto values = call.buffer<GLfloat>(elements);
     if (call.ok() && call.copy_in(address, values.get(), elements * sizeof(GLfloat))) {
-        glUniformMatrix4fv(location, count, transpose, values.get());
+        Uniform(location, count, transpose, values.get());
     }
+}
+
+void uniform_vector(GuestCall& call) {
+    const auto location = call.i32(0), count = call.i32(1);
+    const auto address = call.word(2);
+    if (count < 0 || static_cast<size_t>(count) > SIZE_MAX / (4 * sizeof(GLfloat))) {
+        call.fail(count < 0 ? WA_ERR_INVALID : WA_ERR_OVERFLOW);
+        return;
+    }
+    const size_t elements = size_t(count) * 4;
+    const auto values = call.buffer<GLfloat>(elements);
+    if (call.ok() && call.copy_in(address, values.get(), elements * sizeof(GLfloat)))
+        glUniform4fv(location, count, values.get());
+}
+
+void gl_get_string(GuestCall& call) {
+    const auto* value = glGetString(call.word(0));
+    if (value) call.result(wa::dbt::InternString(*call.context().dbt,
+                                                 reinterpret_cast<const char*>(value)));
+}
+
+void gl_get_integer(GuestCall& call) {
+    const auto name = static_cast<GLenum>(call.word(0));
+    GLint count = 1;
+    switch (name) {
+    case GL_VIEWPORT: case GL_SCISSOR_BOX: case GL_COLOR_WRITEMASK:
+    case GL_COLOR_CLEAR_VALUE: case GL_BLEND_COLOR: count = 4; break;
+    case GL_MAX_VIEWPORT_DIMS: case GL_DEPTH_RANGE:
+    case GL_ALIASED_POINT_SIZE_RANGE: case GL_ALIASED_LINE_WIDTH_RANGE: count = 2; break;
+    case GL_COMPRESSED_TEXTURE_FORMATS:
+        glGetIntegerv(GL_NUM_COMPRESSED_TEXTURE_FORMATS, &count);
+        break;
+    case GL_SHADER_BINARY_FORMATS:
+        glGetIntegerv(GL_NUM_SHADER_BINARY_FORMATS, &count);
+        break;
+    case GL_PROGRAM_BINARY_FORMATS:
+        glGetIntegerv(GL_NUM_PROGRAM_BINARY_FORMATS, &count);
+        break;
+    }
+    if (count <= 0 || count > 4096) return;
+    const auto values = call.buffer<GLint>(count);
+    if (!call.ok()) return;
+    std::fill_n(values.get(), count, 0);
+    glGetIntegerv(name, values.get());
+    call.copy_out(call.word(1), values.get(), count * sizeof(GLint));
 }
 
 size_t pixel_size(GLenum format, GLenum type) {
@@ -504,6 +573,26 @@ void tex_image(GuestCall& call) {
     }
 }
 
+void tex_sub_image(GuestCall& call) {
+    const auto target = static_cast<GLenum>(call.word(0));
+    const auto level = call.i32(1), x = call.i32(2), y = call.i32(3);
+    const auto width = call.i32(4), height = call.i32(5);
+    const auto format = static_cast<GLenum>(call.word(6)), type = static_cast<GLenum>(call.word(7));
+    const auto address = call.word(8);
+    if (!call.ok()) return;
+    GLint buffer = 0;
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &buffer);
+    if (buffer) {
+        const auto* offset = buffer_offset(call, address);
+        if (call.ok()) glTexSubImage2D(target, level, x, y, width, height, format, type, offset);
+        return;
+    }
+    const auto size = pixel_layout(call, width, height, pixel_size(format, type), false).bytes;
+    const auto pixels = call.buffer<uint8_t>(size);
+    if (call.ok() && call.copy_in(address, pixels.get(), size))
+        glTexSubImage2D(target, level, x, y, width, height, format, type, pixels.get());
+}
+
 void read_pixels(GuestCall& call) {
     const GLint x = call.i32(0);
     const GLint y = call.i32(1);
@@ -567,16 +656,22 @@ struct Binding {
 
 #if defined(__EMSCRIPTEN__) || defined(WA_HAL_NATIVE_GLES3)
 #define GL_SCALAR(name) {#name, invoke<Scalars<name>::run, true>}
-#define GL_COPY(name, handler) {#name, invoke<handler, true>}
+#define GL_COPY(name, ...) {#name, invoke<__VA_ARGS__, true>}
 #else
 #define GL_SCALAR(name) {#name, invoke<unsupported_gles>}
-#define GL_COPY(name, handler) GL_SCALAR(name)
+#define GL_COPY(name, ...) GL_SCALAR(name)
 #endif
 
 constexpr Binding gl_bindings[] = {
     GL_SCALAR(glViewport),
     GL_SCALAR(glClearColor),
     GL_SCALAR(glClear),
+    GL_SCALAR(glBlendFunc),
+    GL_SCALAR(glDepthMask),
+    GL_SCALAR(glFlush),
+    GL_SCALAR(glFinish),
+    GL_COPY(glGetString, gl_get_string),
+    GL_COPY(glGetIntegerv, gl_get_integer),
     GL_SCALAR(glEnable),
     GL_SCALAR(glDisable),
     GL_SCALAR(glDepthFunc),
@@ -603,16 +698,24 @@ constexpr Binding gl_bindings[] = {
     GL_COPY(glDeleteVertexArrays, delete_objects<glDeleteVertexArrays>),
     GL_SCALAR(glEnableVertexAttribArray),
     GL_COPY(glVertexAttribPointer, vertex_attrib_pointer),
-    GL_COPY(glGetUniformLocation, get_uniform_location),
-    GL_COPY(glUniformMatrix4fv, uniform_matrix),
+    GL_COPY(glGetUniformLocation, get_location<glGetUniformLocation>),
+    GL_COPY(glGetAttribLocation, get_location<glGetAttribLocation>),
+    GL_COPY(glUniformMatrix2fv, uniform_matrix<4, glUniformMatrix2fv>),
+    GL_COPY(glUniformMatrix3fv, uniform_matrix<9, glUniformMatrix3fv>),
+    GL_COPY(glUniformMatrix4fv, uniform_matrix<16, glUniformMatrix4fv>),
+    GL_COPY(glUniform4fv, uniform_vector),
     GL_SCALAR(glUniform1f),
     GL_SCALAR(glUniform1i),
+    GL_SCALAR(glUniform2f),
+    GL_SCALAR(glUniform3f),
     GL_SCALAR(glUniform4f),
     GL_SCALAR(glDrawArrays),
     GL_COPY(glDrawElements, draw_elements),
     GL_COPY(glGenTextures, gen_objects<glGenTextures>),
     GL_SCALAR(glBindTexture),
     GL_COPY(glTexImage2D, tex_image),
+    GL_COPY(glTexSubImage2D, tex_sub_image),
+    GL_SCALAR(glTexParameterf),
     GL_SCALAR(glTexParameteri),
     GL_SCALAR(glActiveTexture),
     GL_SCALAR(glPixelStorei),
@@ -625,6 +728,9 @@ constexpr Binding gl_bindings[] = {
 #undef GL_COPY
 
 constexpr Binding egl_bindings[] = {
+    {"eglBindAPI", invoke<egl_bind_api>},
+    {"eglGetProcAddress", invoke<egl_get_proc_address>},
+    {"eglQueryString", invoke<egl_query_string>},
     {"eglGetDisplay", invoke<Scalars<egl::get_display>::run>},
     {"eglInitialize", invoke<egl_initialize>},
     {"eglChooseConfig", invoke<egl_choose_config>},
@@ -647,7 +753,33 @@ constexpr Binding log_bindings[] = {
 
 constexpr Binding audio_bindings[] = {{"wa_ndk_audio_push_stereo_f32", invoke<audio_push>}};
 
+#if defined(__EMSCRIPTEN__) || defined(WA_HAL_NATIVE_GLES3)
+int32_t gles2(wa_host_call_ctx_t* context, void* user) {
+    const auto& binding = *static_cast<const Binding*>(user);
+    if (wa::gfx::has_current_surface()) return binding.function(context, nullptr);
+    const std::string_view name(binding.name);
+    if (name == "glGetError") context->ret0 = 0x0502;
+    else if (name == "glGetUniformLocation" || name == "glGetAttribLocation") context->ret0 = UINT32_MAX;
+    return WA_OK;
+}
+#endif
+
 } // namespace
+
+int32_t wa_hal_register_graphics_symbols(wa_dbt_t* dbt) {
+    for (const auto& binding : egl_bindings) {
+        const auto status = wa_dbt_register_symbol(dbt, "libEGL.so", binding.name, binding.function, nullptr);
+        if (status != WA_OK) return status;
+    }
+#if defined(__EMSCRIPTEN__) || defined(WA_HAL_NATIVE_GLES3)
+    for (const auto& binding : gl_bindings) {
+        const auto status = wa_dbt_register_symbol(dbt, "libGLESv2.so", binding.name, gles2,
+                                                   const_cast<Binding*>(&binding));
+        if (status != WA_OK) return status;
+    }
+#endif
+    return WA_OK;
+}
 
 int32_t wa_hal_register_ndk_symbols(wa_dbt_t* dbt) {
     if (!dbt) {

@@ -11,6 +11,7 @@ extern "C" {
 // ARM32 uses the Android softfp ABI (float bits in R0-R3 or on the stack). ARM64 uses
 // independent X and FP argument registers, then 8-byte stack slots.
 int32_t wa_hal_register_ndk_symbols(wa_dbt_t* dbt);
+int32_t wa_hal_register_graphics_symbols(wa_dbt_t* dbt);
 
 // Bind an initialized ring on its producer thread. Pass NULL to detach before freeing it.
 // The ring counters track dropped/missing frames. The push returns the frames enqueued.

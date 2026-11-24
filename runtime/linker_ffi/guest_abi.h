@@ -26,18 +26,27 @@ inline uint64_t AlignUp(uint64_t value, size_t alignment) {
     return (value + alignment - 1) & ~(uint64_t{alignment} - 1);
 }
 
+int32_t CheckMappedAccess(const wa_dbt* dbt, uint64_t address, size_t size, unsigned permission);
+
 class GuestMemory {
   public:
     GuestMemory(wa_softmmu_t* mmu, wa_guest_arch_t arch) : mmu_(mmu), width_(arch == WA_ARCH_ARM64 ? 8 : 4) {}
-    explicit GuestMemory(const wa_host_call_ctx_t& ctx) : GuestMemory(ctx.mmu, ctx.arch) {}
+    explicit GuestMemory(const wa_host_call_ctx_t& ctx)
+        : GuestMemory(ctx.mmu, ctx.arch) { dbt_ = ctx.dbt; }
     size_t width() const { return width_; }
 
     void Read(uint64_t address, void* out, size_t count) const {
-        if (count) CheckGuest(wa_softmmu_read(mmu_, address, out, count));
+        if (count) {
+            CheckGuest(CheckMappedAccess(dbt_, address, count, WA_PROT_READ));
+            CheckGuest(wa_softmmu_read(mmu_, address, out, count));
+        }
     }
 
     void Write(uint64_t address, const void* bytes, size_t count) const {
-        if (count) CheckGuest(wa_softmmu_write(mmu_, address, bytes, count));
+        if (count) {
+            CheckGuest(CheckMappedAccess(dbt_, address, count, WA_PROT_WRITE));
+            CheckGuest(wa_softmmu_write(mmu_, address, bytes, count));
+        }
     }
 
     template<class T> T Read(uint64_t address) const {
@@ -73,11 +82,12 @@ class GuestMemory {
     }
 
   private:
+    const wa_dbt* dbt_ = nullptr;
     wa_softmmu_t* mmu_;
     size_t width_;
 };
 
-enum class ArgKind { Word, Long, Float, Double };
+enum class ArgKind { Word, Long, Float, Double, Quad };
 
 struct ArgLocation {
     enum Bank { Gpr, Fp, Stack } bank;
@@ -93,11 +103,12 @@ class ArgumentLayout {
 
     ArgLocation Next(ArgKind kind) {
         const bool wide = kind == ArgKind::Long || kind == ArgKind::Double;
-        const bool fp = kind == ArgKind::Float || kind == ArgKind::Double;
+        const bool fp = kind == ArgKind::Float || kind == ArgKind::Double || kind == ArgKind::Quad;
         if (a64_) {
-            if (fp && fpr_ < 8) return {ArgLocation::Fp, fpr_++, 8};
-            if (!fp && gpr_ < 8) return {ArgLocation::Gpr, gpr_++, 8};
-            return StackSlot(8);
+            const size_t size = kind == ArgKind::Quad ? 16 : 8;
+            if (fp && fpr_ < 8) return {ArgLocation::Fp, fpr_++, size};
+            if (!fp && gpr_ < 8) return {ArgLocation::Gpr, gpr_++, size};
+            return StackSlot(size);
         }
         const size_t words = wide ? 2 : 1;
         if (wide) gpr_ = (gpr_ + 1) & ~size_t{1};
@@ -126,6 +137,7 @@ class CallArguments {
     explicit CallArguments(wa_guest_arch_t arch) : layout_(arch), arm32_(arch == WA_ARCH_ARM32) {}
 
     void Add(ArgKind kind, uint64_t bits) {
+        if (kind == ArgKind::Quad) throw GuestFault{WA_ERR_NOTSUP};
         const auto slot = layout_.Next(kind);
         switch (slot.bank) {
         case ArgLocation::Gpr:
@@ -175,6 +187,12 @@ class CallReader {
         return 0;
     }
 
+    std::array<uint64_t, 2> NextQuad() {
+        const auto slot = layout_.Next(ArgKind::Quad);
+        if (slot.bank == ArgLocation::Fp) return {ctx_.fp_bits[slot.offset], ctx_.fp_high[slot.offset]};
+        return memory_.Read<std::array<uint64_t, 2>>(ctx_.sp + slot.offset);
+    }
+
   private:
     const wa_host_call_ctx_t& ctx_;
     GuestMemory memory_;
@@ -217,6 +235,17 @@ class VaListReader {
         const auto address = AlignUp(stack_, size);
         stack_ = address + size;
         return wide ? memory_.Read<uint64_t>(address) : memory_.Read<uint32_t>(address);
+    }
+
+    std::array<uint64_t, 2> NextQuad() {
+        if (vr_offs_ < 0 && vr_offs_ % 16 == 0) {
+            const auto address = vr_top_ + vr_offs_;
+            vr_offs_ += 16;
+            return memory_.Read<std::array<uint64_t, 2>>(address);
+        }
+        const auto address = AlignUp(stack_, 16);
+        stack_ = address + 16;
+        return memory_.Read<std::array<uint64_t, 2>>(address);
     }
 
   private:

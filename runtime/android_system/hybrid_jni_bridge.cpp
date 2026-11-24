@@ -82,7 +82,14 @@ std::string Mangle(std::string_view name) {
 std::string CallFailure(const wa_dbt& dbt, std::string_view name, int32_t status) {
     char location[24];
     std::snprintf(location, sizeof(location), "0x%llx", static_cast<unsigned long long>(dbt.last_pc));
-    return std::string(name) + ": guest status " + std::to_string(status) + " at PC " + location;
+    auto message = std::string(name) + ": guest status " + std::to_string(status) + " at PC " + location;
+    if (status == WA_ERR_FAULT && dbt.last_fault_address) {
+        std::snprintf(location, sizeof(location), "0x%llx",
+                      static_cast<unsigned long long>(dbt.last_fault_address));
+        message += " accessing guest address ";
+        message += location;
+    }
+    return message;
 }
 
 void CheckRegion(Runtime& vm, size_t size, int32_t start, int32_t length, std::string_view exception) {

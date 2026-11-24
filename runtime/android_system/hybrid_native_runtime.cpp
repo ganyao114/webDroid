@@ -3,6 +3,7 @@
 #include "dbt_internal.h"
 #include "elf_image.h"
 #include "hybrid_jni_bridge.h"
+#include "gles_host_bridge.h"
 #include "mounted_apk.h"
 #include "ziparchive/zip_archive.h"
 
@@ -120,6 +121,7 @@ class HybridNativeRuntime {
         : apk_(apk), arch_(arch), mmu_(wa_softmmu_create(ReadElf, this), wa_softmmu_destroy),
           dbt_(wa_dbt_create(arch, mmu_.get()), wa_dbt_destroy), memory_(mmu_.get(), arch) {
         if (!dbt_) throw std::bad_alloc();
+        CheckGuest(wa_hal_register_graphics_symbols(dbt_.get()));
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlopen", DlDispatch<&HybridNativeRuntime::DlOpen>, this));
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlsym", DlDispatch<&HybridNativeRuntime::DlSym>, this));
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlclose", DlDispatch<&HybridNativeRuntime::DlClose>, this));
@@ -179,7 +181,7 @@ class HybridNativeRuntime {
         dbt::RunExitHandlers(*dbt_);
     }
 
-    std::vector<NativeLibraryProbe> Probe() {
+    std::vector<NativeLibraryProbe> Probe(std::span<const NativeProbeRequest> requests) {
         std::vector<NativeLibraryProbe> report;
         std::map<std::string, dbt::ElfInfo, std::less<>> images;
         for (const auto& name : apk_.Libraries(arch_)) {
@@ -218,6 +220,38 @@ class HybridNativeRuntime {
             auto& loaded = LoadImage(entry.name);
             entry.mapped_base = loaded.base;
             entry.load_error = loaded.error;
+        }
+        for (const auto& request : requests) {
+            auto entry = std::ranges::find(report, request.library, &NativeLibraryProbe::name);
+            if (entry == report.end()) continue;
+            auto& probe = entry->entrypoints.emplace_back();
+            probe.name = request.symbol;
+            if (!entry->mapped_base) {
+                probe.diagnostic = entry->load_error;
+                continue;
+            }
+            probe.address = dbt::FindElfSymbol(*dbt_, entry->mapped_base, request.symbol);
+            if (!probe.address) {
+                probe.diagnostic = "Guest export is missing";
+            } else if (request.action == NativeProbeAction::CallString) {
+                uint64_t value = 0;
+                const auto status = wa_dbt_call(dbt_.get(), probe.address, nullptr, 0, &value);
+                if (status != WA_OK)
+                    probe.diagnostic = Error("Guest call at PC " + std::to_string(dbt_->last_pc), status);
+                else if (!value)
+                    probe.diagnostic = "Guest function returned NULL";
+                else {
+                    try {
+                        probe.value = memory_.String(value, 4096);
+                    } catch (const GuestFault& fault) {
+                        probe.diagnostic = Error("Read guest result string", fault.status);
+                    }
+                }
+            } else if (request.action == NativeProbeAction::CallJniOnLoad) {
+                if (request.symbol != "JNI_OnLoad") probe.diagnostic = "Expected JNI_OnLoad";
+                else if (!jni_) probe.diagnostic = "JNI_OnLoad requires a guest JavaVM";
+                else probe.diagnostic = LoadForJava(entry->name);
+            }
         }
         return report;
     }
@@ -324,7 +358,7 @@ class HybridNativeRuntime {
     }
 
     bool Virtual(std::string_view name) const {
-        return name == "libandroid.so" || dbt::IsVirtualLibrary(*dbt_, name);
+        return dbt::IsVirtualLibrary(*dbt_, name);
     }
 
     template<uint64_t (HybridNativeRuntime::*Op)(const wa_host_call_ctx_t&)>
@@ -507,10 +541,11 @@ std::unique_ptr<interp::GuestNativeLibraries> OpenGuestNativeApk(JNIEnv* env, co
     return std::make_unique<ApkNativeLibraries>(env, static_cast<const MountedApk*>(mounted_apk)->path());
 }
 
-std::vector<NativeLibraryProbe> ProbeApkNativeLibraries(const std::string& path, wa_guest_arch_t arch) {
+std::vector<NativeLibraryProbe> ProbeApkNativeLibraries(const std::string& path, wa_guest_arch_t arch,
+    std::span<const NativeProbeRequest> requests, JNIEnv* environment) {
     const ApkArchive apk(path);
-    HybridNativeRuntime runtime(apk, arch, nullptr);
-    auto report = runtime.Probe();
+    HybridNativeRuntime runtime(apk, arch, environment ? &interp::JniBridge::From(environment) : nullptr);
+    auto report = runtime.Probe(requests);
     runtime.Shutdown();
     return report;
 }

@@ -51,7 +51,10 @@ int main(int argc, char** argv) try {
         Names("resolvable imports", library.resolved);
         Names("missing strong imports", library.missing);
         Names("unresolved weak imports", library.weak_undefined);
-        if (!library.load_error.empty()) std::cout << "  load stopped: " << library.load_error << '\n';
+        Require(library.missing_libraries.empty() && library.missing.empty() && library.weak_undefined.empty(),
+                "Unresolved production ELF imports for " + library.name);
+        Require(library.mapped_base && library.load_error.empty(),
+                "Production ELF initialization failed for " + library.name + " " + library.load_error);
     }
     Foreground foreground(argv[1], argv[2], argv[3]);
     const auto result = foreground.Boot(apk);

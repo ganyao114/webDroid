@@ -48,7 +48,7 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
     target_include_directories(wa_android_system_foreground PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include"
         PRIVATE ../linker_ffi ../../tools/ffi_gen/generated)
     target_link_libraries(wa_android_system_foreground PUBLIC wa_hal_surfaceflinger
-        PRIVATE wa_android_system_apk aosp17_ui_jni aosp17_libandroidfw wa_linker_ffi)
+        PRIVATE wa_android_system_apk aosp17_ui_jni aosp17_libandroidfw wa_linker_ffi wa_hal_browser)
 endif()
 
 if(EMSCRIPTEN)
@@ -181,4 +181,5 @@ if(BUILD_TESTING AND TARGET wa_android_system_apk)
     add_subdirectory(../../tests/m14_upstream_apps "${CMAKE_BINARY_DIR}/tests/m14_upstream_apps")
     add_subdirectory(../../tests/m16_commercial_apk_compat "${CMAKE_BINARY_DIR}/tests/m16_commercial_apk_compat")
     add_subdirectory(../../tests/m17_hybrid_art_ndk "${CMAKE_BINARY_DIR}/tests/m17_hybrid_art_ndk")
+    add_subdirectory(../../tests/m18_bionic_libcpp_pthread "${CMAKE_BINARY_DIR}/tests/m18_bionic_libcpp_pthread")
 endif()
