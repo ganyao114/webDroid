@@ -14,7 +14,7 @@ constexpr uint32_t kTableBits = 10;
 constexpr uint32_t kTableSize = 1u << kTableBits;
 constexpr uint32_t kPageMask = WA_PAGE_SIZE - 1;
 constexpr uint32_t kProtectionMask = WA_PROT_READ | WA_PROT_WRITE | WA_PROT_EXEC;
-using Bytes = std::array<uint8_t, WA_PAGE_SIZE>;
+using Bytes = wa::softmmu::PageBytes;
 const Bytes kZeroPage{};
 
 struct FilePage {
@@ -362,6 +362,19 @@ void wa_softmmu_get_stats(const wa_softmmu_t* mmu, wa_softmmu_stats_t* out_stats
 }
 
 namespace wa::softmmu {
+
+int32_t SetPageBytes(wa_softmmu_t* mmu, uint64_t address, std::shared_ptr<PageBytes> bytes) {
+    if (!mmu || !bytes || address >= kAddressLimit || (address & kPageMask))
+        return WA_ERR_INVALID;
+    std::lock_guard lock(mmu->mutex);
+    auto* entry = mmu->Find(static_cast<uint32_t>(address >> WA_PAGE_SHIFT));
+    if (!entry || entry->state != WA_PAGE_PRIVATE_RW || entry->cow)
+        return WA_ERR_FAULT;
+    if (!entry->data)
+        ++mmu->stats.private_pages_allocated;
+    entry->data = std::move(bytes);
+    return WA_OK;
+}
 
 Access Read(wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> bytes,
             uint32_t permission) noexcept {

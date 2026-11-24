@@ -5,8 +5,10 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <sys/eventfd.h>
+#include <sys/file.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #include <cerrno>
 #include <csetjmp>
@@ -210,6 +212,25 @@ int Posix() {
     if (mprotect(allocation, page, PROT_READ) || *cell != 47 || munmap(allocation, page))
         return 45;
 
+    FILE* backed = std::tmpfile();
+    const int fd = backed ? fileno(backed) : -1;
+    if (fd < 0 || ftruncate(fd, page + 4) || flock(fd, LOCK_EX | LOCK_NB)) return 48;
+    auto* writer = static_cast<volatile char*>(mmap(nullptr, page, PROT_READ | PROT_WRITE, MAP_SHARED, fd, page));
+    auto* reader = static_cast<volatile char*>(mmap(nullptr, page, PROT_READ, MAP_SHARED, fd, page));
+    if (writer == MAP_FAILED || reader == MAP_FAILED) return 49;
+    writer[0] = 'M';
+    writer[page - 1] = 'X';  // The partial EOF page cannot grow the file.
+    if (reader[0] != 'M' || pwrite(fd, "K", 1, page + 1) != 1 ||
+        msync(const_cast<char*>(writer), page, MS_SYNC | MS_INVALIDATE) ||
+        reader[1] != 'K') return 50;
+    writer[2] = 'V';
+    char persisted[4]{};
+    if (munmap(const_cast<char*>(writer), page) || reader[2] != 'V' ||
+        pread(fd, persisted, sizeof(persisted), page) != sizeof(persisted) ||
+        std::memcmp(persisted, "MKV", sizeof(persisted)) ||
+        lseek(fd, 0, SEEK_END) != page + 4 || flock(fd, LOCK_UN) ||
+        std::fclose(backed) || munmap(const_cast<char*>(reader), page)) return 51;
+
     std::jmp_buf jump;
     const auto result = setjmp(jump);
     if (!result)
@@ -221,6 +242,29 @@ int Posix() {
     if (std::swprintf(wide, 16, L"%ls %.1Lf", L"\u03bb", 1.5L) != 5 ||
         std::wmemcmp(wide, L"\u03bb 1.5", 6))
         return 47;
+
+    unsigned char input[] = "ARM guest zlib stream";
+    unsigned char zipped[128]{}, output[sizeof(input)]{};
+    z_stream writer_stream{};
+    if (deflateInit2(&writer_stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY))
+        return 52;
+    writer_stream.next_in = input;
+    writer_stream.avail_in = sizeof(input);
+    writer_stream.next_out = zipped;
+    writer_stream.avail_out = sizeof(zipped);
+    if (deflate(&writer_stream, Z_FINISH) != Z_STREAM_END ||
+        writer_stream.total_in != sizeof(input) || deflateEnd(&writer_stream))
+        return 53;
+    z_stream reader_stream{};
+    if (inflateInit2(&reader_stream, 15 + 16)) return 54;
+    reader_stream.next_in = zipped;
+    reader_stream.avail_in = writer_stream.total_out;
+    reader_stream.next_out = output;
+    reader_stream.avail_out = sizeof(output);
+    if (inflate(&reader_stream, Z_FINISH) != Z_STREAM_END ||
+        reader_stream.total_out != sizeof(output) || inflateEnd(&reader_stream) ||
+        std::memcmp(input, output, sizeof(input)))
+        return 55;
     return 0;
 }
 

@@ -331,6 +331,9 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest,
                 literal_label = attr("label");
             if (indexed) {
                 indexed->application = wa::system::ActivityClassName(manifest.package, attr("name"));
+                indexed->process = attr("process");
+                if (indexed->process.empty()) indexed->process = manifest.package;
+                else if (indexed->process.starts_with(':')) indexed->process.insert(0, manifest.package);
                 indexed->icon = typed("icon", Res_value::TYPE_REFERENCE, 0);
                 indexed->enabled = typed("enabled", Res_value::TYPE_INT_BOOLEAN, 1) != 0;
             }

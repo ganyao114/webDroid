@@ -34,7 +34,7 @@ foreach(abi arm64-v8a armeabi-v7a)
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${libcxx}" "${directory}/libc++_shared.so"
         COMMAND "${compiler}" -std=c++17 -O2 -g -fPIC -shared -fexceptions -frtti ${arch_flags}
             -Wl,--no-undefined -Wl,--pack-dyn-relocs=android+relr -Wl,-soname,libcpp_pthread_jni.so
-            -Wl,--no-as-needed "${fixture}/cpp_pthread_jni.cpp" -lc++_shared -llog -ldl
+            -Wl,--no-as-needed "${fixture}/cpp_pthread_jni.cpp" -lc++_shared -llog -ldl -lz
             -o "${directory}/libcpp_pthread_jni.so"
         DEPENDS "${compiler}" "${libcxx}" "${fixture}/cpp_pthread_jni.cpp"
         COMMENT "Building NDK libc++ and pthread JNI fixture for ${abi}"

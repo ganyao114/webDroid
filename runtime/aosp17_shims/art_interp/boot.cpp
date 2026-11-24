@@ -696,6 +696,21 @@ Field* FindPublicField(const Class& owner, std::string_view name) {
   return owner.super ? FindPublicField(*owner.super, name) : nullptr;
 }
 
+Object* ReflectField(Runtime& vm, Field& field) {
+  auto& type = vm.linker.Resolve("Ljava/lang/reflect/Field;");
+  RootScope roots(vm);
+  auto* mirror = roots.Hold(vm.heap.Allocate(vm, type));
+  mirror->reflected_field = &field;
+  const auto initialize = [&](std::string_view name, std::string_view signature, Value value) {
+    mirror->fields[vm.linker.FindField(type, name, signature, false).slot] = value;
+  };
+  initialize("accessFlags", "I", Value::Int(field.flags));
+  initialize("offset", "I", Value::Int(static_cast<int32_t>(field.slot)));
+  initialize("declaringClass", "Ljava/lang/Class;", Value::Ref(vm.ClassObject(*field.owner)));
+  initialize("type", "Ljava/lang/Class;", Value::Ref(vm.ClassObject(vm.linker.Resolve(field.type))));
+  return mirror;
+}
+
 void InstallFieldReflection(ClassLinker& linker, Class& cls) {
   constexpr auto descriptor = "Ljava/lang/reflect/Field;";
   for (const bool declared : {false, true}) {
@@ -712,19 +727,25 @@ void InstallFieldReflection(ClassLinker& linker, Class& cls) {
           field = FindPublicField(owner, name);
         }
         if (!field) vm.Fail("Ljava/lang/NoSuchFieldException;", name);
-        auto& type = vm.linker.Resolve("Ljava/lang/reflect/Field;");
-        RootScope roots(vm);
-        auto* mirror = roots.Hold(vm.heap.Allocate(vm, type));
-        mirror->reflected_field = field;
-        const auto initialize = [&](std::string_view name, std::string_view signature, Value value) {
-          mirror->fields[vm.linker.FindField(type, name, signature, false).slot] = value;
+        return Value::Ref(ReflectField(vm, *field));
+      });
+    linker.AddMethod(cls, declared ? "getDeclaredFields" : "getFields", "()[Ljava/lang/reflect/Field;", 0,
+      [declared](Runtime& vm, Object* self, Values) {
+        std::vector<Field*> fields;
+        std::unordered_set<const Class*> visited;
+        const auto gather = [&](auto&& visit, const Class& type) -> void {
+          if (!visited.insert(&type).second) return;
+          for (auto* field : type.field_order)
+            if (declared || (field->flags & art::kAccPublic)) fields.push_back(field);
+          if (declared) return;
+          for (auto* iface : type.interfaces) visit(visit, *iface);
+          if (type.super && !type.IsInterface()) visit(visit, *type.super);
         };
-        initialize("accessFlags", "I", Value::Int(field->flags));
-        initialize("offset", "I", Value::Int(static_cast<int32_t>(field->slot)));
-        initialize("declaringClass", "Ljava/lang/Class;", Value::Ref(vm.ClassObject(*field->owner)));
-        auto& actual = vm.linker.Resolve(field->type);
-        initialize("type", "Ljava/lang/Class;", Value::Ref(vm.ClassObject(actual)));
-        return Value::Ref(mirror);
+        gather(gather, *self->represented_class);
+        RootScope roots(vm);
+        auto* array = roots.Hold(vm.NewArray(vm.linker.Resolve("[Ljava/lang/reflect/Field;"), fields.size()));
+        for (size_t i = 0; i < fields.size(); ++i) array->elements[i] = Value::Ref(ReflectField(vm, *fields[i]));
+        return Value::Ref(array);
       });
   }
   const auto bind = [&](std::string_view name, std::string_view sig, Builtin fn) {
@@ -2743,12 +2764,8 @@ template<class T> T ParseInteger(Runtime& vm, Object* str, int radix) {
   vm.Fail("Ljava/lang/NumberFormatException;", EncodeUtf8(text));
 }
 
-template<class T> std::optional<T> IntegerProperty(Runtime& vm, Object* key) {
-  if (!key || key->text.empty()) return std::nullopt;
-  const auto entry = vm.system_properties.find(EncodeUtf8(key->text, false));
-  if (entry == vm.system_properties.end()) return std::nullopt;
-  const auto decoded = DecodeUtf8(entry->second);
-  std::u16string_view text(decoded);
+// The primitive wrapper intrinsics use the radix prefixes of libcore Integer.decode.
+template<class T> std::optional<T> DecodeInteger(std::u16string_view text) {
   const bool negative = text.starts_with(u'-');
   if (negative || text.starts_with(u'+')) text.remove_prefix(1);
   int radix = 10;
@@ -2763,6 +2780,12 @@ template<class T> std::optional<T> IntegerProperty(Runtime& vm, Object* key) {
     text.remove_prefix(1);
   }
   return ParseDigits<T>(text, radix, negative);
+}
+
+template<class T> std::optional<T> IntegerProperty(Runtime& vm, Object* key) {
+  if (!key || key->text.empty()) return std::nullopt;
+  const auto entry = vm.system_properties.find(EncodeUtf8(key->text, false));
+  return entry == vm.system_properties.end() ? std::nullopt : DecodeInteger<T>(DecodeUtf8(entry->second));
 }
 
 std::string BoxText(char type, Value value) {
@@ -3003,6 +3026,15 @@ void InstallNumbers(Runtime& vm) {
   };
   cl.AddMethod(integer, "parseInt", "(Ljava/lang/String;)I", art::kAccStatic, parse_int);
   cl.AddMethod(integer, "parseInt", "(Ljava/lang/String;I)I", art::kAccStatic, parse_int);
+  cl.AddMethod(integer, "decode", "(Ljava/lang/String;)Ljava/lang/Integer;", art::kAccStatic,
+      [&integer](Runtime& vm, Object*, Values a) {
+        const auto& text = vm.NonNull(a[0].ref()).text;
+        const auto decoded = DecodeInteger<int32_t>(text);
+        if (!decoded) vm.Fail("Ljava/lang/NumberFormatException;", EncodeUtf8(text));
+        const auto value = Value::Int(*decoded);
+        auto& box = vm.linker.FindMethod(integer, "valueOf", "(I)Ljava/lang/Integer;", true);
+        return vm.Invoke(box, nullptr, {&value, 1});
+      });
   cl.AddMethod(lng, "parseLong", "(Ljava/lang/String;)J", art::kAccStatic, parse_long);
   cl.AddMethod(lng, "parseLong", "(Ljava/lang/String;I)J", art::kAccStatic, parse_long);
   cl.AddMethod(*classes['B'], "parseByte", "(Ljava/lang/String;)B", art::kAccStatic, parse_byte);

@@ -471,6 +471,8 @@ struct Session {
         const double average = samples ? std::accumulate(frame_ms.begin(), frame_ms.begin() + samples, 0.0)
             / samples : 0.0;
         const auto app_create = vm.GetLinkedVirtualMethodStats(application_descriptor, "onCreate", "()V");
+        const auto app_attach = vm.GetLinkedVirtualMethodStats(application_descriptor, "attachBaseContext",
+                                                               "(Landroid/content/Context;)V");
         const auto providers = vm.GetLinkedVirtualMethodStats("Landroid/content/ContentProvider;",
             "attachInfo", "(Landroid/content/Context;Landroid/content/pm/ProviderInfo;)V").returned;
         const auto on_destroy = vm.GetLinkedVirtualMethodStats(activity_descriptor, "onDestroy", "()V").returned;
@@ -478,14 +480,17 @@ struct Session {
         std::snprintf(numbers, sizeof(numbers),
             ",\"frames\":%u,\"bootMs\":%.3f,\"lastFrameMs\":%.3f,\"avgFrameMs\":%.3f,"
             "\"drawCommands\":%zu,\"inputEventsProcessed\":%zu,\"gcLive\":%zu,\"gcCollections\":%zu,"
-            "\"dexFiles\":%zu,\"dexClasses\":%zu,\"iconResource\":%u,\"catalogPackages\":%zu,"
+            "\"dexFiles\":%zu,\"dexClasses\":%zu,\"dexLoadMs\":%.3f,\"iconResource\":%u,\"catalogPackages\":%zu,"
             "\"executedActivityMethods\":%zu,\"executedApplicationMethods\":%zu,"
+            "\"attachBaseContextCalls\":%llu,\"attachBaseContextReturns\":%llu,"
             "\"applicationCreateCalls\":%llu,\"applicationCreateReturns\":%llu,\"providersCreated\":%llu,"
             "\"onCreateCalls\":%llu,\"onStartCalls\":%llu,\"onResumeCalls\":%llu,\"onDestroyCalls\":%llu",
             frames, boot_ms, frames ? frame_ms[(frames - 1) % frame_ms.size()] : 0.0, average,
-            draw_commands, input_events, gc.live, gc.collections, dex_files, dex_classes,
+            draw_commands, input_events, gc.live, gc.collections, dex_files, dex_classes, dex_load_ms,
             icon_resource, catalog.size(), vm.InterpretedMethodCount(activity_descriptor),
             vm.InterpretedMethodCount(application_descriptor),
+            static_cast<unsigned long long>(app_attach.invocations),
+            static_cast<unsigned long long>(app_attach.returned),
             static_cast<unsigned long long>(app_create.invocations),
             static_cast<unsigned long long>(app_create.returned),
             static_cast<unsigned long long>(providers),
@@ -501,14 +506,12 @@ struct Session {
         const auto native = vm.GetGuestNativeStats();
         const auto loads = vm.GetMethodStats("Ljava/lang/System;", "loadLibrary", "(Ljava/lang/String;)V");
         state += ",\"nativeLoadCalls\":" + std::to_string(loads.invocations) +
-            ",\"nativeLoadReturns\":" + std::to_string(loads.returned);
-        if (!native.abi.empty()) {
-            state += ",\"nativeAbi\":" + Quote(native.abi) +
-                ",\"nativeLibraries\":" + std::to_string(native.libraries) +
-                ",\"nativeHostCalls\":" + std::to_string(native.calls) +
-                ",\"nativeCallbacks\":" + std::to_string(native.callbacks) +
-                ",\"nativeFileFaults\":" + std::to_string(native.file_faults);
-        }
+            ",\"nativeLoadReturns\":" + std::to_string(loads.returned) +
+            ",\"nativeAbi\":" + Quote(native.abi) +
+            ",\"nativeLibraries\":" + std::to_string(native.libraries) +
+            ",\"nativeHostCalls\":" + std::to_string(native.calls) +
+            ",\"nativeCallbacks\":" + std::to_string(native.callbacks) +
+            ",\"nativeFileFaults\":" + std::to_string(native.file_faults);
 #ifdef __EMSCRIPTEN__
         state += ",\"wasmLinearBytes\":" + std::to_string(emscripten_get_heap_size()) +
             ",\"wasmHeapEndBytes\":" + std::to_string(reinterpret_cast<uintptr_t>(sbrk(0)));
@@ -536,7 +539,7 @@ struct Session {
     uint64_t last_time = 0;
     size_t input_events = 0, draw_commands = 0, dex_files = 0, dex_classes = 0;
     unsigned long long on_create = 0, on_start = 0, on_resume = 0;
-    double boot_ms = 0;
+    double boot_ms = 0, dex_load_ms = 0;
     std::array<double, 120> frame_ms{};
     bool framework_loaded = false, fallback_loaded = false, boot_attempted = false, booted = false;
     bool natives_registered = false;
@@ -675,6 +678,14 @@ int32_t wa::system::RunForegroundProbe(ForegroundProbe probe, char* out, size_t 
         return CopyText(probe(s.vm, activity), out, cap);
     });
 }
+
+int32_t wa::system::RunForegroundVmProbe(ForegroundVmProbe probe) {
+    return Api("Probe foreground VM", [&]() -> int32_t {
+        if (!session) return WA_ERR_NOENT;
+        probe(session->vm);
+        return WA_OK;
+    });
+}
 #endif
 
 int32_t wa_system_app_create(int32_t width, int32_t height, int32_t dpi, const char* locale) {
@@ -787,20 +798,27 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
     s.application_descriptor = Descriptor(s.application_class);
     s.icon_resource = chosen->icon ? chosen->icon : package.manifest.icon;
     const std::string apk_path = package.mount->path();
+    const auto process = package.manifest.process;
     s.catalog.insert_or_assign(s.package_name, std::move(package));
     s.boot_attempted = true;
 
+    s.vm.SetSystemProperty("org.wasmandroid.processName", process);
+    const auto cmdline = std::span(reinterpret_cast<const uint8_t*>(process.c_str()), process.size() + 1);
+    s.vm.MountReadOnlyFile("/proc/self/cmdline", cmdline);
+    s.vm.MountReadOnlyFile("/proc/1/cmdline", cmdline);
     s.vm.MountReadOnlyHostFile(apk_path);
+    const auto dex_start = Clock::now();
     s.vm.LoadApkDexFiles(apk_path);
-    const auto native_library_dir = wa::system::MountGuestApkLibraries(s.vm, apk_path, s.package_name);
+    s.dex_load_ms = MillisecondsSince(dex_start);
     const auto prefix = apk_path + '!';
-    if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))
-        throw std::invalid_argument("Launcher activity is absent from the APK DEX files");
     for (const auto& file : s.vm.GetDexStats().files) {
         if (!file.location.starts_with(prefix)) continue;
         ++s.dex_files;
         s.dex_classes += file.class_definitions;
     }
+    if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))
+        throw std::invalid_argument("Launcher activity is absent from the APK DEX files");
+    const auto native_library_dir = wa::system::MountGuestApkLibraries(s.vm, apk_path, s.package_name);
     s.ui.RegisterNatives(s.vm);
     s.natives_registered = true;
     s.ui.BindSurfaceFlinger(s.scene.get(), kActivityLayer);
@@ -812,15 +830,23 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
             return s.GetApplication(pkg, flags, user);
         },
     });
-    s.ui.LaunchActivity(s.vm, {.apk_path = apk_path, .class_name = s.activity_class,
-        .locale = s.locale, .density_dpi = static_cast<int32_t>(s.display.density_dpi),
-        .width = static_cast<int32_t>(s.display.viewport_w),
-        .height = static_cast<int32_t>(s.display.viewport_h),
-        .framework_resource_apk = s.framework_resources->path(), .native_library_dir = native_library_dir});
-    s.on_create = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onCreate",
-                                                   "(Landroid/os/Bundle;)V").returned;
-    s.on_start = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onStart", "()V").returned;
-    s.on_resume = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onResume", "()V").returned;
+    const auto record_lifecycle = [&] {
+        s.on_create = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onCreate",
+                                                       "(Landroid/os/Bundle;)V").returned;
+        s.on_start = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onStart", "()V").returned;
+        s.on_resume = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onResume", "()V").returned;
+    };
+    try {
+        s.ui.LaunchActivity(s.vm, {.apk_path = apk_path, .class_name = s.activity_class,
+            .locale = s.locale, .density_dpi = static_cast<int32_t>(s.display.density_dpi),
+            .width = static_cast<int32_t>(s.display.viewport_w),
+            .height = static_cast<int32_t>(s.display.viewport_h),
+            .framework_resource_apk = s.framework_resources->path(), .native_library_dir = native_library_dir});
+    } catch (...) {
+        record_lifecycle();
+        throw;
+    }
+    record_lifecycle();
     {
         ScopedHandleScope roots(s.vm);
         auto* current = roots.Hold(s.Activity());

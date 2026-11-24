@@ -32,7 +32,7 @@ struct ApkComponent {
 };
 
 struct LauncherPackage {
-    std::string package, label, application;
+    std::string package, label, application, process;
     uint32_t icon = 0;
     bool enabled = true;
     std::vector<ApkComponent> activities;

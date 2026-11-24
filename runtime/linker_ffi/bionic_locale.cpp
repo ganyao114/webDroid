@@ -335,7 +335,7 @@ void SingleByte(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = ctx.args[0] < 128 ? ctx.args[0] : UINT32_MAX;
 }
 
-enum class Wide { Length, Copy, Move, Compare, Find, Set, StrCopy, StrFind };
+enum class Wide { Length, Copy, Move, Compare, Find, Set, StrCopy, StrCopyBounded, StrCompare, StrFind };
 template <Wide op> void WideMemory(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     const auto dst = ctx.args[0], arg = ctx.args[1], count = ctx.args[2];
@@ -351,6 +351,16 @@ template <Wide op> void WideMemory(wa_host_call_ctx_t& ctx) {
         const auto input = WideString(mem, arg);
         mem.Write(dst, input.c_str(), (input.size() + 1) * 4);
         ctx.ret0 = dst;
+    } else if constexpr (op == Wide::StrCopyBounded) {
+        if (count > kWideLimit) throw GuestFault{WA_ERR_OVERFLOW};
+        uint32_t ch = 1;
+        for (uint64_t i = 0; i < count; ++i) {
+            if (ch) ch = mem.Read<uint32_t>(arg + 4 * i);
+            mem.Write<uint32_t>(dst + 4 * i, ch);
+        }
+        ctx.ret0 = dst;
+    } else if constexpr (op == Wide::StrCompare) {
+        ctx.ret0 = WideString(mem, dst).compare(WideString(mem, arg));
     } else if constexpr (op == Wide::Copy || op == Wide::Move) {
         if (count > kWideLimit)
             throw GuestFault{WA_ERR_OVERFLOW};
@@ -502,6 +512,27 @@ void Strftime(wa_host_call_ctx_t& ctx) {
 } // namespace
 
 void RegisterLocale(wa_dbt& dbt) {
+    // Older Bionic headers index _ctype_[1 + unsigned character], with index 0 for EOF.
+    constexpr uint8_t upper = 0x01, lower = 0x02, digit = 0x04, space = 0x08;
+    constexpr uint8_t punct = 0x10, control = 0x20, hex_letter = 0x40, blank = 0x80;
+    std::array<uint8_t, 257> classes{};
+    for (unsigned ch = 0; ch < 256; ++ch) {
+        auto& classification = classes[ch + 1];
+        if (ch >= 'A' && ch <= 'Z') classification = upper | (ch <= 'F' ? hex_letter : 0);
+        else if (ch >= 'a' && ch <= 'z') classification = lower | (ch <= 'f' ? hex_letter : 0);
+        else if (ch >= '0' && ch <= '9') classification = digit;
+        else if (ch == ' ') classification = space | blank;
+        else if (ch >= '\t' && ch <= '\r') classification = control | space;
+        else if (ch < ' ' || (ch >= 0x7f && ch <= 0x9f)) classification = control;
+        else classification = punct;
+    }
+    const GuestMemory mem(dbt.mmu, dbt.arch);
+    const auto ctype = AllocateGuest(dbt, mem.width() + classes.size());
+    if (!ctype) throw GuestFault{WA_ERR_NOMEM};
+    mem.Write(ctype + mem.width(), classes.data(), classes.size());
+    mem.WriteWord(ctype, ctype + mem.width());
+    CheckGuest(RegisterData(dbt, "libc.so", "_ctype_", ctype, true));
+
 #define CHAR(name) {#name, Dispatch<Character<::name>>}
 #define WIDE(name)                                                                                 \
     {#name, Dispatch<WideCharacter<::name>>}, {#name "_l", Dispatch<WideCharacter<::name, true>>}
@@ -559,6 +590,8 @@ void RegisterLocale(wa_dbt& dbt) {
         {"btowc", Dispatch<SingleByte>},
         {"wcslen", Dispatch<WideMemory<Wide::Length>>},
         {"wcscpy", Dispatch<WideMemory<Wide::StrCopy>>},
+        {"wcsncpy", Dispatch<WideMemory<Wide::StrCopyBounded>>},
+        {"wcscmp", Dispatch<WideMemory<Wide::StrCompare>>},
         {"wcschr", Dispatch<WideMemory<Wide::StrFind>>},
         {"wmemcpy", Dispatch<WideMemory<Wide::Copy>>},
         {"wmemmove", Dispatch<WideMemory<Wide::Move>>},
@@ -576,6 +609,7 @@ void RegisterLocale(wa_dbt& dbt) {
         NUM(strtol, Long),
         NUM(strtoll, LongLong),
         NUM(strtoll_l, LongLong),
+        NUM(strtoimax, LongLong),
         NUM(strtoul, ULong),
         NUM(strtoull, ULongLong),
         NUM(strtoull_l, ULongLong),

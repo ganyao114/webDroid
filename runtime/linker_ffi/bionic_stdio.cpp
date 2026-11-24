@@ -196,10 +196,12 @@ void CloseFile(wa_host_call_ctx_t& ctx) {
         WriteFileHeader(mem, address, -1, 0);
 }
 
-template <bool Read> void Transfer(wa_host_call_ctx_t& ctx) {
+template <bool Read, bool Checked = false> void Transfer(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
-    const auto address = ctx.args[0], width = ctx.args[1], count = ctx.args[2],
-               stream = ctx.args[3];
+    CallReader args(ctx);
+    const auto address = args.Next(), width = args.Next(), count = args.Next(), stream = args.Next();
+    if constexpr (Checked)
+        if (count && width > args.Next() / count) throw GuestFault{WA_ERR_FAULT};
     auto* file = Stream(ctx, stream);
     if (!file) {
         ctx.ret0 = 0;
@@ -331,7 +333,7 @@ template <Line op> void FileLine(wa_host_call_ctx_t& ctx) {
     Refresh(mem, address, file->host);
 }
 
-enum class Position { Seek, Seek64, Tell, Tell64, Rewind };
+enum class Position { Seek, Seek64, Tell, Tell64, Rewind, Get, Get64, Set, Set64 };
 template <Position op> void FilePosition(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     CallReader args(ctx);
@@ -339,7 +341,20 @@ template <Position op> void FilePosition(wa_host_call_ctx_t& ctx) {
     auto* file = Stream(ctx, address);
     if (!file)
         return;
-    if constexpr (op == Position::Tell || op == Position::Tell64) {
+    if constexpr (op == Position::Get || op == Position::Get64) {
+        const auto offset = ftello(file->host);
+        if (offset < 0) return PosixResult(ctx, -1);
+        if constexpr (op == Position::Get) {
+            if (mem.width() == 4 && offset > INT32_MAX) return Fail(ctx, EOVERFLOW);
+            mem.WriteWord(args.Next(), offset);
+        } else {
+            mem.Write<int64_t>(args.Next(), offset);
+        }
+    } else if constexpr (op == Position::Set || op == Position::Set64) {
+        const auto dest = args.Next();
+        const auto offset = op == Position::Set64 ? mem.Read<int64_t>(dest) : SignedWord(mem, mem.ReadWord(dest));
+        PosixResult(ctx, fseeko(file->host, offset, SEEK_SET));
+    } else if constexpr (op == Position::Tell || op == Position::Tell64) {
         const auto offset = ftello(file->host);
         if (offset < 0)
             PosixResult(ctx, offset);
@@ -541,6 +556,7 @@ void RegisterStdio(wa_dbt& dbt) {
         {"fclose", Dispatch<CloseFile>},
         {"fread", Dispatch<Transfer<true>>},
         {"fwrite", Dispatch<Transfer<false>>},
+        {"__fwrite_chk", Dispatch<Transfer<false, true>>},
         {"fgetc", Dispatch<FileChar<Character::Get>>},
         {"getc", Dispatch<FileChar<Character::Get>>},
         {"getc_unlocked", Dispatch<FileChar<Character::Get>>},
@@ -566,6 +582,10 @@ void RegisterStdio(wa_dbt& dbt) {
         {"ftell", Dispatch<FilePosition<Position::Tell>>},
         {"ftello", Dispatch<FilePosition<Position::Tell>>},
         {"ftello64", Dispatch<FilePosition<Position::Tell64>>},
+        {"fgetpos", Dispatch<FilePosition<Position::Get>>},
+        {"fgetpos64", Dispatch<FilePosition<Position::Get64>>},
+        {"fsetpos", Dispatch<FilePosition<Position::Set>>},
+        {"fsetpos64", Dispatch<FilePosition<Position::Set64>>},
         {"rewind", Dispatch<FilePosition<Position::Rewind>>},
         {"fflush", Dispatch<Control<StreamOp::Flush>>},
         {"feof", Dispatch<Control<StreamOp::Eof>>},

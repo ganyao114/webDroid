@@ -552,6 +552,14 @@ GuestNativeStats Vm::GetGuestNativeStats() const {
   return runtime_->guest_native ? runtime_->guest_native->Stats() : GuestNativeStats{};
 }
 
+std::vector<GuestNativeImage> Vm::GetGuestNativeImages() const {
+  return runtime_->guest_native ? runtime_->guest_native->Images() : std::vector<GuestNativeImage>{};
+}
+
+void Vm::SetGuestLibraryObserver(std::function<void(std::string_view)> observer) {
+  runtime_->guest_library_observer = std::move(observer);
+}
+
 void Vm::ReleaseGuestNativeSource() noexcept { runtime_->ReleaseGuestNativeSource(); }
 
 Value Vm::CallStatic(std::string_view owner, std::string_view name, std::string_view signature,
@@ -626,6 +634,13 @@ MethodStats Vm::GetLinkedVirtualMethodStats(std::string_view owner, std::string_
   if (!cls) return {};
   const auto method = cls->vtable.find(MemberKey(name, signature));
   return method == cls->vtable.end() ? MethodStats{} : method->second->stats;
+}
+MethodStats Vm::GetLinkedDeclaredMethodStats(std::string_view owner, std::string_view name,
+                                             std::string_view signature) const {
+  const auto* cls = runtime_->linker.FindLinkedClass(owner);
+  if (!cls) return {};
+  const auto method = cls->methods.find(MemberKey(name, signature));
+  return method == cls->methods.end() ? MethodStats{} : method->second.stats;
 }
 size_t Vm::InterpretedMethodCount(std::string_view descriptor) const {
   const auto* cls = runtime_->linker.FindLinkedClass(descriptor);

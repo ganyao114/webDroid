@@ -3,6 +3,7 @@
 #include <arpa/inet.h>
 #include <cerrno>
 #include <fcntl.h>
+#include <ifaddrs.h>
 #include <net/if.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
@@ -147,6 +148,66 @@ struct Address {
         mem.Write<uint32_t>(length, size);
     }
 };
+
+void GetInterfaces(wa_host_call_ctx_t& ctx) {
+    const GuestMemory mem(ctx);
+    const auto result = ctx.args[0];
+    if (!result) return Fail(ctx, EFAULT);
+    mem.WriteWord(result, 0);
+    ifaddrs* first = nullptr;
+    if (getifaddrs(&first)) return PosixResult(ctx, -1);
+    const std::unique_ptr<ifaddrs, decltype(&freeifaddrs)> addresses(first, freeifaddrs);
+    std::vector<const ifaddrs*> list;
+    for (auto* item = first; item; item = item->ifa_next) {
+        const auto* addr = item->ifa_addr;
+        if (item->ifa_name && addr && (addr->sa_family == AF_INET || addr->sa_family == AF_INET6))
+            list.push_back(item);
+    }
+    if (list.empty()) return;
+
+    const auto word = mem.width();
+    constexpr auto address_size = sizeof(sockaddr_storage);
+    const auto stride = AlignUp(7 * word + IFNAMSIZ + 3 * address_size, word);
+    GuestBuffer storage(*ctx.dbt, list.size() * stride);
+    for (size_t i = 0; i < list.size(); ++i) {
+        const auto& item = *list[i];
+        const auto base = storage.address + i * stride;
+        const auto name = base + 7 * word;
+        const auto length = strnlen(item.ifa_name, IFNAMSIZ - 1);
+        mem.Write(name, item.ifa_name, length);
+        mem.Write<uint8_t>(name + length, 0);
+        mem.WriteWord(base, i + 1 < list.size() ? base + stride : 0);
+        mem.WriteWord(base + word, name);
+        uint32_t flags = 0;
+        constexpr std::pair<unsigned, uint32_t> flag_bits[]{
+            {IFF_UP, 1}, {IFF_BROADCAST, 2}, {IFF_LOOPBACK, 8}, {IFF_POINTOPOINT, 16},
+            {IFF_RUNNING, 64}, {IFF_NOARP, 128}, {IFF_PROMISC, 256}, {IFF_ALLMULTI, 512},
+            {IFF_MULTICAST, 4096},
+        };
+        for (const auto& [host, guest] : flag_bits)
+            if (item.ifa_flags & host) flags |= guest;
+        mem.Write<uint32_t>(base + 2 * word, flags);
+
+        const auto write_address = [&](size_t slot, const sockaddr* address) {
+            const auto at = name + IFNAMSIZ + (slot - 3) * address_size;
+            if (address && (address->sa_family == AF_INET || address->sa_family == AF_INET6)) {
+                const auto bytes = address->sa_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6);
+                Address::Write(mem, at, address, bytes, address_size);
+                mem.WriteWord(base + slot * word, at);
+            } else {
+                mem.WriteWord(base + slot * word, 0);
+            }
+        };
+        write_address(3, item.ifa_addr);
+        write_address(4, item.ifa_netmask);
+        write_address(5, item.ifa_flags & IFF_POINTOPOINT ? item.ifa_dstaddr :
+                     item.ifa_flags & IFF_BROADCAST ? item.ifa_broadaddr : nullptr);
+        mem.WriteWord(base + 6 * word, 0);
+    }
+    mem.WriteWord(result, std::exchange(storage.address, 0));
+}
+
+void FreeInterfaces(wa_host_call_ctx_t& ctx) { FreeGuest(*ctx.dbt, ctx.args[0]); }
 
 template <bool Pair> void Socket(wa_host_call_ctx_t& ctx) {
     const auto family = HostFamily(ctx.args[0]);
@@ -464,6 +525,52 @@ void GetAddrInfo(wa_host_call_ctx_t& ctx) {
     }
 }
 
+void GetHostByName(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    const GuestMemory mem(ctx);
+    const auto name = mem.String(ctx.args[0]);
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_CANONNAME;
+    addrinfo* results = nullptr;
+    const auto error = getaddrinfo(name.c_str(), nullptr, &hints, &results);
+    if (error) {
+        if (error == EAI_SYSTEM) SetErrno(dbt, GuestErrno(errno));
+        return;
+    }
+    const std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> resolved(results, freeaddrinfo);
+    std::vector<in_addr> addresses;
+    for (auto* item = results; item; item = item->ai_next) {
+        if (item->ai_family == AF_INET && item->ai_addrlen >= sizeof(sockaddr_in))
+            addresses.push_back(reinterpret_cast<const sockaddr_in*>(item->ai_addr)->sin_addr);
+    }
+    if (addresses.empty()) return;
+
+    const std::string_view canon = results->ai_canonname ? results->ai_canonname : name.c_str();
+    const auto word = mem.width();
+    const auto header = 3 * word + 2 * sizeof(int32_t);
+    const auto pointers = (2 + addresses.size()) * word;
+    GuestBuffer entry(dbt, header + pointers + addresses.size() * sizeof(in_addr) + canon.size() + 1);
+    const auto aliases = entry.address + header;
+    const auto list = aliases + word;
+    const auto bytes = list + (addresses.size() + 1) * word;
+    const auto label = bytes + addresses.size() * sizeof(in_addr);
+    mem.WriteWord(entry.address, label);
+    mem.WriteWord(entry.address + word, aliases);
+    mem.Write<int32_t>(entry.address + 2 * word, GuestFamily(AF_INET));
+    mem.Write<int32_t>(entry.address + 2 * word + sizeof(int32_t), sizeof(in_addr));
+    mem.WriteWord(entry.address + header - word, list);
+    mem.WriteWord(aliases, 0);
+    for (size_t i = 0; i < addresses.size(); ++i)
+        mem.WriteWord(list + i * word, bytes + i * sizeof(in_addr));
+    mem.WriteWord(list + addresses.size() * word, 0);
+    mem.Write(bytes, addresses.data(), addresses.size() * sizeof(in_addr));
+    mem.Write(label, canon.data(), canon.size() + 1);
+    FreeGuest(dbt, std::exchange(dbt.running->host_entry, entry.address));
+    ctx.ret0 = std::exchange(entry.address, 0);
+}
+
 void FreeAddrInfo(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     const auto next = AlignUp(20, mem.width()) + 2 * mem.width();
@@ -766,6 +873,9 @@ void RegisterNetwork(wa_dbt& dbt) {
         {"setsockopt", Dispatch<Options<true>>},
         {"getsockopt", Dispatch<Options<false>>},
         {"getaddrinfo", Dispatch<GetAddrInfo>},
+        {"gethostbyname", Dispatch<GetHostByName>},
+        {"getifaddrs", Dispatch<GetInterfaces>},
+        {"freeifaddrs", Dispatch<FreeInterfaces>},
         {"freeaddrinfo", Dispatch<FreeAddrInfo>},
         {"getnameinfo", Dispatch<GetNameInfo>},
         {"gai_strerror", Dispatch<GaiError>},

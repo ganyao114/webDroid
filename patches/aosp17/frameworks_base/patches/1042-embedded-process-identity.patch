@@ -1,0 +1,29 @@
+--- a/frameworks/base/core/java/android/app/Application.java
++++ b/frameworks/base/core/java/android/app/Application.java
+@@ -336,7 +336,13 @@
+     @UnsupportedAppUsage
+     /* package */ final void attach(Context context) {
++        if (Boolean.getBoolean("org.wasmandroid.foreground")) {
++            String name = System.getProperty(
++                    "org.wasmandroid.processName", context.getPackageName());
++            context.getApplicationInfo().processName = name;
++            setEmbeddedProcessName(name);
++        }
+         attachBaseContext(context);
+         if (Boolean.getBoolean("org.wasmandroid.foreground")) {
+             getPackageManager().installEmbeddedProviders(this);
+         }
+     }
+--- a/frameworks/base/core/java/android/app/ActivityManager.java
++++ b/frameworks/base/core/java/android/app/ActivityManager.java
+@@ -3899,4 +3899,9 @@
+      */
+     public List<RunningAppProcessInfo> getRunningAppProcesses() {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        String name = Application.getProcessName();
++        if (name == null) return null;
++        RunningAppProcessInfo process = new RunningAppProcessInfo(
++                name, Process.myPid(), new String[] {mContext.getPackageName()});
++        process.uid = Process.myUid();
++        return java.util.Collections.singletonList(process);
+     }

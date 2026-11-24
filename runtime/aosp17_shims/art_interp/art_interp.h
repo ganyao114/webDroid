@@ -61,6 +61,15 @@ struct GuestNativeStats {
   uint64_t file_faults = 0;
 };
 
+struct GuestNativeImage {
+  std::string name;
+  uint64_t mapped_base;
+  std::string_view jni_on_load;
+  uint64_t host_calls;
+  uint64_t callbacks;
+  std::string error;
+};
+
 // The embedder supplies the APK namespace. ART continues to use its existing
 // JNI adapters for platform natives.
 class GuestNativeLibraries {
@@ -70,6 +79,7 @@ class GuestNativeLibraries {
   virtual std::string Load(std::string_view path) = 0;
   virtual std::optional<Value> Invoke(Method& method, Object* receiver, std::span<const Value> args) = 0;
   virtual GuestNativeStats Stats() const = 0;
+  virtual std::vector<GuestNativeImage> Images() const = 0;
   virtual void Shutdown() noexcept = 0;
 };
 
@@ -154,6 +164,8 @@ class Vm {
   void SetGuestNativeSource(GuestNativeFactory factory, std::shared_ptr<const void> source);
   void SetSystemProperty(std::string_view name, std::string_view value);
   GuestNativeStats GetGuestNativeStats() const;
+  std::vector<GuestNativeImage> GetGuestNativeImages() const;
+  void SetGuestLibraryObserver(std::function<void(std::string_view)> observer);
   void ReleaseGuestNativeSource() noexcept;
 
   Value CallStatic(std::string_view owner, std::string_view name, std::string_view signature,
@@ -181,6 +193,8 @@ class Vm {
                                      std::string_view signature);
   MethodStats GetLinkedVirtualMethodStats(std::string_view owner, std::string_view name,
                                          std::string_view signature) const;
+  MethodStats GetLinkedDeclaredMethodStats(std::string_view owner, std::string_view name,
+                                          std::string_view signature) const;
   size_t InterpretedMethodCount(std::string_view descriptor) const;
   size_t ExecutedOpcodeCount() const;
   static size_t SupportedOpcodeCount();

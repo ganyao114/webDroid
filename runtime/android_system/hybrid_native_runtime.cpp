@@ -4,6 +4,7 @@
 #include "bionic_internal.h"
 #include "dbt_internal.h"
 #include "elf_image.h"
+#include "guest_zlib.h"
 #include "hybrid_jni_bridge.h"
 #include "gles_host_bridge.h"
 #include "ziparchive/zip_archive.h"
@@ -124,6 +125,7 @@ class HybridNativeRuntime {
           dbt_(wa_dbt_create(arch, mmu_.get()), wa_dbt_destroy), memory_(mmu_.get(), arch) {
         if (!dbt_) throw std::bad_alloc();
         CheckGuest(wa_hal_register_graphics_symbols(dbt_.get()));
+        zlib_.Register(dbt_.get());
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlopen", DlDispatch<&HybridNativeRuntime::DlOpen>, this));
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlsym", DlDispatch<&HybridNativeRuntime::DlSym>, this));
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlclose", DlDispatch<&HybridNativeRuntime::DlClose>, this));
@@ -150,15 +152,35 @@ class HybridNativeRuntime {
         return {Abi(arch_), load_order_.size(), stats.host_calls, stats.reverse_callbacks, pages.demand_file_faults};
     }
 
+    std::vector<interp::GuestNativeImage> Images() const {
+        std::vector<interp::GuestNativeImage> images;
+        for (const auto& [name, library] : libraries_) {
+            using State = Library::JavaState;
+            std::string_view jni = "not_requested";
+            switch (library.java_state) {
+            case State::Uninitialized: break;
+            case State::Initializing: jni = "running"; break;
+            case State::Ready: jni = library.has_on_load ? "returned" : "absent"; break;
+            case State::Failed: jni = "failed"; break;
+            }
+            images.push_back({name, library.base, jni, library.host_calls, library.callbacks,
+                              library.error.empty() ? library.java_error : library.error});
+        }
+        return images;
+    }
+
     std::string LoadForJava(std::string_view name) {
         auto& library = LoadImage(name);
         if (!library.error.empty()) return library.error;
         if (library.java_state != Library::JavaState::Uninitialized) return library.java_error;
         jni_->AddImage(library.base);
         library.java_state = Library::JavaState::Initializing;
+        const LoadCounters counters(dbt_.get(), library);
         try {
-            if (const auto on_load = dbt::FindElfSymbol(*dbt_, library.base, "JNI_OnLoad"))
+            if (const auto on_load = dbt::FindElfSymbol(*dbt_, library.base, "JNI_OnLoad")) {
+                library.has_on_load = true;
                 library.java_error = jni_->OnLoad(on_load);
+            }
         } catch (const GuestFault& fault) {
             library.java_error = Error("Initialize guest JNI", fault.status);
         } catch (...) {
@@ -276,6 +298,24 @@ class HybridNativeRuntime {
         uint32_t file_id = 0;
         std::string error, java_error;
         JavaState java_state = JavaState::Uninitialized;
+        uint64_t host_calls = 0, callbacks = 0;
+        bool has_on_load = false;
+    };
+
+    struct LoadCounters {
+        wa_dbt_t* dbt;
+        Library& library;
+        wa_dbt_stats_t before{};
+
+        LoadCounters(wa_dbt_t* dbt, Library& library) : dbt(dbt), library(library) {
+            wa_dbt_get_stats(dbt, &before);
+        }
+        ~LoadCounters() {
+            wa_dbt_stats_t after{};
+            wa_dbt_get_stats(dbt, &after);
+            library.host_calls += after.host_calls - before.host_calls;
+            library.callbacks += after.reverse_callbacks - before.reverse_callbacks;
+        }
     };
 
     static int64_t ReadElf(void* self, uint32_t id, void* output, size_t count, uint64_t offset) {
@@ -333,6 +373,7 @@ class HybridNativeRuntime {
         files_.emplace(library.file_id, &library);
         std::string detail;
         try {
+            const LoadCounters counters(dbt_.get(), library);
             status = dbt::LoadElf(*dbt_, library.file_id, image, bias, name, library.base, &detail);
         } catch (...) {
             files_.erase(library.file_id);
@@ -466,6 +507,7 @@ class HybridNativeRuntime {
     std::unique_ptr<wa_softmmu_t, decltype(&wa_softmmu_destroy)> mmu_;
     std::unique_ptr<wa_dbt_t, decltype(&wa_dbt_destroy)> dbt_;
     GuestMemory memory_;
+    GuestZlib zlib_;
     std::unique_ptr<HybridJniBridge> jni_;
 };
 
@@ -504,6 +546,10 @@ class ApkNativeLibraries final : public interp::GuestNativeLibraries {
 
     interp::GuestNativeStats Stats() const override {
         return runtime_ ? runtime_->Stats() : interp::GuestNativeStats{};
+    }
+
+    std::vector<interp::GuestNativeImage> Images() const override {
+        return runtime_ ? runtime_->Images() : std::vector<interp::GuestNativeImage>{};
     }
 
     void Shutdown() noexcept override {

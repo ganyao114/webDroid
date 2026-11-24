@@ -323,7 +323,8 @@ bool IsMemberAccess(uint8_t opcode) {
     const auto& id = dex.GetMethodId(index);
     owner = &runtime.linker.Resolve(dex.GetMethodDeclaringClassDescriptorView(id));
     target = &runtime.linker.FindMethod(*owner, dex.GetMethodNameView(id),
-                                        dex.GetMethodSignature(id).ToString(), is_static);
+                                        dex.GetMethodSignature(id).ToString(), is_static,
+                                        /*dex_direct_invoke=*/op == I::INVOKE_DIRECT);
     if (cache) {
       cache->owner = owner;
       cache->declaration = target;

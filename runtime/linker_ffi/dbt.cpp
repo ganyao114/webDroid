@@ -768,6 +768,7 @@ void wa::dbt::ReleaseThread(wa_dbt& dbt, GuestThread& thread) {
     if (thread.stack_base)
         softmmu::Unmap(dbt.mmu, std::exchange(thread.stack_base, 0), thread.stack_size + WA_PAGE_SIZE);
     FreeGuest(dbt, std::exchange(thread.errno_address, 0));
+    FreeGuest(dbt, std::exchange(thread.host_entry, 0));
     FreeGuest(dbt, std::exchange(thread.thread_pointer, 0));
     for (const auto& [control, address] : thread.emutls) FreeGuest(dbt, address);
     thread.emutls.clear();

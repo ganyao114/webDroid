@@ -44,7 +44,7 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
         VERBATIM)
     set(wa_launcher_runtime_sources art_sf_entry.cpp launcher_session_entry.cpp "${wa_systemui_host_dex}")
     add_library(wa_android_system_foreground STATIC foreground_activity_entry.cpp
-        hybrid_native_runtime.cpp hybrid_jni_bridge.cpp)
+        hybrid_native_runtime.cpp hybrid_jni_bridge.cpp guest_zlib.cpp)
     target_include_directories(wa_android_system_foreground PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include"
         PRIVATE ../linker_ffi ../../tools/ffi_gen/generated)
     target_link_libraries(wa_android_system_foreground PUBLIC wa_hal_surfaceflinger
@@ -193,4 +193,7 @@ if(BUILD_TESTING AND TARGET wa_android_system_apk)
     add_subdirectory(../../tests/m18_bionic_libcpp_pthread "${CMAKE_BINARY_DIR}/tests/m18_bionic_libcpp_pthread")
     add_subdirectory(../../tests/m18_vlc_framework_compat "${CMAKE_BINARY_DIR}/tests/m18_vlc_framework_compat")
     add_subdirectory(../../tests/m19_vlc_main_libvlc "${CMAKE_BINARY_DIR}/tests/m19_vlc_main_libvlc")
+    if(NOT EMSCRIPTEN)
+        add_subdirectory(../../tests/m20_wechat_compat "${CMAKE_BINARY_DIR}/tests/m20_wechat_compat")
+    endif()
 endif()

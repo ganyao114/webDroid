@@ -9,6 +9,7 @@
 #include <functional>
 #include <optional>
 #include <set>
+#include <tuple>
 
 namespace wa::dbt {
 
@@ -56,6 +57,7 @@ struct GuestThread {
     uint64_t id = 1;
     uint64_t stack_base = 0, stack_size = 1 << 20, active_sp = 0, steps_left = 0;
     uint64_t errno_address = 0, thread_pointer = 0, result = 0, joiner = 0;
+    uint64_t host_entry = 0;
     uint64_t locale = 0, signal_mask = 0, pending_signals = 0;
     int policy = 0, priority = 0, nice = 0, egl_error = 0x3000;
     bool dumpable = true;
@@ -113,6 +115,13 @@ struct GuestDirectory {
     uint64_t entry = 0;
 };
 
+struct SharedFilePage;
+struct GuestMappingPage {
+    uint8_t prot;
+    bool can_write = true;
+    std::shared_ptr<SharedFilePage> shared;
+};
+
 struct BionicState {
     GuestThread main;
     std::map<uint64_t, GuestThread> threads;
@@ -126,7 +135,8 @@ struct BionicState {
         {0, {0, false, {}}}, {1, {1, false, {}}}, {2, {2, false, {}}}};
     std::map<uint64_t, GuestFile> files;
     std::map<uint64_t, uint64_t> map_allocations;
-    std::map<uint64_t, uint8_t> map_pages;
+    std::map<uint64_t, GuestMappingPage> map_pages;
+    std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::weak_ptr<SharedFilePage>> map_file_pages;
     std::map<uint64_t, GuestDirectory> directories;
     std::map<std::string, uint64_t, std::less<>> strings;
     std::map<std::string, uint64_t, std::less<>> environment;
@@ -142,6 +152,7 @@ struct BionicState {
     int log_mask = 0xff;
     uint32_t random = 1;
     ~BionicState();
+    void FlushSharedMappings() noexcept;
 };
 
 struct GuestBuffer {

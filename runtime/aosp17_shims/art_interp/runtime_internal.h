@@ -226,7 +226,8 @@ class ClassLinker {
   const Class* FindLinkedClass(std::string_view descriptor) const;
   bool HasClass(std::string_view descriptor) const;
   void Initialize(Class& cls);
-  Method& FindMethod(Class& cls, std::string_view name, std::string_view signature, bool is_static);
+  Method& FindMethod(Class& cls, std::string_view name, std::string_view signature, bool is_static,
+                     bool dex_direct_invoke = false);
   Method& VirtualMethod(Class& receiver, Method& method);
   Field& FindField(Class& cls, std::string_view name, std::string_view type, bool is_static);
   bool IsAssignable(const Class& target, const Class& source) const;
@@ -377,6 +378,7 @@ struct Runtime {
   GuestNativeFactory guest_native_factory = nullptr;
   std::shared_ptr<const void> guest_native_source;
   std::unique_ptr<GuestNativeLibraries> guest_native;
+  std::function<void(std::string_view)> guest_library_observer;
   std::unique_ptr<DirectArrays> direct_arrays;
   struct GuestFile {
     std::vector<uint8_t> bytes;

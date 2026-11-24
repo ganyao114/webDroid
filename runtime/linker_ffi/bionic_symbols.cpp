@@ -85,6 +85,7 @@ void Register(wa_dbt& dbt, std::string_view library, std::span<const Builtin> bi
 }
 
 BionicState::~BionicState() {
+    FlushSharedMappings();
     for (const auto& [address, stream] : files)
         if (stream.owned)
             std::fclose(stream.host);

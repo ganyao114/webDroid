@@ -1409,6 +1409,11 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
       });
   cl.AddMethod(objects, "equals", "(Ljava/lang/Object;Ljava/lang/Object;)Z", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) { return Value::Int(JavaEquals(vm, a[0].ref(), a[1].ref())); });
+  cl.AddMethod(objects, "toString", "(Ljava/lang/Object;)Ljava/lang/String;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values a) {
+        return a[0].ref() ? CallVirtual(vm, a[0].ref(), "toString", "()Ljava/lang/String;")
+                          : StringValue(vm, "null");
+      });
   const Builtin non_null = [](Runtime& vm, Object*, Values a) {
     if (!a[0].ref()) vm.Fail("Ljava/lang/NullPointerException;",
         a.size() > 1 && a[1].ref() ? EncodeUtf8(a[1].ref()->text) : std::string{});

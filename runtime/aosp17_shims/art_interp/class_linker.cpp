@@ -500,8 +500,13 @@ void ClassLinker::Initialize(Class& cls) {
 }
 
 Method& ClassLinker::FindMethod(Class& cls, std::string_view name,
-                               std::string_view signature, bool is_static) {
+                               std::string_view signature, bool is_static, bool dex_direct_invoke) {
   const std::string key = MemberKey(name, signature);
+  // ART's DEX method resolution searches the superclass chain even for
+  // invoke-direct <init> references. Optimizers can remove forwarding
+  // constructors while leaving references whose owner is the allocated type.
+  // Reflection and host-side construction still require a declared constructor.
+  const bool constructor_reference = dex_direct_invoke && name == "<init>";
   for (Class* current = &cls; current; current = current->super) {
     auto it = current->methods.find(key);
     if (it != current->methods.end()) {
@@ -510,7 +515,7 @@ Method& ClassLinker::FindMethod(Class& cls, std::string_view name,
       }
       return it->second;
     }
-    if (name.starts_with('<') || (is_static && cls.IsInterface())) break;
+    if ((name.starts_with('<') && !constructor_reference) || (is_static && cls.IsInterface())) break;
   }
   if (!is_static && !name.starts_with('<')) {
     auto virtual_method = cls.vtable.find(key);

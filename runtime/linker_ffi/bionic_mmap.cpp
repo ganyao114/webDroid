@@ -1,10 +1,65 @@
 #include "bionic_internal.h"
 #include "softmmu_internal.h"
 
+#include <algorithm>
 #include <cerrno>
+#include <fcntl.h>
+#include <limits>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace wa::dbt {
+
+struct SharedFileDescriptor {
+    int fd = -1;
+    bool writable = false;
+
+    ~SharedFileDescriptor() { if (fd >= 0) close(fd); }
+};
+
+struct SharedFilePage {
+    std::tuple<uint64_t, uint64_t, uint64_t> key;
+    std::shared_ptr<SharedFileDescriptor> file;
+    softmmu::PageBytes saved{};
+    std::shared_ptr<softmmu::PageBytes> bytes;
+
+    uint64_t Offset() const { return std::get<2>(key); }
+    int Read(softmmu::PageBytes& data) const {
+        data.fill(0);
+        size_t done = 0;
+        while (done < data.size()) {
+            const auto count = pread(file->fd, data.data() + done, data.size() - done, Offset() + done);
+            if (count < 0 && errno == EINTR) continue;
+            if (count < 0) return errno;
+            if (!count) break;
+            done += count;
+        }
+        return 0;
+    }
+
+    int Flush() {
+        if (*bytes == saved) return 0;
+        struct stat info{};
+        if (fstat(file->fd, &info)) return errno;
+        const auto end = std::clamp<int64_t>(info.st_size - static_cast<int64_t>(Offset()), 0, WA_PAGE_SIZE);
+        // Copy back changed bytes only. The file may also be written through a descriptor.
+        for (size_t pos = 0; pos < static_cast<size_t>(end);) {
+            if ((*bytes)[pos] == saved[pos]) {
+                ++pos;
+                continue;
+            }
+            auto run = pos + 1;
+            while (run < static_cast<size_t>(end) && (*bytes)[run] != saved[run]) ++run;
+            const auto count = pwrite(file->fd, bytes->data() + pos, run - pos, Offset() + pos);
+            if (count < 0 && errno == EINTR) continue;
+            if (count <= 0) return count < 0 ? errno : EIO;
+            std::copy_n(bytes->data() + pos, count, saved.data() + pos);
+            pos += count;
+        }
+        return 0;
+    }
+};
+
 namespace {
 
 constexpr size_t kMaxMapping = 256 << 20;
@@ -22,7 +77,11 @@ bool Mapped(const wa_dbt& dbt, uint64_t address, uint64_t size) {
 void Unmap(wa_dbt& dbt, uint64_t address, uint64_t size) {
     auto& pages = dbt.bionic->map_pages;
     softmmu::Unmap(dbt.mmu, address, size);
-    pages.erase(pages.lower_bound(address), pages.lower_bound(address + size));
+    for (auto page = pages.lower_bound(address); page != pages.end() && page->first < address + size;) {
+        const auto& shared = page->second.shared;
+        if (shared && shared.use_count() == 1) dbt.bionic->map_file_pages.erase(shared->key);
+        page = pages.erase(page);
+    }
     auto allocation = dbt.bionic->map_allocations.upper_bound(address);
     if (allocation != dbt.bionic->map_allocations.begin())
         --allocation;
@@ -39,6 +98,36 @@ void Unmap(wa_dbt& dbt, uint64_t address, uint64_t size) {
     }
 }
 
+int PopulateSharedMapping(wa_dbt& dbt, int fd, bool writable, uint64_t address,
+                          uint64_t size, uint64_t offset, uint8_t prot) {
+    struct stat info{};
+    if (fstat(fd, &info)) return errno;
+    if (!S_ISREG(info.st_mode)) return ENODEV;
+    auto file = std::make_shared<SharedFileDescriptor>();
+    file->fd = dup(fd);
+    if (file->fd < 0) return errno;
+    file->writable = writable;
+    auto& state = *dbt.bionic;
+    for (uint64_t done = 0; done < size; done += WA_PAGE_SIZE) {
+        const auto key = std::make_tuple(uint64_t(info.st_dev), uint64_t(info.st_ino), offset + done);
+        auto it = state.map_file_pages.find(key);
+        auto shared = it == state.map_file_pages.end() ? nullptr : it->second.lock();
+        if (!shared) {
+            shared = std::make_shared<SharedFilePage>();
+            shared->key = key;
+            shared->file = file;
+            if (const int error = shared->Read(shared->saved)) return error;
+            shared->bytes = std::make_shared<softmmu::PageBytes>(shared->saved);
+        } else if (writable && !shared->file->writable) {
+            shared->file = file;
+        }
+        state.map_pages.emplace(address + done, GuestMappingPage{prot, writable, shared});
+        state.map_file_pages.insert_or_assign(key, shared);
+        CheckGuest(softmmu::SetPageBytes(dbt.mmu, address + done, shared->bytes));
+    }
+    return 0;
+}
+
 template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
     auto& dbt = *ctx.dbt;
     const GuestMemory raw(ctx.mmu, ctx.arch);
@@ -51,18 +140,32 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
     if (!length || length > kMaxMapping || (prot & ~kReadWriteExecute) ||
         ((flags & 3) != 1 && (flags & 3) != 2) || offset < 0 || (offset & (WA_PAGE_SIZE - 1)))
         return Fail(ctx, EINVAL);
-    if ((flags & 3) == 1 && !(flags & anonymous) && (prot & WA_PROT_WRITE))
-        return Fail(ctx, ENOTSUP);
+    const bool shared = (flags & 3) == 1 && !(flags & anonymous);
     const auto fd = flags & anonymous ? -1 : HostFd(dbt, descriptor);
     if (!(flags & anonymous) && fd < 0)
         return PosixResult(ctx, -1);
     const auto size = AlignUp(length, WA_PAGE_SIZE);
+    if (static_cast<uint64_t>(offset) > std::numeric_limits<off_t>::max() - size)
+        return Fail(ctx, EOVERFLOW);
+    bool writable = true;
+    if (shared) {
+        const int mode = fcntl(fd, F_GETFL);
+        if (mode < 0) return PosixResult(ctx, -1);
+        writable = (mode & O_ACCMODE) == O_RDWR;
+        // pwrite must obey the mapped offset, even on hosts where O_APPEND overrides it.
+        if ((mode & O_ACCMODE) == O_WRONLY || (writable && (mode & O_APPEND)) ||
+            (!writable && (prot & WA_PROT_WRITE))) return Fail(ctx, EACCES);
+        if (prot & WA_PROT_EXEC) return Fail(ctx, ENOTSUP);
+    }
     uint64_t address;
     if (flags & (fixed | fixed_noreplace)) {
         if (!hint || (hint & (WA_PAGE_SIZE - 1)) || hint < kHeapBase || hint >= kHeapLimit ||
             size > kHeapLimit - hint)
             return Fail(ctx, EINVAL);
         if (flags & fixed && Mapped(dbt, hint, size)) {
+            if (shared) return Fail(ctx, ENOTSUP);
+            for (uint64_t i = 0; i < size; i += WA_PAGE_SIZE)
+                if (dbt.bionic->map_pages.at(hint + i).shared) return Fail(ctx, ENOTSUP);
             // In-place replacement preserves the allocation and resets its bytes.
             std::array<uint8_t, WA_PAGE_SIZE> zeros{};
             for (uint64_t i = 0; i < size; i += WA_PAGE_SIZE)
@@ -96,9 +199,16 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
     try {
         if (!replace)
             state.map_allocations.emplace(address, size);
-        for (uint64_t i = 0; i < size; i += WA_PAGE_SIZE)
-            state.map_pages[address + i] = prot;
-        if (!(flags & anonymous)) {
+        if (shared) {
+            if (const auto error = PopulateSharedMapping(dbt, fd, writable, address, size, offset, prot)) {
+                Unmap(dbt, address, size);
+                return Fail(ctx, error);
+            }
+        } else {
+            for (uint64_t i = 0; i < size; i += WA_PAGE_SIZE)
+                state.map_pages.insert_or_assign(address + i, GuestMappingPage{static_cast<uint8_t>(prot)});
+        }
+        if (!shared && !(flags & anonymous)) {
             std::array<uint8_t, WA_PAGE_SIZE> buffer;
             for (uint64_t i = 0; i < length;) {
                 const auto size = std::min<uint64_t>(buffer.size(), length - i);
@@ -133,12 +243,59 @@ void UnmapCall(wa_host_call_ctx_t& ctx) {
     auto end = address + AlignUp(length, WA_PAGE_SIZE);
     // Only remove pages owned by mmap; munmap ignores holes.
     auto& pages = dbt.bionic->map_pages;
+    for (auto cursor = pages.lower_bound(address); cursor != pages.end() && cursor->first < end; ++cursor) {
+        if (const auto& shared = cursor->second.shared)
+            if (const auto error = shared->Flush()) return Fail(ctx, error);
+    }
     auto cursor = pages.lower_bound(address);
     while (cursor != pages.end() && cursor->first < end) {
         const auto page = cursor->first;
         Unmap(dbt, page, WA_PAGE_SIZE);
         cursor = pages.upper_bound(page);
     }
+}
+
+void Sync(wa_host_call_ctx_t& ctx) {
+    const auto address = ctx.args[0], length = ctx.args[1], flags = ctx.args[2];
+    constexpr uint64_t async = 1, invalidate = 2, sync = 4;
+    if ((address & (WA_PAGE_SIZE - 1)) || (flags & ~(async | invalidate | sync)) ||
+        (flags & (async | sync)) == (async | sync)) return Fail(ctx, EINVAL);
+    auto& dbt = *ctx.dbt;
+    if (!Mapped(dbt, address, length)) return Fail(ctx, ENOMEM);
+    std::set<int> files;
+    for (uint64_t done = 0; done < length; done += WA_PAGE_SIZE) {
+        const auto& shared = dbt.bionic->map_pages.at(address + done).shared;
+        if (!shared) continue;
+        if (const auto error = shared->Flush()) return Fail(ctx, error);
+        if (flags & sync) files.insert(shared->file->fd);
+        if (flags & invalidate) {
+            softmmu::PageBytes refreshed;
+            if (const auto error = shared->Read(refreshed)) return Fail(ctx, error);
+            *shared->bytes = shared->saved = refreshed;
+        }
+    }
+    for (const auto fd : files)
+        if (fsync(fd)) return PosixResult(ctx, -1);
+}
+
+void Advise(wa_host_call_ctx_t& ctx) {
+    const auto address = ctx.args[0], length = ctx.args[1];
+    if (address & (WA_PAGE_SIZE - 1)) return Fail(ctx, EINVAL);
+    const auto* dbt = ctx.dbt;
+    switch (ctx.args[2]) {
+    case 0: case 1: case 2: case 3:  // Access pattern hints.
+    case 14: case 15: case 16: case 17:  // Huge pages and core dump hints.
+        break;
+    default: return Fail(ctx, EINVAL);
+    }
+    // These hints do not change guest-visible bytes. SoftMMU controls residency.
+    const auto allocation = dbt->allocations.upper_bound(address);
+    if (allocation != dbt->allocations.begin()) {
+        const auto& [base, range] = *std::prev(allocation);
+        const auto end = base + range.mapped_size;
+        if (address < end && length <= end - address) return;
+    }
+    if (length && !Mapped(*dbt, address, length)) return Fail(ctx, ENOMEM);
 }
 
 void Protect(wa_host_call_ctx_t& ctx) {
@@ -148,8 +305,13 @@ void Protect(wa_host_call_ctx_t& ctx) {
         return Fail(ctx, EINVAL);
     if (!Mapped(dbt, address, length))
         return Fail(ctx, ENOMEM);
+    for (uint64_t done = 0; done < length; done += WA_PAGE_SIZE) {
+        const auto& page = dbt.bionic->map_pages.at(address + done);
+        if ((prot & WA_PROT_WRITE) && !page.can_write) return Fail(ctx, EACCES);
+        if ((prot & WA_PROT_EXEC) && page.shared) return Fail(ctx, ENOTSUP);
+    }
     for (uint64_t done = 0; done < length; done += WA_PAGE_SIZE)
-        dbt.bionic->map_pages.at(address + done) = prot;
+        dbt.bionic->map_pages.at(address + done).prot = prot;
 }
 
 void Remap(wa_host_call_ctx_t& ctx) {
@@ -160,6 +322,8 @@ void Remap(wa_host_call_ctx_t& ctx) {
     if (!before || !after || after > kMaxMapping || !Mapped(dbt, original, before) || flags > 1)
         return Fail(ctx, EINVAL);
     const auto old_pages = AlignUp(before, WA_PAGE_SIZE), new_pages = AlignUp(after, WA_PAGE_SIZE);
+    for (uint64_t done = 0; done < old_pages; done += WA_PAGE_SIZE)
+        if (dbt.bionic->map_pages.at(original + done).shared) return Fail(ctx, ENOTSUP);
     if (new_pages <= old_pages) {
         if (new_pages < old_pages)
             Unmap(dbt, original + new_pages, old_pages - new_pages);
@@ -216,15 +380,21 @@ int32_t CheckMappedAccess(const wa_dbt* dbt, uint64_t address, size_t size, unsi
     const auto first = address & ~uint64_t(WA_PAGE_SIZE - 1);
     for (auto page = pages.lower_bound(first); page != pages.end() && page->first < address + size;
          ++page)
-        if ((page->second & permission) != permission)
+        if ((page->second.prot & permission) != permission)
             return WA_ERR_FAULT;
     return WA_OK;
+}
+
+void BionicState::FlushSharedMappings() noexcept {
+    for (auto& [address, page] : map_pages)
+        if (page.shared) page.shared->Flush();
 }
 
 void RegisterMappings(wa_dbt& dbt) {
     const Builtin c[] = {
         {"mmap", Dispatch<Map<false>>},  {"mmap64", Dispatch<Map<true>>},
         {"munmap", Dispatch<UnmapCall>}, {"mprotect", Dispatch<Protect>},
+        {"msync", Dispatch<Sync>},       {"madvise", Dispatch<Advise>},
         {"mremap", Dispatch<Remap>},     {"mlock", Dispatch<Lock>},
         {"munlock", Dispatch<Lock>},
     };

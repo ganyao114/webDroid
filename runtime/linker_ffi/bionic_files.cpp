@@ -192,10 +192,10 @@ bool TransferEvent(wa_host_call_ctx_t& ctx, int descriptor, uint64_t address, ui
     return true;
 }
 
-enum class Io { Read, Checked, Write, Pread, Pwrite, Pread64, Pwrite64 };
+enum class Io { Read, ReadChecked, Write, WriteChecked, Pread, Pwrite, Pread64, Pwrite64 };
 template <Io op> void Transfer(wa_host_call_ctx_t& ctx) {
     constexpr bool read =
-        op == Io::Read || op == Io::Checked || op == Io::Pread || op == Io::Pread64;
+        op == Io::Read || op == Io::ReadChecked || op == Io::Pread || op == Io::Pread64;
     constexpr bool positioned =
         op == Io::Pread || op == Io::Pread64 || op == Io::Pwrite || op == Io::Pwrite64;
     const GuestMemory mem(ctx);
@@ -205,7 +205,7 @@ template <Io op> void Transfer(wa_host_call_ctx_t& ctx) {
     if (fd < 0)
         return PosixResult(ctx, -1);
     const auto address = args.Next(), count = args.Next();
-    if constexpr (op == Io::Checked)
+    if constexpr (op == Io::ReadChecked || op == Io::WriteChecked)
         if (count > args.Next())
             throw GuestFault{WA_ERR_FAULT};
     if constexpr (!positioned)
@@ -369,10 +369,12 @@ void Statvfs(wa_host_call_ctx_t& ctx) {
     }
 }
 
-void Statfs(wa_host_call_ctx_t& ctx) {
+template<bool ByPath> void Statfs(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     struct statfs info{};
-    if (fstatfs(HostFd(*ctx.dbt, ctx.args[0]), &info))
+    const auto status = ByPath ? statfs(Path(ctx, ctx.args[0]).c_str(), &info)
+                               : fstatfs(HostFd(*ctx.dbt, ctx.args[0]), &info);
+    if (status)
         return PosixResult(ctx, -1);
     const auto width = mem.width();
     const auto address = ctx.args[1];
@@ -409,6 +411,7 @@ enum class FilePath {
     UnlinkAt,
     ChmodAt,
     Truncate,
+    Truncate64,
     Readlink,
     Realpath,
     Chdir,
@@ -454,6 +457,11 @@ template <FilePath op> void PathCall(wa_host_call_ctx_t& ctx) {
         result = fchmodat(fd, p, ctx.args[2], ctx.args[3] & 0x100 ? AT_SYMLINK_NOFOLLOW : 0);
     if constexpr (op == FilePath::Truncate)
         result = truncate(p, SignedWord(mem, ctx.args[1]));
+    if constexpr (op == FilePath::Truncate64) {
+        CallReader args(ctx);
+        args.Next();
+        result = truncate(p, static_cast<int64_t>(args.Next(ArgKind::Long)));
+    }
     if constexpr (op == FilePath::Pathconf) {
         const auto command = ctx.args[1];
         if (command < 1 || command > 9)
@@ -1174,8 +1182,9 @@ void RegisterFiles(wa_dbt& dbt) {
         FD(flock),
         {"isatty", Dispatch<Isatty>},
         {"read", Dispatch<Transfer<Io::Read>>},
-        {"__read_chk", Dispatch<Transfer<Io::Checked>>},
+        {"__read_chk", Dispatch<Transfer<Io::ReadChecked>>},
         {"write", Dispatch<Transfer<Io::Write>>},
+        {"__write_chk", Dispatch<Transfer<Io::WriteChecked>>},
         {"pread", Dispatch<Transfer<Io::Pread>>},
         {"pread64", Dispatch<Transfer<Io::Pread64>>},
         {"pwrite", Dispatch<Transfer<Io::Pwrite>>},
@@ -1195,7 +1204,8 @@ void RegisterFiles(wa_dbt& dbt) {
         {"fstatat", Dispatch<StatCall<Stat::At>>},
         {"fstatat64", Dispatch<StatCall<Stat::At>>},
         {"statvfs", Dispatch<Statvfs>},
-        {"fstatfs", Dispatch<Statfs>},
+        {"fstatfs", Dispatch<Statfs<false>>},
+        {"statfs", Dispatch<Statfs<true>>},
         PATH(access, Access),
         PATH(unlink, Unlink),
         PATH(mkdir, Mkdir),
@@ -1208,6 +1218,7 @@ void RegisterFiles(wa_dbt& dbt) {
         PATH(fchmodat, ChmodAt),
         PATH(unlinkat, UnlinkAt),
         PATH(truncate, Truncate),
+        PATH(truncate64, Truncate64),
         PATH(readlink, Readlink),
         PATH(realpath, Realpath),
         PATH(chdir, Chdir),

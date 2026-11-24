@@ -2,12 +2,14 @@
 
 #include "wasmandroid/softmmu_linker.h"
 
+#include <array>
 #include <memory>
 #include <span>
 
 namespace wa::softmmu {
 
 inline constexpr uint64_t kAddressLimit = uint64_t{1} << 32;
+using PageBytes = std::array<uint8_t, WA_PAGE_SIZE>;
 
 struct Access {
     int32_t status = WA_OK;
@@ -31,5 +33,8 @@ Access GetUnitWindow(wa_softmmu_t* mmu, uint64_t address, PageWindow& window) no
 // Convert the image's relocated and initialized data into a COW template.
 void PublishFileTemplates(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept;
 void Unmap(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept;
+
+// Attach storage to an anonymous writable page. Aliases are confined to this MMU.
+int32_t SetPageBytes(wa_softmmu_t* mmu, uint64_t address, std::shared_ptr<PageBytes> bytes);
 
 } // namespace wa::softmmu

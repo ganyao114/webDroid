@@ -1205,3 +1205,4 @@ patches/1038-embedded-timers-and-permission-rationale.patch
 patches/1039-embedded-pointer-icons.patch
 patches/1040-embedded-context-device.patch
 patches/1041-embedded-auto-complete.patch
+patches/1042-embedded-process-identity.patch

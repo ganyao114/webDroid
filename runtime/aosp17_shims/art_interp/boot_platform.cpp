@@ -170,6 +170,7 @@ Value LoadNativePath(Runtime& vm, Object* path) {
 
 Value LoadNativeName(Runtime& vm, Object* loader, Object* name_object) {
   const auto name = EncodeUtf8(vm.NonNull(name_object).text, false);
+  if (vm.guest_library_observer) vm.guest_library_observer(name);
   if (name.empty() || name.find_first_of("/\\") != name.npos || name.find('\0') != name.npos)
     vm.Fail("Ljava/lang/UnsatisfiedLinkError;", "Invalid native library name: " + name);
   if (loader) {
