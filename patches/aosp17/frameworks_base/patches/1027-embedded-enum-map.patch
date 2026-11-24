@@ -1,0 +1,21 @@
+--- a/libcore/ojluni/src/main/java/java/util/EnumMap.java
++++ b/libcore/ojluni/src/main/java/java/util/EnumMap.java
+@@ -26,7 +26,6 @@
+ 
+ package java.util;
+ 
+-import jdk.internal.access.SharedSecrets;
+ 
+ /**
+  * A specialized {@link Map} implementation for use with enum type keys.  All
+@@ -748,9 +747,7 @@
+      * The result is uncloned, cached, and shared by all callers.
+      */
+     private static <K extends Enum<K>> K[] getKeyUniverse(Class<K> keyType) {
+-        // Android-changed: Use getEnumConstantsShared directly instead of going
+-        // through SharedSecrets.
+-        return keyType.getEnumConstantsShared();
++        return keyType.getEnumConstants();
+     }
+ 
+     @java.io.Serial

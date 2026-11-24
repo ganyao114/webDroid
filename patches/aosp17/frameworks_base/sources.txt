@@ -1,6 +1,11 @@
 # Upstream program sources are relative to the android-17.0.0_r1 checkout.
 # @dir includes all Java sources recursively. @exclude omits one named file.
 [framework]
+frameworks/base/core/java/android/content/UriMatcher.java
+frameworks/base/core/java/android/os/ConditionVariable.java
+frameworks/base/core/java/com/android/internal/pm/pkg/component/ParsedProviderUtils.java
+frameworks/base/telephony/java/android/telephony/SubscriptionManager.java
+frameworks/base/telephony/java/android/telephony/TelephonyManager.java
 frameworks/base/core/java/android/os/FileUtils.java
 frameworks/base/core/java/android/window/OnBackInvokedDispatcher.java
 frameworks/base/core/java/android/window/WindowOnBackInvokedDispatcher.java
@@ -171,6 +176,7 @@ frameworks/base/core/java/android/os/TraceNameSupplier.java
 frameworks/base/core/java/android/appwidget/AppWidgetHost.java
 frameworks/base/core/java/android/appwidget/AppWidgetHostView.java
 frameworks/base/core/java/android/appwidget/AppWidgetManager.java
+frameworks/base/core/java/android/appwidget/AppWidgetProvider.java
 frameworks/base/core/java/android/appwidget/AppWidgetProviderInfo.java
 frameworks/base/core/java/android/database/ContentObserver.java
 frameworks/base/core/java/android/database/DataSetObserver.java
@@ -600,6 +606,24 @@ org/ccil/cowan/tagsoup/Scanner.java
 org/ccil/cowan/tagsoup/Schema.java
 
 [java-base]
+libcore/ojluni/src/main/java/java/lang/annotation/AnnotationFormatError.java
+libcore/ojluni/src/main/java/java/lang/annotation/AnnotationTypeMismatchException.java
+libcore/ojluni/src/main/java/java/lang/annotation/IncompleteAnnotationException.java
+libcore/luni/src/main/java/libcore/reflect/AnnotationFactory.java
+libcore/luni/src/main/java/libcore/reflect/AnnotationMember.java
+libcore/ojluni/src/main/java/java/util/WeakHashMap.java
+libcore/ojluni/src/main/java/java/lang/ThreadGroup.java
+libcore/ojluni/src/main/java/java/lang/StackTraceElement.java
+libcore/ojluni/src/main/java/java/util/BitSet.java
+libcore/ojluni/src/main/java/java/util/concurrent/PriorityBlockingQueue.java
+libcore/ojluni/src/main/java/java/util/concurrent/locks/AbstractQueuedSynchronizer.java
+libcore/ojluni/src/main/java/java/util/concurrent/Semaphore.java
+libcore/ojluni/src/main/java/sun/misc/Unsafe.java
+libcore/ojluni/src/main/java/java/util/EnumMap.java
+libcore/ojluni/src/main/java/java/security/AccessController.java
+libcore/ojluni/src/main/java/java/security/PrivilegedAction.java
+libcore/ojluni/src/main/java/java/util/ServiceConfigurationError.java
+libcore/ojluni/src/main/java/java/util/ServiceLoader.java
 libcore/ojluni/src/main/java/java/util/Collections.java
 libcore/ojluni/src/main/java/java/lang/reflect/InvocationHandler.java
 libcore/ojluni/src/main/java/java/lang/reflect/Proxy.java
@@ -629,6 +653,7 @@ libcore/ojluni/src/main/java/java/text/AttributedCharacterIterator.java
 libcore/ojluni/src/main/java/java/util/concurrent/atomic/AtomicMarkableReference.java
 libcore/ojluni/src/main/java/java/util/Date.java
 libcore/ojluni/src/main/java/java/io/ByteArrayInputStream.java
+libcore/ojluni/src/main/java/java/io/ObjectStreamField.java
 libcore/ojluni/src/main/java/java/io/BufferedWriter.java
 libcore/ojluni/src/main/java/java/io/StringWriter.java
 libcore/ojluni/src/main/java/java/io/PrintWriter.java
@@ -1153,3 +1178,17 @@ patches/1019-embedded-context-file-delegation.patch
 patches/1020-embedded-sqlite-replace-update.patch
 patches/1021-embedded-file-copy.patch
 patches/1022-embedded-webview-document-title.patch
+patches/1023-embedded-telephony.patch
+patches/1024-embedded-provider-startup.patch
+patches/1025-embedded-service-loader.patch
+patches/1026-embedded-activity-results.patch
+patches/1027-embedded-enum-map.patch
+patches/1028-managed-unsafe-atomics.patch
+patches/1029-cooperative-semaphore.patch
+patches/1030-cooperative-priority-blocking-queue.patch
+patches/1031-embedded-thread-group.patch
+patches/1032-embedded-private-directory.patch
+patches/1033-embedded-weak-hash-map.patch
+patches/1034-embedded-component-state.patch
+patches/1035-embedded-connectivity-requests.patch
+patches/1036-embedded-database-migration.patch

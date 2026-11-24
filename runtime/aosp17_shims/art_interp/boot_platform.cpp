@@ -247,22 +247,40 @@ void InstallSystem(Runtime& vm) {
     if (!vm.gc_paused) vm.heap.Collect(vm);
     return Value{};
   });
-  const Builtin property = [](Runtime& vm, Object*, Values a) {
-    const auto key = EncodeUtf8(vm.NonNull(a[0].ref()).text, false);
-    if (key.empty()) vm.Fail("Ljava/lang/IllegalArgumentException;", "Empty property name");
-    const auto entry = vm.options.system_properties.find(key);
-    if (entry != vm.options.system_properties.end()) return StringValue(vm, entry->second);
+  const auto default_property = [](std::string_view key) -> std::optional<std::string_view> {
     // The class linker indexes secondary DEX files before Application.attach.
-    if (key == "java.vm.version") return StringValue(vm, "2.1.0");
-    if (key == "line.separator") return StringValue(vm, "\n");
-    if (key == "file.separator") return StringValue(vm, "/");
-    if (key == "path.separator") return StringValue(vm, ":");
+    if (key == "java.vm.version") return "2.1.0";
+    if (key == "line.separator") return "\n";
+    if (key == "file.separator") return "/";
+    if (key == "path.separator") return ":";
+    return std::nullopt;
+  };
+  const auto property_key = [](Runtime& vm, Value key) {
+    const auto name = EncodeUtf8(vm.NonNull(key.ref()).text, false);
+    if (name.empty()) vm.Fail("Ljava/lang/IllegalArgumentException;", "Empty property name");
+    return name;
+  };
+  const Builtin property = [default_property, property_key](Runtime& vm, Object*, Values a) {
+    const auto key = property_key(vm, a[0]);
+    const auto entry = vm.system_properties.find(key);
+    if (entry != vm.system_properties.end()) return StringValue(vm, entry->second);
+    if (const auto value = default_property(key)) return StringValue(vm, *value);
     if (key == "java.io.tmpdir") return StringValue(vm, "/tmp");
     return a.size() == 2 ? a[1] : Value{};
   };
   cl.AddMethod(sys, "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic, property);
   cl.AddMethod(sys, "getProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
                art::kAccStatic, property);
+  cl.AddMethod(sys, "setProperty", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic,
+      [default_property, property_key](Runtime& vm, Object*, Values a) {
+        const auto key = property_key(vm, a[0]);
+        auto value = EncodeUtf8(vm.NonNull(a[1].ref()).text, false);
+        if (default_property(key)) return Value{};
+        auto [entry, inserted] = vm.system_properties.try_emplace(key, std::move(value));
+        if (inserted) return Value{};
+        std::swap(entry->second, value);
+        return StringValue(vm, value);
+      });
   cl.AddMethod(sys, "getenv", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) {
         const auto key = EncodeUtf8(vm.NonNull(a[0].ref()).text, false);
@@ -271,8 +289,8 @@ void InstallSystem(Runtime& vm) {
       });
   cl.AddMethod(sys, "lineSeparator", "()Ljava/lang/String;", art::kAccStatic,
       [](Runtime& vm, Object*, Values) {
-        const auto entry = vm.options.system_properties.find("line.separator");
-        return StringValue(vm, entry == vm.options.system_properties.end() ? "\n" : entry->second);
+        const auto entry = vm.system_properties.find("line.separator");
+        return StringValue(vm, entry == vm.system_properties.end() ? "\n" : entry->second);
       });
 
   Class& runtime = cl.Define("Ljava/lang/Runtime;", kObject);
@@ -545,8 +563,10 @@ const Field& InstallThread(Runtime& vm) {
         return vm.NonNull(args[0].ref()).fields[park_blocker.slot];
       });
   cl.AddMethod(context, "unpark", "(Ljava/lang/Thread;)V", art::kAccStatic,
-      [&park_permit](Runtime&, Object*, Values args) {
-        if (auto* target = args[0].ref()) target->fields[park_permit.slot] = Value::Int(1);
+      [&park_permit](Runtime& vm, Object*, Values args) {
+        if (auto* target = args[0].ref()) {
+          target->fields[park_permit.slot] = Value::Int(!vm.WakeThread(target, false));
+        }
         return Value{};
       });
   cl.AddMethod(context, "park", "(ZJ)V", art::kAccStatic,
@@ -560,10 +580,16 @@ const Field& InstallThread(Runtime& vm) {
         if (args[0].i()) {
           const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
               std::chrono::system_clock::now().time_since_epoch()).count();
-          if (time > now) std::this_thread::sleep_for(std::chrono::milliseconds(time - now));
+          if (time > now) {
+            const auto millis = time - now;
+            if (vm.active_worker) vm.SuspendWorker(std::min<int64_t>(millis, INT64_MAX / 1'000'000) * 1'000'000, false);
+            std::this_thread::sleep_for(std::chrono::milliseconds(millis));
+          }
         } else if (time > 0) {
+          if (vm.active_worker) vm.SuspendWorker(time, false);
           std::this_thread::sleep_for(std::chrono::nanoseconds(time));
         } else if (time == 0) {
+          if (vm.active_worker) vm.SuspendWorker(std::nullopt, false);
           vm.Fail("Ljava/lang/IllegalStateException;", "The cooperative guest cannot park indefinitely");
         }
         return Value{};
@@ -590,8 +616,11 @@ const Field& InstallThread(Runtime& vm) {
       [&priority](Runtime&, Object* self, Values) { return self->fields[priority.slot]; });
   cl.AddMethod(thread, "isInterrupted", "()Z", 0,
       [&interrupted](Runtime&, Object* self, Values) { return self->fields[interrupted.slot]; });
-  cl.AddMethod(thread, "interrupt", "()V", 0, [&main, &current, &interrupted](Runtime&, Object* self, Values) {
-    if (self == main.value.ref() || self == current.value.ref()) self->fields[interrupted.slot] = Value::Int(1);
+  cl.AddMethod(thread, "interrupt", "()V", 0, [&main, &current, &interrupted](Runtime& vm, Object* self, Values) {
+    if (self == main.value.ref() || self == current.value.ref() || vm.HasThread(self)) {
+      self->fields[interrupted.slot] = Value::Int(1);
+      vm.WakeThread(self, true);
+    }
     return Value{};
   });
   const auto clear_interrupt = [&current, &interrupted](Runtime&, Object*, Values) {
@@ -611,6 +640,9 @@ const Field& InstallThread(Runtime& vm) {
         const auto millis = a[0].j();
         if (millis < 0) vm.Fail("Ljava/lang/IllegalArgumentException;", "Negative sleep time");
         if (clear_interrupt(vm, nullptr, {}).i()) vm.Fail("Ljava/lang/InterruptedException;");
+        if (millis > 0 && vm.active_worker) {
+          vm.SuspendWorker(std::min<int64_t>(millis, INT64_MAX / 1'000'000) * 1'000'000, true);
+        }
         if (millis == 0) std::this_thread::yield();
         else {
           const auto seconds = std::chrono::seconds(millis / 1000);
@@ -623,6 +655,17 @@ const Field& InstallThread(Runtime& vm) {
         }
         return Value{};
       });
+  cl.AddMethod(thread, "start", "()V", art::kAccPublic | art::kAccSynchronized,
+      [&started](Runtime& vm, Object* self, Values) {
+        if (self->fields[started.slot].i()) vm.Fail("Ljava/lang/IllegalThreadStateException;");
+        vm.StartThread(self);
+        self->fields[started.slot] = Value::Int(1);
+        return Value{};
+      });
+  cl.AddMethod(thread, "isAlive", "()Z", art::kAccPublic | art::kAccFinal,
+      [&main, &current](Runtime& vm, Object* self, Values) {
+        return Value::Int(self == main.value.ref() || self == current.value.ref() || vm.HasThread(self));
+      });
   cl.AddMethod(thread, "run", "()V", 0, [&target](Runtime& vm, Object* self, Values) {
     if (auto* runnable = self->fields[target.slot].ref()) CallVirtual(vm, runnable, "run", "()V");
     return Value{};
@@ -634,10 +677,25 @@ const Field& InstallThread(Runtime& vm) {
         self->fields[loader.slot] = a[0];
         return Value{};
       });
+  constexpr auto group = "Ljava/lang/ThreadGroup;";
+  const Builtin main_group = [](Runtime& vm, Object*, Values) {
+    if (!vm.linker.HasClass(group)) return Value{};
+    auto& type = vm.linker.Resolve(group);
+    vm.linker.Initialize(type);
+    return vm.linker.FindField(type, "mainThreadGroup", group, true).value;
+  };
+  cl.AddMethod(thread, "getThreadGroup", "()Ljava/lang/ThreadGroup;", 0, main_group);
+  cl.AddBootNative(group, "reportEmbeddedUncaughtException", "(Ljava/lang/Throwable;)V",
+      [](Runtime& vm, Object*, Values args) -> Value {
+        vm.exception = &vm.NonNull(args[0].ref());
+        throw ManagedException{};
+      });
   cl.AddMethod(thread, "getUncaughtExceptionHandler", "()Ljava/lang/Thread$UncaughtExceptionHandler;", 0,
-      [&exception_handler, &default_handler](Runtime&, Object* self, Values) {
+      [&exception_handler, &default_handler, main_group](Runtime& vm, Object* self, Values) {
         const auto handler = self->fields[exception_handler.slot];
-        return handler.ref() ? handler : default_handler.value;
+        if (handler.ref()) return handler;
+        const auto fallback = main_group(vm, self, {});
+        return fallback.ref() ? fallback : default_handler.value;
       });
   cl.AddMethod(thread, "setUncaughtExceptionHandler", "(Ljava/lang/Thread$UncaughtExceptionHandler;)V", 0,
       [&exception_handler](Runtime&, Object* self, Values a) {
@@ -829,6 +887,120 @@ void CheckAtomicValue(Runtime& vm, const Object& updater, Value value) {
   }
 }
 
+constexpr int64_t kUnsafeFieldStride = 8;
+
+int32_t UnsafeArrayScale(const Class& component) {
+  switch (component.descriptor.front()) {
+    case 'Z': case 'B': return 1;
+    case 'S': case 'C': return 2;
+    case 'J': case 'D': return 8;
+    default: return 4;
+  }
+}
+
+struct ManagedSlot {
+  Runtime& vm;
+  Object& object;
+  const Field* field;
+  int32_t index;
+
+  Value Read() const {
+    return field ? object.fields[field->slot] : vm.ArrayElement(object, index);
+  }
+
+  void Write(Value value) const {
+    if (!field) {
+      vm.StoreArrayElement(object, index, value);
+      return;
+    }
+    if (value.ref() && !vm.linker.IsAssignable(vm.linker.Resolve(field->type), *value.ref()->type)) {
+      vm.Fail("Ljava/lang/IllegalArgumentException;", "Incompatible managed field value");
+    }
+    object.fields[field->slot] = Normalize(value, field->value_type);
+  }
+};
+
+ManagedSlot ResolveUnsafeSlot(Runtime& vm, Values args, char kind) {
+  auto& object = vm.NonNull(args[0].ref());
+  const auto offset = args[1].j();
+  const auto fits = [kind](char type) { return kind == 'L' ? IsReference(type) : kind == type; };
+  if (offset >= 0 && object.type->IsArray()) {
+    const auto& component = *object.type->component;
+    const auto scale = UnsafeArrayScale(component);
+    if (offset % scale == 0 && static_cast<uint64_t>(offset / scale) < vm.ArrayLength(object) &&
+        fits(component.descriptor.front())) {
+      return {vm, object, nullptr, static_cast<int32_t>(offset / scale)};
+    }
+  } else if (offset >= 0 && offset % kUnsafeFieldStride == 0) {
+    const auto slot = static_cast<uint64_t>(offset / kUnsafeFieldStride);
+    for (auto* owner = object.type; owner && slot < object.fields.size(); owner = owner->super) {
+      for (const auto* field : owner->field_order) {
+        if (!field->is_static && field->slot == slot && fits(field->value_type)) return {vm, object, field, 0};
+      }
+    }
+  }
+  vm.Fail("Ljava/lang/IllegalArgumentException;", "Invalid managed field or array offset");
+}
+
+void InstallManagedUnsafe(ClassLinker& cl) {
+  constexpr auto owner = "Lsun/misc/Unsafe;";
+  const auto bind = [&](std::string_view name, std::string_view sig, Builtin fn) {
+    cl.AddBootNative(owner, name, sig, std::move(fn));
+  };
+  bind("getUnsafe", "()Lsun/misc/Unsafe;", [](Runtime& vm, Object*, Values) {
+    for (auto* scope = vm.roots; scope; scope = scope->previous) {
+      if (!scope->declaring_class) continue;
+      const auto location = vm.linker.DexLocation(scope->declaring_class->descriptor);
+      const auto source = std::string_view(location).substr(0, location.rfind('!'));
+      if (vm.read_only_paths.contains(source)) {
+        vm.Fail("Ljava/lang/SecurityException;", "Unsafe access denied");
+      }
+      break;
+    }
+    auto& type = vm.linker.Resolve(owner);
+    return vm.linker.FindField(type, "THE_ONE", owner, true).value;
+  });
+  bind("objectFieldOffset", "(Ljava/lang/reflect/Field;)J", [](Runtime& vm, Object*, Values args) {
+    const auto* field = vm.NonNull(args[0].ref()).reflected_field;
+    if (!field || field->is_static) vm.Fail("Ljava/lang/IllegalArgumentException;", "Expected an instance field");
+    return Value::Long(field->slot * kUnsafeFieldStride);
+  });
+  for (const bool scale : {false, true}) {
+    bind(scale ? "arrayIndexScale" : "arrayBaseOffset", "(Ljava/lang/Class;)I",
+        [scale](Runtime& vm, Object*, Values args) {
+          const auto* component = vm.NonNull(args[0].ref()).represented_class->component;
+          if (!component) vm.Fail("Ljava/lang/IllegalArgumentException;", "Expected an array class");
+          return Value::Int(scale ? UnsafeArrayScale(*component) : 0);
+        });
+  }
+  for (const auto [name, signature] : {std::pair{"Int", "I"}, {"Long", "J"}, {"Object", "Ljava/lang/Object;"}}) {
+    const std::string prefix = "(Ljava/lang/Object;J";
+    const char kind = signature[0];
+    const Builtin read = [kind](Runtime& vm, Object*, Values args) {
+      return ResolveUnsafeSlot(vm, args, kind).Read();
+    };
+    const Builtin write = [kind](Runtime& vm, Object*, Values args) {
+      ResolveUnsafeSlot(vm, args, kind).Write(args[2]);
+      return Value{};
+    };
+    bind(std::string("get") + name, prefix + ")" + signature, read);
+    bind(std::string("get") + name + "Volatile", prefix + ")" + signature, read);
+    bind(std::string("put") + name, prefix + signature + ")V", write);
+    bind(std::string("put") + name + "Volatile", prefix + signature + ")V", write);
+    bind(std::string("putOrdered") + name, prefix + signature + ")V", write);
+    bind(std::string("compareAndSwap") + name, prefix + signature + signature + ")Z",
+        [kind](Runtime& vm, Object*, Values args) {
+          const auto slot = ResolveUnsafeSlot(vm, args, kind);
+          const auto value = slot.Read();
+          const bool match = kind == 'L' ? value.ref() == args[2].ref() : value.bits() == args[2].bits();
+          if (match) slot.Write(args[3]);
+          return Value::Int(match);
+        });
+  }
+  // This VM runs one guest Java thread at a time, including between safepoints.
+  bind("storeFence", "()V", [](Runtime&, Object*, Values) { return Value{}; });
+}
+
 void InstallAtomicUpdaters(ClassLinker& cl) {
   for (auto [type, kind] : {std::pair{"Reference", 'L'}, {"Integer", 'I'}, {"Long", 'J'}}) {
     const auto name = std::string("Ljava/util/concurrent/atomic/Atomic") + type + "FieldUpdater;";
@@ -953,7 +1125,7 @@ void InstallAndroid(Runtime& vm) {
     cl.AddMethod(log, "isLoggable", "(Ljava/lang/String;I)Z", art::kAccStatic,
         [](Runtime& vm, Object*, Values a) {
           const auto tag = EncodeUtf8(vm.NonNull(a[0].ref()).text, false);
-          const auto& properties = vm.options.system_properties;
+          const auto& properties = vm.system_properties;
           auto entry = properties.find("log.tag." + tag);
           if (entry == properties.end()) entry = properties.find("log.tag");
           constexpr std::string_view levels = "VDIWEAS";
@@ -981,21 +1153,6 @@ void InstallAndroid(Runtime& vm) {
   };
   cl.AddMethod(props, "get", "(Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic, property);
   cl.AddMethod(props, "get", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", art::kAccStatic, property);
-  auto& set = cl.Define("Landroid/util/ArraySet;", "Ljava/util/HashSet;");
-  cl.AddMethod(set, "<init>", "()V", 0, [](Runtime&, Object*, Values) { return Value{}; });
-  cl.AddMethod(set, "<init>", "(I)V", 0, [](Runtime& vm, Object* self, Values a) {
-    if (a[0].i() < 0) vm.Fail("Ljava/lang/IllegalArgumentException;");
-    self->table = std::make_unique<HashEntries>();
-    self->table->buckets.reserve(a[0].i());
-    return Value{};
-  });
-  cl.AddMethod(set, "valueAt", "(I)Ljava/lang/Object;", 0, [](Runtime& vm, Object* self, Values a) {
-    const auto index = a[0].i();
-    if (index < 0 || !self->table || static_cast<size_t>(index) >= self->table->order.size()) {
-      vm.Fail("Ljava/lang/IndexOutOfBoundsException;");
-    }
-    return (*std::next(self->table->order.begin(), index))->elements[0];
-  });
 }
 
 }  // namespace
@@ -1006,6 +1163,7 @@ void InstallPlatform(Runtime& vm) {
   InstallRandom(vm.linker);
   InstallThreadLocal(vm.linker, current);
   InstallAtomicUpdaters(vm.linker);
+  InstallManagedUnsafe(vm.linker);
   InstallFiles(vm);
   software_raster::Install(vm.linker);
   InstallAndroid(vm);

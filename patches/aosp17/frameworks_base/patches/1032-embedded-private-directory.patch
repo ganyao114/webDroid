@@ -1,0 +1,14 @@
+--- a/frameworks/base/core/java/android/content/ContextWrapper.java
++++ b/frameworks/base/core/java/android/content/ContextWrapper.java
+@@ -154,6 +154,11 @@
+     @Override
+     public File getNoBackupFilesDir() {
+         return mBase.getNoBackupFilesDir();
++    }
++
++    @Override
++    public File getDir(String name, int mode) {
++        return mBase.getDir(name, mode);
+     }
+ 
+     @Override

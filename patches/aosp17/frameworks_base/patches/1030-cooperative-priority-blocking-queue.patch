@@ -1,0 +1,50 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/PriorityBlockingQueue.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/PriorityBlockingQueue.java
+@@ -35,8 +35,6 @@
+ 
+ package java.util.concurrent;
+ 
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+ import java.util.AbstractQueue;
+ import java.util.Arrays;
+ import java.util.Collection;
+@@ -53,8 +51,6 @@
+ import java.util.function.Consumer;
+ import java.util.function.Predicate;
+ import jdk.internal.access.SharedSecrets;
+-import jdk.internal.invoke.MhUtil;
+-import jdk.internal.util.ArraysSupport;
+ 
+ /**
+  * An unbounded {@linkplain BlockingQueue blocking queue} that uses
+@@ -291,13 +287,16 @@
+     private void tryGrow(Object[] array, int oldCap) {
+         lock.unlock(); // must release and then re-acquire main lock
+         Object[] newArray = null;
+-        if (allocationSpinLock == 0 &&
+-            ALLOCATIONSPINLOCK.compareAndSet(this, 0, 1)) {
++        if (allocationSpinLock == 0) {
++            allocationSpinLock = 1;
+             try {
+                 int growth = (oldCap < 64)
+                     ? (oldCap + 2) // grow faster if small
+                     : (oldCap >> 1);
+-                int newCap = ArraysSupport.newLength(oldCap, 1, growth);
++                long minCap = (long) oldCap + 1;
++                if (minCap > Integer.MAX_VALUE) throw new OutOfMemoryError("Queue capacity exhausted");
++                int newCap = (int) Math.min((long) oldCap + growth,
++                        Math.max(minCap, Integer.MAX_VALUE - 8L));
+                 if (queue == array)
+                     newArray = new Object[newCap];
+             } finally {
+@@ -1096,9 +1095,4 @@
+         }
+     }
+ 
+-    // VarHandle mechanics
+-    private static final VarHandle ALLOCATIONSPINLOCK =
+-            MhUtil.findVarHandle(
+-                    MethodHandles.lookup(), "allocationSpinLock", int.class);
+-
+ }

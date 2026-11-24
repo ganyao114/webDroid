@@ -547,6 +547,7 @@ Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value
   } else {
     pc = suspended.front().dex_pc;
     f.Restore(suspended.front().slots);
+    for (Value monitor : suspended.front().monitors) f.EnterMonitor(*monitor.ref());
   }
   ActiveTraceFrame trace{&method, &pc, active_trace, f.Roots(), call_depth};
   struct RestoreTrace {
@@ -554,7 +555,7 @@ Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value
     ActiveTraceFrame* caller;
     ~RestoreTrace() { active = caller; }
   } restore_trace{active_trace, active_trace};
-  if (options.capture_exception_stack || loop_dispatch) active_trace = &trace;
+  if (options.capture_exception_stack || loop_dispatch || worker_dispatch) active_trace = &trace;
   const auto member = [&]() -> MemberCache* {
     if (!indices) return nullptr;
     if (indices[pc] == UINT32_MAX) Fail("Ljava/lang/VerifyError;", "Invalid member instruction");

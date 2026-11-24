@@ -1,0 +1,82 @@
+--- a/frameworks/base/core/java/android/app/Activity.java
++++ b/frameworks/base/core/java/android/app/Activity.java
+@@ -5294,6 +5294,7 @@
+      */
+     public void startActivityForResult(@RequiresPermission Intent intent, int requestCode,
+             @Nullable Bundle options) {
++        if (enqueueEmbeddedLaunch(intent, requestCode)) return;
+         if (requestCode >= 0) {
+             throw new UnsupportedOperationException("The embedded host has no activity results");
+         }
+@@ -5628,7 +5629,7 @@
+      */
+     @Override
+     public void startActivity(Intent intent, @Nullable Bundle options) {
+-        getBaseContext().startActivity(intent, options);
++        if (!enqueueEmbeddedLaunch(intent, -1)) getBaseContext().startActivity(intent, options);
+     }
+ 
+     /**
+@@ -6560,7 +6561,11 @@
+      */
+     @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+     private void finish(int finishTask) {
+-        mFinished = true;
++        if (mEmbeddedHasParent || !mEmbeddedLaunches.isEmpty()) {
++            mEmbeddedFinishPending = true;
++        } else {
++            mFinished = true;
++        }
+     }
+ 
+     /**
+@@ -8512,6 +8517,49 @@
+             default: return String.valueOf(request);
+         }
+     }
++    private boolean mEmbeddedHasParent;
++    private boolean mEmbeddedFinishPending;
++    private final ArrayList<EmbeddedLaunch> mEmbeddedLaunches = new ArrayList<>();
++
++    static final class EmbeddedLaunch {
++        final Intent intent;
++        final int requestCode;
++
++        EmbeddedLaunch(Intent intent, int requestCode) {
++            this.intent = new Intent(intent);
++            this.requestCode = requestCode;
++        }
++    }
++
++    private boolean enqueueEmbeddedLaunch(Intent intent, int requestCode) {
++        if (!Boolean.getBoolean("org.wasmandroid.foreground")) return false;
++        ComponentName name = intent.getComponent();
++        if (name == null || !getPackageName().equals(name.getPackageName())) return false;
++        if (getPackageManager().resolveActivity(intent, 0) == null) {
++            throw new ActivityNotFoundException(intent.toString());
++        }
++        mEmbeddedLaunches.add(new EmbeddedLaunch(intent, requestCode));
++        return true;
++    }
++
++    final EmbeddedLaunch pollEmbeddedLaunch() {
++        return mEmbeddedLaunches.isEmpty() ? null : mEmbeddedLaunches.remove(0);
++    }
++
++    final android.view.ViewRootImpl attachEmbeddedRoot(Context context, Intent intent, int theme,
++            boolean hasParent) {
++        mEmbeddedHasParent = hasParent;
++        attachEmbedded(context, intent, theme);
++        PhoneWindow window = attachEmbeddedWindow();
++        window.setDecorFitsSystemWindows(false);
++        try (TypedArray attrs = obtainStyledAttributes(new int[] {android.R.attr.windowBackground})) {
++            if (attrs.hasValue(0)) window.setBackgroundDrawable(attrs.getDrawable(0));
++        }
++        android.view.ViewRootImpl root = new android.view.ViewRootImpl(this, getDisplay(), window);
++        root.setView(window.getDecorView(), window.getAttributes(), null);
++        return root;
++    }
++
+     private boolean mEmbeddedStarted;
+     private final WindowOnBackInvokedDispatcher mEmbeddedBack = new WindowOnBackInvokedDispatcher();
+ 

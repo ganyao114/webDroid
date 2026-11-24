@@ -1,10 +1,12 @@
 #include "boot.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <stdexcept>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace wa::interp {
@@ -130,6 +132,22 @@ std::span<Value> Buffer(Runtime& vm, Values args) {
   return std::span(bytes).subspan(offset, length);
 }
 
+size_t ReadHostFile(Runtime& vm, Runtime::FileHandle& handle, std::span<Value> buffer) {
+  std::array<uint8_t, 4096> bytes;
+  size_t total = 0;
+  while (total < buffer.size()) {
+    const auto size = std::min(bytes.size(), buffer.size() - total);
+    const auto count = pread(fileno(handle.file->backing.get()), bytes.data(), size, handle.position);
+    if (count < 0 && errno == EINTR) continue;
+    if (count < 0) vm.Fail("Ljava/io/IOException;", "Cannot read mounted file");
+    if (count == 0) break;
+    for (ssize_t i = 0; i < count; ++i) buffer[total + i] = Value::Int(static_cast<int8_t>(bytes[i]));
+    handle.position += count;
+    total += count;
+  }
+  return total;
+}
+
 void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host_fd) {
   constexpr auto kIn = "Ljava/io/FileInputStream;";
   constexpr auto kOut = "Ljava/io/FileOutputStream;";
@@ -160,11 +178,15 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
     auto& descriptor = Descriptor(vm, self);
     if (descriptor.fields[android_fd.slot].i() == 0) return Value::Int(-1);
     auto& handle = Handle(vm, descriptor, false);
-    const auto& bytes = handle.file->bytes;
-    if (handle.position >= bytes.size()) return Value::Int(-1);
-    const auto count = std::min<uint64_t>(buffer.size(), bytes.size() - handle.position);
+    const auto size = handle.file->Size();
+    if (handle.position >= size) return Value::Int(-1);
+    const auto count = std::min<uint64_t>(buffer.size(), size - handle.position);
+    if (handle.file->backing) {
+      const auto read = ReadHostFile(vm, handle, buffer.first(count));
+      return Value::Int(read != 0 ? static_cast<int32_t>(read) : -1);
+    }
     for (size_t i = 0; i < count; ++i) {
-      buffer[i] = Value::Int(static_cast<int8_t>(bytes[handle.position + i]));
+      buffer[i] = Value::Int(static_cast<int8_t>(handle.file->bytes[handle.position + i]));
     }
     handle.position += count;
     return Value::Int(count);
@@ -173,7 +195,7 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
   cl.AddBootNative(kRandom, "readBytes", "([BII)I", read);
   const Builtin length = [&android_fd](Runtime& vm, Object* self, Values) {
     auto& descriptor = Descriptor(vm, self);
-    return Value::Long(descriptor.fields[android_fd.slot].i() == 0 ? 0 : Handle(vm, descriptor, false).file->bytes.size());
+    return Value::Long(descriptor.fields[android_fd.slot].i() == 0 ? 0 : Handle(vm, descriptor, false).file->Size());
   };
   cl.AddBootNative(kIn, "length0", "()J", length);
   cl.AddBootNative(kRandom, "length", "()J", length);
@@ -201,7 +223,7 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
     auto& descriptor = Descriptor(vm, self);
     if (descriptor.fields[android_fd.slot].i() == 0) return Value::Int(0);
     const auto& handle = Handle(vm, descriptor, false);
-    const auto size = handle.file->bytes.size();
+    const auto size = handle.file->Size();
     const auto remaining = size - std::min<uint64_t>(size, handle.position);
     return Value::Int(std::min<uint64_t>(INT32_MAX, remaining));
   });
@@ -248,10 +270,7 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
   cl.AddBootNative(kRandom, "writeBytes", "([BII)V", write);
 }
 
-}  // namespace
-
-void Vm::MountReadOnlyFile(std::string_view name, std::span<const uint8_t> bytes) {
-  auto& vm = *runtime_;
+void MountReadOnly(Runtime& vm, std::string_view name, std::shared_ptr<Runtime::GuestFile> file) {
   const auto path = GuestPath(DecodeUtf8(name));
   if (path.empty() || vm.guest_files.contains(path)) throw std::invalid_argument("Invalid guest file mount");
   const auto parent = Parent(path);
@@ -260,8 +279,6 @@ void Vm::MountReadOnlyFile(std::string_view name, std::span<const uint8_t> bytes
   if (directory == vm.guest_files.end() || directory->second) {
     throw std::invalid_argument("Invalid guest file mount parent");
   }
-  auto file = std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{
-      std::vector<uint8_t>(bytes.begin(), bytes.end()), NowMillis()});
   const auto permission = vm.read_only_paths.insert(path).first;
   try {
     vm.guest_files.emplace(path, std::move(file));
@@ -271,9 +288,28 @@ void Vm::MountReadOnlyFile(std::string_view name, std::span<const uint8_t> bytes
   }
 }
 
+}  // namespace
+
+void Vm::MountReadOnlyFile(std::string_view name, std::span<const uint8_t> bytes) {
+  MountReadOnly(*runtime_, name, std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{
+      std::vector<uint8_t>(bytes.begin(), bytes.end()), NowMillis()}));
+}
+
+void Vm::MountReadOnlyHostFile(const std::string& path) {
+  std::shared_ptr<std::FILE> backing(std::fopen(path.c_str(), "rb"), [](std::FILE* file) {
+    if (file) std::fclose(file);
+  });
+  struct stat status{};
+  if (!backing || fstat(fileno(backing.get()), &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0) {
+    throw std::invalid_argument("Cannot open mounted guest file: " + path);
+  }
+  MountReadOnly(*runtime_, path, std::make_shared<Runtime::GuestFile>(Runtime::GuestFile{
+      {}, NowMillis(), std::move(backing), static_cast<uint64_t>(status.st_size)}));
+}
+
 std::optional<std::span<const uint8_t>> Vm::ReadGuestFile(std::string_view path) const {
   const auto file = runtime_->guest_files.find(path);
-  if (file == runtime_->guest_files.end() || !file->second) return std::nullopt;
+  if (file == runtime_->guest_files.end() || !file->second || file->second->backing) return std::nullopt;
   return file->second->bytes;
 }
 
@@ -316,6 +352,27 @@ void InstallFiles(Runtime& vm) {
     if (!self->text.empty()) absolute /= EncodeUtf8(self->text, false);
     return StringValue(vm, absolute.string());
   });
+  cl.AddMethod(file, "getCanonicalPath", "()Ljava/lang/String;", 0, [](Runtime& vm, Object* self, Values) {
+    const auto guest_path = self->text.empty() ? std::string("/") : GuestPath(self->text);
+    if (guest_path.empty()) vm.Fail("Ljava/io/IOException;", "Invalid file path");
+    if (vm.options.sandboxed_files || vm.guest_files.contains(guest_path) ||
+        guest_path.starts_with("/data/") || guest_path.starts_with("/storage/")) {
+      return StringValue(vm, guest_path);
+    }
+    std::error_code error;
+    const auto absolute = std::filesystem::absolute(EncodeUtf8(self->text, false), error);
+    if (error) vm.Fail("Ljava/io/IOException;", error.message());
+    const auto canonical = std::filesystem::weakly_canonical(absolute, error);
+    if (error) vm.Fail("Ljava/io/IOException;", error.message());
+    return StringValue(vm, canonical.string());
+  });
+  cl.AddMethod(file, "getCanonicalFile", "()Ljava/io/File;", 0,
+      [&file](Runtime& vm, Object* self, Values) {
+        RootScope roots(vm);
+        const auto path = roots.Hold(CallVirtual(vm, self, "getCanonicalPath", "()Ljava/lang/String;"));
+        return Value::Ref(vm.NewObject(file, vm.linker.FindMethod(file, "<init>",
+            "(Ljava/lang/String;)V", false), {&path, 1}));
+      });
   cl.AddMethod(file, "getName", "()Ljava/lang/String;", 0, [](Runtime& vm, Object* self, Values) {
     const auto index = self->text.rfind(u'/');
     return StringValue(vm, index == self->text.npos ? self->text : self->text.substr(index + 1));
@@ -366,9 +423,9 @@ void InstallFiles(Runtime& vm) {
         suffix.find_first_of(std::u16string_view(u"/\0", 2)) != suffix.npos) {
       vm.Fail("Ljava/io/IOException;", "Invalid temporary file name");
     }
-    const auto property = vm.options.system_properties.find("java.io.tmpdir");
+    const auto property = vm.system_properties.find("java.io.tmpdir");
     const auto directory = a.size() == 3 && a[2].ref() ? GuestPath(a[2].ref()->text)
-        : property == vm.options.system_properties.end() ? "/tmp" : GuestPath(DecodeUtf8(property->second));
+        : property == vm.system_properties.end() ? "/tmp" : GuestPath(DecodeUtf8(property->second));
     const auto parent = vm.guest_files.find(directory);
     if (parent == vm.guest_files.end() || parent->second) {
       vm.Fail("Ljava/io/IOException;", "Invalid temporary file directory");
@@ -399,7 +456,7 @@ void InstallFiles(Runtime& vm) {
   });
   cl.AddMethod(file, "length", "()J", 0, [](Runtime& vm, Object* self, Values) {
     const auto entry = vm.guest_files.find(GuestPath(self->text));
-    return Value::Long(entry != vm.guest_files.end() && entry->second ? entry->second->bytes.size() : 0);
+    return Value::Long(entry != vm.guest_files.end() && entry->second ? entry->second->Size() : 0);
   });
   cl.AddMethod(file, "lastModified", "()J", 0, [](Runtime& vm, Object* self, Values) {
     const auto entry = vm.guest_files.find(GuestPath(self->text));

@@ -161,7 +161,33 @@ void ClassLinker::LoadApkDexFiles(const std::string& path, bool fallback) {
   if (opened != 0) throw std::runtime_error("APK " + path + ": " + ErrorCodeString(opened));
 
   auto files = ReadDexArchive(handle, path, runtime_.options.verify_dex, /*file_backed=*/true);
+  std::string resource_path;
+  if (std::ranges::find(apk_paths_, path) == apk_paths_.end()) {
+    resource_path = path;
+    apk_paths_.reserve(apk_paths_.size() + 1);
+  }
   IndexDexFiles(std::move(files), fallback ? DexSource::FallbackApk : DexSource::Apk);
+  if (!resource_path.empty()) apk_paths_.push_back(std::move(resource_path));
+}
+
+std::optional<std::vector<uint8_t>> ClassLinker::ReadApkResource(std::string_view name) const {
+  if (name.empty() || name.starts_with('/') || name.ends_with('/') || name.contains('\0')) {
+    return std::nullopt;
+  }
+  for (const auto& path : apk_paths_) {
+    ZipArchiveHandle handle = nullptr;
+    if (OpenArchive(path.c_str(), &handle) != 0) continue;
+    const std::unique_ptr<ZipArchive, decltype(&CloseArchive)> archive(handle, CloseArchive);
+    ZipEntry64 entry{};
+    if (FindEntry(handle, name, &entry) != 0) continue;
+    if (entry.uncompressed_length > INT32_MAX) return std::nullopt;
+    std::vector<uint8_t> bytes(entry.uncompressed_length);
+    if (!bytes.empty() && ExtractToMemory(handle, &entry, bytes.data(), bytes.size()) != 0) {
+      return std::nullopt;
+    }
+    return bytes;
+  }
+  return std::nullopt;
 }
 
 void ClassLinker::IndexDexFiles(DexFiles files, DexSource source) {

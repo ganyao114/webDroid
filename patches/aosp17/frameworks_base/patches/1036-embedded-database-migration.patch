@@ -1,0 +1,47 @@
+--- a/frameworks/base/core/java/android/content/Context.java
++++ b/frameworks/base/core/java/android/content/Context.java
+@@ -2316,7 +2316,29 @@
+      * @see #createDeviceProtectedStorageContext()
+      */
+     public boolean moveDatabaseFrom(Context sourceContext, String name) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        synchronized (Context.class) {
++            final File source = sourceContext.getDatabasePath(name);
++            final File target = getDatabasePath(name);
++            final File sourceDir = source.getParentFile();
++            final File targetDir = target.getParentFile();
++            if (sourceDir == null || targetDir == null) return false;
++            try {
++                // The embedded context can share a data directory across storage contexts.
++                if (sourceDir.getCanonicalPath().equals(targetDir.getCanonicalPath())) return true;
++            } catch (IOException error) {
++                return false;
++            }
++            final File[] sourceFiles = sourceDir.listFiles(
++                    (dir, fileName) -> fileName.startsWith(source.getName()));
++            if (sourceFiles == null) return !sourceDir.exists();
++            if (!targetDir.isDirectory() && !targetDir.mkdirs()) return false;
++            // The guest filesystem supports atomic renames between its directories.
++            boolean migrated = true;
++            for (File file : sourceFiles) {
++                if (!file.renameTo(new File(targetDir, file.getName()))) migrated = false;
++            }
++            return migrated;
++        }
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/content/ContextWrapper.java
++++ b/frameworks/base/core/java/android/content/ContextWrapper.java
+@@ -164,6 +164,11 @@
+     @Override
+     public File getFilesDir() {
+         return mBase.getFilesDir();
++    }
++
++    @Override
++    public boolean moveDatabaseFrom(Context sourceContext, String name) {
++        return mBase.moveDatabaseFrom(sourceContext, name);
+     }
+ 
+     @Override
