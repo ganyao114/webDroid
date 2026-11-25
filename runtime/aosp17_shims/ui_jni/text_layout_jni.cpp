@@ -402,7 +402,9 @@ Line BreakLine(State& state, const MeasuredParagraph& paragraph, jint start, flo
         }
         fit = next;
         fit_width = width;
-        if (IsLineSpace(text[i]) || text[i] == u'-' || text[i] == 0x200b
+        const bool slash_break = text[i] == u'/' && next < length && text[next] != u'/' &&
+            (i == start || text[i - 1] != u'/') && (text[next] < u'0' || text[next] > u'9');
+        if (IsLineSpace(text[i]) || text[i] == u'-' || text[i] == 0x200b || slash_break
                 || IsIdeograph(CodePoint(text, i))) {
             word_break = next;
             word_width = width;

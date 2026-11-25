@@ -75,7 +75,6 @@ libcore/ojluni/src/main/java/java/util/Optional.java
 libcore/ojluni/src/main/java/java/util/AbstractList.java
 libcore/ojluni/src/main/java/java/util/AbstractSequentialList.java
 libcore/ojluni/src/main/java/java/util/LinkedList.java
-libcore/ojluni/src/main/java/java/math/RoundingMode.java
 libcore/ojluni/src/main/java/java/util/StringJoiner.java
 @patch 0018-linked-list-jdk17.patch
 @patch 0020-local-long-sparse-array.patch

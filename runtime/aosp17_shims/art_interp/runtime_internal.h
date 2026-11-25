@@ -247,6 +247,7 @@ class ClassLinker {
 
  private:
   struct DexClass {
+    std::string_view descriptor;
     const art::DexFile* dex;
     uint16_t definition;
     bool from_apk;
@@ -259,15 +260,17 @@ class ClassLinker {
     }
   };
   using DexFiles = std::vector<std::unique_ptr<const art::DexFile>>;
+  using DexIndex = std::vector<DexClass>;
 
   void IndexDexFiles(DexFiles files, DexSource source);
+  const DexClass* FindDexClass(std::string_view descriptor) const;
   void Link(Class& cls);
   void LoadMembers(Class& cls);
   void InitializeConstants(Class& cls);
   Runtime& runtime_;
   DexFiles dex_files_;
   std::vector<std::string> apk_paths_;
-  std::unordered_map<std::string_view, DexClass> dex_index_;
+  std::vector<DexIndex> dex_indices_;
   std::unordered_map<std::string, Class, DescriptorHash, std::equal_to<>> classes_;
   std::map<std::string, std::map<std::string, Builtin>, std::less<>> boot_natives_;
   size_t linked_dex_classes_ = 0;

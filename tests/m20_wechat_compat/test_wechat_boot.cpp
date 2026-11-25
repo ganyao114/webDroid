@@ -7,8 +7,11 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <iterator>
+#include <map>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -22,6 +25,10 @@ constexpr auto kFence = "(Landroid/app/Application;ILjava/lang/String;ZJJLandroi
 constexpr auto kAppLikeConstructor = "(Landroid/app/Application;IZJJLandroid/content/Intent;)V";
 constexpr auto kLauncher = "Lcom/tencent/mm/ui/LauncherUI;";
 constexpr auto kWelcome = "Lcom/tencent/mm/plugin/account/ui/WelcomeActivity;";
+constexpr auto kLanguage = "Lcom/tencent/mm/plugin/setting/ui/setting/SettingsLanguageUI;";
+constexpr auto kLogin = "Lcom/tencent/mm/plugin/account/ui/MobileInputUI;";
+constexpr auto kReport = "Lcom/tencent/mm/plugin/report/service/o0;";
+constexpr auto kHttpClient = "Lorg/apache/http/impl/client/DefaultHttpClient;";
 constexpr auto kMatrix = "Lcom/tencent/matrix/hook/jnihook/JniHookJni;";
 constexpr auto kPackageManager = "Landroid/content/pm/PackageManager;";
 constexpr auto kFirebaseProvider = "Lcom/google/firebase/provider/FirebaseInitProvider;";
@@ -39,7 +46,8 @@ constexpr auto kPool = "Ljava/util/concurrent/ForkJoinPool;";
 constexpr auto kPoolConstructor =
     "(ILjava/util/concurrent/ForkJoinPool$ForkJoinWorkerThreadFactory;Ljava/lang/Thread$UncaughtExceptionHandler;"
     "ZIIILjava/util/function/Predicate;JLjava/util/concurrent/TimeUnit;)V";
-constexpr int kWelcomeFrames = 3;
+constexpr int kSteadyWelcomeFrames = 65;
+constexpr int64_t kFrameNanos = 16'666'667;
 
 using hybrid_test::Check;
 using hybrid_test::Require;
@@ -229,24 +237,36 @@ size_t CountBitmapPixels(wa_bitmap_store_t* store, const wa_canvas_bitmap_t& dra
 }
 
 struct FrameEvidence {
+    struct Label {
+        float x, y;
+        uint32_t color;
+    };
     uint32_t sequence = 0;
     size_t draws = 0;
     size_t bitmap_pixels = 0;
-    std::set<std::string> labels;
+    std::map<std::string, Label, std::less<>> labels;
+    std::set<uint32_t> rounded_fills;
 
     bool ShowsWelcome() const {
         return draws && bitmap_pixels && labels.contains("Log In") && labels.contains("Sign Up") &&
                labels.contains("语言");
     }
+
+    bool ShowsSettledWelcome() const {
+        return ShowsWelcome() && rounded_fills.contains(0xff07c160) && rounded_fills.contains(0xffffffff) &&
+               labels.at("Log In").color == 0xffffffff && labels.at("语言").color == 0xffffffff &&
+               labels.at("Sign Up").color == 0xb4000000;
+    }
 };
 
-FrameEvidence ReadFrame() {
+FrameEvidence ReadFrame(const std::filesystem::path& capture = {}) {
     auto* scene = wa_system_app_sf_ctx();
     const auto release = [scene](const wa_sf_frame_packet_t* frame) { wa_sf_frame_release(scene, frame); };
     const std::unique_ptr<const wa_sf_frame_packet_t, decltype(release)> frame(
         wa_sf_frame_acquire(scene), release);
     if (!frame) return {};
     FrameEvidence evidence{.sequence = frame->sequence};
+    std::set<uint32_t> bitmap_ids;
     auto* bitmaps = wa_sf_bitmaps(scene);
     const auto* layers = wa_sf_frame_layers(frame.get());
     for (uint32_t i = 0; i < frame->layer_count; ++i) {
@@ -255,6 +275,10 @@ FrameEvidence ReadFrame() {
             layer.desc.surface_kind != WA_SF_SURFACE_DISPLAY_LIST) continue;
         const auto* list = wa_sf_frame_list(frame.get(), &layer);
         Require(list || !layer.list_size, "Missing display list");
+        struct Transform { float x, y, sx, sy; };
+        Transform transform{layer.desc.x - layer.desc.scroll_x, layer.desc.y - layer.desc.scroll_y,
+                            layer.desc.scale_x, layer.desc.scale_y};
+        std::vector<Transform> stack;
         for (size_t offset = 0; offset < layer.list_size;) {
             wa_canvas_record_t record{};
             const auto remaining = layer.list_size - offset;
@@ -262,27 +286,81 @@ FrameEvidence ReadFrame() {
             std::memcpy(&record, list + offset, sizeof(record));
             Require(record.byte_size >= sizeof(record) && record.byte_size <= remaining,
                     "Invalid display list record size");
+            const auto* payload = list + offset + sizeof(record);
             if (record.opcode >= WA_CANVAS_DRAW_COLOR && record.opcode <= WA_CANVAS_DRAW_TEXT) ++evidence.draws;
-            if (record.opcode == WA_CANVAS_DRAW_BITMAP) {
+            switch (record.opcode) {
+            case WA_CANVAS_SAVE: stack.push_back(transform); break;
+            case WA_CANVAS_RESTORE:
+                Require(!stack.empty(), "Unbalanced canvas restore");
+                transform = stack.back();
+                stack.pop_back();
+                break;
+            case WA_CANVAS_TRANSLATE:
+            case WA_CANVAS_SCALE: {
+                wa_canvas_xy_t xy{};
+                Require(record.byte_size >= sizeof(record) + sizeof(xy), "Truncated canvas transform");
+                std::memcpy(&xy, payload, sizeof(xy));
+                if (record.opcode == WA_CANVAS_TRANSLATE) {
+                    transform.x += transform.sx * xy.x;
+                    transform.y += transform.sy * xy.y;
+                } else {
+                    transform.sx *= xy.x;
+                    transform.sy *= xy.y;
+                }
+                break;
+            }
+            case WA_CANVAS_DRAW_BITMAP: {
                 wa_canvas_bitmap_t draw{};
                 Require(record.byte_size >= sizeof(record) + sizeof(draw), "Truncated drawable bitmap");
-                std::memcpy(&draw, list + offset + sizeof(record), sizeof(draw));
+                std::memcpy(&draw, payload, sizeof(draw));
                 evidence.bitmap_pixels += CountBitmapPixels(bitmaps, draw);
+                if (!capture.empty()) bitmap_ids.insert(draw.bitmap_id);
+                break;
             }
-            if (record.opcode == WA_CANVAS_DRAW_TEXT) {
+            case WA_CANVAS_DRAW_ROUND_RECT: {
+                wa_canvas_round_draw_t draw{};
+                Require(record.byte_size >= sizeof(record) + sizeof(draw), "Truncated rounded rectangle");
+                std::memcpy(&draw, payload, sizeof(draw));
+                if (draw.paint.style == WA_PAINT_FILL && (draw.paint.argb >> 24))
+                    evidence.rounded_fills.insert(draw.paint.argb);
+                break;
+            }
+            case WA_CANVAS_DRAW_TEXT: {
                 wa_canvas_text_t text{};
                 Require(record.byte_size >= sizeof(record) + sizeof(text), "Truncated draw text");
-                std::memcpy(&text, list + offset + sizeof(record), sizeof(text));
+                std::memcpy(&text, payload, sizeof(text));
                 Require(text.utf8_offset >= sizeof(record) + sizeof(text) &&
                         text.utf8_offset <= record.byte_size &&
                         text.utf8_len <= record.byte_size - text.utf8_offset,
                         "Invalid display list text bounds");
-                if (text.utf8_len && (text.argb >> 24))
-                    evidence.labels.emplace(reinterpret_cast<const char*>(list + offset + text.utf8_offset),
-                                            text.utf8_len);
+                if (!text.utf8_len || !(text.argb >> 24)) break;
+                const auto* label = reinterpret_cast<const char*>(list + offset + text.utf8_offset);
+                const auto metrics = wa_canvas_measure_text(scene, label, text.utf8_len, text.font_size,
+                                                            text.weight, text.font_face);
+                const float width = text.max_width > 0 ? std::min(metrics.advance, text.max_width) : metrics.advance;
+                const FrameEvidence::Label appearance{
+                    transform.x + transform.sx * (text.x + width * (1.f - text.align) / 2.f),
+                    transform.y + transform.sy * (text.y + (metrics.descent - metrics.ascent) / 2.f),
+                    text.argb};
+                evidence.labels.try_emplace(std::string(label, text.utf8_len), appearance);
+                break;
+            }
+            default: break;
             }
             offset += record.byte_size;
         }
+    }
+    if (!capture.empty()) {
+        std::ofstream output(capture, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(frame.get()), frame->byte_size);
+        for (const auto id : bitmap_ids) {
+            const auto* bitmap = wa_bitmap_acquire(bitmaps, id);
+            Require(bitmap != nullptr, "Missing captured bitmap");
+            output.write(reinterpret_cast<const char*>(bitmap), sizeof(*bitmap));
+            output.write(reinterpret_cast<const char*>(wa_bitmap_pixels(bitmap)), bitmap->byte_size);
+            wa_bitmap_release(bitmaps, bitmap);
+        }
+        Require(static_cast<bool>(output), "Write SurfaceFlinger capture " + capture.string());
     }
     return evidence;
 }
@@ -293,9 +371,76 @@ void PrintFrame(const FrameEvidence& evidence, int welcome_frames) {
               << ",\"non_blank_bitmap_pixels\":" << evidence.bitmap_pixels << ",\"drawn_text\":[";
     for (auto label = evidence.labels.begin(); label != evidence.labels.end(); ++label) {
         if (label != evidence.labels.begin()) std::cout << ',';
-        std::cout << JsonString(*label);
+        std::cout << JsonString(label->first);
     }
     std::cout << "]}\n";
+}
+
+void Tap(const FrameEvidence& frame, std::string_view label, int ticks) {
+    const auto found = frame.labels.find(label);
+    Require(found != frame.labels.end(), "Missing tap target " + std::string(label));
+    const auto& target = found->second;
+    auto* ring = wa_sf_input(wa_system_app_sf_ctx());
+    for (auto action : {WA_ACTION_DOWN, WA_ACTION_UP}) {
+        const wa_input_event_t event{.kind = WA_INPUT_MOTION, .action = action,
+            .event_time_ms = ticks * kFrameNanos / 1e6 + 2 * action, .x = target.x, .y = target.y};
+        Check(wa_input_push(ring, &event), label);
+    }
+}
+
+void Advance(int& ticks, int count, std::string_view operation) {
+    for (int i = 0; i < count; ++i) Check(wa_system_app_tick(++ticks * kFrameNanos), operation);
+}
+
+std::string ResumedActivity() {
+    std::array<char, 256> observed{};
+    Check(wa::system::RunForegroundProbe([](Vm& vm, Object* activity) {
+        const auto& descriptor = activity->type->descriptor;
+        Require(vm.GetLinkedVirtualMethodStats(descriptor, "onCreate", "(Landroid/os/Bundle;)V").returned > 0 &&
+                vm.GetLinkedVirtualMethodStats(descriptor, "onStart", "()V").returned > 0 &&
+                vm.GetLinkedVirtualMethodStats(descriptor, "onResume", "()V").returned > 0 &&
+                vm.CallVirtual(activity, "isResumed", "()Z").i(),
+                "Visible activity did not complete its lifecycle " + descriptor);
+        std::cout << "{\"event\":\"resumed_activity\",\"class\":" << JsonString(descriptor) << "}\n";
+        return descriptor;
+    }, observed.data(), observed.size()), "Check the resumed WeChat activity");
+    return observed.data();
+}
+
+std::string FocusedEditorText() {
+    std::array<char, 256> observed{};
+    Check(wa::system::RunForegroundProbe([](Vm& vm, Object* activity) {
+        ScopedHandleScope roots(vm);
+        auto* focused = roots.Hold(vm.CallVirtual(activity, "getCurrentFocus", "()Landroid/view/View;").ref());
+        const auto* type = focused ? focused->type : nullptr;
+        while (type && type->descriptor != "Landroid/widget/EditText;") type = type->super;
+        Require(type && vm.CallVirtual(focused, "isFocused", "()Z").i(), "The login editor did not take focus");
+        auto* editable = roots.Hold(vm.CallVirtual(focused, "getText", "()Landroid/text/Editable;").ref());
+        return vm.StringUtf8(vm.CallVirtual(editable, "toString", "()Ljava/lang/String;").ref());
+    }, observed.data(), observed.size()), "Read the focused login editor");
+    return observed.data();
+}
+
+void VerifyPhoneInput(const FrameEvidence& frame, std::string_view hint, int& ticks) {
+    Tap(frame, hint, ticks);
+    Advance(ticks, 6, "Focus WeChat's phone number field");
+    Require(FocusedEditorText().empty(), "WeChat's phone number field starts empty");
+    constexpr std::string_view number = "2025550123";
+    wa_input_event_t input{.kind = WA_INPUT_IME, .action = WA_IME_COMMIT,
+        .text_len = number.size(), .event_time_ms = ticks * kFrameNanos / 1e6};
+    std::ranges::copy(number, input.text);
+    Check(wa_input_push(wa_sf_input(wa_system_app_sf_ctx()), &input), "Send phone digits to the login editor");
+    Advance(ticks, 6, "Draw the entered phone number");
+    const auto digits = [](std::string_view value) {
+        std::string result;
+        std::ranges::copy_if(value, std::back_inserter(result), [](char c) { return c >= '0' && c <= '9'; });
+        return result;
+    };
+    Require(digits(FocusedEditorText()) == number, "WeChat's login editor did not accept the typed digits");
+    const auto typed_frame = ReadFrame();
+    Require(std::ranges::any_of(typed_frame.labels, [&](const auto& label) { return digits(label.first) == number; }),
+            "WeChat did not render the typed phone number");
+    std::cout << "{\"event\":\"login_input\",\"digits\":" << number.size() << "}\n";
 }
 
 std::string_view Phase(const std::string& state) {
@@ -396,8 +541,15 @@ int main(int argc, char** argv) try {
     auto status = foreground.Boot(argv[4]);
     std::string error = status < 0 ? hybrid_test::LastError() : "";
     FrameEvidence frame;
+    FrameEvidence early_welcome;
+    int ticks = 0;
     int welcome_frames = 0;
-    // Allow a delayed redirect and finish once the welcome scene is stable.
+    int steady_welcome_frames = 0;
+    const auto* capture_dir = std::getenv("WA_WECHAT_FRAME_DIR");
+    const auto capture = [&](const char* name) {
+        if (capture_dir) ReadFrame(std::filesystem::path(capture_dir) / name);
+    };
+    // Allow a delayed redirect and count steady frames after the control fade.
     for (int i = 0; status >= 0 && i <= 180; ++i) {
         const auto state = hybrid_test::State();
         if (state.contains("\"activity\":\"com.tencent.mm.plugin.account.ui.WelcomeActivity\"") &&
@@ -405,14 +557,21 @@ int main(int argc, char** argv) try {
             auto next_frame = ReadFrame();
             if (next_frame.sequence != frame.sequence) {
                 welcome_frames = next_frame.ShowsWelcome() ? welcome_frames + 1 : 0;
+                steady_welcome_frames = next_frame.ShowsSettledWelcome() ? steady_welcome_frames + 1 : 0;
                 frame = std::move(next_frame);
+                if (welcome_frames == 3) {
+                    early_welcome = frame;
+                    PrintFrame(frame, welcome_frames);
+                    capture("welcome-early.waf");
+                }
             }
-            if (welcome_frames == kWelcomeFrames) break;
+            if (steady_welcome_frames == kSteadyWelcomeFrames) break;
         } else {
             welcome_frames = 0;
+            steady_welcome_frames = 0;
         }
         if (i == 180) break;
-        status = wa_system_app_tick((i + 1) * 16'666'667LL);
+        status = wa_system_app_tick(++ticks * kFrameNanos);
         if (status < 0) error = hybrid_test::LastError();
     }
     const auto state = hybrid_test::State();
@@ -540,20 +699,49 @@ int main(int argc, char** argv) try {
     Require(status >= 0, error);
     Require(Metric(state, "onCreateCalls") == 1 && Metric(state, "onStartCalls") == 1 &&
             Metric(state, "onResumeCalls") == 1, "WeChat did not finish the LauncherUI lifecycle");
-    std::array<char, 16> observed{};
-    Check(wa::system::RunForegroundProbe([](Vm& vm, Object* activity) {
-        const auto& descriptor = activity->type->descriptor;
-        Require(descriptor == kWelcome, "WeChat did not reach the WelcomeActivity redirect");
-        Require(vm.GetLinkedVirtualMethodStats(descriptor, "onCreate", "(Landroid/os/Bundle;)V").returned > 0 &&
-                vm.GetLinkedVirtualMethodStats(descriptor, "onStart", "()V").returned > 0 &&
-                vm.GetLinkedVirtualMethodStats(descriptor, "onResume", "()V").returned > 0 &&
-                vm.CallVirtual(activity, "isResumed", "()Z").i(),
-                "The visible WeChat activity did not complete its lifecycle");
-        std::cout << "{\"event\":\"resumed_activity\",\"class\":" << JsonString(descriptor) << "}\n";
-        return std::string("resumed");
-    }, observed.data(), observed.size()), "Check the resumed welcome activity");
-    Require(welcome_frames == kWelcomeFrames && frame.ShowsWelcome(),
-            "WeChat did not publish three welcome frames with labels and non-blank bitmap pixels");
+    Require(ResumedActivity() == kWelcome, "WeChat did not reach the WelcomeActivity redirect");
+    Require(steady_welcome_frames == kSteadyWelcomeFrames && frame.ShowsSettledWelcome(),
+            "WeChat did not publish 65 full-contrast welcome frames with non-blank bitmap pixels");
+    Require(early_welcome.ShowsWelcome(), "WeChat did not render its WelcomeActivity fade");
+    const auto early_alpha = early_welcome.labels.at("Log In").color >> 24;
+    Require(early_alpha < 255, "WelcomeActivity did not start with partially transparent controls");
+    std::cout << "{\"event\":\"welcome_fade\",\"early_alpha\":" << early_alpha
+              << ",\"settled_alpha\":" << (frame.labels.at("Log In").color >> 24)
+              << ",\"steady_frames\":" << steady_welcome_frames << "}\n";
+    Check(wa::system::RunForegroundVmProbe([](Vm& vm) {
+        Require(vm.GetLinkedDeclaredMethodStats(kHttpClient, "<init>", "()V").returned > 0 &&
+                vm.GetLinkedDeclaredMethodStats(kReport, "run", "()V").returned > 0,
+                "The scheduled WeChat reporter did not construct DefaultHttpClient and return");
+        std::cout << "{\"event\":\"reporter_returned\"}\n";
+    }), "Verify the delayed WeChat report task");
+    capture("welcome.waf");
+    Tap(frame, "语言", ticks);
+    Advance(ticks, 18, "Open WeChat's language selector");
+    const auto language = ReadFrame();
+    PrintFrame(language, 0);
+    Require(ResumedActivity() == kLanguage && language.bitmap_pixels && language.labels.contains("English") &&
+            language.labels.contains("简体中文"), "WeChat did not render the language options");
+    capture("language.waf");
+    Check(wa_system_app_send_back(), "Return from the language selector");
+    Advance(ticks, 18, "Draw WelcomeActivity after language selector");
+    frame = ReadFrame();
+    Require(ResumedActivity() == kWelcome && frame.ShowsWelcome(),
+            "WeChat did not return to WelcomeActivity after the language selector");
+    Tap(frame, "Log In", ticks);
+    Advance(ticks, 25, "Open WeChat's login activity");
+    const auto login = ReadFrame();
+    PrintFrame(login, 0);
+    Require(ResumedActivity() == kLogin, "WeChat did not reach MobileInputUI from Log In");
+    constexpr auto phone_hint = "Enter phone number";
+    Require(login.sequence > frame.sequence && login.bitmap_pixels && login.labels.contains("Log In Via Mobile Number") &&
+            login.labels.contains("Mobile Number") && login.labels.contains(phone_hint) &&
+            login.labels.contains("Other Login Options"), "MobileInputUI did not draw the login form");
+    capture("login.waf");
+    VerifyPhoneInput(login, phone_hint, ticks);
+    Check(wa_system_app_send_back(), "Return from WeChat's login activity");
+    Advance(ticks, 18, "Draw WelcomeActivity after login");
+    Require(ResumedActivity() == kWelcome && ReadFrame().ShowsWelcome(),
+            "WeChat did not return to WelcomeActivity after login");
     return 0;
 } catch (const std::exception& error) {
     std::cerr << "{\"event\":\"probe_error\",\"error\":" << JsonString(error.what()) << "}\n";

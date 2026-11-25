@@ -368,6 +368,17 @@ void RunExitHandlers(wa_dbt& dbt) {
     }
 }
 
+static void AddHostSlot(wa_dbt& dbt, HostSymbol symbol) {
+    // Stub addresses depend on the slot order. Index the slots without moving them.
+    const auto index = dbt.host_slots_by_name.emplace(symbol.name, dbt.hosts.size());
+    try {
+        dbt.hosts.push_back(std::move(symbol));
+    } catch (...) {
+        dbt.host_slots_by_name.erase(index);
+        throw;
+    }
+}
+
 int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name,
                      wa_host_symbol_fn function, void* user, bool builtin, uint64_t* address) {
     for (auto& symbol : dbt.hosts) {
@@ -384,7 +395,7 @@ int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name
     constexpr auto capacity = (WA_HOST_STUB_LIMIT - WA_HOST_STUB_BASE) / WA_HOST_STUB_STRIDE;
     if (dbt.hosts.size() == capacity) return WA_ERR_NOMEM;
     const auto stub = WA_HOST_STUB_BASE + dbt.hosts.size() * WA_HOST_STUB_STRIDE;
-    dbt.hosts.push_back({std::string(soname), std::string(name), function, user, builtin, stub});
+    AddHostSlot(dbt, {std::string(soname), std::string(name), function, user, builtin, stub});
     if (address) *address = stub;
     return WA_OK;
 }
@@ -400,7 +411,7 @@ int32_t RegisterData(wa_dbt& dbt, std::string_view soname, std::string_view name
     }
     constexpr auto capacity = (WA_HOST_STUB_LIMIT - WA_HOST_STUB_BASE) / WA_HOST_STUB_STRIDE;
     if (dbt.hosts.size() == capacity) return WA_ERR_NOMEM;
-    dbt.hosts.push_back({std::string(soname), std::string(name), nullptr, nullptr, builtin, address});
+    AddHostSlot(dbt, {std::string(soname), std::string(name), nullptr, nullptr, builtin, address});
     return WA_OK;
 }
 
@@ -419,9 +430,11 @@ bool IsVirtualLibrary(const wa_dbt& dbt, std::string_view soname) {
 
 bool ResolveImport(const wa_dbt& dbt, std::span<const std::string_view> needed,
                    std::string_view symbol, uint64_t& address) {
+    const auto [first, last] = dbt.host_slots_by_name.equal_range(symbol);
     const auto find_host = [&](std::string_view soname, bool builtin) {
-        for (const auto& entry : dbt.hosts) {
-            if (entry.builtin == builtin && entry.soname == soname && entry.name == symbol) {
+        for (auto it = first; it != last; ++it) {
+            const auto& entry = dbt.hosts[it->second];
+            if (entry.builtin == builtin && entry.soname == soname) {
                 address = entry.address;
                 return true;
             }

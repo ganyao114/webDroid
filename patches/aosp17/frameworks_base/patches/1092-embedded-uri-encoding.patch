@@ -1,0 +1,99 @@
+--- a/libcore/ojluni/src/main/java/java/net/URI.java
++++ b/libcore/ojluni/src/main/java/java/net/URI.java
+@@ -31,14 +31,8 @@
+ import java.io.ObjectInputStream;
+ import java.io.ObjectOutputStream;
+ import java.io.Serializable;
+-import java.nio.ByteBuffer;
+-import java.nio.CharBuffer;
+-import java.nio.charset.CharsetDecoder;
+-import java.nio.charset.CoderResult;
+-import java.nio.charset.CodingErrorAction;
+-import java.nio.charset.CharacterCodingException;
++import java.nio.charset.StandardCharsets;
+ import java.text.Normalizer;
+-import sun.nio.cs.ThreadLocalCoders;
+ 
+ import java.lang.Character;             // for javadoc
+ import java.lang.NullPointerException;  // for javadoc
+@@ -2703,15 +2697,8 @@
+     }
+ 
+     private static void appendEncoded(StringBuffer sb, char c) {
+-        ByteBuffer bb = null;
+-        try {
+-            bb = ThreadLocalCoders.encoderFor("UTF-8")
+-                .encode(CharBuffer.wrap("" + c));
+-        } catch (CharacterCodingException x) {
+-            assert false;
+-        }
+-        while (bb.hasRemaining()) {
+-            int b = bb.get() & 0xff;
++        for (byte octet : String.valueOf(c).getBytes(StandardCharsets.UTF_8)) {
++            int b = octet & 0xff;
+             if (b >= 0x80)
+                 appendEscape(sb, (byte)b);
+             else
+@@ -2772,17 +2759,9 @@
+         }
+ 
+         String ns = Normalizer.normalize(s, Normalizer.Form.NFC);
+-        ByteBuffer bb = null;
+-        try {
+-            bb = ThreadLocalCoders.encoderFor("UTF-8")
+-                .encode(CharBuffer.wrap(ns));
+-        } catch (CharacterCodingException x) {
+-            assert false;
+-        }
+-
+         StringBuffer sb = new StringBuffer();
+-        while (bb.hasRemaining()) {
+-            int b = bb.get() & 0xff;
++        for (byte octet : ns.getBytes(StandardCharsets.UTF_8)) {
++            int b = octet & 0xff;
+             if (b >= 0x80)
+                 appendEscape(sb, (byte)b);
+             else
+@@ -2824,11 +2803,8 @@
+             return s;
+ 
+         StringBuffer sb = new StringBuffer(n);
+-        ByteBuffer bb = ByteBuffer.allocate(n);
+-        CharBuffer cb = CharBuffer.allocate(n);
+-        CharsetDecoder dec = ThreadLocalCoders.decoderFor("UTF-8")
+-            .onMalformedInput(CodingErrorAction.REPLACE)
+-            .onUnmappableCharacter(CodingErrorAction.REPLACE);
++        // The guest UTF-8 String codec supplies the same replacement decoding.
++        byte[] octets = new byte[n];
+ 
+         // This is not horribly efficient, but it will do for now
+         char c = s.charAt(0);
+@@ -2848,25 +2824,17 @@
+                 c = s.charAt(i);
+                 continue;
+             }
+-            bb.clear();
+-            int ui = i;
++            int count = 0;
+             for (;;) {
+                 assert (n - i >= 2);
+-                bb.put(decode(s.charAt(++i), s.charAt(++i)));
++                octets[count++] = decode(s.charAt(++i), s.charAt(++i));
+                 if (++i >= n)
+                     break;
+                 c = s.charAt(i);
+                 if (c != '%')
+                     break;
+             }
+-            bb.flip();
+-            cb.clear();
+-            dec.reset();
+-            CoderResult cr = dec.decode(bb, cb, true);
+-            assert cr.isUnderflow();
+-            cr = dec.flush(cb);
+-            assert cr.isUnderflow();
+-            sb.append(cb.flip().toString());
++            sb.append(new String(octets, 0, count, StandardCharsets.UTF_8));
+         }
+ 
+         return sb.toString();
