@@ -526,6 +526,7 @@ const Field& InstallThread(Runtime& vm) {
   cl.AddField(thread, "niceness", "I", false);
   auto& daemon = cl.AddField(thread, "daemon", "Z", false);
   auto& interrupted = cl.AddField(thread, "interrupted", "Z", false);
+  auto& io_blocker = cl.AddField(thread, "ioBlocker", "Ljava/lang/Runnable;", false);
   auto& park_permit = cl.AddField(thread, "parkPermit", "Z", false);
   auto& park_blocker = cl.AddField(thread, "parkBlocker", kObject, false);
   auto& target = cl.AddField(thread, "target", "Ljava/lang/Runnable;", false);
@@ -575,6 +576,12 @@ const Field& InstallThread(Runtime& vm) {
   cl.AddMethod(thread, "currentThread", "()Ljava/lang/Thread;", art::kAccStatic,
       [&current](Runtime&, Object*, Values) { return current.value; });
   auto& context = cl.Define("Lorg/wasmandroid/ui/ThreadContext;", kObject, art::kAccFinal);
+  cl.AddMethod(context, "setIoBlocker", "(Ljava/lang/Runnable;)V", art::kAccStatic,
+      [&thread, &current, &io_blocker](Runtime& vm, Object*, Values a) {
+        vm.linker.Initialize(thread);
+        current.value.ref()->fields[io_blocker.slot] = a[0];
+        return Value{};
+      });
   cl.AddMethod(context, "swap", "(Ljava/lang/Thread;)Ljava/lang/Thread;", art::kAccStatic,
       [&thread, &current](Runtime& vm, Object*, Values a) {
         vm.linker.Initialize(thread);
@@ -701,10 +708,11 @@ const Field& InstallThread(Runtime& vm) {
       [&priority](Runtime&, Object* self, Values) { return self->fields[priority.slot]; });
   cl.AddMethod(thread, "isInterrupted", "()Z", 0,
       [&interrupted](Runtime&, Object* self, Values) { return self->fields[interrupted.slot]; });
-  cl.AddMethod(thread, "interrupt", "()V", 0, [&main, &current, &interrupted](Runtime& vm, Object* self, Values) {
+  cl.AddMethod(thread, "interrupt", "()V", 0, [&main, &current, &interrupted, &io_blocker](Runtime& vm, Object* self, Values) {
     if (self == main.value.ref() || self == current.value.ref() || vm.HasThread(self)) {
       self->fields[interrupted.slot] = Value::Int(1);
       vm.WakeThread(self, true);
+      if (auto* blocker = self->fields[io_blocker.slot].ref()) CallVirtual(vm, blocker, "run", "()V");
     }
     return Value{};
   });
@@ -842,6 +850,18 @@ void InstallRandom(ClassLinker& cl) {
   };
   cl.AddMethod(random, "nextInt", "()I", 0,
       [bits](Runtime& vm, Object* self, Values) { return Value::Int(bits(vm, self, 32)); });
+  cl.AddMethod(random, "nextBytes", "([B)V", 0, [](Runtime& vm, Object* self, Values a) {
+    auto& bytes = vm.NonNull(a[0].ref()).elements;
+    size_t offset = 0;
+    while (offset < bytes.size()) {
+      auto sample = static_cast<uint32_t>(CallVirtual(vm, self, "nextInt", "()I").i());
+      const auto count = std::min(bytes.size() - offset, sizeof(sample));
+      for (size_t i = 0; i < count; ++i, sample >>= 8) {
+        bytes[offset++] = Value::Int(static_cast<int8_t>(sample));
+      }
+    }
+    return Value{};
+  });
   cl.AddMethod(random, "nextInt", "(I)I", 0, [bits](Runtime& vm, Object* self, Values a) {
     const int32_t bound = a[0].i();
     if (bound <= 0) vm.Fail("Ljava/lang/IllegalArgumentException;", "Bound must be positive");

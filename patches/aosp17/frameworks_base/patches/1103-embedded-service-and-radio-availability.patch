@@ -1,0 +1,50 @@
+--- a/frameworks/base/core/java/android/content/pm/PackageManager.java
++++ b/frameworks/base/core/java/android/content/pm/PackageManager.java
+@@ -8330,9 +8330,8 @@
+      *         returns an empty list.
+      */
+     @NonNull
+-    public List<ResolveInfo> queryIntentServices(@NonNull Intent intent,
+-            int flags) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++    public List<ResolveInfo> queryIntentServices(@NonNull Intent intent, int flags) {
++        return queryIntentServicesAsUser(intent, flags, 0);
+     }
+ 
+     /**
+@@ -8366,7 +8365,8 @@
+     @UnsupportedAppUsage
+     public List<ResolveInfo> queryIntentServicesAsUser(@NonNull Intent intent,
+             int flags, @UserIdInt int userId) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        java.util.Objects.requireNonNull(intent);
++        return java.util.Collections.emptyList();
+     }
+ 
+     /**
+--- a/packages/modules/Connectivity/framework/src/android/net/ConnectivityManager.java
++++ b/packages/modules/Connectivity/framework/src/android/net/ConnectivityManager.java
+@@ -1437,4 +1437,10 @@
+ 
+     }
+ 
++
++    /** @hide */
++    public boolean getMobileDataEnabled() {
++        // The embedded device has no telephony subscription or mobile radio.
++        return false;
++    }
+ }
+--- a/frameworks/base/telephony/java/android/telephony/TelephonyManager.java
++++ b/frameworks/base/telephony/java/android/telephony/TelephonyManager.java
+@@ -106,4 +106,10 @@
+     public int getSubscriptionId() {
+         return SubscriptionManager.INVALID_SUBSCRIPTION_ID;
+     }
++
++    public static final int SIM_STATE_ABSENT = 1;
++
++    public int getSimState() {
++        return SIM_STATE_ABSENT;
++    }
+ }

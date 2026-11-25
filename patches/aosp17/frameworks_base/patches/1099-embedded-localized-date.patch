@@ -1,0 +1,39 @@
+--- a/libcore/ojluni/src/main/java/java/util/Date.java
++++ b/libcore/ojluni/src/main/java/java/util/Date.java
+@@ -25,6 +25,8 @@
+  */
+ 
+ package java.util;
++
++import java.text.DateFormat;
+ 
+ import java.time.Instant;
+ 
+@@ -322,4 +324,27 @@
+     public Instant toInstant() {
+         return Instant.ofEpochMilli(getTime());
+     }
++    /**
++     * Creates a string representation of this {@code Date} object in an
++     * implementation-dependent form. The intent is that the form should
++     * be familiar to the user of the Java application, wherever it may
++     * happen to be running. The intent is comparable to that of the
++     * "{@code %c}" format supported by the {@code strftime()}
++     * function of ISO&nbsp;C.
++     *
++     * @return  a string representation of this date, using the locale
++     *          conventions.
++     * @see     java.text.DateFormat
++     * @see     java.util.Date#toString()
++     * @see     java.util.Date#toGMTString()
++     * @deprecated As of JDK version 1.1,
++     * replaced by {@code DateFormat.format(Date date)}.
++     */
++    @Deprecated
++    public String toLocaleString() {
++        DateFormat formatter = DateFormat.getDateTimeInstance(
++                DateFormat.DEFAULT, DateFormat.DEFAULT, Locale.getDefault());
++        return formatter.format(this);
++    }
++
+ }

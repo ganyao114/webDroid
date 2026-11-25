@@ -1,0 +1,46 @@
+--- a/libcore/ojluni/src/main/java/java/util/Collections.java
++++ b/libcore/ojluni/src/main/java/java/util/Collections.java
+@@ -39,6 +39,43 @@
+ final class EmbeddedSynchronizedCollections {
+     private EmbeddedSynchronizedCollections() {}
+ 
++    /**
++     * Returns an iterator that has no elements.  More precisely,
++     *
++     * <ul>
++     * <li>{@link Iterator#hasNext hasNext} always returns {@code
++     * false}.</li>
++     * <li>{@link Iterator#next next} always throws {@link
++     * NoSuchElementException}.</li>
++     * <li>{@link Iterator#remove remove} always throws {@link
++     * IllegalStateException}.</li>
++     * </ul>
++     *
++     * <p>Implementations of this method are permitted, but not
++     * required, to return the same object from multiple invocations.
++     *
++     * @param <T> type of elements, if there were any, in the iterator
++     * @return an empty iterator
++     * @since 1.7
++     */
++    @SuppressWarnings("unchecked")
++    public static <T> Iterator<T> emptyIterator() {
++        return (Iterator<T>) EmptyIterator.EMPTY_ITERATOR;
++    }
++
++    private static class EmptyIterator<E> implements Iterator<E> {
++        static final EmptyIterator<Object> EMPTY_ITERATOR
++            = new EmptyIterator<>();
++
++        public boolean hasNext() { return false; }
++        public E next() { throw new NoSuchElementException(); }
++        public void remove() { throw new IllegalStateException(); }
++        @Override
++        public void forEachRemaining(Consumer<? super E> action) {
++            Objects.requireNonNull(action);
++        }
++    }
++
+     public static <T> Collection<T> synchronizedCollection(Collection<T> c) {
+         return new SynchronizedCollection<>(c);
+     }

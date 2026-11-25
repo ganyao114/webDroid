@@ -19,7 +19,7 @@ const provenanceName = 'upstream_provenance.json';
 const robotoSource = join(WORKTREE, 'third_party/aosp17/external/roboto-fonts');
 const shellFiles = ['index.html', 'launcher.css', 'launcher_playground.mjs', 'runtime.mjs', 'elf_inspector.mjs'];
 const launcherFiles = ['abi_helpers.mjs', 'assets.mjs', 'foreground_apk.mjs', 'foreground_java_apk.mjs',
-  'launcher_host.mjs', 'scene_labels.mjs'];
+  'foreground_worker_apk.mjs', 'foreground_worker.mjs', 'launcher_host.mjs', 'scene_labels.mjs'];
 const sfFiles = ['abi', 'atlas_cache', 'backend_common', 'compositor', 'display_list', 'input_ime',
   'mediacodec_bridge', 'shaders', 'webgl2_backend', 'webgpu_backend', 'webview_iframe'];
 

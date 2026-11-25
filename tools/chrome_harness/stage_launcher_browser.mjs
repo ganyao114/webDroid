@@ -3,7 +3,6 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { defaultWasmBuild, stageM9Browser } from '../../tests/m9_launcher3_chrome_e2e/stage_browser.mjs';
-import { WORKTREE } from './serve.mjs';
 
 export async function stageLauncherBrowser(root, wasmBuild = defaultWasmBuild) {
   await stageM9Browser(root, { wasmBuild });
@@ -12,8 +11,6 @@ export async function stageLauncherBrowser(root, wasmBuild = defaultWasmBuild) {
       copyFile(join(wasmBuild, name), join(root, 'build', name))),
     ...['hybrid_art_ndk.apk', 'hybrid_art_ndk_arm32.apk'].map(name =>
       copyFile(join(wasmBuild, 'tests/m17_hybrid_art_ndk', name), join(root, 'build', name))),
-    ...['foreground_worker.mjs', 'foreground_worker_apk.mjs'].map(name =>
-      copyFile(join(WORKTREE, 'web/launcher', name), join(root, 'web/launcher', name))),
   ]);
 }
 

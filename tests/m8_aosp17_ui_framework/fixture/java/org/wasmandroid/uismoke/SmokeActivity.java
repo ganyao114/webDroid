@@ -77,11 +77,14 @@ import android.widget.TextView;
 import android.window.BackEvent;
 import android.window.BackMotionEvent;
 import com.android.launcher3.fixture.TileView;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.lang.ref.Reference;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.net.URL;
 import java.net.URISyntaxException;
+import java.net.URLEncoder;
 import java.util.AbstractCollection;
 import java.util.AbstractList;
 import java.util.ArrayList;
@@ -123,6 +126,12 @@ public final class SmokeActivity extends Activity {
     private static SmokeActivity active;
     private static int lifecycle;
     private static boolean shutdownHookRan;
+    @Retention(RetentionPolicy.RUNTIME)
+    public @interface FieldLabel {
+        String value();
+        int order() default 1;
+    }
+    @FieldLabel("reflected")
     private static final int REFLECTED_VALUE = 17;
     private static final Object LEGACY_FIELD = new Object();
     private static int providerOrder, providerQueries;
@@ -1015,6 +1024,12 @@ public final class SmokeActivity extends Activity {
         if (!Pattern.compile("[^\\p{Alnum}]").matcher("a1_b❤").replaceAll("").equals("a1b")) return 0;
         Pattern intersection = Pattern.compile("[a-c[x-z]&&[^b]]+");
         if (!intersection.matcher("acxyz").matches() || intersection.matcher("ab").matches()) return 0;
+        var parameters = Pattern.compile("(?<=(^|&|\\?)__biz=)([^&]*)(?=&|$)")
+                .matcher("__biz=first&not__biz=ignored&__biz=last");
+        if (!parameters.find() || parameters.start() != 6 || !parameters.group(2).equals("first")) return 0;
+        if (!parameters.find() || !parameters.group(1).equals("&") || !parameters.group().equals("last")
+                || parameters.find()) return 0;
+        if (!"ab ab".replaceFirst("(?<letter>a)b", "${letter}").equals("a ab")) return 0;
         return letters.equals("12[abc]34") && words.length == 2 && words[1].equals("words") ? 1 : 0;
     }
     public static int verifyLegacyTime() {
@@ -1024,7 +1039,17 @@ public final class SmokeActivity extends Activity {
                 && time.minute == 30 && time.gmtoff == 19_800L && time.toMillis(false) == 0L ? 1 : 0;
     }
     private static final class StringList extends java.util.ArrayList<String> {}
+    private static final class ClassMembers {
+        public static final class Visible {}
+        private static final class Hidden {}
+        private static final Object ANONYMOUS = new Object() {};
+    }
     public static int verifyGenericSuperclass() {
+        var members = java.util.Arrays.asList(ClassMembers.class.getDeclaredClasses());
+        if (members.size() != 2 || !members.contains(ClassMembers.Visible.class)
+                || !members.contains(ClassMembers.Hidden.class) || int[].class.getDeclaredClasses().length != 0) {
+            return 0;
+        }
         var type = StringList.class.getGenericSuperclass();
         return type instanceof java.lang.reflect.ParameterizedType generic
                 && generic.getRawType() == java.util.ArrayList.class
@@ -1034,6 +1059,12 @@ public final class SmokeActivity extends Activity {
         var field = SmokeActivity.class.getDeclaredField("REFLECTED_VALUE");
         field.setAccessible(true);
         if (field.getType() != int.class || field.getLong(null) != 17 || !field.getName().equals("REFLECTED_VALUE")) {
+            return 0;
+        }
+        var label = field.getAnnotation(FieldLabel.class);
+        var declared = field.getDeclaredAnnotations();
+        if (!field.isAnnotationPresent(FieldLabel.class) || label == null || !"reflected".equals(label.value())
+                || label.order() != 1 || declared.length != 1 || declared[0].annotationType() != FieldLabel.class) {
             return 0;
         }
         try {
@@ -1139,6 +1170,7 @@ public final class SmokeActivity extends Activity {
                 .getJSONObject(1).getString("name")) ? 1 : 0;
     }
     public static int verifyEmbeddedUrl() throws IOException {
+        if (!"WeChat+%E8%AF%AD".equals(URLEncoder.encode("WeChat 语"))) return 0;
         URL base = new URL("https://example.test/alpha/beta");
         URL resolved = new URL(base, "../page?q=1#fragment");
         if (!"https://example.test/page?q=1#fragment".equals(resolved.toExternalForm())
@@ -1150,7 +1182,7 @@ public final class SmokeActivity extends Activity {
             return 1;
         }
     }
-    public static int verifyExecutorAndRegisterShutdownHook() throws InterruptedException {
+    public static int verifyExecutorAndRegisterShutdownHook() throws Exception {
         var executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>(),
                 Executors.defaultThreadFactory(), new ThreadPoolExecutor.DiscardPolicy());
         executor.setMaximumPoolSize(2);
@@ -1158,16 +1190,23 @@ public final class SmokeActivity extends Activity {
         AtomicInteger ran = new AtomicInteger();
         AtomicInteger rejected = new AtomicInteger();
         executor.setRejectedExecutionHandler((task, pool) -> rejected.incrementAndGet());
-        executor.execute(ran::incrementAndGet);
+        Thread submittingThread = Thread.currentThread();
+        executor.execute(() -> {
+            if (Thread.currentThread() != submittingThread) ran.incrementAndGet();
+        });
+        var worker = executor.submit(Thread::currentThread);
+        if (ran.get() != 0 || worker.isDone() || worker.get() == submittingThread) return 0;
+        var result = executor.submit(() -> 42);
         executor.shutdown();
         executor.execute(ran::incrementAndGet);
+        if (result.get(1, TimeUnit.SECONDS) != 42 || !executor.awaitTermination(1, TimeUnit.SECONDS)) return 0;
         Thread hook = new Thread(() -> shutdownHookRan = "smoke-hook".equals(Thread.currentThread().getName()),
                 "smoke-hook");
         Runtime runtime = Runtime.getRuntime();
         runtime.addShutdownHook(hook);
         if (!runtime.removeShutdownHook(hook) || runtime.removeShutdownHook(hook)) return 0;
         runtime.addShutdownHook(hook);
-        return ran.get() == 1 && rejected.get() == 1 && executor.awaitTermination(0, TimeUnit.SECONDS) ? 1 : 0;
+        return ran.get() == 1 && rejected.get() == 1 ? 1 : 0;
     }
     public static boolean shutdownHookRan() { return shutdownHookRan; }
     public static int lifecycle() { return lifecycle; }

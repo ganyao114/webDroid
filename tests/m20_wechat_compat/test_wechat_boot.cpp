@@ -4,11 +4,14 @@
 #include "runtime_internal.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <initializer_list>
 #include <iostream>
 #include <iterator>
 #include <map>
@@ -27,6 +30,20 @@ constexpr auto kLauncher = "Lcom/tencent/mm/ui/LauncherUI;";
 constexpr auto kWelcome = "Lcom/tencent/mm/plugin/account/ui/WelcomeActivity;";
 constexpr auto kLanguage = "Lcom/tencent/mm/plugin/setting/ui/setting/SettingsLanguageUI;";
 constexpr auto kLogin = "Lcom/tencent/mm/plugin/account/ui/MobileInputUI;";
+constexpr auto kCountry = "Lcom/tencent/mm/ui/tools/NewCountryCodeUI;";
+constexpr auto kPassword = "Lcom/tencent/mm/plugin/account/ui/LoginUI;";
+constexpr auto kFacebook = "Lcom/tencent/mm/plugin/account/ui/MMFBLoginUI;";
+constexpr auto kSignup = "Lcom/tencent/mm/plugin/account/ui/RegByMobileRegAIOUI;";
+constexpr auto kHelp = "Lcom/tencent/mm/plugin/webview/ui/tools/MMWebViewUI;";
+constexpr auto kCountryChina = "中国大陆（+86）";
+constexpr auto kPhoneHint = "Enter phone number";
+constexpr auto kAccountHint = "Enter WeChat ID/QQ/email";
+constexpr auto kAccountOption = "Log in with WeChat ID, QQ, or email";
+constexpr auto kFacebookOption = "Log in with  Facebook  Account";
+constexpr auto kRegistrationTerms = "《软件许可及服务协";
+constexpr auto kCountryTitle = "选择国家和地区";
+constexpr auto kFirstCountry = "Afghanistan";
+constexpr auto kCountryCanada = "Canada（+1）";
 constexpr auto kReport = "Lcom/tencent/mm/plugin/report/service/o0;";
 constexpr auto kHttpClient = "Lorg/apache/http/impl/client/DefaultHttpClient;";
 constexpr auto kMatrix = "Lcom/tencent/matrix/hook/jnihook/JniHookJni;";
@@ -244,6 +261,8 @@ struct FrameEvidence {
     uint32_t sequence = 0;
     size_t draws = 0;
     size_t bitmap_pixels = 0;
+    size_t webviews = 0;
+    bool modal = false;
     std::map<std::string, Label, std::less<>> labels;
     std::set<uint32_t> rounded_fills;
 
@@ -271,8 +290,10 @@ FrameEvidence ReadFrame(const std::filesystem::path& capture = {}) {
     const auto* layers = wa_sf_frame_layers(frame.get());
     for (uint32_t i = 0; i < frame->layer_count; ++i) {
         const auto& layer = layers[i];
-        if (!(layer.desc.flags & WA_SF_VISIBLE) || layer.desc.alpha <= 0 ||
-            layer.desc.surface_kind != WA_SF_SURFACE_DISPLAY_LIST) continue;
+        if (!(layer.desc.flags & WA_SF_VISIBLE) || layer.desc.alpha <= 0) continue;
+        evidence.modal |= (layer.desc.flags & WA_SF_INPUT_MODAL) != 0;
+        if (layer.desc.surface_kind == WA_SF_SURFACE_IFRAME_WEBVIEW) ++evidence.webviews;
+        if (layer.desc.surface_kind != WA_SF_SURFACE_DISPLAY_LIST) continue;
         const auto* list = wa_sf_frame_list(frame.get(), &layer);
         Require(list || !layer.list_size, "Missing display list");
         struct Transform { float x, y, sx, sy; };
@@ -368,7 +389,9 @@ FrameEvidence ReadFrame(const std::filesystem::path& capture = {}) {
 void PrintFrame(const FrameEvidence& evidence, int welcome_frames) {
     std::cout << "{\"event\":\"surface_frame\",\"sequence\":" << evidence.sequence
               << ",\"welcome_frames\":" << welcome_frames << ",\"draw_commands\":" << evidence.draws
-              << ",\"non_blank_bitmap_pixels\":" << evidence.bitmap_pixels << ",\"drawn_text\":[";
+              << ",\"non_blank_bitmap_pixels\":" << evidence.bitmap_pixels
+              << ",\"webviews\":" << evidence.webviews << ",\"modal\":" << (evidence.modal ? "true" : "false")
+              << ",\"drawn_text\":[";
     for (auto label = evidence.labels.begin(); label != evidence.labels.end(); ++label) {
         if (label != evidence.labels.begin()) std::cout << ',';
         std::cout << JsonString(label->first);
@@ -376,16 +399,19 @@ void PrintFrame(const FrameEvidence& evidence, int welcome_frames) {
     std::cout << "]}\n";
 }
 
-void Tap(const FrameEvidence& frame, std::string_view label, int ticks) {
-    const auto found = frame.labels.find(label);
-    Require(found != frame.labels.end(), "Missing tap target " + std::string(label));
-    const auto& target = found->second;
+void TapAt(float x, float y, int ticks, std::string_view operation) {
     auto* ring = wa_sf_input(wa_system_app_sf_ctx());
     for (auto action : {WA_ACTION_DOWN, WA_ACTION_UP}) {
         const wa_input_event_t event{.kind = WA_INPUT_MOTION, .action = action,
-            .event_time_ms = ticks * kFrameNanos / 1e6 + 2 * action, .x = target.x, .y = target.y};
-        Check(wa_input_push(ring, &event), label);
+            .event_time_ms = ticks * kFrameNanos / 1e6 + 2 * action, .x = x, .y = y};
+        Check(wa_input_push(ring, &event), operation);
     }
+}
+
+void Tap(const FrameEvidence& frame, std::string_view label, int ticks) {
+    const auto found = frame.labels.find(label);
+    Require(found != frame.labels.end(), "Missing tap target " + std::string(label));
+    TapAt(found->second.x, found->second.y, ticks, label);
 }
 
 void Advance(int& ticks, int count, std::string_view operation) {
@@ -407,6 +433,45 @@ std::string ResumedActivity() {
     return observed.data();
 }
 
+FrameEvidence ExpectScreen(int& ticks, std::string_view operation, std::string_view activity,
+                           std::initializer_list<std::string_view> labels, int frames = 24) {
+    Advance(ticks, frames, operation);
+    const auto current = ResumedActivity();
+    const auto frame = ReadFrame();
+    PrintFrame(frame, 0);
+    Require(current == activity && hybrid_test::State().contains("\"finishing\":false") && frame.draws,
+            std::string(operation) + " expected " + std::string(activity) + ", got " + current);
+    for (const auto label : labels) {
+        Require(frame.labels.contains(label), std::string(operation) + " did not render " + std::string(label));
+    }
+    return frame;
+}
+
+FrameEvidence BackTo(int& ticks, std::string_view activity, std::initializer_list<std::string_view> labels) {
+    const auto status = wa_system_app_send_back();
+    Check(status, "Back in WeChat");
+    Require(status == 1, "Back closed the WeChat foreground activity");
+    return ExpectScreen(ticks, "Back", activity, labels);
+}
+
+FrameEvidence TapTo(const FrameEvidence& frame, std::string_view label, int& ticks,
+                    std::string_view activity, std::initializer_list<std::string_view> labels, int frames = 24) {
+    Tap(frame, label, ticks);
+    return ExpectScreen(ticks, label, activity, labels, frames);
+}
+
+void SwipeUp(float x, float top, float bottom, int& ticks) {
+    constexpr int steps = 10;
+    for (int step = 0; step <= steps + 1; ++step) {
+        const auto action = step == 0 ? WA_ACTION_DOWN : step > steps ? WA_ACTION_UP : WA_ACTION_MOVE;
+        const float y = bottom + (top - bottom) * std::min(step, steps) / steps;
+        const wa_input_event_t event{.kind = WA_INPUT_MOTION, .action = static_cast<uint32_t>(action),
+            .event_time_ms = ticks * kFrameNanos / 1e6, .x = x, .y = y};
+        Check(wa_input_push(wa_sf_input(wa_system_app_sf_ctx()), &event), "Swipe the country list");
+        Advance(ticks, 1, "Scroll the country list");
+    }
+}
+
 std::string FocusedEditorText() {
     std::array<char, 256> observed{};
     Check(wa::system::RunForegroundProbe([](Vm& vm, Object* activity) {
@@ -414,23 +479,28 @@ std::string FocusedEditorText() {
         auto* focused = roots.Hold(vm.CallVirtual(activity, "getCurrentFocus", "()Landroid/view/View;").ref());
         const auto* type = focused ? focused->type : nullptr;
         while (type && type->descriptor != "Landroid/widget/EditText;") type = type->super;
-        Require(type && vm.CallVirtual(focused, "isFocused", "()Z").i(), "The login editor did not take focus");
+        Require(type && vm.CallVirtual(focused, "isFocused", "()Z").i(), "The editor did not take focus");
         auto* editable = roots.Hold(vm.CallVirtual(focused, "getText", "()Landroid/text/Editable;").ref());
         return vm.StringUtf8(vm.CallVirtual(editable, "toString", "()Ljava/lang/String;").ref());
-    }, observed.data(), observed.size()), "Read the focused login editor");
+    }, observed.data(), observed.size()), "Read the focused editor");
     return observed.data();
+}
+
+void SendText(std::string_view text, int& ticks, uint32_t action = WA_IME_COMMIT) {
+    wa_input_event_t input{.kind = WA_INPUT_IME, .action = action,
+        .text_len = static_cast<uint32_t>(text.size()), .event_time_ms = ticks * kFrameNanos / 1e6};
+    Require(text.size() <= sizeof(input.text), "IME text exceeds input ring capacity");
+    std::ranges::copy(text, input.text);
+    Check(wa_input_push(wa_sf_input(wa_system_app_sf_ctx()), &input), "Send WeChat IME input");
+    Advance(ticks, 6, "Draw the entered text");
 }
 
 void VerifyPhoneInput(const FrameEvidence& frame, std::string_view hint, int& ticks) {
     Tap(frame, hint, ticks);
     Advance(ticks, 6, "Focus WeChat's phone number field");
     Require(FocusedEditorText().empty(), "WeChat's phone number field starts empty");
-    constexpr std::string_view number = "2025550123";
-    wa_input_event_t input{.kind = WA_INPUT_IME, .action = WA_IME_COMMIT,
-        .text_len = number.size(), .event_time_ms = ticks * kFrameNanos / 1e6};
-    std::ranges::copy(number, input.text);
-    Check(wa_input_push(wa_sf_input(wa_system_app_sf_ctx()), &input), "Send phone digits to the login editor");
-    Advance(ticks, 6, "Draw the entered phone number");
+    constexpr std::string_view number = "13000000000";
+    SendText(number, ticks);
     const auto digits = [](std::string_view value) {
         std::string result;
         std::ranges::copy_if(value, std::back_inserter(result), [](char c) { return c >= '0' && c <= '9'; });
@@ -441,6 +511,78 @@ void VerifyPhoneInput(const FrameEvidence& frame, std::string_view hint, int& ti
     Require(std::ranges::any_of(typed_frame.labels, [&](const auto& label) { return digits(label.first) == number; }),
             "WeChat did not render the typed phone number");
     std::cout << "{\"event\":\"login_input\",\"digits\":" << number.size() << "}\n";
+}
+
+void VerifyComposingInput(const FrameEvidence& frame, std::string_view hint, int& ticks) {
+    Tap(frame, hint, ticks);
+    Advance(ticks, 6, "Focus the text editor");
+    Require(FocusedEditorText().empty(), "The text editor starts empty");
+    SendText("phase", ticks, WA_IME_COMPOSING);
+    Require(FocusedEditorText() == "phase", "WeChat did not display the composing text");
+    SendText("phase11_test", ticks);
+    Require(FocusedEditorText() == "phase11_test", "WeChat did not commit the text");
+    Require(ReadFrame().labels.contains("phase11_test"), "WeChat did not draw the committed text");
+}
+
+FrameEvidence VerifyWebViewBack(const FrameEvidence& from, std::string_view label, int& ticks,
+                                std::string_view parent, std::initializer_list<std::string_view> labels) {
+    auto* requests = wa_sf_webview_requests(wa_system_app_sf_ctx());
+    std::atomic_ref read(requests->header.read_index);
+    const std::atomic_ref write(requests->header.write_index);
+    const auto consume = [&](auto visit) {
+        const auto end = write.load(std::memory_order_acquire);
+        for (auto i = read.load(std::memory_order_relaxed); i != end; ++i) {
+            visit(requests->entries[i % WA_WEBVIEW_CAPACITY]);
+        }
+        read.store(end, std::memory_order_release);
+    };
+    const auto web = TapTo(from, label, ticks, kHelp, {}, 72);
+    uint32_t opened = 0;
+    consume([&](const wa_webview_request_t& request) {
+        if (request.action != WA_WEBVIEW_OPEN) return;
+        const std::string_view url(request.text, request.text_len);
+        if (url.starts_with("https://") || url.starts_with("http://")) opened = request.webview_id;
+    });
+    Require(opened && web.webviews, std::string(label) + " did not present a WebView navigation");
+    auto restored = BackTo(ticks, parent, labels);
+    bool closed = false;
+    consume([&](const wa_webview_request_t& request) {
+        closed |= request.action == WA_WEBVIEW_CLOSE && request.webview_id == opened;
+    });
+    Require(closed && !restored.webviews, std::string(label) + " did not close the WebView on Back");
+    return restored;
+}
+
+FrameEvidence VerifyCountryPicker(const FrameEvidence& login, int& ticks) {
+    const std::initializer_list<std::string_view> country_labels{kCountryTitle, "Search", kFirstCountry, "+93"};
+    auto country = TapTo(login, kCountryChina, ticks, kCountry, country_labels);
+    const auto first_row = country.labels.at(kFirstCountry).y;
+    SwipeUp(160, 275, 650, ticks);
+    country = ExpectScreen(ticks, "Scroll Country/Region", kCountry, {kCountryTitle});
+    const auto first = country.labels.find(kFirstCountry);
+    Require(first == country.labels.end() || first->second.y != first_row, "The country list did not scroll");
+    const auto cancelled = BackTo(ticks, kLogin, {kCountryChina, kPhoneHint});
+
+    country = TapTo(cancelled, kCountryChina, ticks, kCountry, country_labels);
+    TapTo(country, "Search", ticks, kCountry, {"Cancel"});
+    SendText("canada", ticks);
+    const auto results = ExpectScreen(ticks, "Search for Canada", kCountry, {"canada", "Canada", "+1"});
+    Require(FocusedEditorText() == "canada" && !results.labels.contains(kFirstCountry),
+            "Search did not filter the country list");
+    const auto selected = TapTo(results, "Canada", ticks, kLogin, {kCountryCanada, kPhoneHint});
+    TapTo(selected, kCountryCanada, ticks, kCountry, {kCountryTitle, "Search"});
+    return BackTo(ticks, kLogin, {kCountryCanada, kPhoneHint});
+}
+
+void VerifyMobileLoginSteps(const FrameEvidence& login, int& ticks) {
+    VerifyPhoneInput(login, kPhoneHint, ticks);
+    const std::initializer_list<std::string_view> password_labels{
+        "Enter WeChat password", "Log in via SMS code", "+86 130 0000 0000"};
+    const auto password = TapTo(ReadFrame(), "Accept and Continue", ticks, kLogin, password_labels);
+    const auto sms = TapTo(password, "Log in via SMS code", ticks, kLogin,
+                           {"SMS Code", "Get SMS", "Log in via Password", "+86 130 0000 0000"});
+    TapTo(sms, "Log in via Password", ticks, kLogin, password_labels);
+    BackTo(ticks, kLogin, {"Accept and Continue", "130 0000 0000"});
 }
 
 std::string_view Phase(const std::string& state) {
@@ -715,33 +857,76 @@ int main(int argc, char** argv) try {
         std::cout << "{\"event\":\"reporter_returned\"}\n";
     }), "Verify the delayed WeChat report task");
     capture("welcome.waf");
-    Tap(frame, "语言", ticks);
-    Advance(ticks, 18, "Open WeChat's language selector");
-    const auto language = ReadFrame();
-    PrintFrame(language, 0);
-    Require(ResumedActivity() == kLanguage && language.bitmap_pixels && language.labels.contains("English") &&
-            language.labels.contains("简体中文"), "WeChat did not render the language options");
+    const std::initializer_list<std::string_view> welcome_labels{"Log In", "Sign Up", "语言"};
+    const std::initializer_list<std::string_view> language_labels{"English", "简体中文", "保存"};
+    const std::initializer_list<std::string_view> login_labels{
+        "Log In Via Mobile Number", "Mobile Number", kPhoneHint, "Other Login Options", "Accept and Continue"};
+    const std::initializer_list<std::string_view> other_options{kAccountOption, kFacebookOption, "Cancel"};
+    const std::initializer_list<std::string_view> more_options{
+        "Help Center", "Go to Security Center", "Feedback", "Sign Up for a New Account", "Cancel"};
+    const std::initializer_list<std::string_view> signup_options{"Sign up via Mobile", "Sign up via  Facebook ", "Cancel"};
+    const std::initializer_list<std::string_view> signup_labels{
+        "Name", "Enter alias", "Mobile Number", kPhoneHint, "Set password", "Sign up via phone number"};
+    auto language = TapTo(frame, "语言", ticks, kLanguage, language_labels);
     capture("language.waf");
-    Check(wa_system_app_send_back(), "Return from the language selector");
-    Advance(ticks, 18, "Draw WelcomeActivity after language selector");
-    frame = ReadFrame();
-    Require(ResumedActivity() == kWelcome && frame.ShowsWelcome(),
-            "WeChat did not return to WelcomeActivity after the language selector");
-    Tap(frame, "Log In", ticks);
-    Advance(ticks, 25, "Open WeChat's login activity");
-    const auto login = ReadFrame();
-    PrintFrame(login, 0);
-    Require(ResumedActivity() == kLogin, "WeChat did not reach MobileInputUI from Log In");
-    constexpr auto phone_hint = "Enter phone number";
-    Require(login.sequence > frame.sequence && login.bitmap_pixels && login.labels.contains("Log In Via Mobile Number") &&
-            login.labels.contains("Mobile Number") && login.labels.contains(phone_hint) &&
-            login.labels.contains("Other Login Options"), "MobileInputUI did not draw the login form");
+    language = TapTo(language, "English", ticks, kLanguage, language_labels, 6);
+    frame = TapTo(language, "保存", ticks, kWelcome, welcome_labels);
+    language = TapTo(frame, "语言", ticks, kLanguage, {"English", "简体中文"});
+    language = TapTo(language, "简体中文", ticks, kLanguage, {"English", "简体中文"}, 6);
+    frame = BackTo(ticks, kWelcome, welcome_labels);
+
+    auto signup_menu = TapTo(frame, "Sign Up", ticks, kWelcome, signup_options);
+    Require(signup_menu.modal, "Sign Up did not open a modal sheet");
+    frame = TapTo(signup_menu, "Cancel", ticks, kWelcome, welcome_labels);
+    Require(!frame.modal, "Cancel did not dismiss Sign Up");
+    signup_menu = TapTo(frame, "Sign Up", ticks, kWelcome, signup_options);
+    frame = TapTo(signup_menu, "Sign up via  Facebook ", ticks, kWelcome, welcome_labels);
+    Require(!frame.modal, "Facebook Sign Up did not return to the welcome screen");
+    signup_menu = TapTo(frame, "Sign Up", ticks, kWelcome, signup_options);
+    const auto signup = TapTo(signup_menu, "Sign up via Mobile", ticks, kSignup, signup_labels);
+    capture("signup.waf");
+    VerifyComposingInput(signup, "Enter alias", ticks);
+    VerifyPhoneInput(ReadFrame(), kPhoneHint, ticks);
+    VerifyWebViewBack(ReadFrame(), kRegistrationTerms, ticks, kSignup, {"Sign up via phone number", "130 0000 0000"});
+    frame = BackTo(ticks, kWelcome, welcome_labels);
+
+    auto login = TapTo(frame, "Log In", ticks, kLogin, login_labels);
     capture("login.waf");
-    VerifyPhoneInput(login, phone_hint, ticks);
-    Check(wa_system_app_send_back(), "Return from WeChat's login activity");
-    Advance(ticks, 18, "Draw WelcomeActivity after login");
-    Require(ResumedActivity() == kWelcome && ReadFrame().ShowsWelcome(),
-            "WeChat did not return to WelcomeActivity after login");
+    auto options = TapTo(login, "Other Login Options", ticks, kLogin, other_options);
+    Require(options.modal, "Other Login Options did not open a modal sheet");
+    login = TapTo(options, "Cancel", ticks, kLogin, login_labels);
+    Require(!login.modal, "Cancel did not dismiss Other Login Options");
+    options = TapTo(login, "Other Login Options", ticks, kLogin, other_options);
+    TapTo(options, kFacebookOption, ticks, kFacebook, {"Link Facebook Account"});
+    login = BackTo(ticks, kLogin, login_labels);
+
+    auto more = TapTo(login, "More", ticks, kLogin, more_options);
+    Require(more.modal, "More did not open a modal sheet");
+    login = BackTo(ticks, kLogin, login_labels);
+    Require(!login.modal && !login.labels.contains("Help Center"), "Back did not dismiss More");
+    login = VerifyWebViewBack(login, "Unable to Log In?", ticks, kLogin, login_labels);
+    for (const auto label : {"Help Center", "Go to Security Center", "Feedback"}) {
+        more = TapTo(login, "More", ticks, kLogin, more_options);
+        login = VerifyWebViewBack(more, label, ticks, kLogin, login_labels);
+    }
+    more = TapTo(login, "More", ticks, kLogin, more_options);
+    TapTo(more, "Sign Up for a New Account", ticks, kSignup, signup_labels);
+    login = BackTo(ticks, kLogin, login_labels);
+
+    options = TapTo(login, "Other Login Options", ticks, kLogin, other_options);
+    const auto account = TapTo(options, kAccountOption, ticks, kPassword, {"Account", kAccountHint, "Password"});
+    VerifyComposingInput(account, kAccountHint, ticks);
+    frame = BackTo(ticks, kWelcome, welcome_labels);
+
+    login = TapTo(frame, "Log In", ticks, kLogin, login_labels);
+    VerifyMobileLoginSteps(login, ticks);
+    frame = BackTo(ticks, kWelcome, welcome_labels);
+
+    login = TapTo(frame, "Log In", ticks, kLogin, login_labels);
+    VerifyCountryPicker(login, ticks);
+    // Center of the top-left close control in the 480x800 test viewport.
+    TapAt(29, 58, ticks, "Close MobileInputUI");
+    frame = ExpectScreen(ticks, "Close MobileInputUI", kWelcome, welcome_labels);
     return 0;
 } catch (const std::exception& error) {
     std::cerr << "{\"event\":\"probe_error\",\"error\":" << JsonString(error.what()) << "}\n";

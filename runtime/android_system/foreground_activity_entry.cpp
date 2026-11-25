@@ -171,6 +171,7 @@ using GlobalRef = std::unique_ptr<_jobject, DeleteGlobalRef>;
 struct StoppedActivity {
     GlobalRef activity, root;
     int32_t request_code;
+    std::string name;
 };
 
 std::string WebViewFilePath(std::string_view url, std::string_view package) {
@@ -227,7 +228,7 @@ struct Session {
         return linker.FindField(linker.Resolve(kUiRuntime), name, signature, true).value;
     }
 
-    Value Member(Object* object, std::string_view name, std::string_view signature) {
+    Value& Member(Object* object, std::string_view name, std::string_view signature) {
         auto& linker = Jni().Vm().linker;
         return object->fields[linker.FindField(*object->type, name, signature, false).slot];
     }
@@ -237,6 +238,7 @@ struct Session {
     void SetActive(Object* activity, Object* root, std::string name) {
         RuntimeField("current", kActivity) = Value::Ref(activity);
         RuntimeField("root", kViewRoot) = Value::Ref(root);
+        Member(activity, "mEmbeddedHasParent", "Z") = Value::Int(!activity_stack.empty());
         auto* base = activity_stack.empty() ? activity : Jni().Read(activity_stack.front().activity.get());
         vm.CallStatic("Landroid/app/ActivityThread;", "updateEmbeddedTask",
             "(Landroid/app/Activity;Landroid/app/Activity;I)V",
@@ -260,15 +262,39 @@ struct Session {
         }
     }
 
-    void ApplyActivityRequest() {
-        if (!vm.HasClass("Landroid/app/Activity$EmbeddedLaunch;")) return;
+    bool FinishRequested(Object* activity) {
+        return Member(activity, "mEmbeddedFinishPending", "Z").i() || Member(activity, "mFinished", "Z").i();
+    }
+
+    void RemoveFinishedParents() {
+        const auto removed = std::erase_if(activity_stack, [&](const StoppedActivity& entry) {
+            auto* activity = Jni().Read(entry.activity.get());
+            if (!FinishRequested(activity)) return false;
+            DestroyStopped(activity, Jni().Read(entry.root.get()));
+            return true;
+        });
+        if (!removed) return;
+        if (!activity_stack.empty()) {
+            Member(Jni().Read(activity_stack.front().activity.get()), "mEmbeddedHasParent", "Z") = Value::Int(0);
+        }
+        if (auto* activity = Activity()) {
+            SetActive(activity, RuntimeField("root", kViewRoot).ref(), activity_class);
+        }
+    }
+
+    void DeliverIntent(Object* activity, Object* intent) {
+        vm.CallVirtual(activity, "performNewIntent", "(Landroid/content/Intent;)V", std::array{Value::Ref(intent)});
+        if (!FinishRequested(activity)) ui.ResumeActivity(vm);
+    }
+
+    bool ApplyActivityRequest() {
         ScopedHandleScope roots(vm);
         auto* current = roots.Hold(Activity());
-        if (!current) return;
+        if (!current) return false;
         auto* request = roots.Hold(vm.CallVirtual(current, "pollEmbeddedLaunch",
             "()Landroid/app/Activity$EmbeddedLaunch;").ref());
         const bool finish = Member(current, "mEmbeddedFinishPending", "Z").i() != 0;
-        if (!request && !finish) return;
+        if (!request && !finish) return false;
 
         auto* old_root = roots.Hold(RuntimeField("root", kViewRoot).ref());
         if (request) {
@@ -277,34 +303,81 @@ struct Session {
             auto* component = roots.Hold(vm.CallVirtual(intent, "getComponent",
                 "()Landroid/content/ComponentName;").ref());
             auto* name = roots.Hold(vm.CallVirtual(component, "getClassName", "()Ljava/lang/String;").ref());
+            auto class_name = vm.StringUtf8(name);
+            const auto& package = catalog.at(package_name);
+            const auto entry = std::ranges::find(package.manifest.activities, class_name, &ApkComponent::name);
+            const auto launch_mode = entry == package.manifest.activities.end() ? 0 : entry->launch_mode;
+            const auto flags = vm.CallVirtual(intent, "getFlags", "()I").i();
+            constexpr int32_t single_top_flag = 0x20000000;
+            constexpr int32_t clear_top_flag = 0x04000000;
+            const bool reuse = launch_mode != 0 || (flags & single_top_flag);
+            const bool clear_top = launch_mode >= 2 || (flags & clear_top_flag);
+            if (class_name == activity_class && reuse && !finish) {
+                DeliverIntent(current, intent);
+                return true;
+            }
+
+            bool cleared_current = false;
+            if (clear_top) {
+                const auto target = std::find_if(activity_stack.rbegin(), activity_stack.rend(),
+                    [&](const StoppedActivity& stopped) { return stopped.name == class_name; });
+                const bool found = target != activity_stack.rend();
+                if (found || class_name == activity_class) {
+                    const auto keep = found ? static_cast<size_t>(target.base() - activity_stack.begin())
+                                            : activity_stack.size();
+                    ui.StopActivity(vm);
+                    DestroyStopped(current, old_root);
+                    cleared_current = true;
+                    while (activity_stack.size() > keep) {
+                        auto removed = std::move(activity_stack.back());
+                        activity_stack.pop_back();
+                        DestroyStopped(Jni().Read(removed.activity.get()), Jni().Read(removed.root.get()));
+                    }
+                    if (found) {
+                        auto match = std::move(activity_stack.back());
+                        activity_stack.pop_back();
+                        auto* previous = Jni().Read(match.activity.get());
+                        auto* previous_root = Jni().Read(match.root.get());
+                        if (reuse) {
+                            SetActive(previous, previous_root, std::move(class_name));
+                            DeliverIntent(previous, intent);
+                            return true;
+                        }
+                        DestroyStopped(previous, previous_root);
+                    }
+                }
+            }
             auto* context = roots.Hold(RuntimeField("context", "Landroid/app/UiRuntime$AppContext;").ref());
             auto* resources = roots.Hold(vm.CallVirtual(context, "getResources",
                 "()Landroid/content/res/Resources;").ref());
-            auto* path = roots.Hold(vm.NewString(catalog.at(package_name).mount->path()));
+            auto* path = roots.Hold(vm.NewString(package.mount->path()));
             auto* manifest = roots.Hold(vm.CallStatic(kUiRuntime, "readManifest",
                 "(Landroid/content/res/Resources;Ljava/lang/String;Ljava/lang/String;I)Landroid/app/UiRuntime$Manifest;",
                 std::array{Value::Ref(resources), Value::Ref(path), Value::Ref(name), Value::Int(1)}).ref());
             const auto theme = Member(manifest, "theme", "I");
             auto* next = roots.Hold(vm.CallStatic(kUiRuntime, "nativeCreateActivity",
                 "(Ljava/lang/String;)Landroid/app/Activity;", std::array{Value::Ref(name)}).ref());
-            const bool has_parent = !finish || !activity_stack.empty();
+            const bool has_parent = (!cleared_current && !finish) || !activity_stack.empty();
             auto* root = roots.Hold(vm.CallVirtual(next, "attachEmbeddedRoot",
                 "(Landroid/content/Context;Landroid/content/Intent;IZ)Landroid/view/ViewRootImpl;",
                 std::array{Value::Ref(context), Value::Ref(intent), theme, Value::Int(has_parent)}).ref());
 
-            ui.StopActivity(vm);
-            if (finish) {
-                DestroyStopped(current, old_root);
-            } else {
-                activity_stack.push_back({Keep(current), Keep(old_root), request_code});
+            if (!cleared_current) {
+                ui.StopActivity(vm);
+                if (FinishRequested(current)) DestroyStopped(current, old_root);
+                else activity_stack.push_back({Keep(current), Keep(old_root), request_code, activity_class});
             }
-            SetActive(next, root, vm.StringUtf8(name));
+            SetActive(next, root, std::move(class_name));
             vm.CallVirtual(next, "performCreate", "(Landroid/os/Bundle;)V", std::array{Value{}});
             ui.ResumeActivity(vm);
-            return;
+            return true;
         }
 
-        if (activity_stack.empty()) throw std::logic_error("The finishing activity has no parent");
+        if (activity_stack.empty()) {
+            ui.DestroyActivity(vm);
+            finishing = true;
+            return true;
+        }
         const auto result_code = Member(current, "mResultCode", "I");
         const auto result = roots.Hold(Member(current, "mResultData", kIntent));
         ui.StopActivity(vm);
@@ -312,15 +385,22 @@ struct Session {
         auto parent = std::move(activity_stack.back());
         activity_stack.pop_back();
         auto* previous = Jni().Read(parent.activity.get());
-        auto* component = roots.Hold(vm.CallVirtual(previous, "getComponentName",
-            "()Landroid/content/ComponentName;").ref());
-        const auto name = vm.StringUtf8(vm.CallVirtual(component, "getClassName", "()Ljava/lang/String;").ref());
-        SetActive(previous, Jni().Read(parent.root.get()), name);
+        SetActive(previous, Jni().Read(parent.root.get()), std::move(parent.name));
         if (parent.request_code >= 0) {
             vm.CallVirtual(previous, "onActivityResult", "(IILandroid/content/Intent;)V",
                 std::array{Value::Int(parent.request_code), result_code, result});
         }
         ui.ResumeActivity(vm);
+        return true;
+    }
+
+    bool ApplyActivityRequests() {
+        if (!vm.HasClass("Landroid/app/Activity$EmbeddedLaunch;")) return false;
+        RemoveFinishedParents();
+        for (int count = 0;; ++count) {
+            if (!ApplyActivityRequest()) return count != 0;
+            if (count == 31) throw std::logic_error("Too many foreground activity transitions in one frame");
+        }
     }
 
     std::vector<PackageActivity> Query(const IntentRequest& intent) const {
@@ -411,8 +491,9 @@ struct Session {
 
     int32_t Draw(uint64_t nanos) {
         vm.CollectIfNeeded();
+        bool activity_changed = false;
         if (!frame_pending) {
-            ApplyActivityRequest();
+            activity_changed = ApplyActivityRequests();
             vm.RunReadyThreads();
         }
         vm.SetGcPaused(true);
@@ -437,7 +518,7 @@ struct Session {
         if (!frame_pending) CountCommands();
         // Input is consumed before publishing the frame. Preserve its focus and finish state
         // when the compositor temporarily holds the frame slot we need.
-        if (events || !booted) ObserveActivity();
+        if (events || activity_changed || !booted) ObserveActivity();
         else finishing = finishing || Activity() == nullptr;
         return SurfaceStatus(status);
     }
@@ -1000,7 +1081,7 @@ int32_t wa_system_app_send_back() {
             const Value args[] = {time, Value::Int(action), Value::Int(kBack), Value::Int(0)};
             s.vm.CallStatic(kUiRuntime, "dispatchKey", "(JIII)Z", args);
         }
-        s.ApplyActivityRequest();
+        s.ApplyActivityRequests();
         s.ObserveActivity();
         return s.finishing ? 0 : 1;
     });

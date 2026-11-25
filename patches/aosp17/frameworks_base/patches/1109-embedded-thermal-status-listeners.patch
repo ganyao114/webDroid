@@ -1,0 +1,52 @@
+--- a/frameworks/base/core/java/android/os/PowerManager.java
++++ b/frameworks/base/core/java/android/os/PowerManager.java
+@@ -2000,6 +2000,49 @@
+         void onThermalStatusChanged(@ThermalStatus int status);
+     }
+ 
++
++
++    private final android.util.ArrayMap<OnThermalStatusChangedListener, Object> mThermalStatusListeners =
++            new android.util.ArrayMap<>();
++
++    public void addThermalStatusListener(@NonNull OnThermalStatusChangedListener listener) {
++        addThermalStatusListener(mContext.getMainExecutor(), listener);
++    }
++
++    public void addThermalStatusListener(@NonNull @CallbackExecutor Executor executor,
++            @NonNull OnThermalStatusChangedListener listener) {
++        Objects.requireNonNull(executor);
++        Objects.requireNonNull(listener);
++        Object registration = new Object();
++        synchronized (mThermalStatusListeners) {
++            if (mThermalStatusListeners.containsKey(listener)) {
++                throw new IllegalArgumentException("Thermal status listener already registered");
++            }
++            mThermalStatusListeners.put(listener, registration);
++        }
++        try {
++            executor.execute(() -> {
++                synchronized (mThermalStatusListeners) {
++                    if (mThermalStatusListeners.get(listener) != registration) return;
++                }
++                listener.onThermalStatusChanged(getCurrentThermalStatus());
++            });
++        } catch (RuntimeException error) {
++            synchronized (mThermalStatusListeners) {
++                if (mThermalStatusListeners.get(listener) == registration) mThermalStatusListeners.remove(listener);
++            }
++            throw error;
++        }
++    }
++
++    public void removeThermalStatusListener(@NonNull OnThermalStatusChangedListener listener) {
++        Objects.requireNonNull(listener);
++        synchronized (mThermalStatusListeners) {
++            if (mThermalStatusListeners.remove(listener) == null) {
++                throw new IllegalArgumentException("Thermal status listener is not registered");
++            }
++        }
++    }
+     /**
+      * Listener passed to
+      * {@link PowerManager#addThermalHeadroomListener} and

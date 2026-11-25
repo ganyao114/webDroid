@@ -21,7 +21,8 @@ function replacementCanvas(canvas) {
 
 export async function createSurfaceFlingerCompositor({
   module, scene, canvas, webviewHost, webviewMethods, readWebViewFile, onVsync, onError = console.error,
-  onCanvasChanged, viewport, preferredBackend = 'auto', maxPixelRatio = 2,
+  webviewLayout, createOverlayCanvas, onPresented, onCanvasChanged, viewport,
+  preferredBackend = 'auto', maxPixelRatio = 2,
 }) {
   await loadAospRoboto(canvas.ownerDocument ?? globalThis.document);
   let backend, fallbackReason, canvasClaimed;
@@ -45,7 +46,8 @@ export async function createSurfaceFlingerCompositor({
     }
   }
   const compositor = new SurfaceFlingerCompositor({
-    module, scene, canvas, backend, webviewHost, webviewMethods, readWebViewFile, onVsync, viewport,
+    module, scene, canvas, backend, webviewHost, webviewMethods, readWebViewFile, webviewLayout,
+    createOverlayCanvas, onPresented, onVsync, viewport,
     onError, onCanvasChanged, maxPixelRatio, fallbackReason,
   });
   if (canvas !== inputCanvas) onCanvasChanged?.(canvas);
@@ -54,13 +56,15 @@ export async function createSurfaceFlingerCompositor({
 
 class SurfaceFlingerCompositor {
   constructor({ module, scene, canvas, backend, webviewHost, webviewMethods, readWebViewFile, onVsync, viewport,
-                onError, onCanvasChanged, maxPixelRatio, fallbackReason }) {
+                webviewLayout, createOverlayCanvas, onPresented, onError, onCanvasChanged, maxPixelRatio,
+                fallbackReason }) {
     this.module = module;
     this.scene = scene;
     this.canvas = canvas;
     this.memory = new Memory(module);
     this.vsync = module._wa_sf_vsync(scene);
     this.onVsync = onVsync;
+    this.onPresented = onPresented;
     this.onError = onError;
     this.onCanvasChanged = onCanvasChanged;
     this.viewport = viewport;
@@ -74,12 +78,14 @@ class SurfaceFlingerCompositor {
     this.output = [];
     this.usedOutputs = new Uint8Array(65);
     this.webviewHost = webviewHost;
+    this.createOverlayCanvas = createOverlayCanvas;
     this.frames = new Float64Array(historySize);
     this.codec = new MediaCodecBridge(this.memory,
       module._wa_sf_codec_requests(scene), module._wa_sf_codec_events(scene));
     this.webview = webviewHost && new BrowserIframeWebViewProvider(this.memory,
       module._wa_sf_webview_requests(scene), module._wa_sf_webview_events(scene), webviewHost,
       { methods: webviewMethods, readFile: readWebViewFile });
+    this.webviewLayout = this.webview ?? webviewLayout;
     this.input = new AndroidInputWriter(this.memory, module._wa_sf_input(scene));
     this.bind(backend);
     this.animate = time => {
@@ -101,7 +107,8 @@ class SurfaceFlingerCompositor {
 
   bind(backend) {
     this.backend = backend;
-    this.renderer = new DisplayListRenderer(this.memory, this.scene, backend, this);
+    this.renderer = new DisplayListRenderer(this.memory, this.scene, backend,
+      { codec: this.codec, webview: this.webviewLayout });
     this.renderer.atlas.calibrateFonts(this.memory, this.scene);
     if (backend.lost) {
       backend.device.addEventListener('uncapturederror', event => {
@@ -165,6 +172,7 @@ class SurfaceFlingerCompositor {
       this.syncOutputs(data);
       this.drawCalls = this.backend.render(data, data.packet.width, data.packet.height, this.output);
       this.frames[this.frame++ % historySize] = time;
+      this.onPresented?.(data.packet, data.planeOrder, this.output, this.usedOutputs);
     } finally {
       this.module._wa_sf_frame_release(this.scene, p);
     }
@@ -173,33 +181,38 @@ class SurfaceFlingerCompositor {
 
   syncOutputs(data) {
     const host = this.webviewHost;
-    if (!host) return;
+    if (!host && !this.createOverlayCanvas) return;
     const active = this.usedOutputs.fill(0);
     for (let i = 0; i < data.batchCount; ++i) active[data.batches[i].plane] = 1;
     for (let i = 1; i < active.length; ++i) {
       let canvas = this.output[i];
       if (!active[i]) {
-        if (canvas && !canvas.hidden) canvas.hidden = true;
+        if (host && canvas && !canvas.hidden) canvas.hidden = true;
+        if (!host) this.output[i] = undefined;
         continue;
       }
       if (!canvas) {
-        canvas = host.ownerDocument.createElement('canvas');
-        Object.assign(canvas.style, {
-          position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none',
-        });
-        host.append(canvas);
+        canvas = this.createOverlayCanvas?.() ?? host.ownerDocument.createElement('canvas');
+        if (host) {
+          Object.assign(canvas.style, {
+            position: 'absolute', inset: '0', width: '100%', height: '100%', pointerEvents: 'none',
+          });
+          host.append(canvas);
+        }
         this.output[i] = canvas;
       }
-      const z = String(data.planeOrder[i]);
-      if (canvas.style.zIndex !== z) canvas.style.zIndex = z;
-      if (canvas.hidden) canvas.hidden = false;
+      if (host) {
+        const z = String(data.planeOrder[i]);
+        if (canvas.style.zIndex !== z) canvas.style.zIndex = z;
+        if (canvas.hidden) canvas.hidden = false;
+      }
       if (canvas.width !== this.canvas.width) canvas.width = this.canvas.width;
       if (canvas.height !== this.canvas.height) canvas.height = this.canvas.height;
     }
   }
 
   removeOutputs() {
-    for (let i = 1; i < this.output.length; ++i) this.output[i]?.remove();
+    for (let i = 1; i < this.output.length; ++i) this.output[i]?.remove?.();
     this.output.length = 0;
   }
 

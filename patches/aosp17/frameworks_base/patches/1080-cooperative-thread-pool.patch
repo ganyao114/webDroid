@@ -1,97 +1,15 @@
 --- a/libcore/ojluni/src/main/java/java/util/concurrent/ThreadPoolExecutor.java
 +++ b/libcore/ojluni/src/main/java/java/util/concurrent/ThreadPoolExecutor.java
-@@ -535,6 +535,8 @@
-      */
-     private volatile boolean allowCoreThreadTimeOut;
+@@ -881,7 +881,8 @@
  
-+    private boolean embeddedDraining;
-+
-     /**
-      * Core pool size is the minimum number of workers to keep alive
-      * (and not allow to time out etc) unless allowCoreThreadTimeOut
-@@ -680,6 +682,7 @@
-      * allow access from ScheduledThreadPoolExecutor.
-      */
-     final void tryTerminate() {
-+        if (embeddedDraining) return;
-         for (;;) {
-             int c = ctl.get();
-             if (isRunning(c) ||
-@@ -1285,41 +1288,31 @@
-      */
-     public void execute(Runnable command) {
-         Objects.requireNonNull(command, "command");
--        /*
--         * Proceed in 3 steps:
--         *
--         * 1. If fewer than corePoolSize threads are running, try to
--         * start a new thread with the given command as its first
--         * task.  The call to addWorker atomically checks runState and
--         * workerCount, and so prevents false alarms that would add
--         * threads when it shouldn't, by returning false.
--         *
--         * 2. If a task can be successfully queued, then we still need
--         * to double-check whether we should have added a thread
--         * (because existing ones died since last checking) or that
--         * the pool shut down since entry into this method. So we
--         * recheck state and if necessary roll back the enqueuing if
--         * stopped, or start a new thread if there are none.
--         *
--         * 3. If we cannot queue task, then we try to add a new
--         * thread.  If it fails, we know we are shut down or saturated
--         * and so reject the task.
--         */
--        int c = ctl.get();
--        if (workerCountOf(c) < corePoolSize) {
--            if (addWorker(command, true))
--                return;
--            c = ctl.get();
--        }
--        if (isRunning(c) && workQueue.offer(command)) {
--            int recheck = ctl.get();
--            if (! isRunning(recheck) && remove(command))
--                reject(command);
--            else if (workerCountOf(recheck) == 0)
--                addWorker(null, false);
--        }
--        else if (!addWorker(command, false))
-+        // The embedded scheduler executes queued work on the submitting thread.
-+        // Nested submissions append to the same queue for the current drain.
-+        if (isShutdown() || !workQueue.offer(command)) {
-             reject(command);
-+            return;
-+        }
-+        if (embeddedDraining) return;
-+        embeddedDraining = true;
-+        try {
-+            Runnable task;
-+            while ((task = workQueue.poll()) != null) {
-+                beforeExecute(Thread.currentThread(), task);
-+                try {
-+                    task.run();
-+                } catch (Throwable error) {
-+                    afterExecute(task, error);
-+                    throw error;
-+                }
-+                afterExecute(task, null);
-+                completedTaskCount++;
-+            }
-+        } finally {
-+            embeddedDraining = false;
-+            tryTerminate();
-+        }
-     }
- 
-     /**
-@@ -1512,7 +1505,7 @@
-         this.corePoolSize = corePoolSize;
-         if (workerCountOf(ctl.get()) > corePoolSize)
-             interruptIdleWorkers();
--        else if (delta > 0) {
-+        else if (delta > 0 && !embeddedDraining) {
-             // We don't really know how many new threads are "needed".
-             // As a heuristic, prestart enough new workers (up to new
-             // core size) to handle the current number of tasks in
+                     if (isRunning(c) ||
+                         (runStateLessThan(c, STOP) && firstTask == null)) {
+-                        if (t.getState() != Thread.State.NEW)
++                        // Thread.start() also rejects a worker that already terminated.
++                        if (t.isAlive())
+                             throw new IllegalThreadStateException();
+                         workers.add(w);
+                         workerAdded = true;
 --- a/libcore/ojluni/src/main/java/java/util/concurrent/ScheduledThreadPoolExecutor.java
 +++ b/libcore/ojluni/src/main/java/java/util/concurrent/ScheduledThreadPoolExecutor.java
 @@ -182,7 +182,6 @@

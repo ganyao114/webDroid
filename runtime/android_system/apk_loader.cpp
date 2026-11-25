@@ -353,6 +353,7 @@ bool ParseManifest(AssetManager2& manager, Manifest& manifest,
                 if (indexed) {
                     component = {};
                     component.icon = typed("icon", Res_value::TYPE_REFERENCE, indexed->icon);
+                    component.launch_mode = typed("launchMode", Res_value::TYPE_INT_DEC, 0);
                     component.label = attr("label");
                     component.enabled = typed("enabled", Res_value::TYPE_INT_BOOLEAN, 1) != 0;
                     const auto value = typed("exported", Res_value::TYPE_INT_BOOLEAN, 2);

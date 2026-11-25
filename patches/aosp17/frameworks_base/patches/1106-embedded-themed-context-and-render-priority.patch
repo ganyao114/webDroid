@@ -1,0 +1,23 @@
+--- a/frameworks/base/core/java/android/view/ContextThemeWrapper.java
++++ b/frameworks/base/core/java/android/view/ContextThemeWrapper.java
+@@ -192,7 +192,7 @@
+             }
+             return mInflater;
+         }
+-        return getBaseContext().getSystemService(name);
++        return super.getSystemService(name);
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/webkit/WebView.java
++++ b/frameworks/base/core/java/android/webkit/WebView.java
+@@ -2783,6 +2783,9 @@
+         @Override public void setGeolocationDatabasePath(String path) {}
+         @Override public void setGeolocationEnabled(boolean value) {}
+         @Override public void setSaveFormData(boolean value) {}
++        @Override public boolean getSavePassword() { return false; }
++        @Override public void setSavePassword(boolean value) {}
++        @Override public void setRenderPriority(RenderPriority priority) {}
+     }
+ 
+     private static native boolean nativeNavigate(int id, String url);

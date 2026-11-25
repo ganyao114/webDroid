@@ -1,0 +1,23 @@
+--- a/frameworks/base/core/java/android/app/Activity.java
++++ b/frameworks/base/core/java/android/app/Activity.java
+@@ -7917,7 +7917,7 @@
+     }
+ 
+     final void performNewIntent(@NonNull Intent intent) {
+-        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        onNewIntent(intent);
+     }
+ 
+     final void performNewIntent(@NonNull Intent intent, @NonNull ComponentCaller caller) {
+@@ -8554,6 +8554,11 @@
+         if (name == null || !getPackageName().equals(name.getPackageName())) return false;
+         if (getPackageManager().resolveActivity(intent, 0) == null) {
+             throw new ActivityNotFoundException(intent.toString());
++        }
++        if (mFinished) {
++            // A replacement requested by the finishing activity is still in this task.
++            mFinished = false;
++            mEmbeddedFinishPending = true;
+         }
+         mEmbeddedLaunches.add(new EmbeddedLaunch(intent, requestCode));
+         return true;

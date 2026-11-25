@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <optional>
 #include <regex>
 #include <thread>
 #include <unordered_set>
@@ -255,18 +256,18 @@ std::optional<std::string> CanonicalClassName(Runtime& vm, const Class& cls, uns
   return std::nullopt;
 }
 
-bool HasRuntimeAnnotation(const art::DexFile& dex, const art::dex::AnnotationSetItem* set,
-                          std::string_view descriptor) {
-  if (!set) return false;
+const uint8_t* RuntimeAnnotationData(const Class& owner, const art::dex::AnnotationSetItem* set,
+                                     std::string_view descriptor) {
+  if (!set) return nullptr;
+  const auto& dex = *owner.dex;
   for (uint32_t i = 0; i < set->size_; ++i) {
     const auto* item = dex.GetAnnotationItem(set, i);
     if (item->visibility_ != static_cast<uint8_t>(art::DexFile::DexVisibility::kRuntime)) continue;
-    if (descriptor.empty()) return true;
     const uint8_t* data = item->annotation_;
     if (dex.GetTypeDescriptorView(art::dex::TypeIndex(art::DecodeUnsignedLeb128(&data))) ==
-        descriptor) return true;
+        descriptor) return data;
   }
-  return false;
+  return nullptr;
 }
 
 bool HasClassAnnotation(const Class& type, std::string_view descriptor) {
@@ -288,8 +289,7 @@ const art::dex::AnnotationSetItem* MethodAnnotations(const Method& method) {
 }
 
 bool HasMethodAnnotation(const Method& method, std::string_view descriptor) {
-  const auto* set = MethodAnnotations(method);
-  return set && HasRuntimeAnnotation(*method.owner->dex, set, descriptor);
+  return RuntimeAnnotationData(*method.owner, MethodAnnotations(method), descriptor) != nullptr;
 }
 
 Class& ClassForName(Runtime& vm, Object* object, bool initialize) {
@@ -471,6 +471,26 @@ Value MaterializeAnnotation(Runtime& vm, const art::DexFile& dex, const uint8_t*
   auto& create = vm.linker.FindMethod(factory, "createAnnotation",
       "(Ljava/lang/Class;[Llibcore/reflect/AnnotationMember;)Ljava/lang/annotation/Annotation;", true);
   return vm.Invoke(create, nullptr, std::array{Value::Ref(vm.ClassObject(type)), Value::Ref(members)});
+}
+
+Value DeclaredRuntimeAnnotations(Runtime& vm, const Class& owner, const art::dex::AnnotationSetItem* set) {
+  auto& array = vm.linker.Resolve("[Ljava/lang/annotation/Annotation;");
+  if (!set) return Value::Ref(vm.NewArray(array, 0));
+  const auto& dex = *owner.dex;
+  std::vector<const art::dex::AnnotationItem*> visible;
+  for (uint32_t i = 0; i < set->size_; ++i) {
+    const auto* item = dex.GetAnnotationItem(set, i);
+    if (item->visibility_ == static_cast<uint8_t>(art::DexFile::DexVisibility::kRuntime)) visible.push_back(item);
+  }
+  RootScope roots(vm);
+  auto* result = roots.Hold(vm.NewArray(array, visible.size()));
+  for (size_t i = 0; i < visible.size(); ++i) {
+    const uint8_t* data = visible[i]->annotation_;
+    const auto type = art::dex::TypeIndex(art::DecodeUnsignedLeb128(&data));
+    auto& annotation = vm.linker.Resolve(dex.GetTypeDescriptorView(type));
+    result->elements[i] = MaterializeAnnotation(vm, dex, data, annotation, 0);
+  }
+  return Value::Ref(result);
 }
 
 Value ReflectionDefaultValue(Runtime& vm, const Method& method) {
@@ -832,24 +852,22 @@ void InstallFieldReflection(ClassLinker& linker, Class& cls) {
     }
     return Value::Int(0);
   });
-  const auto has_annotation = [](Runtime& vm, Object* self, Values a) {
-    const auto& field = *self->reflected_field;
-    const auto name = vm.NonNull(a[0].ref()).represented_class->descriptor;
-    return field.owner->dex && HasRuntimeAnnotation(*field.owner->dex, FieldAnnotations(field), name);
-  };
   bind("isAnnotationPresentNative", "(Ljava/lang/Class;)Z",
-      [has_annotation](Runtime& vm, Object* self, Values a) { return Value::Int(has_annotation(vm, self, a)); });
+      [](Runtime& vm, Object* self, Values a) {
+        const auto& field = *self->reflected_field;
+        const auto& annotation = *vm.NonNull(a[0].ref()).represented_class;
+        return Value::Int(RuntimeAnnotationData(*field.owner, FieldAnnotations(field), annotation.descriptor) != nullptr);
+      });
   bind("getAnnotationNative", "(Ljava/lang/Class;)Ljava/lang/annotation/Annotation;",
-      [has_annotation](Runtime& vm, Object* self, Values a) {
-        if (has_annotation(vm, self, a)) vm.Fail("Ljava/lang/UnsupportedOperationException;", "Field annotation instances");
-        return Value{};
+      [](Runtime& vm, Object* self, Values a) {
+        const auto& field = *self->reflected_field;
+        auto& annotation = *vm.NonNull(a[0].ref()).represented_class;
+        auto* data = RuntimeAnnotationData(*field.owner, FieldAnnotations(field), annotation.descriptor);
+        return data ? MaterializeAnnotation(vm, *field.owner->dex, data, annotation, 0) : Value{};
       });
   bind("getDeclaredAnnotations", "()[Ljava/lang/annotation/Annotation;", [](Runtime& vm, Object* self, Values) {
     const auto& field = *self->reflected_field;
-    if (field.owner->dex && HasRuntimeAnnotation(*field.owner->dex, FieldAnnotations(field), {})) {
-      vm.Fail("Ljava/lang/UnsupportedOperationException;", "Field annotation instances");
-    }
-    return Value::Ref(vm.NewArray(vm.linker.Resolve("[Ljava/lang/annotation/Annotation;"), 0));
+    return DeclaredRuntimeAnnotations(vm, *field.owner, FieldAnnotations(field));
   });
 }
 
@@ -967,6 +985,13 @@ void InstallReflection(Runtime& vm, Class& cls) {
     const auto& type = *self->represented_class;
     auto* owner = SimpleClassName(type).empty() ? nullptr : DeclaringClass(vm, type);
     return owner ? Value::Ref(vm.ClassObject(*owner)) : Value{};
+  });
+  cl.AddMethod(cls, "getDeclaredClasses", "()[Ljava/lang/Class;", 0, [](Runtime& vm, Object* self, Values) {
+    const auto& type = *self->represented_class;
+    auto* data = ClassSystemAnnotation(type, "Ldalvik/annotation/MemberClasses;");
+    if (data) data = FindAnnotationValue(vm, *type.dex, data, "value");
+    auto& array = vm.linker.Resolve("[Ljava/lang/Class;");
+    return data ? ReadAnnotationValue(vm, *type.dex, data, array, 0) : Value::Ref(vm.NewArray(array, 0));
   });
   cl.AddMethod(cls, "isLocalClass", "()Z", 0, [](Runtime&, Object* self, Values) {
     const auto& type = *self->represented_class;
@@ -1132,38 +1157,13 @@ void InstallReflection(Runtime& vm, Class& cls) {
       [](Runtime& vm, Object* self, Values args) {
         auto& annotation = *vm.NonNull(args[0].ref()).represented_class;
         const auto& method = *self->reflected_method;
-        const auto* set = MethodAnnotations(method);
-        if (!set) return Value{};
-        const auto& dex = *method.owner->dex;
-        for (uint32_t i = 0; i < set->size_; ++i) {
-          const auto* item = dex.GetAnnotationItem(set, i);
-          if (item->visibility_ != static_cast<uint8_t>(art::DexFile::DexVisibility::kRuntime)) continue;
-          const uint8_t* data = item->annotation_;
-          if (dex.GetTypeDescriptorView(art::dex::TypeIndex(art::DecodeUnsignedLeb128(&data))) == annotation.descriptor)
-            return MaterializeAnnotation(vm, dex, data, annotation, 0);
-        }
-        return Value{};
+        auto* data = RuntimeAnnotationData(*method.owner, MethodAnnotations(method), annotation.descriptor);
+        return data ? MaterializeAnnotation(vm, *method.owner->dex, data, annotation, 0) : Value{};
       });
   executable_native("getDeclaredAnnotationsNative", "()[Ljava/lang/annotation/Annotation;",
       [](Runtime& vm, Object* self, Values) {
         const auto& method = *self->reflected_method;
-        const auto* set = MethodAnnotations(method);
-        auto& array = vm.linker.Resolve("[Ljava/lang/annotation/Annotation;");
-        if (!set) return Value::Ref(vm.NewArray(array, 0));
-        const auto& dex = *method.owner->dex;
-        std::vector<art::dex::AnnotationItem const*> visible;
-        for (uint32_t i = 0; i < set->size_; ++i) {
-          const auto* item = dex.GetAnnotationItem(set, i);
-          if (item->visibility_ == static_cast<uint8_t>(art::DexFile::DexVisibility::kRuntime)) visible.push_back(item);
-        }
-        RootScope roots(vm);
-        auto* result = roots.Hold(vm.NewArray(array, visible.size()));
-        for (size_t i = 0; i < visible.size(); ++i) {
-          const uint8_t* data = visible[i]->annotation_;
-          auto& annotation = vm.linker.Resolve(dex.GetTypeDescriptorView(art::dex::TypeIndex(art::DecodeUnsignedLeb128(&data))));
-          result->elements[i] = MaterializeAnnotation(vm, dex, data, annotation, 0);
-        }
-        return Value::Ref(result);
+        return DeclaredRuntimeAnnotations(vm, *method.owner, MethodAnnotations(method));
       });
   executable_native("getParameterAnnotationsNative", "()[[Ljava/lang/annotation/Annotation;", Void);
   executable_native("getSignatureAnnotation", "()[Ljava/lang/String;", [](Runtime& vm, Object* self, Values) {
@@ -1863,10 +1863,21 @@ std::u16string PrimitiveText(char type, Value value) {
 }
 
 struct RegexProgram {
+  struct LookBehind {
+    std::wregex expression;
+    bool negative;
+  };
   std::wregex expression;
   std::map<std::u16string, int32_t> named_groups;
+  std::optional<LookBehind> look_behind;
   bool marks = false;
   bool end_anchor = false;
+
+  size_t LookBehindGroups() const {
+    return look_behind ? look_behind->expression.mark_count() : 0;
+  }
+
+  size_t GroupCount() const { return expression.mark_count() + LookBehindGroups(); }
 };
 
 std::wstring_view RegexProperty(std::u16string_view name, bool unicode_classes) {
@@ -1975,6 +1986,33 @@ std::u16string TranslateRegexClasses(std::u16string_view pattern, bool comments)
   return result;
 }
 
+size_t FindRegexBoundary(std::u16string_view pattern, char16_t boundary, bool comments) {
+  int depth = 0;
+  bool in_class = false;
+  for (size_t i = 0; i < pattern.size(); ++i) {
+    const auto ch = pattern[i];
+    if (ch == u'\\') {
+      if (++i < pattern.size() && pattern[i] == u'Q') {
+        const auto end = pattern.find(u"\\E", i + 1);
+        if (end == pattern.npos) break;
+        i = end + 1;
+      }
+    } else if (in_class) {
+      if (ch == u']') in_class = false;
+    } else if (ch == u'[') {
+      in_class = true;
+    } else if (comments && ch == u'#') {
+      i = pattern.find_first_of(u"\r\n", i + 1);
+      if (i == pattern.npos) break;
+    } else {
+      if (depth == 0 && ch == boundary) return i;
+      if (ch == u'(') ++depth;
+      if (ch == u')') --depth;
+    }
+  }
+  return pattern.npos;
+}
+
 std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern, int flags = 0,
                          RegexProgram* program = nullptr) {
   constexpr int kCaseInsensitive = 2, kComments = 4, kMultiline = 8, kLiteral = 16;
@@ -1986,6 +2024,7 @@ std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern, int flags = 0
   const auto original = pattern;
   const auto invalid = [&] { vm.Fail("Ljava/util/regex/PatternSyntaxException;", EncodeUtf8(original)); };
   std::u16string classes;
+  std::map<std::u16string, int32_t> look_behind_names;
   if (!quoted) {
     while (pattern.starts_with(u"(?")) {
       const auto end = pattern.find(u')', 2);
@@ -2003,6 +2042,20 @@ std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern, int flags = 0
         invalid();
       }
       pattern = classes;
+    }
+    if (program && (pattern.starts_with(u"(?<=") || pattern.starts_with(u"(?<!"))) {
+      const bool negative = pattern[3] == u'!';
+      const auto assertion = pattern.substr(4);
+      const auto close = FindRegexBoundary(assertion, u')', flags & kComments);
+      if (close == assertion.npos) invalid();
+      pattern = assertion.substr(close + 1);
+      if (FindRegexBoundary(pattern, u'|', flags & kComments) != pattern.npos) invalid();
+      // libc++ implements lookahead. Match a separate assertion against the
+      // prefix ending at the consuming expression's start.
+      RegexProgram prefix;
+      const auto context = u"(?:" + std::u16string(assertion.substr(0, close)) + u")(?![\\s\\S])";
+      program->look_behind = RegexProgram::LookBehind{CompileRegex(vm, context, flags, &prefix), negative};
+      look_behind_names = std::move(prefix.named_groups);
     }
   }
   for (size_t i = 0; i < pattern.size(); ++i) {
@@ -2049,6 +2102,9 @@ std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern, int flags = 0
         translated += L"(?:\\" + std::to_wstring(name->second) + L")";
         i = end;
       } else {
+        if (!in_class && escaped >= u'1' && escaped <= u'9' && program && program->LookBehindGroups()) {
+          invalid();
+        }
         translated += L'\\';
         translated += escaped;
       }
@@ -2081,6 +2137,13 @@ std::wregex CompileRegex(Runtime& vm, std::u16string_view pattern, int flags = 0
     if (ch == u'[') in_class = true;
     if (ch == u']') in_class = false;
     translated += ch;
+  }
+  if (program && program->look_behind) {
+    const auto offset = static_cast<int32_t>(program->LookBehindGroups());
+    for (auto& [name, index] : program->named_groups) index += offset;
+    for (auto& [name, index] : look_behind_names) {
+      if (!program->named_groups.emplace(name, index).second) invalid();
+    }
   }
   try {
     auto opt = std::regex_constants::ECMAScript;
@@ -2130,7 +2193,7 @@ Value MatchRegex(Runtime& vm, Object* self, Values a) {
   }
   if (start > to) return Value::Int(2);
   auto& groups = vm.NonNull(a[5].ref()).elements;
-  if (groups.size() < 2 * (1 + program.expression.mark_count())) {
+  if (groups.size() < 2 * (1 + program.GroupCount())) {
     vm.Fail("Ljava/lang/IndexOutOfBoundsException;", "Regex capture array is too small");
   }
   if (program.marks) {
@@ -2143,21 +2206,46 @@ Value MatchRegex(Runtime& vm, Object* self, Values a) {
   const bool anchors = (a[4].i() & 4) != 0;
   const bool transparent = (a[4].i() & 8) != 0;
   const std::wstring wide(text.begin(), text.end());
-  auto flags = std::regex_constants::match_default;
-  if (start > from || (!anchors && start > 0) || (transparent && start > 0)) {
-    flags |= std::regex_constants::match_prev_avail;
-  }
-  if (!anchors && static_cast<size_t>(to) < text.size()) flags |= std::regex_constants::match_not_eol;
-  if (mode == 1) flags |= std::regex_constants::match_continuous;
-  std::wsmatch match;
+  const auto save = [&](size_t group, const std::wssub_match& capture) {
+    groups[group * 2] = Value::Int(capture.matched ? static_cast<int32_t>(capture.first - wide.cbegin()) : -1);
+    groups[group * 2 + 1] = Value::Int(capture.matched ? static_cast<int32_t>(capture.second - wide.cbegin()) : -1);
+  };
   try {
-    const auto begin = wide.cbegin() + start, end = wide.cbegin() + to;
-    const bool found = mode == 2 ? std::regex_match(begin, end, match, program.expression, flags)
-                                 : std::regex_search(begin, end, match, program.expression, flags);
-    if (!found) return Value::Int(2);
-    for (size_t i = 0; i < match.size(); ++i) {
-      groups[i * 2] = Value::Int(match[i].matched ? static_cast<int32_t>(start + match.position(i)) : -1);
-      groups[i * 2 + 1] = Value::Int(match[i].matched ? static_cast<int32_t>(start + match.position(i) + match.length(i)) : -1);
+    const auto end = wide.cbegin() + to;
+    auto begin = wide.cbegin() + start;
+    for (;;) {
+      auto flags = std::regex_constants::match_default;
+      if (begin > wide.cbegin() + from || ((!anchors || transparent) && begin > wide.cbegin())) {
+        flags |= std::regex_constants::match_prev_avail;
+      }
+      if (!anchors && static_cast<size_t>(to) < text.size()) flags |= std::regex_constants::match_not_eol;
+      if (mode == 1) flags |= std::regex_constants::match_continuous;
+      std::wsmatch match;
+      const bool found = mode == 2 ? std::regex_match(begin, end, match, program.expression, flags)
+                                   : std::regex_search(begin, end, match, program.expression, flags);
+      if (!found) return Value::Int(2);
+      if (const auto& look_behind = program.look_behind) {
+        const int32_t lower = transparent ? 0 : from;
+        auto prefix_flags = std::regex_constants::match_default;
+        if (!anchors && lower > 0) prefix_flags |= std::regex_constants::match_prev_avail;
+        if (match[0].first < wide.cbegin() + (anchors ? to : wide.size())) {
+          prefix_flags |= std::regex_constants::match_not_eol;
+        }
+        std::wsmatch prefix;
+        const bool preceded = std::regex_search(wide.cbegin() + lower, match[0].first,
+                                               prefix, look_behind->expression, prefix_flags);
+        if (preceded == look_behind->negative) {
+          if (mode != 0 || match[0].first == end) return Value::Int(2);
+          begin = match[0].first + 1;
+          continue;
+        }
+        for (size_t i = 1; i <= program.LookBehindGroups(); ++i) {
+          save(i, preceded ? prefix[i] : std::wssub_match{});
+        }
+      }
+      save(0, match[0]);
+      for (size_t i = 1; i < match.size(); ++i) save(program.LookBehindGroups() + i, match[i]);
+      break;
     }
   } catch (const std::regex_error& error) {
     vm.Fail("Ljava/lang/StackOverflowError;", error.what());
@@ -2177,7 +2265,7 @@ void InstallRegex(Runtime& vm) {
     return Value{};
   });
   cl.AddBootNative(owner, "groupCountNative", "()I", [](Runtime& vm, Object* self, Values) {
-    return Value::Int(static_cast<int32_t>(GetRegex(vm, self).expression.mark_count()));
+    return Value::Int(static_cast<int32_t>(GetRegex(vm, self).GroupCount()));
   });
   cl.AddBootNative(owner, "namedGroupNative", "(Ljava/lang/String;)I", [](Runtime& vm, Object* self, Values a) {
     const auto& named = GetRegex(vm, self).named_groups;
@@ -2845,6 +2933,16 @@ void InstallStrings(Runtime& vm) {
     auto& matches = vm.linker.FindMethod(pattern, "matches", "(Ljava/lang/String;Ljava/lang/CharSequence;)Z", true);
     return vm.Invoke(matches, nullptr, std::array{args[0], Value::Ref(self)});
   });
+  add("replaceFirst", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+      [](Runtime& vm, Object* self, Values args) {
+        RootScope roots(vm);
+        auto& pattern = vm.linker.Resolve("Ljava/util/regex/Pattern;");
+        auto& compile = vm.linker.FindMethod(pattern, "compile", "(Ljava/lang/String;)Ljava/util/regex/Pattern;", true);
+        auto* compiled = roots.Hold(vm.Invoke(compile, nullptr, args.first(1))).ref();
+        auto* matcher = roots.Hold(CallVirtual(vm, compiled, "matcher",
+            "(Ljava/lang/CharSequence;)Ljava/util/regex/Matcher;", std::array{Value::Ref(self)})).ref();
+        return CallVirtual(vm, matcher, "replaceFirst", "(Ljava/lang/String;)Ljava/lang/String;", args.subspan(1));
+      });
   add("replaceAll", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;", ReplaceRegex);
   add("toCharArray", "()[C", [](Runtime& vm, Object* self, Values) {
     auto* array = vm.NewArray(vm.linker.Resolve("[C"), self->text.size());
@@ -3633,6 +3731,11 @@ void InstallNumbers(Runtime& vm) {
       return Value::Int(a[1].i() < 2 || a[1].i() > 36 || digit >= a[1].i() ? -1 : digit);
     });
   }
+  cl.AddMethod(character, "forDigit", "(II)C", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    const auto digit = a[0].i(), radix = a[1].i();
+    if (radix < 2 || radix > 36 || digit < 0 || digit >= radix) return Value::Int(0);
+    return Value::Int(digit < 10 ? '0' + digit : 'a' + digit - 10);
+  });
   for (bool upper : {true, false}) {
     for (auto sig : {"(C)C", "(I)I"}) {
       cl.AddMethod(character, upper ? "toUpperCase" : "toLowerCase", sig, art::kAccStatic,

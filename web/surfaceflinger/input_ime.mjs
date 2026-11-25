@@ -14,6 +14,16 @@ export class AndroidInputWriter {
     return true;
   }
 
+  pressKey(keycode, time) {
+    // A caller can retry the complete key press after the consumer drains the ring.
+    const index = this.ring.reserve(2, false);
+    if (index === -1) return false;
+    this.store(index, Input.KEY, Action.DOWN, time, 0, keycode, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    this.store(index + 1, Input.KEY, Action.UP, time, 0, keycode, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    this.ring.publish(2);
+    return true;
+  }
+
   store(index, kind, action, time, pointer, key, meta, x, y, dx, dy, vx, vy, len, flags) {
     const p = this.ring.offset(index);
     const { view } = this.ring.memory;
@@ -128,7 +138,7 @@ export function attachAndroidInput(canvas, writer, {
       state.vx += (dx * 1000 / elapsed - state.vx) * weight;
       state.vy += (dy * 1000 / elapsed - state.vy) * weight;
     }
-    writer.write(Input.MOTION, action, t, id, 0, metaState(event), x, y, dx, dy, state.vx, state.vy);
+    const written = writer.write(Input.MOTION, action, t, id, 0, metaState(event), x, y, dx, dy, state.vx, state.vy);
     if (action === Action.MOVE) {
       state.x = x;
       state.y = y;
@@ -136,7 +146,7 @@ export function attachAndroidInput(canvas, writer, {
     }
     if (action === Action.UP || action === Action.CANCEL) {
       pointers.delete(id);
-      if (action === Action.UP) onPointerUp?.(x, y, Math.hypot(x - state.startX, y - state.startY));
+      if (action === Action.UP && written) onPointerUp?.(x, y, Math.hypot(x - state.startX, y - state.startY));
     }
   }
 

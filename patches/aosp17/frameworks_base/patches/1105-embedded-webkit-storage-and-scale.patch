@@ -1,0 +1,92 @@
+--- a/frameworks/base/core/java/android/webkit/WebStorage.java
++++ b/frameworks/base/core/java/android/webkit/WebStorage.java
+@@ -30,6 +30,7 @@
+  * possible to set per-origin quotas.
+  */
+ public class WebStorage {
++    private static final WebStorage sEmbedded = new WebStorage();
+ 
+     /**
+      * Encapsulates a callback function which is used to provide a new quota
+@@ -123,7 +124,7 @@
+      * representation of the origin to a {@link WebStorage.Origin} object.
+      */
+     public void getOrigins(ValueCallback<Map> callback) {
+-        // Must be a no-op for backward compatibility: see the hidden constructor for reason.
++        if (callback != null) callback.onReceiveValue(java.util.Collections.emptyMap());
+     }
+ 
+     /**
+@@ -134,7 +135,7 @@
+      * a {@link ValueCallback}.
+      */
+     public void getUsageForOrigin(String origin, ValueCallback<Long> callback) {
+-        // Must be a no-op for backward compatibility: see the hidden constructor for reason.
++        if (callback != null) callback.onReceiveValue(0L);
+     }
+ 
+     /**
+@@ -144,7 +145,7 @@
+      * being provided via a {@link ValueCallback}.
+      */
+     public void getQuotaForOrigin(String origin, ValueCallback<Long> callback) {
+-        // Must be a no-op for backward compatibility: see the hidden constructor for reason.
++        if (callback != null) callback.onReceiveValue(0L);
+     }
+ 
+     /**
+@@ -180,7 +181,7 @@
+      * @return the singleton {@link WebStorage} instance
+      */
+     public static WebStorage getInstance() {
+-      return WebViewFactory.getProvider().getWebStorage();
++        return sEmbedded;
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/view/ScaleGestureDetector.java
++++ b/frameworks/base/core/java/android/view/ScaleGestureDetector.java
+@@ -23,8 +23,6 @@
+ import android.os.Build;
+ import android.os.Handler;
+ import android.util.Log;
+-
+-import com.android.hardware.input.Flags;
+ 
+ /**
+  * Detects scaling transformation gestures using the supplied {@link MotionEvent}s.
+@@ -167,12 +165,6 @@
+     private static final int ANCHORED_SCALE_MODE_STYLUS = 2;
+ 
+ 
+-    /**
+-     * Consistency verifier for debugging purposes.
+-     */
+-    private final InputEventConsistencyVerifier mInputEventConsistencyVerifier =
+-            InputEventConsistencyVerifier.isInstrumentationEnabled() ?
+-                    new InputEventConsistencyVerifier(this, 0) : null;
+     private GestureDetector mGestureDetector;
+ 
+     private boolean mEventBeforeOrAboveStartingGestureEvent;
+@@ -249,10 +241,6 @@
+      * @return {@code true} if the event has been handled.
+      */
+     private boolean handleClassifiedPinch(MotionEvent event) {
+-        if (!Flags.scaleGestureDetectorUseEventsClassification()) {
+-            return false;
+-        }
+-
+         boolean isPinch = event.getClassification() == MotionEvent.CLASSIFICATION_PINCH;
+ 
+         if (mInProgress && isPinch != mIsClassifiedPinchMode) {
+@@ -314,10 +302,6 @@
+      *         rest of the MotionEvents in this event stream.
+      */
+     public boolean onTouchEvent(@NonNull MotionEvent event) {
+-        if (mInputEventConsistencyVerifier != null) {
+-            mInputEventConsistencyVerifier.onTouchEvent(event, 0);
+-        }
+-
+         mCurrTime = event.getEventTime();
+ 
+         final int action = event.getActionMasked();

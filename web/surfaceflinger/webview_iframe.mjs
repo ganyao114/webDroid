@@ -7,27 +7,38 @@ const localMediaTypes = new Map(Object.entries({
 }));
 const decoder = new TextDecoder();
 
-function localDocument(document, readFile, id, source) {
-  const bytes = readFile?.(id, source);
+async function replaceAsync(text, pattern, replace) {
+  const parts = [];
+  let end = 0;
+  for (const match of text.matchAll(pattern)) {
+    parts.push(text.slice(end, match.index), replace(...match));
+    end = match.index + match[0].length;
+  }
+  parts.push(text.slice(end));
+  return (await Promise.all(parts)).join('');
+}
+
+async function localDocument(document, readFile, id, source) {
+  const bytes = await readFile?.(id, source);
   if (!bytes) throw new Error('WebView document is unavailable');
-  const resource = (reference, base, stylesheet = false) => {
+  const resource = async (reference, base, stylesheet = false) => {
     let url;
     try { url = new URL(reference, base); }
     catch { return reference; }
     if (url.protocol !== 'file:') return reference;
     const type = localMediaTypes.get(url.pathname.split('.').at(-1).toLowerCase());
     if (!type || (stylesheet && type === 'text/css')) return reference;
-    const data = readFile(id, url.href);
+    const data = await readFile(id, url.href);
     if (!data) return reference;
     const content = type === 'text/css'
-      ? encoder.encode(decoder.decode(data).replace(/url\(\s*(["']?)([^()]*?)\1\s*\)/gi,
-        (match, quote, path) => `url(${quote}${resource(path, url, true)}${quote})`))
+      ? encoder.encode(await replaceAsync(decoder.decode(data), /url\(\s*(["']?)([^()]*?)\1\s*\)/gi,
+        async (match, quote, path) => `url(${quote}${await resource(path, url, true)}${quote})`))
       : data;
     return `data:${type};base64,${content.toBase64()}`;
   };
-  const html = decoder.decode(bytes).replace(/\b(src|href|poster)(\s*=\s*)(["'])([^\n]+?)\3/gi,
-    (match, attribute, equals, quote, reference) =>
-      attribute + equals + quote + resource(reference, source) + quote);
+  const html = await replaceAsync(decoder.decode(bytes), /\b(src|href|poster)(\s*=\s*)(["'])([^\n]+?)\3/gi,
+    async (match, attribute, equals, quote, reference) =>
+      attribute + equals + quote + await resource(reference, source) + quote);
   const template = document.createElement('template');
   template.innerHTML = html;
   const title = template.content.querySelector('title')?.textContent ?? '';
@@ -79,12 +90,15 @@ export class BrowserIframeWebViewProvider {
     if (!local && url.protocol !== 'https:' && url.protocol !== 'http:') {
       throw new Error('Unsupported WebView URL scheme');
     }
-    const page = local ? localDocument(document, this.readFile, id, source) : null;
     this.close(id);
     const frame = document.createElement('iframe');
     frame.title = 'Embedded WebView';
     frame.setAttribute('sandbox', 'allow-scripts');
     frame.referrerPolicy = 'no-referrer';
+    if (!local && document.defaultView?.crossOriginIsolated && url.origin !== document.location.origin) {
+      // The worker needs an isolated window. External pages can load without sharing credentials.
+      frame.credentialless = true;
+    }
     Object.assign(frame.style, {
       position: 'absolute', top: '0', left: '0', transformOrigin: '0 0', border: '0',
       display: 'none', pointerEvents: 'auto',
@@ -93,10 +107,11 @@ export class BrowserIframeWebViewProvider {
     this.views.set(id, state);
     frame.addEventListener('load', () => {
       if (this.views.get(id) !== state) return;
-      const withTitle = page?.title ? `${source}\0${page.title}` : source;
+      const withTitle = state.title ? `${source}\0${state.title}` : source;
       this.report(id, WebViewStatus.PAGE_LOADED, 0,
         encoder.encode(withTitle).length <= WEBVIEW_TEXT_SIZE ? withTitle : source);
       this.disconnect(state, 'WebView navigated');
+      state.bridgeUnavailable = false;
       const { port1, port2 } = new MessageChannel();
       state.port = port1;
       port1.onmessage = ({ data }) => {
@@ -108,13 +123,29 @@ export class BrowserIframeWebViewProvider {
       state.readyTimer = setTimeout(() => {
         if (!state.ready && state.port === port1) {
           this.disconnect(state, 'WebView did not acknowledge its bridge');
-          this.report(id, WebViewStatus.ERROR, 0, 'WebView bridge handshake timed out');
+          state.bridgeUnavailable = true;
+          // Ordinary pages can render without an endpoint. Only bridge requests need a reply.
+          for (const message of state.pending.splice(0)) {
+            if (message.type === 'eval') this.report(id, WebViewStatus.ERROR, message.id, 'WebView bridge unavailable');
+          }
         }
       }, 10_000);
     });
-    if (page) frame.srcdoc = page.content;
-    else frame.src = url.href;
-    this.host.append(frame);
+    if (local) {
+      void localDocument(document, this.readFile, id, source).then(({ content, title }) => {
+        if (this.views.get(id) !== state) return;
+        state.title = title;
+        frame.srcdoc = content;
+        this.host.append(frame);
+      }).catch(error => {
+        if (this.views.get(id) !== state) return;
+        this.close(id);
+        this.report(id, WebViewStatus.ERROR, 0, error.message);
+      });
+    } else {
+      frame.src = url.href;
+      this.host.append(frame);
+    }
   }
 
   receive(state, data) {
@@ -151,6 +182,7 @@ export class BrowserIframeWebViewProvider {
 
   send(state, message) {
     if (!state.ready) {
+      if (state.bridgeUnavailable) throw new Error('WebView bridge unavailable');
       if (state.pending.length >= 16) throw new Error('WebView message queue is full');
       state.pending.push(message);
     } else {

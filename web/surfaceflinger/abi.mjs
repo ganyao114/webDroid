@@ -129,18 +129,21 @@ export class Ring {
     Atomics.add(this.memory.refresh().words, this.index + 1, 1);
   }
 
-  reserve(count = 1) {
+  reserve(count = 1, countDropped = true) {
     const { words } = this.memory.refresh();
     const write = Atomics.load(words, this.index);
     const read = Atomics.load(words, this.index + 1);
     if (((write - read) >>> 0) + count <= this.capacity) return write;
-    Atomics.add(words, this.index + 2, count);
+    if (countDropped) Atomics.add(words, this.index + 2, count);
     return -1;
   }
 
   publish(count = 1) {
     Atomics.add(this.memory.refresh().words, this.index, count);
   }
+
+  get readIndex() { return Atomics.load(this.memory.refresh().words, this.index + 1); }
+  get writeIndex() { return Atomics.load(this.memory.refresh().words, this.index); }
 
   get dropped() {
     return Atomics.load(this.memory.refresh().words, this.index + 2);

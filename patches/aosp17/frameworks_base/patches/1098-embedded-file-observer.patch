@@ -1,0 +1,30 @@
+--- a/frameworks/base/core/java/android/os/FileObserver.java
++++ b/frameworks/base/core/java/android/os/FileObserver.java
+@@ -175,11 +175,13 @@
+             }
+         }
+ 
+-        private native int init();
+-        private native void observe(int fd);
+-        private native void startWatching(int fd, String[] paths,
+-                @NotifyEventType int mask, int[] wfds);
+-        private native void stopWatching(int fd, int[] wfds);
++        // The embedded filesystem has no inotify source. Use the upstream
++        // failure path: no observer thread and no valid watch descriptors.
++        private int init() { return -1; }
++        private void observe(int fd) {}
++        private void startWatching(int fd, String[] paths,
++                @NotifyEventType int mask, int[] wfds) {}
++        private void stopWatching(int fd, int[] wfds) {}
+     }
+ 
+     @UnsupportedAppUsage
+@@ -187,7 +189,7 @@
+ 
+     static {
+         s_observerThread = new ObserverThread();
+-        s_observerThread.start();
++        if (s_observerThread.m_fd >= 0) s_observerThread.start();
+     }
+ 
+     // instance

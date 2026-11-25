@@ -549,7 +549,7 @@
  }
 --- a/libcore/ojluni/src/main/java/java/util/concurrent/FutureTask.java
 +++ b/libcore/ojluni/src/main/java/java/util/concurrent/FutureTask.java
-@@ -35,11 +35,7 @@
+@@ -35,10 +35,8 @@
  
  package java.util.concurrent;
  
@@ -557,323 +557,58 @@
 -
 -import java.lang.invoke.MethodHandles;
 -import java.lang.invoke.VarHandle;
--import java.util.concurrent.locks.LockSupport;
-+
++import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
++import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+ import java.util.concurrent.locks.LockSupport;
  
  /**
-  * A cancellable asynchronous computation.  This class provides a base
-@@ -106,9 +102,6 @@
-     private Object outcome; // non-volatile, protected by state reads/writes
-     /** The thread running the callable; CASed during run() */
-     private volatile Thread runner;
--    /** Treiber stack of waiting threads */
--    private volatile WaitNode waiters;
--
-     /**
-      * Returns result or throws exception for completed task.
-      *
-@@ -164,22 +157,10 @@
-     }
- 
-     public boolean cancel(boolean mayInterruptIfRunning) {
--        if (!(state == NEW && STATE.compareAndSet
--              (this, NEW, mayInterruptIfRunning ? INTERRUPTING : CANCELLED)))
--            return false;
--        try {    // in case call to interrupt throws exception
--            if (mayInterruptIfRunning) {
--                try {
--                    Thread t = runner;
--                    if (t != null)
--                        t.interrupt();
--                } finally { // final state
+@@ -174,7 +172,7 @@
+                     if (t != null)
+                         t.interrupt();
+                 } finally { // final state
 -                    STATE.setRelease(this, INTERRUPTED);
--                }
--            }
--        } finally {
--            finishCompletion();
--        }
-+        if (state != NEW) return false;
-+        state = CANCELLED;
-+        if (mayInterruptIfRunning && runner != null) runner.interrupt();
-+        finishCompletion();
-         return true;
-     }
- 
-@@ -188,8 +169,10 @@
-      */
-     public V get() throws InterruptedException, ExecutionException {
-         int s = state;
--        if (s <= COMPLETING)
--            s = awaitDone(false, 0L);
-+        if (s <= COMPLETING) {
-+            if (Thread.interrupted()) throw new InterruptedException();
-+            throw new IllegalStateException("Cannot wait for a queued task on its executor");
-+        }
-         return report(s);
-     }
- 
-@@ -198,12 +181,12 @@
-      */
-     public V get(long timeout, TimeUnit unit)
-         throws InterruptedException, ExecutionException, TimeoutException {
--        if (unit == null)
--            throw new NullPointerException();
-+        if (unit == null) throw new NullPointerException();
-         int s = state;
--        if (s <= COMPLETING &&
--            (s = awaitDone(true, unit.toNanos(timeout))) <= COMPLETING)
-+        if (s <= COMPLETING) {
-+            if (Thread.interrupted()) throw new InterruptedException();
-             throw new TimeoutException();
-+        }
-         return report(s);
-     }
- 
-@@ -290,9 +273,10 @@
-      * @param v the value
-      */
++                    STATE.lazySet(this, INTERRUPTED);
+                 }
+             }
+         } finally {
+@@ -292,7 +290,7 @@
      protected void set(V v) {
--        if (STATE.compareAndSet(this, NEW, COMPLETING)) {
-+        if (state == NEW) {
-+            state = COMPLETING;
+         if (STATE.compareAndSet(this, NEW, COMPLETING)) {
              outcome = v;
 -            STATE.setRelease(this, NORMAL); // final state
-+            state = NORMAL; // final state
++            STATE.lazySet(this, NORMAL); // final state
              finishCompletion();
          }
      }
-@@ -308,17 +292,17 @@
-      * @param t the cause of failure
-      */
+@@ -310,7 +308,7 @@
      protected void setException(Throwable t) {
--        if (STATE.compareAndSet(this, NEW, COMPLETING)) {
-+        if (state == NEW) {
-+            state = COMPLETING;
+         if (STATE.compareAndSet(this, NEW, COMPLETING)) {
              outcome = t;
 -            STATE.setRelease(this, EXCEPTIONAL); // final state
-+            state = EXCEPTIONAL; // final state
++            STATE.lazySet(this, EXCEPTIONAL); // final state
              finishCompletion();
          }
      }
- 
-     public void run() {
--        if (state != NEW ||
--            !RUNNER.compareAndSet(this, null, Thread.currentThread()))
--            return;
-+        if (state != NEW || runner != null) return;
-+        runner = Thread.currentThread();
-         try {
-             Callable<V> c = callable;
-             if (c != null && state == NEW) {
-@@ -341,9 +325,6 @@
-             runner = null;
-             // state must be re-read after nulling runner to prevent
-             // leaked interrupts
--            int s = state;
--            if (s >= INTERRUPTING)
--                handlePossibleCancellationInterrupt(s);
-         }
+@@ -584,16 +582,13 @@
+         return super.toString() + status;
      }
  
-@@ -357,9 +338,9 @@
-      * @return {@code true} if successfully run and reset
-      */
-     protected boolean runAndReset() {
--        if (state != NEW ||
--            !RUNNER.compareAndSet(this, null, Thread.currentThread()))
-+        if (state != NEW || runner != null)
-             return false;
-+        runner = Thread.currentThread();
-         boolean ran = false;
-         int s = state;
-         try {
-@@ -379,43 +360,8 @@
-             // state must be re-read after nulling runner to prevent
-             // leaked interrupts
-             s = state;
--            if (s >= INTERRUPTING)
--                handlePossibleCancellationInterrupt(s);
-         }
-         return ran && s == NEW;
--    }
--
--    /**
--     * Ensures that any interrupt from a possible cancel(true) is only
--     * delivered to a task while in run or runAndReset.
--     */
--    private void handlePossibleCancellationInterrupt(int s) {
--        // It is possible for our interrupter to stall before getting a
--        // chance to interrupt us.  Let's spin-wait patiently.
--        if (s == INTERRUPTING)
--            while (state == INTERRUPTING)
--                Thread.yield(); // wait out pending interrupt
--
--        // assert state == INTERRUPTED;
--
--        // We want to clear any interrupt we may have received from
--        // cancel(true).  However, it is permissible to use interrupts
--        // as an independent mechanism for a task to communicate with
--        // its caller, and there is no way to clear only the
--        // cancellation interrupt.
--        //
--        // Thread.interrupted();
--    }
--
--    /**
--     * Simple linked list nodes to record waiting threads in a Treiber
--     * stack.  See other classes such as Phaser and SynchronousQueue
--     * for more detailed explanation.
--     */
--    static final class WaitNode {
--        volatile Thread thread;
--        volatile WaitNode next;
--        WaitNode() { thread = Thread.currentThread(); }
-     }
- 
-     /**
-@@ -423,125 +369,8 @@
-      * nulls out callable.
-      */
-     private void finishCompletion() {
--        // assert state > COMPLETING;
--        for (WaitNode q; (q = waiters) != null;) {
--            if (WAITERS.weakCompareAndSet(this, q, null)) {
--                for (;;) {
--                    Thread t = q.thread;
--                    if (t != null) {
--                        q.thread = null;
--                        LockSupport.unpark(t);
--                    }
--                    WaitNode next = q.next;
--                    if (next == null)
--                        break;
--                    q.next = null; // unlink to help gc
--                    q = next;
--                }
--                break;
--            }
--        }
--
-         done();
--
--        callable = null;        // to reduce footprint
--    }
--
--    /**
--     * Awaits completion or aborts on interrupt or timeout.
--     *
--     * @param timed true if use timed waits
--     * @param nanos time to wait, if timed
--     * @return state upon completion or at timeout
--     */
--    private int awaitDone(boolean timed, long nanos)
--        throws InterruptedException {
--        // The code below is very delicate, to achieve these goals:
--        // - call nanoTime exactly once for each call to park
--        // - if nanos <= 0L, return promptly without allocation or nanoTime
--        // - if nanos == Long.MIN_VALUE, don't underflow
--        // - if nanos == Long.MAX_VALUE, and nanoTime is non-monotonic
--        //   and we suffer a spurious wakeup, we will do no worse than
--        //   to park-spin for a while
--        long startTime = 0L;    // Special value 0L means not yet parked
--        WaitNode q = null;
--        boolean queued = false;
--        for (;;) {
--            int s = state;
--            if (s > COMPLETING) {
--                if (q != null)
--                    q.thread = null;
--                return s;
--            }
--            else if (s == COMPLETING)
--                // We may have already promised (via isDone) that we are done
--                // so never return empty-handed or throw InterruptedException
--                Thread.yield();
--            else if (Thread.interrupted()) {
--                removeWaiter(q);
--                throw new InterruptedException();
--            }
--            else if (q == null) {
--                if (timed && nanos <= 0L)
--                    return s;
--                q = new WaitNode();
--            }
--            else if (!queued)
--                queued = WAITERS.weakCompareAndSet(this, q.next = waiters, q);
--            else if (timed) {
--                final long parkNanos;
--                if (startTime == 0L) { // first time
--                    startTime = System.nanoTime();
--                    if (startTime == 0L)
--                        startTime = 1L;
--                    parkNanos = nanos;
--                } else {
--                    long elapsed = System.nanoTime() - startTime;
--                    if (elapsed >= nanos) {
--                        removeWaiter(q);
--                        return state;
--                    }
--                    parkNanos = nanos - elapsed;
--                }
--                // nanoTime may be slow; recheck before parking
--                if (state < COMPLETING)
--                    LockSupport.parkNanos(this, parkNanos);
--            }
--            else
--                LockSupport.park(this);
--        }
--    }
--
--    /**
--     * Tries to unlink a timed-out or interrupted wait node to avoid
--     * accumulating garbage.  Internal nodes are simply unspliced
--     * without CAS since it is harmless if they are traversed anyway
--     * by releasers.  To avoid effects of unsplicing from already
--     * removed nodes, the list is retraversed in case of an apparent
--     * race.  This is slow when there are a lot of nodes, but we don't
--     * expect lists to be long enough to outweigh higher-overhead
--     * schemes.
--     */
--    private void removeWaiter(WaitNode node) {
--        if (node != null) {
--            node.thread = null;
--            retry:
--            for (;;) {          // restart on removeWaiter race
--                for (WaitNode pred = null, q = waiters, s; q != null; q = s) {
--                    s = q.next;
--                    if (q.thread != null)
--                        pred = q;
--                    else if (pred != null) {
--                        pred.next = s;
--                        if (pred.thread == null) // check for race
--                            continue retry;
--                    }
--                    else if (!WAITERS.compareAndSet(this, q, s))
--                        continue retry;
--                }
--                break;
--            }
--        }
-+        callable = null;
-     }
- 
-     /**
-@@ -585,18 +414,4 @@
-     }
- 
-     // VarHandle mechanics
+-    // VarHandle mechanics
 -    private static final VarHandle STATE;
 -    private static final VarHandle RUNNER;
 -    private static final VarHandle WAITERS;
--    static {
++    private static final AtomicIntegerFieldUpdater<FutureTask> STATE =
++        AtomicIntegerFieldUpdater.newUpdater(FutureTask.class, "state");
++    private static final AtomicReferenceFieldUpdater<FutureTask, Thread> RUNNER =
++        AtomicReferenceFieldUpdater.newUpdater(FutureTask.class, Thread.class, "runner");
++    private static final AtomicReferenceFieldUpdater<FutureTask, WaitNode> WAITERS =
++        AtomicReferenceFieldUpdater.newUpdater(FutureTask.class, WaitNode.class, "waiters");
+     static {
 -        MethodHandles.Lookup l = MethodHandles.lookup();
 -        STATE = MhUtil.findVarHandle(l, "state", int.class);
 -        RUNNER = MhUtil.findVarHandle(l, "runner", Thread.class);
 -        WAITERS = MhUtil.findVarHandle(l, "waiters", WaitNode.class);
 -
--        // Reduce the risk of rare disastrous classloading in first call to
--        // LockSupport.park: https://bugs.openjdk.org/browse/JDK-8074773
--        Class<?> ensureLoaded = LockSupport.class;
--    }
--
- }
+         // Reduce the risk of rare disastrous classloading in first call to
+         // LockSupport.park: https://bugs.openjdk.org/browse/JDK-8074773
+         Class<?> ensureLoaded = LockSupport.class;

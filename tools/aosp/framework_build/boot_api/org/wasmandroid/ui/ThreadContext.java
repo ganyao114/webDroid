@@ -12,6 +12,7 @@ public final class ThreadContext {
     public static native boolean postAtTime(Runnable task, long uptimeMillis);
     public static native void removeCallbacks(Runnable task);
     public static native void clearThreadLocals(Thread thread);
+    public static native void setIoBlocker(Runnable blocker);
     public static native void setParkBlocker(Thread thread, Object blocker);
     public static native Object getParkBlocker(Thread thread);
     public static native void unpark(Thread thread);

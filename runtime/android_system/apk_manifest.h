@@ -26,6 +26,7 @@ struct ApkIntentFilter {
 struct ApkComponent {
     std::string name, label;
     uint32_t icon = 0;
+    uint32_t launch_mode = 0;
     bool enabled = true;
     bool exported = false;
     std::vector<ApkIntentFilter> filters;

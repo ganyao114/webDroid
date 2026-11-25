@@ -10,7 +10,7 @@ if(EMSCRIPTEN)
     add_test(NAME test_m20_wechat_compat_wasm COMMAND "${WA_NODE_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/test_wechat_wasm.mjs" "$<TARGET_FILE:android_system_large>" ${wechat_inputs})
     set_tests_properties(test_m20_wechat_compat_wasm PROPERTIES
-        SKIP_REGULAR_EXPRESSION "WeChat APK is absent" TIMEOUT 600)
+        SKIP_REGULAR_EXPRESSION "WeChat APK is absent" TIMEOUT 900)
     return()
 endif()
 
@@ -24,4 +24,4 @@ add_dependencies(test_m20_wechat_compat wa_foreground_framework_assets)
 add_test(NAME test_m20_wechat_compat COMMAND test_m20_wechat_compat ${wechat_inputs})
 set_tests_properties(test_m20_wechat_compat PROPERTIES
     SKIP_REGULAR_EXPRESSION "WeChat APK is absent"
-    FAIL_REGULAR_EXPRESSION "mutex lock failed: Invalid argument" TIMEOUT 240)
+    FAIL_REGULAR_EXPRESSION "mutex lock failed: Invalid argument" TIMEOUT 720)

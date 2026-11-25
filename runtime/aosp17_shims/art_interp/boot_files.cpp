@@ -200,12 +200,18 @@ Value Open(Runtime& vm, Object* name_object, bool readable, bool writable, bool 
   return Value::Ref(descriptor);
 }
 
-Runtime::FileHandle& Handle(Runtime& vm, Object& descriptor, bool writable) {
+Runtime::FileHandle& Handle(Runtime& vm, Object& descriptor) {
   const auto entry = vm.file_handles.find(&descriptor);
-  if (entry == vm.file_handles.end() || !(writable ? entry->second.writable : entry->second.readable)) {
+  if (entry == vm.file_handles.end()) {
     vm.Fail("Ljava/io/IOException;", "Bad file descriptor");
   }
   return entry->second;
+}
+
+Runtime::FileHandle& Handle(Runtime& vm, Object& descriptor, bool writable) {
+  auto& handle = Handle(vm, descriptor);
+  if (!(writable ? handle.writable : handle.readable)) vm.Fail("Ljava/io/IOException;", "Bad file descriptor");
+  return handle;
 }
 
 struct ByteArrayRange {
@@ -268,10 +274,26 @@ int32_t ReadFile(Runtime::FileHandle& handle, const ByteArrayRange& buffer) {
   return count;
 }
 
+void WriteFile(Runtime& vm, Runtime::FileHandle& handle, const ByteArrayRange& buffer) {
+  auto& bytes = handle.file->bytes;
+  const auto position = handle.append ? bytes.size() : handle.position;
+  if (position > bytes.max_size() || buffer.size > bytes.max_size() - position) {
+    vm.Fail("Ljava/io/IOException;", "File is too large");
+  }
+  const auto end = position + buffer.size;
+  if (end > bytes.size()) bytes.resize(end);
+  if (!buffer.CopyTo(0, std::span(bytes).subspan(position, buffer.size))) {
+    vm.Fail("Ljava/io/IOException;", "Cannot read array backing memory");
+  }
+  handle.position = end;
+  handle.file->last_modified = NowMillis();
+}
+
 void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host_fd) {
   constexpr auto kIn = "Ljava/io/FileInputStream;";
   constexpr auto kOut = "Ljava/io/FileOutputStream;";
   constexpr auto kRandom = "Ljava/io/RandomAccessFile;";
+  constexpr auto kChannel = "Lsun/nio/ch/FileChannelImpl;";
   const Builtin close_stream = [&android_fd, &host_fd](Runtime& vm, Object* self, Values) {
     auto& descriptor = Descriptor(vm, self);
     vm.file_handles.erase(&descriptor);
@@ -292,6 +314,47 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
   cl.AddBootNative(kIn, "close0", "()V", close_stream);
   cl.AddBootNative(kOut, "close0", "()V", close_stream);
   cl.AddBootNative(kRandom, "close0", "()V", close_stream);
+  cl.AddBootNative(kChannel, "close0", "()V", close_stream);
+  cl.AddBootNative(kChannel, "size0", "()J", [](Runtime& vm, Object* self, Values) {
+    return Value::Long(Handle(vm, Descriptor(vm, self)).file->Size());
+  });
+  cl.AddBootNative(kChannel, "position0", "(J)J", [](Runtime& vm, Object* self, Values args) {
+    auto& handle = Handle(vm, Descriptor(vm, self));
+    if (args[0].j() >= 0) handle.position = args[0].j();
+    return Value::Long(handle.append && args[0].j() < 0 ? handle.file->Size() : handle.position);
+  });
+  cl.AddBootNative(kChannel, "truncate0", "(J)V", [](Runtime& vm, Object* self, Values args) {
+    auto& handle = Handle(vm, Descriptor(vm, self), true);
+    const auto size = static_cast<uint64_t>(args[0].j());
+    if (size < handle.file->Size()) {
+      handle.file->bytes.resize(size);
+      handle.file->last_modified = NowMillis();
+    }
+    handle.position = std::min(handle.position, size);
+    return Value{};
+  });
+  cl.AddBootNative(kChannel, "read0", "([BIIJ)I", [](Runtime& vm, Object* self, Values args) {
+    const auto buffer = Buffer(vm, args.first(3));
+    auto& handle = Handle(vm, Descriptor(vm, self), false);
+    auto positioned = handle;
+    const auto offset = args[3].j();
+    if (offset >= 0) positioned.position = offset;
+    const auto count = ReadFile(offset < 0 ? handle : positioned, buffer);
+    if (count < 0) vm.Fail("Ljava/io/IOException;", "Cannot read mounted file");
+    return Value::Int(count == 0 && buffer.size ? -1 : count);
+  });
+  cl.AddBootNative(kChannel, "write0", "([BIIJ)V", [](Runtime& vm, Object* self, Values args) {
+    const auto buffer = Buffer(vm, args.first(3));
+    auto& handle = Handle(vm, Descriptor(vm, self), true);
+    auto positioned = handle;
+    const auto offset = args[3].j();
+    if (offset >= 0) {
+      positioned.position = offset;
+      positioned.append = false;
+    }
+    if (buffer.size) WriteFile(vm, offset < 0 ? handle : positioned, buffer);
+    return Value{};
+  });
   const Builtin read = [&android_fd](Runtime& vm, Object* self, Values args) {
     const auto buffer = Buffer(vm, args);
     if (buffer.size == 0) return Value::Int(0);
@@ -382,19 +445,7 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
       if (std::fflush(stream) != 0) vm.Fail("Ljava/io/IOException;", "Console flush failed");
       return Value{};
     }
-    auto& handle = Handle(vm, descriptor, true);
-    auto& bytes = handle.file->bytes;
-    const auto position = handle.append ? bytes.size() : handle.position;
-    if (position > bytes.max_size() || buffer.size > bytes.max_size() - position) {
-      vm.Fail("Ljava/io/IOException;", "File is too large");
-    }
-    const auto end = position + buffer.size;
-    if (end > bytes.size()) bytes.resize(end);
-    if (!buffer.CopyTo(0, std::span(bytes).subspan(position, buffer.size))) {
-      vm.Fail("Ljava/io/IOException;", "Cannot read array backing memory");
-    }
-    handle.position = end;
-    handle.file->last_modified = NowMillis();
+    WriteFile(vm, Handle(vm, descriptor, true), buffer);
     return Value{};
   };
   cl.AddBootNative(kOut, "writeBytes", "([BII)V", write);

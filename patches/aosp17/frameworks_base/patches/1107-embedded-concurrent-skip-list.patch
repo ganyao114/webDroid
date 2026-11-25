@@ -1,0 +1,278 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentSkipListMap.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentSkipListMap.java
+@@ -35,8 +35,6 @@
+ 
+ package java.util.concurrent;
+ 
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+ import java.io.Serializable;
+ import java.util.AbstractCollection;
+ import java.util.AbstractMap;
+@@ -58,7 +56,8 @@
+ import java.util.function.Consumer;
+ import java.util.function.Function;
+ import java.util.function.Predicate;
+-import java.util.concurrent.atomic.LongAdder;
++import java.util.concurrent.atomic.AtomicLong;
++import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+ 
+ /**
+  * A scalable concurrent {@link ConcurrentNavigableMap} implementation.
+@@ -338,9 +337,9 @@
+     final Comparator<? super K> comparator;
+ 
+     /** Lazily initialized topmost index of the skiplist. */
+-    private transient Index<K,V> head;
++    private transient volatile Index<K,V> head;
+     /** Lazily initialized element count */
+-    private transient LongAdder adder;
++    private transient volatile AtomicLong adder;
+     /** Lazily initialized key set */
+     private transient KeySet<K,V> keySet;
+     /** Lazily initialized values collection */
+@@ -359,8 +358,8 @@
+      */
+     static final class Node<K,V> {
+         final K key; // currently, never detached
+-        V val;
+-        Node<K,V> next;
++        volatile V val;
++        volatile Node<K,V> next;
+         Node(K key, V value, Node<K,V> next) {
+             this.key = key;
+             this.val = value;
+@@ -374,7 +373,7 @@
+     static final class Index<K,V> {
+         final Node<K,V> node;  // currently, never detached
+         final Index<K,V> down;
+-        Index<K,V> right;
++        volatile Index<K,V> right;
+         Index(Node<K,V> node, Index<K,V> down, Index<K,V> right) {
+             this.node = node;
+             this.down = down;
+@@ -398,7 +397,6 @@
+      */
+     final Node<K,V> baseHead() {
+         Index<K,V> h;
+-        VarHandle.acquireFence();
+         return ((h = head) == null) ? null : h.node;
+     }
+ 
+@@ -435,20 +433,20 @@
+      * @param c count to add
+      */
+     private void addCount(long c) {
+-        LongAdder a;
++        AtomicLong a;
+         do {} while ((a = adder) == null &&
+-                     !ADDER.compareAndSet(this, null, a = new LongAdder()));
+-        a.add(c);
++                     !ADDER.compareAndSet(this, null, a = new AtomicLong()));
++        a.addAndGet(c);
+     }
+ 
+     /**
+      * Returns element count, initializing adder if necessary.
+      */
+     final long getAdderCount() {
+-        LongAdder a; long c;
++        AtomicLong a; long c;
+         do {} while ((a = adder) == null &&
+-                     !ADDER.compareAndSet(this, null, a = new LongAdder()));
+-        return ((c = a.sum()) <= 0L) ? 0L : c; // ignore transient negatives
++                     !ADDER.compareAndSet(this, null, a = new AtomicLong()));
++        return ((c = a.get()) <= 0L) ? 0L : c; // ignore transient negatives
+     }
+ 
+     /* ---------------- Traversal -------------- */
+@@ -464,7 +462,6 @@
+      */
+     private Node<K,V> findPredecessor(Object key, Comparator<? super K> cmp) {
+         Index<K,V> q;
+-        VarHandle.acquireFence();
+         if ((q = head) == null || key == null)
+             return null;
+         else {
+@@ -536,7 +533,6 @@
+      */
+     private V doGet(Object key) {
+         Index<K,V> q;
+-        VarHandle.acquireFence();
+         if (key == null)
+             throw new NullPointerException();
+         Comparator<? super K> cmp = comparator;
+@@ -599,7 +595,6 @@
+         Comparator<? super K> cmp = comparator;
+         for (;;) {
+             Index<K,V> h; Node<K,V> b;
+-            VarHandle.acquireFence();
+             int levels = 0;                    // number of levels descended
+             if ((h = head) == null) {          // try to initialize
+                 Node<K,V> base = new Node<K,V>(null, null, null);
+@@ -888,7 +883,6 @@
+     final Node<K,V> findLast() {
+         outer: for (;;) {
+             Index<K,V> q; Node<K,V> b;
+-            VarHandle.acquireFence();
+             if ((q = head) == null)
+                 break;
+             for (Index<K,V> r, d;;) {
+@@ -949,7 +943,6 @@
+     private Map.Entry<K,V> doRemoveLastEntry() {
+         outer: for (;;) {
+             Index<K,V> q; Node<K,V> b;
+-            VarHandle.acquireFence();
+             if ((q = head) == null)
+                 break;
+             for (;;) {
+@@ -1186,10 +1179,8 @@
+             }
+         }
+         if (count != 0L) {
+-            VarHandle.releaseFence(); // emulate volatile stores
+             addCount(count);
+             head = h;
+-            VarHandle.fullFence();
+         }
+     }
+ 
+@@ -1273,10 +1264,8 @@
+             }
+         }
+         if (count != 0L) {
+-            VarHandle.releaseFence();
+             addCount(count);
+             head = h;
+-            VarHandle.fullFence();
+         }
+     }
+ 
+@@ -1412,7 +1401,6 @@
+      */
+     public void clear() {
+         Index<K,V> h, r, d; Node<K,V> b;
+-        VarHandle.acquireFence();
+         while ((h = head) != null) {
+             if ((r = h.right) != null)        // remove indices
+                 RIGHT.compareAndSet(h, r, null);
+@@ -2912,7 +2900,6 @@
+             V nextValue;
+ 
+             SubMapIter() {
+-                VarHandle.acquireFence();
+                 Comparator<? super K> cmp = m.comparator;
+                 for (;;) {
+                     next = isDescending ? hiNode(cmp) : loNode(cmp);
+@@ -3222,7 +3209,6 @@
+     // factory method for KeySpliterator
+     final KeySpliterator<K,V> keySpliterator() {
+         Index<K,V> h; Node<K,V> hn, n; long est;
+-        VarHandle.acquireFence();
+         if ((h = head) == null || (hn = h.node) == null) {
+             n = null;
+             est = 0L;
+@@ -3308,7 +3294,6 @@
+     // Almost the same as keySpliterator()
+     final ValueSpliterator<K,V> valueSpliterator() {
+         Index<K,V> h; Node<K,V> hn, n; long est;
+-        VarHandle.acquireFence();
+         if ((h = head) == null || (hn = h.node) == null) {
+             n = null;
+             est = 0L;
+@@ -3412,7 +3397,6 @@
+     // Almost the same as keySpliterator()
+     final EntrySpliterator<K,V> entrySpliterator() {
+         Index<K,V> h; Node<K,V> hn, n; long est;
+-        VarHandle.acquireFence();
+         if ((h = head) == null || (hn = h.node) == null) {
+             n = null;
+             est = 0L;
+@@ -3424,24 +3408,15 @@
+         return new EntrySpliterator<K,V>(comparator, h, n, null, est);
+     }
+ 
+-    // VarHandle mechanics
+-    private static final VarHandle HEAD;
+-    private static final VarHandle ADDER;
+-    private static final VarHandle NEXT;
+-    private static final VarHandle VAL;
+-    private static final VarHandle RIGHT;
+-    static {
+-        try {
+-            MethodHandles.Lookup l = MethodHandles.lookup();
+-            HEAD = l.findVarHandle(ConcurrentSkipListMap.class, "head",
+-                                   Index.class);
+-            ADDER = l.findVarHandle(ConcurrentSkipListMap.class, "adder",
+-                                    LongAdder.class);
+-            NEXT = l.findVarHandle(Node.class, "next", Node.class);
+-            VAL = l.findVarHandle(Node.class, "val", Object.class);
+-            RIGHT = l.findVarHandle(Index.class, "right", Index.class);
+-        } catch (ReflectiveOperationException e) {
+-            throw new ExceptionInInitializerError(e);
+-        }
+-    }
++    // Use volatile fields and the runtime's atomic field updaters for the skip-list links.
++    private static final AtomicReferenceFieldUpdater<ConcurrentSkipListMap, Index> HEAD =
++        AtomicReferenceFieldUpdater.newUpdater(ConcurrentSkipListMap.class, Index.class, "head");
++    private static final AtomicReferenceFieldUpdater<ConcurrentSkipListMap, AtomicLong> ADDER =
++        AtomicReferenceFieldUpdater.newUpdater(ConcurrentSkipListMap.class, AtomicLong.class, "adder");
++    private static final AtomicReferenceFieldUpdater<Node, Node> NEXT =
++        AtomicReferenceFieldUpdater.newUpdater(Node.class, Node.class, "next");
++    private static final AtomicReferenceFieldUpdater<Node, Object> VAL =
++        AtomicReferenceFieldUpdater.newUpdater(Node.class, Object.class, "val");
++    private static final AtomicReferenceFieldUpdater<Index, Index> RIGHT =
++        AtomicReferenceFieldUpdater.newUpdater(Index.class, Index.class, "right");
+ }
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentSkipListSet.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentSkipListSet.java
+@@ -35,9 +35,6 @@
+ 
+ package java.util.concurrent;
+ 
+-import jdk.internal.misc.Unsafe;
+-
+-import java.lang.invoke.VarHandle;
+ import java.util.AbstractSet;
+ import java.util.Collection;
+ import java.util.Collections;
+@@ -102,11 +99,10 @@
+ 
+     /**
+      * @serial The underlying map. Uses Boolean.TRUE as value for each
+-     * element.  This field is declared final for the sake of thread
+-     * safety, which entails some ugliness in clone().
++     * element. Volatile allows a clone to publish its independent backing map.
+      */
+     @SuppressWarnings("serial") // Conditionally serializable
+-    private final ConcurrentNavigableMap<E,Object> m;
++    private volatile ConcurrentNavigableMap<E,Object> m;
+ 
+     /**
+      * Constructs a new, empty set that orders its elements according to
+@@ -177,9 +173,7 @@
+             @SuppressWarnings("unchecked")
+             ConcurrentSkipListSet<E> clone =
+                 (ConcurrentSkipListSet<E>) super.clone();
+-            clone.setMap(new ConcurrentSkipListMap<E,Object>(m));
+-            // Needed to ensure safe publication of setMap()
+-            VarHandle.releaseFence();
++            clone.m = new ConcurrentSkipListMap<E,Object>(m);
+             return clone;
+         } catch (CloneNotSupportedException e) {
+             throw new InternalError();
+@@ -528,14 +522,4 @@
+             ? ((ConcurrentSkipListMap<E,?>)m).keySpliterator()
+             : ((ConcurrentSkipListMap.SubMap<E,?>)m).new SubMapKeyIterator();
+     }
+-
+-    /** Initializes map field; for use in clone. */
+-    private void setMap(ConcurrentNavigableMap<E,Object> map) {
+-        final Unsafe U = Unsafe.getUnsafe();
+-        U.putReference(
+-            this,
+-            U.objectFieldOffset(ConcurrentSkipListSet.class, "m"),
+-            map
+-        );
+-    }
+ }

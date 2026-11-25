@@ -983,14 +983,16 @@ void InstallArrays(ClassLinker& cl) {
     text += u']';
     return StringValue(vm, std::move(text));
   });
-  add("deepToString", "([Ljava/lang/Object;)Ljava/lang/String;", [](Runtime& vm, Object*, Values a) {
+  const Builtin array_to_string = [](Runtime& vm, Object*, Values a) {
     auto* array = a[0].ref();
     if (!array) return StringValue(vm, u"null");
     std::u16string text;
     std::vector<Object*> parents;
     AppendArray(vm, array, text, parents);
     return StringValue(vm, std::move(text));
-  });
+  };
+  add("deepToString", "([Ljava/lang/Object;)Ljava/lang/String;", array_to_string);
+  add("toString", "([I)Ljava/lang/String;", array_to_string);
   for (char kind : std::string_view("ZBCSIJFDL")) {
     const std::string component = kind == 'L' ? "Ljava/lang/Object;" : std::string(1, kind);
     const std::string array = "[" + component;
@@ -1219,100 +1221,11 @@ void InstallUnmodifiableMap(ClassLinker& cl, Class& collections) {
       [](Runtime& vm, Object*, Values a) { return WrapReadOnly(vm, kReadOnlyMap, a[0]); });
 }
 
-void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
+void InstallQueueAndThreadFactory(ClassLinker& cl) {
   constexpr auto kQueue = "Ljava/util/Queue;";
-  constexpr auto kBlockingQueue = "Ljava/util/concurrent/BlockingQueue;";
-  constexpr auto kLinkedQueue = "Ljava/util/concurrent/LinkedBlockingQueue;";
-  constexpr auto kNode = "Ljava/util/concurrent/LinkedBlockingQueue$Node;";
   auto& queue = cl.Define(kQueue, kObject, kInterface, {kCollection});
   Abstract(cl, queue, {{"offer", "(Ljava/lang/Object;)Z"}, {"poll", "()Ljava/lang/Object;"},
                        {"peek", "()Ljava/lang/Object;"}});
-  auto& blocking = cl.Define(kBlockingQueue, kObject, kInterface, {kQueue});
-  Abstract(cl, blocking, {{"remainingCapacity", "()I"}});
-  auto& node = cl.Define(kNode, kObject, art::kAccFinal);
-  auto& item = cl.AddField(node, "item", kObject, false);
-  auto& next = cl.AddField(node, "next", kNode, false);
-  auto& linked = cl.Define(kLinkedQueue, kObject, 0, {kBlockingQueue, "Ljava/io/Serializable;"});
-  auto& capacity = cl.AddField(linked, "capacity", "I", false);
-  auto& count = cl.AddField(linked, "count", "I", false);
-  auto& first = cl.AddField(linked, "head", kNode, false);
-  auto& last = cl.AddField(linked, "last", kNode, false);
-  const auto construct = [&capacity](Runtime& vm, Object* self, Values a) {
-    const int32_t limit = a.empty() ? INT32_MAX : a[0].i();
-    if (limit <= 0) vm.Fail("Ljava/lang/IllegalArgumentException;", "Queue capacity");
-    self->fields[capacity.slot] = Value::Int(limit);
-    return Value{};
-  };
-  cl.AddMethod(linked, "<init>", "()V", 0, construct);
-  cl.AddMethod(linked, "<init>", "(I)V", 0, construct);
-  const auto offer = [&node, &item, &next, &capacity, &count, &first, &last](Runtime& vm, Object* self, Values a) {
-    vm.NonNull(a[0].ref());
-    const auto size = self->fields[count.slot].i();
-    if (size == self->fields[capacity.slot].i()) return Value::Int(0);
-    auto* entry = vm.heap.Allocate(vm, vm.linker.Resolve(node.descriptor));
-    entry->fields[item.slot] = a[0];
-    if (auto* tail = self->fields[last.slot].ref()) tail->fields[next.slot] = Value::Ref(entry);
-    else self->fields[first.slot] = Value::Ref(entry);
-    self->fields[last.slot] = Value::Ref(entry);
-    self->fields[count.slot] = Value::Int(size + 1);
-    ++self->modifications;
-    return Value::Int(1);
-  };
-  cl.AddMethod(linked, "offer", "(Ljava/lang/Object;)Z", 0, offer);
-  cl.AddMethod(linked, "add", "(Ljava/lang/Object;)Z", 0, [offer](Runtime& vm, Object* self, Values a) {
-    if (!offer(vm, self, a).i()) vm.Fail("Ljava/lang/IllegalStateException;", "Queue full");
-    return Value::Int(1);
-  });
-  cl.AddMethod(linked, "peek", "()Ljava/lang/Object;", 0, [&first, &item](Runtime&, Object* self, Values) {
-    const auto* head = self->fields[first.slot].ref();
-    return head ? head->fields[item.slot] : Value{};
-  });
-  cl.AddMethod(linked, "poll", "()Ljava/lang/Object;", 0,
-      [&first, &last, &next, &item, &count](Runtime&, Object* self, Values) {
-        auto* head = self->fields[first.slot].ref();
-        if (!head) return Value{};
-        self->fields[first.slot] = head->fields[next.slot];
-        if (!self->fields[first.slot].ref()) self->fields[last.slot] = {};
-        self->fields[count.slot] = Value::Int(self->fields[count.slot].i() - 1);
-        ++self->modifications;
-        return head->fields[item.slot];
-      });
-  cl.AddMethod(linked, "remove", "(Ljava/lang/Object;)Z", 0,
-      [&first, &last, &next, &item, &count](Runtime& vm, Object* self, Values args) {
-        auto* wanted = args[0].ref();
-        if (!wanted) return Value::Int(0);
-        const auto version = self->modifications;
-        Object* previous = nullptr;
-        for (auto* entry = self->fields[first.slot].ref(); entry; entry = entry->fields[next.slot].ref()) {
-          const bool match = JavaEquals(vm, wanted, entry->fields[item.slot].ref());
-          if (version != self->modifications) vm.Fail("Ljava/util/ConcurrentModificationException;");
-          if (match) {
-            auto& link = previous ? previous->fields[next.slot] : self->fields[first.slot];
-            link = entry->fields[next.slot];
-            if (self->fields[last.slot].ref() == entry) self->fields[last.slot] = Value::Ref(previous);
-            self->fields[count.slot] = Value::Int(self->fields[count.slot].i() - 1);
-            ++self->modifications;
-            return Value::Int(1);
-          }
-          previous = entry;
-        }
-        return Value::Int(0);
-      });
-  cl.AddMethod(linked, "clear", "()V", 0, [&first, &last, &count](Runtime&, Object* self, Values) {
-    if (self->fields[count.slot].i()) ++self->modifications;
-    self->fields[first.slot] = self->fields[last.slot] = self->fields[count.slot] = {};
-    return Value{};
-  });
-  cl.AddMethod(linked, "size", "()I", 0, [&count](Runtime&, Object* self, Values) { return self->fields[count.slot]; });
-  cl.AddMethod(linked, "isEmpty", "()Z", 0,
-      [&count](Runtime&, Object* self, Values) { return Value::Int(!self->fields[count.slot].i()); });
-  cl.AddMethod(linked, "remainingCapacity", "()I", 0, [&capacity, &count](Runtime&, Object* self, Values) {
-    return Value::Int(self->fields[capacity.slot].i() - self->fields[count.slot].i());
-  });
-
-  constexpr auto kAbstract = "Ljava/util/concurrent/AbstractExecutorService;";
-  auto& executor = cl.Define(kAbstract, kObject, art::kAccAbstract, {"Ljava/util/concurrent/ExecutorService;"});
-  cl.AddMethod(executor, "<init>", "()V", 0, NoOp);
   auto& factory = cl.Define("Ljava/util/concurrent/ThreadFactory;", kObject, kInterface);
   Abstract(cl, factory, {{"newThread", "(Ljava/lang/Runnable;)Ljava/lang/Thread;"}});
 }
@@ -1440,6 +1353,12 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
       [](Runtime& vm, Object*, Values args) {
         auto& views = vm.linker.Resolve("Ljava/util/EmbeddedSynchronizedCollections;");
         auto& method = vm.linker.FindMethod(views, "nCopies", "(ILjava/lang/Object;)Ljava/util/List;", true);
+        return vm.Invoke(method, nullptr, args);
+      });
+  cl.AddMethod(collections, "emptyIterator", "()Ljava/util/Iterator;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values args) {
+        auto& views = vm.linker.Resolve("Ljava/util/EmbeddedSynchronizedCollections;");
+        auto& method = vm.linker.FindMethod(views, "emptyIterator", "()Ljava/util/Iterator;", true);
         return vm.Invoke(method, nullptr, args);
       });
   cl.AddMethod(collections, "singleton", "(Ljava/lang/Object;)Ljava/util/Set;", art::kAccStatic,
@@ -1647,7 +1566,7 @@ void InstallCollections(Runtime& vm) {
   InstallList(cl, interfaces.list);
   InstallMaps(cl);
   InstallUtilities(cl, interfaces);
-  InstallConcurrentQueueAndExecutor(cl);
+  InstallQueueAndThreadFactory(cl);
 }
 
 }  // namespace wa::interp

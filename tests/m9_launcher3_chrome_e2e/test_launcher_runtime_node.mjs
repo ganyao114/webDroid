@@ -11,7 +11,9 @@ import { cubeName, fallbackDexName, frameworkDexName, launcherName, loadAndroidS
   systemAppNames, systemUiName } from '../../web/launcher/assets.mjs';
 import { LauncherHost } from '../../web/launcher/launcher_host.mjs';
 import { mountLauncherPlayground } from '../../web/shell/launcher_playground.mjs';
+import { Action, Input, INPUT_CAPACITY, INPUT_SIZE, Memory } from '../../web/surfaceflinger/abi.mjs';
 import { canvasFont, loadAospRoboto } from '../../web/surfaceflinger/atlas_cache.mjs';
+import { AndroidInputWriter } from '../../web/surfaceflinger/input_ime.mjs';
 import { createMilestones, runLauncher3E2E } from './launcher3_e2e.mjs';
 import { documentFrom, fire, installBrowser, pointer } from './mock_browser.mjs';
 import { launchers, mockLauncherWasm } from './mock_launcher_wasm.mjs';
@@ -102,6 +104,7 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
     globalThis.self = new EventTarget();
     try {
       await import(pathToFileURL(join(staged, 'tests/m6_apk_chrome_e2e/m6_apk_worker.mjs')));
+      await import(pathToFileURL(join(staged, 'web/launcher/foreground_worker.mjs')));
       await import(pathToFileURL(join(staged, 'web/shell/runtime.mjs')));
     } finally {
       delete globalThis.self;
@@ -136,7 +139,7 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
   }
 });
 
-test('honors i64 vsync time, NUL-terminated state/error and launch buffer ownership', () => {
+test('preserves launcher ABI timing, launch buffer ownership, and queued Back presses', () => {
   const fake = mockLauncherWasm();
   assert.throws(() => new LauncherAbi({ ...fake.module, _wa_system_launcher_create: undefined }),
     /missing _wa_system_launcher_create/);
@@ -157,6 +160,22 @@ test('honors i64 vsync time, NUL-terminated state/error and launch buffer owners
   abi.dispose();
   assert.equal(fake.allocations.size, 0);
   assert.equal(fake.calls.filter(([name]) => name === 'destroy').length, 1);
+
+  const shared = new SharedArrayBuffer(16 + INPUT_SIZE * INPUT_CAPACITY);
+  const memory = new Memory({ HEAPU8: new Uint8Array(shared) });
+  const input = new AndroidInputWriter(memory, 0);
+  const ring = input.ring;
+  ring.publish(INPUT_CAPACITY - 1);
+  assert.equal(input.pressKey(4, 20), false);
+  assert.equal(ring.writeIndex, INPUT_CAPACITY - 1);
+  assert.equal(ring.dropped, 0);
+  ring.consume();
+  assert.equal(input.pressKey(4, 20), true);
+  assert.equal(ring.writeIndex, INPUT_CAPACITY + 1);
+  for (const [slot, action] of [[INPUT_CAPACITY - 1, Action.DOWN], [0, Action.UP]]) {
+    const entry = ring.offset(slot);
+    assert.deepEqual([memory.u32(entry), memory.u32(entry + 4), memory.u32(entry + 12)], [Input.KEY, action, 4]);
+  }
 });
 
 test('only the matching CDP ID releases a screenshot milestone', async () => {

@@ -41,8 +41,19 @@ serveWorker({
       const scene = abi.scene;
       viewport = size;
       let display = size;
+      let replacedCanvas, published;
+      let layout = [], inputModal = false;
       compositor = await createSurfaceFlingerCompositor({
         module, scene, canvas, preferredBackend: backend, viewport: () => viewport,
+        webviewLayout: {
+          layout(...geometry) {
+            layout.push(geometry);
+            return true;
+          },
+          finishLayout(modal) { inputModal = modal; },
+        },
+        createOverlayCanvas: () => new OffscreenCanvas(1, 1),
+        onCanvasChanged: next => { replacedCanvas = next; },
         onError: error => self.postMessage({ type: 'error', message: error.message }),
         onVsync() {
           const { width, height, dpi: densityDpi } = compositor;
@@ -50,18 +61,31 @@ serveWorker({
             display = { width, height, densityDpi };
             abi.resize(display);
           }
-          if (!abi.tick(Math.max(0, performance.now() - startedAt))) return;
+          layout = [];
+          published = abi.tick(Math.max(0, performance.now() - startedAt));
+        },
+        onPresented(packet, planeOrder, output, usedOutputs) {
+          if (!published) return;
           const state = abi.state();
           const labels = sceneLabels(module, scene);
-          queueMicrotask(() => self.postMessage({
-            type: 'frame', labels,
+          const overlays = [];
+          if (replacedCanvas) overlays.push({ plane: 0, order: 0, image: replacedCanvas.transferToImageBitmap() });
+          for (let plane = 1; plane < output.length; ++plane) {
+            if (usedOutputs[plane]) overlays.push({ plane, order: planeOrder[plane],
+              image: output[plane].transferToImageBitmap() });
+          }
+          self.postMessage({
+            type: 'frame', labels, layout, inputModal, overlays,
+            inputRead: compositor.input.ring.readIndex,
+            size: { width: packet.width, height: packet.height },
             state: { ...compositor.stats(), ...state, ...source.stats, bootHeapEndBytes,
               presentedFrames: compositor.frame,
               freeHeadroomBytes: state.wasmLinearBytes - state.wasmHeapEndBytes },
-          }));
+          }, overlays.map(({ image }) => image));
         },
       });
-      return { memory: module.wasmMemory.buffer, input: module._wa_sf_input(scene) };
+      return { memory: module.wasmMemory.buffer, input: module._wa_sf_input(scene),
+        webviewRequests: module._wa_sf_webview_requests(scene), webviewEvents: module._wa_sf_webview_events(scene) };
     } catch (error) {
       dispose();
       throw error;
@@ -72,7 +96,7 @@ serveWorker({
     compositor.start();
   },
   resize({ size }) { viewport = size; },
-  back() { return abi.sendBack(); },
+  readWebViewFile({ id, url }) { return abi.readWebViewFile(id, url); },
   pixels() { return compositor.pixels(); },
   hold() { compositor.stop(); },
   shutdown() { dispose(); },

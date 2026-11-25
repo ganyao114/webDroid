@@ -105,10 +105,17 @@ services unavailable when the application requests them.
 Upstream `org.apache.http.legacy` (`third_party/aosp17/external/apache-http` at
 `android-17.0.0_r1`) is included in the framework profile, so WeChat's delayed
 reporting task constructs `DefaultHttpClient` and returns cleanly across 65+
-steady frames. Tapping “语言” opens `SettingsLanguageUI` (`English`, `简体中文`),
-and tapping “Log In” opens `MobileInputUI` (`Log In Via Mobile Number`,
-`Other Login Options`) with interactive IME phone-number input and Back return
-to `WelcomeActivity`.
+steady frames. The interaction probe reads the rendered controls and checks the
+resumed Activity after each transition. It covers language selection and Save,
+both signup options, country search and selection, the account login options,
+the password and SMS-code screens, and the recovery, help, and registration
+terms links. Pointer, scrolling, and IME events go through SurfaceFlinger.
+Language Save uses `CLEAR_TOP` to deliver a new intent to the existing launcher.
+The login close control and child Activity results preserve the foreground task.
+The Terms, recovery, Help Center, Security Center, and Feedback WebViews open.
+Back from these pages initializes WeChat's screenshot observer, which requires
+`MediaStore.Images.Media` from AOSP MediaProvider. The configured upstream
+checkouts omit that repository, so the interaction probe records a Back failure.
 
 JNI lifecycle hooks use the ELF dependency search order.
 The guest VFS exposes APK-backed library files and ELF metadata for system
@@ -165,5 +172,11 @@ The 512 MiB trial exhausted its heap during native library startup. The
 file written to MEMFS in the Node run was 22,731,625 bytes. Chrome took
 317,146.894 ms from the launcher tap to the visible welcome screen, sampled
 4,423 distinct colors from the WebGPU output, and reported zero browser
-errors. The worker renders Android display lists. DOM iframe WebViews use
-the standard foreground renderer.
+errors. The large-APK worker renders Android display lists on its OffscreenCanvas
+and presents WebViews through the same sandboxed iframe provider as the
+standard foreground renderer. The window consumes WebView requests and sends
+events through shared SurfaceFlinger rings. Local WebView files are read from
+the guest through the worker, and Android overlays render above the iframe.
+The Chrome test clicks through mobile login, account login, and mobile signup,
+enters text through Chrome's IME, and uses Back to return to the parent screens.
+It saves the login and signup screenshots alongside each other.

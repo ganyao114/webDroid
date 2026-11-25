@@ -1,0 +1,60 @@
+--- a/frameworks/base/core/java/android/app/ProgressDialog.java
++++ b/frameworks/base/core/java/android/app/ProgressDialog.java
+@@ -73,9 +73,10 @@
+     private int mProgressStyle = STYLE_SPINNER;
+     @UnsupportedAppUsage
+     private TextView mProgressNumber;
+-    private String mProgressNumberFormat;
++    private String mProgressNumberFormat = "%1d/%2d";
+     private TextView mProgressPercent;
+     private NumberFormat mProgressPercentFormat;
++    private boolean mUseDefaultPercentFormat = true;
+     
+     private int mMax;
+     private int mProgressVal;
+@@ -97,7 +98,6 @@
+      */
+     public ProgressDialog(Context context) {
+         super(context);
+-        initFormats();
+     }
+ 
+     /**
+@@ -110,13 +110,6 @@
+      */
+     public ProgressDialog(Context context, int theme) {
+         super(context, theme);
+-        initFormats();
+-    }
+-
+-    private void initFormats() {
+-        mProgressNumberFormat = "%1d/%2d";
+-        mProgressPercentFormat = NumberFormat.getPercentInstance();
+-        mProgressPercentFormat.setMaximumFractionDigits(0);
+     }
+ 
+     /**
+@@ -216,9 +209,12 @@
+                     } else {
+                         mProgressNumber.setText("");
+                     }
+-                    if (mProgressPercentFormat != null) {
+-                        double percent = (double) progress / (double) max;
+-                        SpannableString tmp = new SpannableString(mProgressPercentFormat.format(percent));
++                    if (mUseDefaultPercentFormat || mProgressPercentFormat != null) {
++                        double percent = max == 0 ? 0 : (double) progress / max;
++                        // The embedded profile has no ICU number formatter.
++                        String text = mUseDefaultPercentFormat ? Math.round(percent * 100) + "%"
++                                : mProgressPercentFormat.format(percent);
++                        SpannableString tmp = new SpannableString(text);
+                         tmp.setSpan(new StyleSpan(android.graphics.Typeface.BOLD),
+                                 0, tmp.length(), Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                         mProgressPercent.setText(tmp);
+@@ -508,6 +504,7 @@
+      * percentage text.  If null, nothing will be shown.
+      */
+     public void setProgressPercentFormat(NumberFormat format) {
++        mUseDefaultPercentFormat = false;
+         mProgressPercentFormat = format;
+         onProgressChanged();
+     }
