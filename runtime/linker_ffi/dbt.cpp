@@ -1324,10 +1324,7 @@ int32_t wa::dbt::StartThread(wa_dbt& dbt, GuestThread& thread, uint64_t routine,
     wa_guest_call_frame_t frame{};
     frame.gpr[0] = argument;
     const auto status = InitCpu(dbt, thread, *cpu, routine, frame);
-    if (status == WA_OK) {
-        thread.cpu = std::move(cpu);
-        thread.steps_left = kCallBudget;
-    }
+    if (status == WA_OK) thread.cpu = std::move(cpu);
     return status;
 }
 
@@ -1359,6 +1356,9 @@ bool wa::dbt::RunReadyWorker(wa_dbt& dbt) {
         int32_t status;
         {
             ActiveThread active(dbt, thread);
+            // A pthread can run across arbitrarily many scheduler slices.
+            // Budget this slice and any synchronous guest callbacks it invokes.
+            thread.steps_left = kCallBudget;
             try {
                 status = RunSlice(dbt, thread, *thread.cpu, true, caller_wait);
             } catch (const GuestFault& fault) {
