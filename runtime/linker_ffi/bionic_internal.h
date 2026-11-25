@@ -226,15 +226,21 @@ struct FastHostCall {
     wa_dbt& dbt;
     softmmu::CpuAccess& memory;
     softmmu::Iotlb& tlb;
-    const uint64_t* args;
+    const uint64_t* args; // Core register arguments, four on ARM32 and eight on ARM64.
+    void* user = nullptr;
     uint64_t result = 0;
 
     const uint8_t* ResidentRead(uint64_t address, uint64_t size) const noexcept;
     uint8_t* ResidentWrite(uint64_t address, uint64_t size) const noexcept;
     bool ReadU32(uint64_t address, uint32_t& word) const noexcept;
+
+  private:
+    uint8_t* Resident(uint64_t address, uint64_t size, bool write) const noexcept;
 };
 
-void RegisterFastHost(wa_dbt& dbt, std::string_view name, FastHostFn function);
+void RegisterFastHost(wa_dbt& dbt, std::string_view name, FastHostFn function,
+                      std::string_view soname = "libc.so");
+void RegisterFastHost(wa_dbt& dbt, uint64_t stub, FastHostFn function);
 #endif
 
 template <void (*Function)(wa_host_call_ctx_t&)> int32_t Dispatch(wa_host_call_ctx_t* ctx, void*) {
@@ -255,6 +261,8 @@ void RegisterFiles(wa_dbt& dbt);
 void RegisterMappings(wa_dbt& dbt);
 void RegisterNetwork(wa_dbt& dbt);
 void RegisterStrings(wa_dbt& dbt);
+void RegisterHeap(wa_dbt& dbt);
+void RegisterLegacyCppHeap(wa_dbt& dbt);
 void RegisterMath(wa_dbt& dbt);
 void RegisterDynamicLinker(wa_dbt& dbt);
 void RegisterGraphics(wa_dbt& dbt);

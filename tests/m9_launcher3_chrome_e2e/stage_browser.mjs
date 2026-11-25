@@ -34,7 +34,7 @@ async function firstFile(paths, required = true) {
   if (required) throw new Error(`Missing build artifact. Checked ${paths.join(', ')}`);
 }
 
-export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostBuild } = {}) {
+export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostBuild, robotoRoot = robotoSource } = {}) {
   const builds = [wasmBuild, hostBuild].filter(Boolean).map(dir => resolve(dir));
   const artifact = (paths, required) => firstFile(builds.flatMap(dir => paths.map(path => join(dir, path))), required);
   const [cube, launcher, systemUi, dex, fallback, resources, roboto] = await Promise.all([
@@ -47,7 +47,7 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
       `aosp17-ui/${fallbackDexName}`, `tests/m8_aosp17_ui_framework/aosp17-ui/${fallbackDexName}`]),
     artifact([resourcesName, `${systemRoot}/upstream-framework/framework-res-upstream.apk`]),
     // Match the default Android.bp prebuilt and its recovery font.
-    firstFile([join(robotoSource, 'font/3.005', aospRobotoFile)]),
+    firstFile([join(robotoRoot, 'font/3.005', aospRobotoFile)]),
     // stageM6Browser also validates and copies the two unified module files.
   ]);
   const apps = await Promise.all(systemAppNames.map(async name => {
@@ -71,7 +71,7 @@ export async function stageM9Browser(root, { wasmBuild = defaultWasmBuild, hostB
     [launcher, `build/${launcherName}`], [systemUi, `build/${systemUiName}`],
     [provenancePath, `build/${provenanceName}`], [dex, `build/${frameworkDexName}`],
     [fallback, `build/${fallbackDexName}`], [resources, `build/${resourcesName}`],
-    [roboto, `build/fonts/${aospRobotoFile}`], [join(robotoSource, 'NOTICE'), 'build/fonts/NOTICE'],
+    [roboto, `build/fonts/${aospRobotoFile}`], [join(robotoRoot, 'NOTICE'), 'build/fonts/NOTICE'],
     ...apps.map(({ name, path }) => [path, `build/${name}`])];
   for (const name of ['libndk_gles3_cube_armv7a.so', 'libndk_gles3_cube_arm64.so']) {
     const file = await artifact([name, `${m6}/ndk/${name}`, `${m1}/ndk/${name}`], false);

@@ -83,7 +83,10 @@ class ApkArchive {
         if (!entry || !entry->uncompressed_length ||
                 entry->uncompressed_length >= dbt::kHeapBase - kFirstImage)
             throw std::runtime_error("Missing or invalid ELF entry " + key);
-        return *files.emplace(key, std::make_unique<ApkEntryReader>(zip.get(), *entry,
+        const ApkZipEntry contents{entry->offset, entry->compressed_length,
+                                   entry->uncompressed_length, entry->crc32,
+                                   static_cast<uint16_t>(entry->method)};
+        return *files.emplace(key, std::make_unique<ApkEntryReader>(GetFileDescriptor(zip.get()), contents,
             std::span<const uint8_t>{}, &cache, key)).first->second;
     }
 

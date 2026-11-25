@@ -5,6 +5,7 @@
 
 #include <androidfw/ResourceTypes.h>
 
+namespace wa::dbt { struct FastHostCall; }
 namespace wa::ui_jni::detail {
 struct BitmapData;
 }
@@ -91,6 +92,9 @@ class HybridJniBridge {
 
     class Frame;
     static int32_t Trampoline(wa_host_call_ctx_t* ctx, void* user);
+#ifdef __EMSCRIPTEN__
+    static bool FastEnvCall(dbt::FastHostCall& call);
+#endif
     template<BitmapOp operation> static int32_t BitmapCall(wa_host_call_ctx_t* ctx, void* user);
     template<AssetOp operation> static int32_t AssetCall(wa_host_call_ctx_t* ctx, void* user);
     void DispatchAsset(AssetOp operation, wa_host_call_ctx_t& ctx);
@@ -117,6 +121,7 @@ class HybridJniBridge {
     void DetachThread(uint64_t thread);
     void DeleteReference(uint64_t id, jobjectRefType type);
     jobject Ref(uint64_t id) const;
+    bool SameObject(uint64_t left, uint64_t right) const;
     interp::Method* Method(uint64_t id) const;
     interp::Field* Field(uint64_t id) const;
     uint32_t Track(jobject ref, jobjectRefType type = JNILocalRefType);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "guest_heap.h"
 #include "wasmandroid/softmmu_linker.h"
 
 #include <functional>
@@ -87,9 +88,6 @@ struct BionicState;
 class WasmJit;
 #endif
 
-inline constexpr uint64_t kHeapBase = 0x40000000;
-inline constexpr uint64_t kHeapLimit = 0xe0000000;
-
 } // namespace wa::dbt
 
 struct wa_dbt {
@@ -106,13 +104,13 @@ struct wa_dbt {
     std::vector<wa::dbt::LoadedImage> images;
     std::vector<wa::dbt::ExitHandler> exit_handlers;
     std::map<uint64_t, wa::dbt::GuestAllocation> allocations;
+    wa::dbt::GuestHeap heap;
     std::unique_ptr<wa::dbt::BionicState> bionic;
 #ifdef __EMSCRIPTEN__
     std::unique_ptr<wa::dbt::WasmJit> wasm_jit;
     bool wasm_jit_unavailable = false;
 #endif
     wa::dbt::GuestThread* running;
-    uint64_t heap_hint = wa::dbt::kHeapBase;
     uint64_t next_tls_id = 1, next_tls_offset = 64;
     uint64_t image_loads = 0, image_unloads = 0;
     uint64_t last_pc = 0;
@@ -138,6 +136,7 @@ void RunThreadDestructors(wa_dbt& dbt);
 void RegisterSupplementalBuiltins(wa_dbt& dbt);
 uint64_t AllocateGuest(wa_dbt& dbt, uint64_t size, uint64_t alignment = WA_PAGE_SIZE,
                         uint32_t prot = WA_PROT_READ | WA_PROT_WRITE);
+uint64_t AllocateGuestHeap(wa_dbt& dbt, uint64_t size, uint64_t alignment = 16);
 void FreeGuest(wa_dbt& dbt, uint64_t address);
 bool IsExecutable(const wa_dbt& dbt, uint64_t entry);
 ImportScope MakeImportScope(const wa_dbt& dbt, std::span<const std::string_view> needed);

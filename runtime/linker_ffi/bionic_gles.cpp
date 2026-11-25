@@ -63,13 +63,6 @@ void EglProc(wa_host_call_ctx_t& ctx) {
     }
 }
 
-void New(wa_host_call_ctx_t& ctx) {
-    ctx.ret0 = AllocateGuest(*ctx.dbt, ctx.args[0]);
-}
-void Delete(wa_host_call_ctx_t& ctx) {
-    FreeGuest(*ctx.dbt, ctx.args[0]);
-}
-
 void SlEngine(wa_host_call_ctx_t& ctx) {
     if (!ctx.args[0]) {
         ctx.ret0 = 2; // SL_RESULT_PARAMETER_INVALID / XA_RESULT_PARAMETER_INVALID.
@@ -323,11 +316,7 @@ void RegisterGraphics(wa_dbt& dbt) {
     };
     Register(dbt, "libGLESv3.so", gles3_queries);
 
-    const Builtin legacy_cpp[] = {
-        {"_Znwj", Dispatch<New>}, {"_Znwm", Dispatch<New>},     {"_Znaj", Dispatch<New>},
-        {"_Znam", Dispatch<New>}, {"_ZdlPv", Dispatch<Delete>}, {"_ZdaPv", Dispatch<Delete>},
-    };
-    Register(dbt, "libstdc++.so", legacy_cpp);
+    RegisterLegacyCppHeap(dbt);
     const Builtin audio[] = {{"slCreateEngine", Dispatch<SlEngine>}};
     Register(dbt, "libOpenSLES.so", audio);
     RegisterOpenSlInterfaceIds(dbt);

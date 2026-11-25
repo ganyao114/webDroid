@@ -220,7 +220,7 @@ namespace {
 
 template <typename MakeEntry>
 int32_t Map(wa_softmmu_t* mmu, uint64_t address, size_t bytes, uint32_t prot,
-            MakeEntry make_entry) {
+            MakeEntry make_entry, uint64_t* conflict = nullptr) {
     if (!mmu || !bytes || !ValidRange(address, bytes) || (prot & ~kProtectionMask))
         return WA_ERR_INVALID;
 
@@ -228,8 +228,10 @@ int32_t Map(wa_softmmu_t* mmu, uint64_t address, size_t bytes, uint32_t prot,
     const auto range = Pages(address, bytes);
     for (auto index = range.first; index < range.end; ++index) {
         const auto* entry = mmu->Find(index);
-        if (entry && entry->state != WA_PAGE_UNMAPPED)
+        if (entry && entry->state != WA_PAGE_UNMAPPED) {
+            if (conflict) *conflict = uint64_t{index} << WA_PAGE_SHIFT;
             return WA_ERR_EXIST;
+        }
     }
 
     uint32_t shared = 0;
@@ -444,11 +446,7 @@ int32_t wa_softmmu_map_file_lazy(wa_softmmu_t* mmu, uint64_t guest_vaddr, size_t
 
 int32_t wa_softmmu_map_anon(wa_softmmu_t* mmu, uint64_t guest_vaddr, size_t byte_len,
                             uint32_t prot) {
-    return Map(mmu, guest_vaddr, byte_len, prot, [=](uint64_t) {
-        Entry entry;
-        entry.state = prot & WA_PROT_WRITE ? WA_PAGE_PRIVATE_RW : WA_PAGE_SHARED_RO;
-        return entry;
-    });
+    return wa::softmmu::MapAnon(mmu, guest_vaddr, byte_len, prot);
 }
 
 int32_t wa_softmmu_map_guard(wa_softmmu_t* mmu, uint64_t guest_vaddr, size_t byte_len) {
@@ -520,6 +518,15 @@ void wa_softmmu_get_stats(const wa_softmmu_t* mmu, wa_softmmu_stats_t* out_stats
 }
 
 namespace wa::softmmu {
+
+int32_t MapAnon(wa_softmmu_t* mmu, uint64_t address, size_t length, uint32_t prot,
+                uint64_t* conflict) {
+    return Map(mmu, address, length, prot, [=](uint64_t) {
+        Entry entry;
+        entry.state = prot & WA_PROT_WRITE ? WA_PAGE_PRIVATE_RW : WA_PAGE_SHARED_RO;
+        return entry;
+    }, conflict);
+}
 
 int32_t SetPageBytes(wa_softmmu_t* mmu, uint64_t address, std::shared_ptr<PageBytes> bytes) {
     if (!mmu || !bytes || address >= kAddressLimit || (address & kPageMask))

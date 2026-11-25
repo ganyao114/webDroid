@@ -143,28 +143,43 @@ int PollOnce(NativeLooper& looper, wa_host_call_ctx_t& ctx) {
         const auto queued = PopResponse(looper, ctx, kWake);
         if (queued >= 0) return queued;
     }
-    if (thread.io_deadline == Deadline{}) {
-        const auto millis = static_cast<int32_t>(ctx.args[0]);
+    const auto millis = static_cast<int32_t>(ctx.args[0]);
+    if (millis && thread.io_deadline == Deadline{}) {
         thread.io_deadline = millis < 0 ? kNoDeadline : Clock::now() + milliseconds(millis);
     }
-    std::vector<NativeLooper::Response> watches;
-    std::vector<pollfd> fds;
+    std::array<NativeLooper::Response, 8> inline_watches;
+    std::array<pollfd, inline_watches.size() + 1> inline_fds;
+    std::vector<NativeLooper::Response> extra_watches;
+    std::vector<pollfd> extra_fds;
+    std::span<NativeLooper::Response> watches;
+    std::span<pollfd> fds;
     int result;
     for (;;) {
-        fds.assign(1, {looper.wake_pipe[0], POLLIN, 0});
-        watches.clear();
+        const auto count = looper.watches.size();
+        if (count <= inline_watches.size()) {
+            watches = std::span(inline_watches).first(count);
+            fds = std::span(inline_fds).first(count + 1);
+        } else {
+            extra_watches.resize(count);
+            extra_fds.resize(count + 1);
+            watches = extra_watches;
+            fds = extra_fds;
+        }
+        fds[0] = {looper.wake_pipe[0], POLLIN, 0};
         bool invalid = false;
+        size_t index = 0;
         for (const auto& [fd, watch] : looper.watches) {
             const auto host = HostFd(dbt, fd);
             invalid |= host < 0;
             const short events = (watch.events & kInput ? POLLIN : 0) | (watch.events & kOutput ? POLLOUT : 0);
-            fds.push_back({host, events, 0});
-            watches.push_back({fd, host < 0 ? kInvalid : 0, watch});
+            fds[index + 1] = {host, events, 0};
+            watches[index++] = {fd, host < 0 ? kInvalid : 0, watch};
         }
         RefreshTimers(dbt);
         result = poll(fds.data(), fds.size(), 0);
+        if (result || invalid || !millis) break;
         const auto now = Clock::now();
-        if (result || invalid || now >= thread.io_deadline) break;
+        if (now >= thread.io_deadline) break;
         const auto deadline = std::min(thread.io_deadline, now + milliseconds(2));
         const auto error = Park(dbt, WaitKind::Io, looper.handle.address, deadline);
         if (error && error != GuestErrno(ETIMEDOUT)) { result = -1; break; }
@@ -230,6 +245,23 @@ void PollLooper(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = uint32_t(PollOnce(*looper->second, ctx));
 }
 
+#ifdef __EMSCRIPTEN__
+bool FastPollLooper(FastHostCall& call) {
+    if (call.dbt.running->native_looper) return false;
+    std::array<uint8_t*, 3> outputs{};
+    const size_t word = call.dbt.arch == WA_ARCH_ARM32 ? 4 : 8;
+    for (size_t i = 0; i < outputs.size(); ++i) {
+        if (!call.args[i + 1]) continue;
+        outputs[i] = call.ResidentWrite(call.args[i + 1], i == 2 ? word : 4);
+        if (!outputs[i]) return false;
+    }
+    for (size_t i = 0; i < outputs.size(); ++i)
+        if (outputs[i]) std::memset(outputs[i], 0, i == 2 ? word : 4);
+    call.result = uint32_t(kError);
+    return true;
+}
+#endif
+
 } // namespace
 
 void DropThreadLooper(wa_dbt& dbt) {
@@ -253,6 +285,9 @@ void RegisterNativeLooper(wa_dbt& dbt) {
         {"ALooper_wake", Dispatch<Operate<Operation::Wake>>},
     };
     Register(dbt, "libandroid.so", shims);
+#ifdef __EMSCRIPTEN__
+    RegisterFastHost(dbt, "ALooper_pollOnce", FastPollLooper, "libandroid.so");
+#endif
 }
 
 void DropDescriptorFromLoopers(wa_dbt& dbt, int descriptor) {

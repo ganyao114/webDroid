@@ -1,12 +1,14 @@
 #include "wasmandroid/softmmu_linker.h"
-#ifdef __EMSCRIPTEN__
+#include "bionic_internal.h"
 #include "boot_profile.h"
+#include "elf_image.h"
 #include "softmmu_internal.h"
-#endif
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -168,6 +170,259 @@ uint64_t Call(wa_dbt_t* dbt, uint64_t address, std::initializer_list<uint64_t> a
         std::cerr << "Guest call at 0x" << std::hex << address << std::dec << '\n';
     OK(status);
     return result;
+}
+
+void TestGuestHeap(wa_guest_arch_t arch) {
+    Mmu mmu(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
+    Dbt dbt(wa_dbt_create(arch, mmu.get()), wa_dbt_destroy);
+    CHECK(mmu && dbt);
+    const auto symbol = [&](const char* name) {
+        const auto stub = wa::dbt::FindVirtualSymbol(*dbt, "", name);
+        if (!stub) std::cerr << "Missing host symbol " << name << '\n';
+        CHECK(stub);
+        return stub;
+    };
+    const auto call = [&](const char* name, std::initializer_list<uint64_t> args) {
+        return Call(dbt.get(), symbol(name), args);
+    };
+    const auto malloc_stub = symbol("malloc");
+    const auto free_stub = symbol("free");
+    const auto malloc = [&](uint64_t size) {
+        const auto address = Call(dbt.get(), malloc_stub, {size});
+        CHECK(address && !(address & 15));
+        return address;
+    };
+    const auto free = [&](uint64_t address) { Call(dbt.get(), free_stub, {address}); };
+
+    // Reserve adjacent page allocations, then put a fixed mmap in the middle
+    // of the released interval. Both sides must remain available.
+    const auto page = uint64_t{WA_PAGE_SIZE};
+    const auto first = malloc(3 * page);
+    const auto second = malloc(3 * page);
+    const auto barrier = malloc(3 * page);
+    CHECK(second == first + 3 * page && barrier == second + 3 * page);
+    free(first);
+    free(second);
+    const auto mapping = call("mmap", {first + page, page, 3, 0x100022, UINT32_MAX, 0});
+    CHECK(mapping == first + page);
+    const auto after = malloc(4 * page);
+    CHECK(after == mapping + page);
+    free(after);
+    CHECK(call("munmap", {mapping, page}) == 0);
+    const auto joined = malloc(6 * page);
+    CHECK(joined == first);
+    free(joined);
+    free(barrier);
+
+    free(0);
+    const auto marker = uint64_t{0x12345678abcdef00};
+    const auto small = call("realloc", {0, 33});
+    CHECK((small & 15) == 0 && call("malloc_usable_size", {small}) == 48);
+    Write(mmu.get(), small, marker);
+    CHECK(call("realloc", {small, 47}) == small);
+    CHECK(Read<uint64_t>(mmu.get(), small) == marker);
+    const auto medium = call("realloc", {small, 100});
+    CHECK(medium != small && Read<uint64_t>(mmu.get(), medium) == marker);
+    const auto large = call("realloc", {medium, WA_PAGE_SIZE + 1});
+    CHECK(large && (large & (page - 1)) == 0 && Read<uint64_t>(mmu.get(), large) == marker);
+    CHECK(call("realloc", {large, UINT64_MAX}) == 0);
+    CHECK(Read<uint64_t>(mmu.get(), large) == marker);
+    const auto back = call("realloc", {large, 35});
+    CHECK(back && Read<uint64_t>(mmu.get(), back) == marker);
+    CHECK(call("realloc", {back, 0}) == 0);
+    uint64_t result;
+    STATUS(wa_dbt_call(dbt.get(), free_stub, &back, 1, &result), WA_ERR_FAULT);
+    CHECK(call("malloc_usable_size", {back}) == 0);
+    CHECK(call("malloc_usable_size", {0}) == 0);
+    const auto zero = call("calloc", {7, 5});
+    CHECK(zero == back);
+    CHECK((Read<std::array<uint8_t, 35>>(mmu.get(), zero) == std::array<uint8_t, 35>{}));
+    free(zero);
+    CHECK(call("calloc", {UINT64_MAX, 2}) == 0);
+    free(malloc(0));
+
+    const auto output = malloc(16);
+    CHECK(call("posix_memalign", {output, 16, 87}) == 0);
+    const auto aligned = arch == WA_ARCH_ARM32 ? Read<uint32_t>(mmu.get(), output) :
+                                                Read<uint64_t>(mmu.get(), output);
+    CHECK(aligned && !(aligned & 15) && call("malloc_usable_size", {aligned}) == 96);
+    free(aligned);
+    CHECK(call("posix_memalign", {output, 12, 87}) == 22);
+    free(output);
+    const auto aligned_page = call("memalign", {256, 87});
+    CHECK(aligned_page && !(aligned_page & 255) && call("malloc_usable_size", {aligned_page}) == 87);
+    free(aligned_page);
+    const auto cpp = call(arch == WA_ARCH_ARM32 ? "_Znwj" : "_Znwm", {31});
+    CHECK(cpp && call("malloc_usable_size", {cpp}) == 32);
+    call("_ZdlPv", {cpp});
+
+    struct Block {
+        uint64_t address = 0;
+        uint32_t value = 0;
+    };
+    std::array<Block, 2048> blocks{};
+    constexpr std::array sizes{8, 23, 41, 64, 79, 120, 162, 221, 291, 420, 650, 900,
+                               1040, 2048, 3001, 7000};
+    uint32_t seed = 0x31825c;
+    const auto random = [&] {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        return seed;
+    };
+    constexpr uint32_t rounds = 100'000;
+    const auto pages = MemoryStats(mmu.get()).private_pages_allocated;
+    const auto start = std::chrono::steady_clock::now();
+    for (uint32_t i = 0; i < rounds; ++i) {
+        auto& block = blocks[random() % blocks.size()];
+        if (block.address) {
+            CHECK(Read<uint32_t>(mmu.get(), block.address) == block.value);
+            free(block.address);
+        }
+        block = {malloc(sizes[random() % sizes.size()]), i};
+        Write(mmu.get(), block.address, block.value);
+    }
+    for (const auto& block : blocks) {
+        CHECK(block.address && Read<uint32_t>(mmu.get(), block.address) == block.value);
+        free(block.address);
+    }
+    const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start);
+    const auto allocated = MemoryStats(mmu.get()).private_pages_allocated - pages;
+    CHECK(allocated < rounds / 6);
+    std::cout << "Heap " << (arch == WA_ARCH_ARM32 ? "ARM32" : "ARM64") << ' ' << rounds
+              << " mixed allocations and frees in " << elapsed.count() << " ms, "
+              << allocated << " resident pages allocated\n";
+    dbt.reset();
+    uint8_t byte;
+    STATUS(wa_softmmu_read(mmu.get(), small, &byte, 1), WA_ERR_FAULT);
+}
+
+struct ObjectHandles {
+    std::array<uint32_t, 3> objects{0, 41, 41};
+
+    bool Same(const uint64_t* args, uint64_t& result) const {
+        if (args[0] != 5 || args[1] >= objects.size() || args[2] >= objects.size()) return false;
+        result = objects[args[1]] == objects[args[2]];
+        return true;
+    }
+    static int32_t Call(wa_host_call_ctx_t* ctx, void* user) {
+        return static_cast<ObjectHandles*>(user)->Same(ctx->args, ctx->ret0) ? WA_OK : WA_ERR_INVALID;
+    }
+#ifdef __EMSCRIPTEN__
+    static bool Fast(wa::dbt::FastHostCall& call) {
+        return static_cast<ObjectHandles*>(call.user)->Same(call.args, call.result);
+    }
+#endif
+};
+
+void TestFastHosts(wa_dbt& dbt, wa_guest_arch_t arch, wa_softmmu_t* mmu, uint32_t file_id) {
+    constexpr uint64_t page = WA_PAGE_SIZE;
+    constexpr uint64_t src_page = 0x400000, dst_page = 0x500000, cow_page = 0x600000;
+    constexpr uint32_t rw = WA_PROT_READ | WA_PROT_WRITE;
+    constexpr char text[] = "Phase 15 resident bytes";
+    constexpr auto src = src_page + page - 4, dst = dst_page + page - 11;
+    OK(wa_softmmu_map_anon(mmu, src_page, 2 * page, rw));
+    OK(wa_softmmu_map_anon(mmu, dst_page, 2 * page, rw));
+    OK(wa_softmmu_map_guard(mmu, dst_page + 2 * page, page));
+    Write(mmu, src, text);
+    Write(mmu, dst, std::array<uint8_t, sizeof(text) + 4>{});
+
+    ObjectHandles objects;
+    uint64_t same;
+    OK(wa::dbt::RegisterHost(dbt, "JNIEnv", "FixtureIsSameObject", ObjectHandles::Call,
+                             &objects, false, &same));
+#ifdef __EMSCRIPTEN__
+    wa::dbt::RegisterFastHost(dbt, same, ObjectHandles::Fast);
+#endif
+    CHECK(Call(&dbt, same, {5, 0, 0}) == 1);
+    CHECK(Call(&dbt, same, {5, 1, 2}) == 1);
+    CHECK(Call(&dbt, same, {5, 0, 2}) == 0);
+    const uint64_t invalid[]{5, 1, 3};
+    uint64_t result;
+    STATUS(wa_dbt_call(&dbt, same, invalid, std::size(invalid), &result), WA_ERR_INVALID);
+
+    constexpr uint32_t warmup = 256, rounds = 10'000, memory_rounds = 2048;
+    const auto measure = [&](const char* name, std::initializer_list<uint64_t> warm_args,
+                             std::initializer_list<uint64_t> args, uint64_t warm_result,
+                             uint64_t expected) {
+        const auto entry = Find(&dbt, name);
+        wa::BootProfile cold;
+        {
+            const wa::BootProfile::Capture capture(cold);
+            CHECK(Call(&dbt, entry, warm_args) == warm_result);
+        }
+        wa::BootProfile hot;
+        const auto start = std::chrono::steady_clock::now();
+        {
+            const wa::BootProfile::Capture capture(hot);
+            CHECK(Call(&dbt, entry, args) == expected);
+        }
+        const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start);
+        std::cout << name << ' ' << elapsed.count() << " ms, " << hot.dbt_stats.jit_chains
+                  << " chains, " << hot.dbt_stats.jit_fast_host_calls << " fast calls, "
+                  << hot.dbt_stats.iotlb_slow_writes << " slow writes, "
+                  << cold.dbt_stats.wasm_units_compiled << " warmup units, "
+                  << cold.dbt_stats.jit_emit_ms << " ms emission, " << cold.dbt_stats.jit_install_ms
+                  << " ms install, " << cold.dbt_stats.tier0_insns << " warmup Tier-0 instructions\n";
+        CHECK(!cold.dbt_stats.jit_evictions && !hot.dbt_stats.jit_evictions);
+        return hot.dbt_stats;
+    };
+    const auto space = measure("wa_hot_space", {warmup}, {rounds}, warmup / 2, rounds / 2);
+    const auto heap = measure("wa_hot_heap", {warmup}, {rounds}, 7 * warmup, 7 * rounds);
+    const auto memory = measure("wa_hot_memory", {dst, src, sizeof(text), warmup},
+        {dst, src, sizeof(text), memory_rounds}, warmup * (sizeof(text) - 1),
+        memory_rounds * (sizeof(text) - 1));
+    const auto jni = measure("wa_hot_same_object", {same, warmup}, {same, rounds}, warmup / 2, rounds / 2);
+#ifdef __EMSCRIPTEN__
+    // Run through the regular DBT entry point. Each 8192-tick guest scheduler
+    // slice can start another chain, and the function prologues are still cold.
+    CHECK(space.jit_chains <= 24 && space.jit_fast_host_calls >= rounds - 32);
+    CHECK(heap.jit_fast_host_calls >= 6 * rounds - 32 && heap.iotlb_slow_writes < 10);
+    CHECK(memory.jit_fast_host_calls >= 13 * memory_rounds - 32);
+    CHECK(jni.jit_fast_host_calls >= rounds - 32);
+    wa::BootProfile accounting;
+    accounting.collect_hotspots = true;
+    {
+        const wa::BootProfile::Capture capture(accounting);
+        CHECK(Call(&dbt, Find(&dbt, "wa_hot_space"), {rounds}) == rounds / 2);
+        CHECK(Call(&dbt, Find(&dbt, "wa_hot_same_object"), {same, rounds}) == rounds / 2);
+        CHECK(Call(&dbt, Find(&dbt, "wa_hot_heap"), {warmup}) == 7 * warmup);
+    }
+    CHECK(accounting.host_calls.at("isspace").calls == rounds);
+    CHECK(accounting.host_calls.at("FixtureIsSameObject").calls == rounds);
+    CHECK(accounting.host_calls.at("malloc").calls == warmup);
+    CHECK(accounting.host_calls.at("free").calls == 2 * warmup);
+#endif
+
+    const std::pair<const char*, int (*)(int)> ctype[] = {
+        {"isspace", ::isspace}, {"isalpha", ::isalpha}, {"isdigit", ::isdigit},
+        {"isalnum", ::isalnum}, {"isxdigit", ::isxdigit}, {"isupper", ::isupper},
+        {"islower", ::islower}, {"isprint", ::isprint}, {"isgraph", ::isgraph},
+        {"ispunct", ::ispunct}, {"iscntrl", ::iscntrl}, {"isblank", ::isblank},
+        {"isascii", ::isascii}, {"tolower", ::tolower}, {"toupper", ::toupper},
+    };
+    for (const auto& [name, fn] : ctype) {
+        const auto stub = wa::dbt::FindVirtualSymbol(dbt, "libc.so", name);
+        CHECK(stub);
+        for (int value = -2; value <= 256; ++value) {
+            const auto expected = value >= -1 && value <= 255 ? fn(value) : 0;
+            CHECK(static_cast<int32_t>(Call(&dbt, stub, {static_cast<uint32_t>(value)})) == expected);
+        }
+    }
+
+    const auto move = Find(&dbt, "wa_move_bytes");
+    for (uint32_t i = 0; i < 64; ++i)
+        CHECK(Call(&dbt, move, {dst, src, sizeof(text)}) == dst);
+    const auto crossing = dst_page + 2 * page - 2;
+    Write(mmu, crossing, uint16_t{0xbeef});
+    const uint64_t guard_args[]{crossing, src, sizeof(text)};
+    STATUS(wa_dbt_call(&dbt, move, guard_args, std::size(guard_args), &result), WA_ERR_FAULT);
+    CHECK(Read<uint16_t>(mmu, crossing) == 0xbeef);
+    OK(wa_softmmu_map_file_lazy(mmu, cow_page, page, rw, file_id, 0, page, 1));
+    const auto cow = MemoryStats(mmu).cow_faults;
+    CHECK(Call(&dbt, move, {cow_page, src, sizeof(text)}) == cow_page);
+    CHECK(MemoryStats(mmu).cow_faults == cow + 1);
+    CHECK(std::memcmp(Read<std::array<char, sizeof(text)>>(mmu, cow_page).data(), text, sizeof(text)) == 0);
 }
 
 struct RoutedSymbol {
@@ -375,6 +630,7 @@ void TestELF(wa_guest_arch_t arch, const char* fixture, const char* wasm_output)
     std::cout << arch_name << " passed with " << faults << " file faults across "
               << memory.shared_pages_mapped << " shared mappings and " << stats.reverse_callbacks
               << " reverse callbacks\n";
+    TestFastHosts(*dbt, arch, source.get(), file.file_id);
 }
 
 #ifdef __EMSCRIPTEN__
@@ -471,6 +727,8 @@ void TestForegroundJitMemory() {
 int main(int argc, char** argv) {
     CHECK(argc == 5);
     TestSoftMMU();
+    TestGuestHeap(WA_ARCH_ARM32);
+    TestGuestHeap(WA_ARCH_ARM64);
     TestELF(WA_ARCH_ARM32, argv[1], argv[3]);
     TestELF(WA_ARCH_ARM64, argv[2], argv[4]);
 #ifdef __EMSCRIPTEN__

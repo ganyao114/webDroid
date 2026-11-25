@@ -198,20 +198,8 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
                 raw.Write(hint + i, zeros.data(), zeros.size());
             address = hint;
         } else {
-            const auto next = dbt.allocations.lower_bound(hint);
-            if ((next != dbt.allocations.end() && next->first < hint + size) ||
-                (next != dbt.allocations.begin() &&
-                 std::prev(next)->first + std::prev(next)->second.mapped_size > hint))
-                return Fail(ctx, EEXIST);
-            if (wa_softmmu_map_anon(dbt.mmu, hint, size, kReadWriteExecute) != WA_OK)
-                return Fail(ctx, EEXIST);
-            try {
-                dbt.allocations.emplace_hint(next, hint,
-                                             GuestAllocation{size_t(size), size_t(length), false});
-            } catch (...) {
-                softmmu::Unmap(dbt.mmu, hint, size);
-                throw;
-            }
+            const auto status = dbt.heap.MapPagesAt(dbt, hint, length, kReadWriteExecute);
+            if (status != WA_OK) return Fail(ctx, status == WA_ERR_NOMEM ? ENOMEM : EEXIST);
             address = hint;
         }
     } else {
@@ -390,6 +378,7 @@ void Remap(wa_host_call_ctx_t& ctx) {
     const auto replacement = AllocateGuest(dbt, new_pages, WA_PAGE_SIZE, kReadWriteExecute);
     if (!replacement)
         return Fail(ctx, ENOMEM);
+    dbt.allocations.at(replacement).heap = false;
     try {
         auto& state = *dbt.bionic;
         state.map_allocations.emplace(replacement, new_pages);

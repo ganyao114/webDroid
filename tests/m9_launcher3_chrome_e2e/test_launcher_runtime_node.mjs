@@ -61,6 +61,8 @@ test('all owned JavaScript and HTML modules parse, and Chrome help exits without
 test('stages actual browser module paths and resolves APK/DEX artifacts from the host build', async () => {
   const temp = await mkdtemp(join(tmpdir(), 'm9-launcher-node-'));
   const wasmBuild = join(temp, 'wasm'), hostBuild = join(temp, 'host'), staged = join(temp, 'http');
+  const robotoRoot = join(temp, 'roboto');
+  const options = { wasmBuild, hostBuild, robotoRoot };
   try {
     async function put(build, name, data) {
       const path = join(build, name);
@@ -68,6 +70,8 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
       await writeFile(path, data);
     }
     const wasmFile = 'android_system.wasm';
+    await put(robotoRoot, 'font/3.005/Roboto-Regular.ttf', Uint8Array.of(0, 1, 0, 0));
+    await put(robotoRoot, 'NOTICE', 'Roboto fixture notice\n');
     await put(wasmBuild, wasmFile, Uint8Array.of(0, 97, 115, 109));
     await put(wasmBuild, 'android_system.mjs', 'export default async ({ locateFile } = {}) => ({ locateFile });\n');
     const systemRoot = 'runtime/android_system';
@@ -79,16 +83,15 @@ test('stages actual browser module paths and resolves APK/DEX artifacts from the
     await put(hostBuild, `${systemRoot}/launcher/${systemUiName}`, Uint8Array.of(7, 249));
     for (const name of systemAppNames.filter(name => name !== settingsName))
       await put(hostBuild, `${systemRoot}/upstream-apps/${name}`, Uint8Array.of(4, 252));
-    await assert.rejects(stageM9Browser(staged, { wasmBuild, hostBuild }), /Launcher3-upstream\.apk/);
+    await assert.rejects(stageM9Browser(staged, options), /Launcher3-upstream\.apk/);
     await put(hostBuild, `${systemRoot}/launcher/${launcherName}`, Uint8Array.of(6, 250));
     await put(hostBuild, `${systemRoot}/launcher/upstream_provenance.json`, JSON.stringify({
       tag: 'android-17.0.0_r1',
       launcher_source_counts: { java: { verbatim: 385, patched: 17 }, kt: { verbatim: 452, patched: 25 } },
     }));
-    await assert.rejects(stageM9Browser(staged, { wasmBuild, hostBuild }), /Settings-upstream\.apk/);
+    await assert.rejects(stageM9Browser(staged, options), /Settings-upstream\.apk/);
     await put(hostBuild, `${systemRoot}/upstream-settings/${settingsName}`, Uint8Array.of(4, 252));
-    await stageM9Browser(staged, { wasmBuild, hostBuild });
-    const robotoRoot = join(root, 'third_party/aosp17/external/roboto-fonts');
+    await stageM9Browser(staged, options);
     assert.deepEqual(await readFile(join(staged, 'build/fonts/Roboto-Regular.ttf')),
       await readFile(join(robotoRoot, 'font/3.005/Roboto-Regular.ttf')));
     assert.deepEqual(await readFile(join(staged, 'build/fonts/NOTICE')), await readFile(join(robotoRoot, 'NOTICE')));
