@@ -1,5 +1,6 @@
 #include <arm_neon.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -96,4 +97,19 @@ uint32_t wa_wasm_unit(uint32_t* word, uint32_t addend) {
     const uint32_t result = *word + addend;
     *word = result;
     return result;
+}
+
+static void* RunWorker(void* argument) {
+    for (uint32_t remaining = (uintptr_t)argument; remaining; --remaining)
+        __asm__ volatile("" ::: "memory");
+    return argument;
+}
+
+int wa_run_sliced_worker(uint32_t iterations) {
+    pthread_t worker;
+    void* const argument = (void*)(uintptr_t)iterations;
+    void* result = NULL;
+    if (pthread_create(&worker, NULL, RunWorker, argument))
+        return 0;
+    return pthread_join(worker, &result) == 0 && result == argument;
 }

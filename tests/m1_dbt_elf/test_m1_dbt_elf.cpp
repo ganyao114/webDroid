@@ -343,6 +343,18 @@ void TestELF(wa_guest_arch_t arch, const char* fixture, const char* wasm_output)
     const auto stats = DbtStats(dbt.get());
     CHECK(stats.blocks_executed > 0 && stats.insns_executed > 0);
     CHECK(stats.host_calls >= 11 && stats.reverse_callbacks >= values.size() - 1);
+    if (arch == WA_ARCH_ARM64) {
+        // The worker's countdown spans more than 10 million instructions
+        // while the calling guest is parked in pthread_join.
+        CHECK(Call(dbt.get(), Find(dbt.get(), "wa_run_sliced_worker"), {6'000'000}) == 1);
+        const auto after = DbtStats(dbt.get());
+        const auto instructions = after.insns_executed - stats.insns_executed;
+        CHECK(instructions > 10'000'000);
+#ifdef __EMSCRIPTEN__
+        CHECK(after.jit_entries > stats.jit_entries);
+        CHECK(after.tier0_insns - stats.tier0_insns < instructions / 20);
+#endif
+    }
     std::cout << arch_name << " passed with " << faults << " file faults across "
               << memory.shared_pages_mapped << " shared mappings and " << stats.reverse_callbacks
               << " reverse callbacks\n";
