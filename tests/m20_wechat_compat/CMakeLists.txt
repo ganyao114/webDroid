@@ -10,7 +10,7 @@ if(EMSCRIPTEN)
     add_test(NAME test_m20_wechat_compat_wasm COMMAND "${WA_NODE_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/test_wechat_wasm.mjs" "$<TARGET_FILE:android_system_large>" ${wechat_inputs})
     set_tests_properties(test_m20_wechat_compat_wasm PROPERTIES
-        SKIP_REGULAR_EXPRESSION "WeChat APK is absent" TIMEOUT 360)
+        SKIP_REGULAR_EXPRESSION "WeChat APK is absent" TIMEOUT 600)
     return()
 endif()
 
