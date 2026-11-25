@@ -1,5 +1,5 @@
 #include "gles_host_bridge.h"
-#include "wasmandroid/hal_gfx.h"
+#include "audio_ring.h"
 
 #include <algorithm>
 #include <atomic>
@@ -9,21 +9,14 @@
 
 namespace {
 
-using Cursor = std::atomic_ref<uint32_t>;
-static_assert(Cursor::is_always_lock_free);
-static_assert(Cursor::required_alignment <= alignof(wa_audio_ring_header_t));
-static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559);
-static_assert(sizeof(wa_audio_ring_header_t) == 32);
+using wa::audio::Cursor;
+using wa::audio::kFrameBytes;
 static_assert(offsetof(wa_audio_ring_header_t, magic) == 0);
 static_assert(offsetof(wa_audio_ring_header_t, capacity_frames) == 4);
 static_assert(offsetof(wa_audio_ring_header_t, channels) == 8);
 static_assert(offsetof(wa_audio_ring_header_t, sample_rate) == 12);
-static_assert(offsetof(wa_audio_ring_header_t, write_pos) == 16);
-static_assert(offsetof(wa_audio_ring_header_t, read_pos) == 20);
-static_assert(offsetof(wa_audio_ring_header_t, underruns) == 24);
 static_assert(offsetof(wa_audio_ring_header_t, overruns) == 28);
 
-constexpr size_t frame_bytes = WA_AUDIO_CHANNELS * sizeof(float);
 thread_local void* audio_ring = nullptr;
 
 bool aligned(const void* buffer) {
@@ -48,7 +41,7 @@ int32_t wa_audio_ring_init(void* shared_buf, size_t bytes, uint32_t capacity_fra
                            uint32_t sample_rate) {
     if (!aligned(shared_buf) || !capacity_frames || (capacity_frames & (capacity_frames - 1)) ||
         !sample_rate || bytes < sizeof(wa_audio_ring_header_t) ||
-        capacity_frames > (bytes - sizeof(wa_audio_ring_header_t)) / frame_bytes) {
+        capacity_frames > (bytes - sizeof(wa_audio_ring_header_t)) / kFrameBytes) {
         return WA_ERR_INVALID;
     }
 
@@ -64,22 +57,7 @@ uint32_t wa_audio_ring_write(void* shared_buf, const float* interleaved_stereo, 
         return 0;
     }
 
-    Cursor write(ring->write_pos);
-    const uint32_t start = write.load(std::memory_order_relaxed);
-    const uint32_t used = start - Cursor(ring->read_pos).load(std::memory_order_acquire);
-    const uint32_t count = std::min(frames, ring->capacity_frames - used);
-    if (count) {
-        const uint32_t index = start & (ring->capacity_frames - 1);
-        const uint32_t first = std::min(count, ring->capacity_frames - index);
-        std::memcpy(data(ring) + index * frame_bytes, interleaved_stereo, first * frame_bytes);
-        std::memcpy(data(ring), interleaved_stereo + first * size_t{WA_AUDIO_CHANNELS},
-                    (count - first) * frame_bytes);
-        write.store(start + count, std::memory_order_release);
-    }
-    if (count < frames) {
-        Cursor(ring->overruns).fetch_add(frames - count, std::memory_order_relaxed);
-    }
-    return count;
+    return wa::audio::WriteRing(*ring, interleaved_stereo, frames);
 }
 
 uint32_t wa_audio_ring_read(void* shared_buf, float* out_interleaved_stereo, uint32_t max_frames) {
@@ -95,9 +73,9 @@ uint32_t wa_audio_ring_read(void* shared_buf, float* out_interleaved_stereo, uin
     if (count) {
         const uint32_t index = start & (ring->capacity_frames - 1);
         const uint32_t first = std::min(count, ring->capacity_frames - index);
-        std::memcpy(out_interleaved_stereo, data(ring) + index * frame_bytes, first * frame_bytes);
+        std::memcpy(out_interleaved_stereo, data(ring) + index * kFrameBytes, first * kFrameBytes);
         std::memcpy(out_interleaved_stereo + first * size_t{WA_AUDIO_CHANNELS}, data(ring),
-                    (count - first) * frame_bytes);
+                    (count - first) * kFrameBytes);
         read.store(start + count, std::memory_order_release);
     }
     if (count < max_frames) {

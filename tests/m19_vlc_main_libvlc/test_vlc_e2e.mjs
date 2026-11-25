@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { basename, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import { Action, checkedRecordSize, Flag, FramePacket, Input, Memory, Op, Surface } from '../../web/surfaceflinger/abi.mjs';
 import { AndroidInputWriter } from '../../web/surfaceflinger/input_ime.mjs';
-import { mainActivity, onboardingActivity, onboardingAction, onboardingPages, tabs } from './vlc_journey.mjs';
+import { mainActivity, onboardingActivity, onboardingAction, onboardingPages, tabs, validVlcPcm } from './vlc_journey.mjs';
 
 const [runtimePath, frameworkPath, fallbackPath, resourcesPath, apkPath] = process.argv.slice(2);
 assert(apkPath, 'Expected runtime, framework DEX, fallback DEX, framework resources and VLC APK');
@@ -162,6 +163,22 @@ try {
   for (const tab of tabs) assert(main.texts.some(text => text.toLowerCase() === tab.toLowerCase()),
     JSON.stringify(main.texts));
   const media = probe('media');
+  let audio;
+  try {
+    let previous = 0, stable = 0;
+    for (let attempt = 0; attempt < 150; ++attempt) {
+      tick(1);
+      audio = JSON.parse(probe('audio'));
+      stable = audio.frames === previous ? stable + 1 : 0;
+      if (audio.frames >= 12000 || (audio.frames >= 8640 && stable >= 10)) break;
+      previous = audio.frames;
+      await delay(10);
+    }
+    console.log('VLC PCM', audio);
+    assert(validVlcPcm(audio), JSON.stringify(audio));
+  } finally {
+    probe('stop');
+  }
   for (const tab of ['Audio', 'Browse']) {
     const target = labels().find(({ text }) => text === tab);
     assert(target, `Missing VLC tab ${tab}`);
@@ -179,7 +196,7 @@ try {
   const back = call('send_back');
   assert.equal(state().finishing, back === 0);
   if (back) tick();
-  console.log(JSON.stringify({ abi, onboarding, visited: [...visited], main, media, back, state: current }));
+  console.log(JSON.stringify({ abi, onboarding, visited: [...visited], main, media, audio, back, state: current }));
 } catch (error) {
   console.error('Foreground state', state());
   throw error;

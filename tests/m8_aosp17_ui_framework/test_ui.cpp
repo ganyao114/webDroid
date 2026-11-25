@@ -1,7 +1,9 @@
 #include "art_interp.h"
 #include "jni_bridge.h"
 #include "ui_bridge.h"
+#include "../../runtime/android_system/guest_audio.h"
 #include "../../runtime/hal_surfaceflinger/font_advances.h"
+#include <wasmandroid/hal_gfx.h>
 
 #include <dex/class_accessor-inl.h>
 #include <ziparchive/zip_archive.h>
@@ -63,9 +65,10 @@ void AuditFrameworkNatives(Vm& vm, std::string_view upstream, std::string_view f
                 name == "Lsun/misc/Unsafe;" || name == "Ljava/lang/ThreadGroup;" ||
                 name == "Ljava/util/zip/CRC32;" || name == "Ljava/util/zip/Deflater;" ||
                 name == "Landroid/net/LocalSocketImpl;";
-            const bool package_manager = name == "Landroid/content/pm/PackageManager;";
+            const bool ui_bridge = name == "Landroid/content/pm/PackageManager;" ||
+                name == "Landroid/media/AudioTrack;" || name == "Landroid/app/Activity;";
             const bool apache = name.starts_with("Lorg/apache/");
-            if (!art_boot && !package_manager && !apache && !name.starts_with("Landroid/graphics/") &&
+            if (!art_boot && !ui_bridge && !apache && !name.starts_with("Landroid/graphics/") &&
                 !name.starts_with("Lcom/android/internal/util/") &&
                 name != "Landroid/text/AndroidCharacter;" && name != "Landroid/text/Hyphenator;" &&
                 name != "Landroid/view/MotionEvent;" && name != "Landroid/view/KeyEvent;")
@@ -577,6 +580,22 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     Require(ReadBool(vm, "packagesVerified") && user_forwarded && queried == 2 && applications >= 1,
             "PackageManager and LauncherApps query the host and load icon resources");
     vm.CallStatic("Lorg/wasmandroid/uismoke/NativeGraphicsProbe;", "verify", "()V");
+    {
+        wa::interp::ScopedHandleScope roots(vm);
+        const auto activity = roots.Hold(vm.ReadStaticField(kActivity, "active", kActivity));
+        const std::array args{activity};
+        for (const auto method : {"verifyScaledPatch", "verifyScrollFooter"}) {
+            vm.CallStatic("Lorg/wasmandroid/uismoke/NativeGraphicsProbe;", method, "(Landroid/content/Context;)V", args);
+        }
+    }
+    vm.CallStatic("Lorg/wasmandroid/uismoke/AudioTrackProbe;", "verify", "()V");
+    const auto* pcm = wa_guest_audio_ring();
+    Require(pcm->sample_rate == 48000 && pcm->channels == 2 && pcm->write_pos == 482,
+            "AudioTrack publishes resampled, interleaved stereo PCM");
+    const auto* samples = reinterpret_cast<const float*>(pcm + 1);
+    Require(samples[0] == .25f && samples[1] == .5f && samples[958] == .25f && samples[959] == .5f &&
+            samples[960] == .75f && samples[961] == -.25f && samples[962] == .5f && samples[963] == -.5f,
+            "AudioTrack preserves byte/short/direct writes, channel gain and float PCM");
 
     wa_font_metric_t& font =
         wa_sf_font_metrics(sf.get())[WA_FONT_ROBOTO * WA_FONT_WEIGHT_COUNT + 6];

@@ -7,6 +7,10 @@
 #include <utility>
 
 namespace wa::dbt {
+
+void RegisterOpenSl(wa_dbt& dbt);
+void DestroyOpenSl(BionicState& bionic);
+
 namespace {
 
 template <bool FromVaList, unsigned Offset = 0> void LogPrint(wa_host_call_ctx_t& ctx) {
@@ -109,6 +113,7 @@ void Register(wa_dbt& dbt, std::string_view library, std::span<const Builtin> bi
 }
 
 BionicState::~BionicState() {
+    DestroyOpenSl(*this);
     FlushSharedMappings();
     for (const auto& [address, stream] : files)
         if (stream.owned)
@@ -171,6 +176,7 @@ void RegisterSupplementalBuiltins(wa_dbt& dbt) {
     RegisterMath(dbt);
     RegisterDynamicLinker(dbt);
     RegisterGraphics(dbt);
+    RegisterOpenSl(dbt);
     RegisterNativeLooper(dbt);
 }
 

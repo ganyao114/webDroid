@@ -1,12 +1,15 @@
 package org.wasmandroid.uismoke;
 
+import android.content.Context;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.BitmapShader;
 import android.graphics.Canvas;
 import android.graphics.ColorSpace;
 import android.graphics.ComposeShader;
 import android.graphics.Interpolator;
 import android.graphics.Matrix;
+import android.graphics.NinePatch;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PorterDuff;
@@ -16,8 +19,14 @@ import android.graphics.RectF;
 import android.graphics.Region;
 import android.graphics.RegionIterator;
 import android.graphics.Shader;
+import android.graphics.drawable.Drawable;
 import android.os.Parcel;
 import android.text.AndroidCharacter;
+import android.view.View;
+import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
 
 import com.android.internal.util.ArrayUtils;
 
@@ -27,17 +36,73 @@ public final class NativeGraphicsProbe {
     private static final int GRAY = 0xffa0a0a0;
 
     private static void check(boolean condition, String detail) {
-        if (!condition) throw new AssertionError(detail);
+        if (!condition) throw new IllegalStateException(detail);
     }
 
     private static void pixel(Bitmap bitmap, int x, int y, int expected) {
         int actual = bitmap.getPixel(x, y);
         if (actual != expected)
-            throw new AssertionError("pixel " + x + "," + y + " expected " + expected + " got " + actual);
+            throw new IllegalStateException("pixel " + x + "," + y + " expected " + expected + " got " + actual);
     }
 
     private static Bitmap create(int w, int h) {
         return Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+    }
+
+    public static void verifyScaledPatch(Context context) {
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inTargetDensity = 160;
+        Bitmap source = BitmapFactory.decodeResource(context.getResources(), R.drawable.single_pixel_patch, options);
+        check(source != null && source.getWidth() == 2 && source.getHeight() == 2,
+                "Scale the xxhdpi nine-patch to mdpi");
+        Bitmap target = create(60, 60);
+        Canvas canvas = new Canvas(target);
+        new NinePatch(source, source.getNinePatchChunk()).draw(canvas, new Rect(0, 0, 60, 60));
+        pixel(target, 24, 46, GRAY);
+        pixel(target, 59, 59, BLUE);
+        Drawable overlay = context.getDrawable(R.drawable.ic_star_vector);
+        overlay.setBounds(18, 18, 42, 42);
+        overlay.draw(canvas);
+        check(target.getPixel(30, 26) != GRAY, "VectorDrawable remains visible above the scaled nine-patch");
+        pixel(target, 24, 46, GRAY);
+    }
+
+    public static void verifyScrollFooter(Context context) {
+        FrameLayout root = new FrameLayout(context);
+        ScrollView scroll = new ScrollView(context);
+        scroll.setFillViewport(true);
+        scroll.setPadding(0, 8, 0, 12);
+        root.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
+        LinearLayout content = new LinearLayout(context);
+        content.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(content, new FrameLayout.LayoutParams(-1, -1));
+        content.addView(new View(context), new LinearLayout.LayoutParams(-1, 156));
+        content.addView(new View(context), new LinearLayout.LayoutParams(-1, 0, 1));
+        Button footer = new Button(context);
+        footer.setBackgroundColor(BLUE);
+        LinearLayout.LayoutParams footerParams = new LinearLayout.LayoutParams(-1, 48);
+        footerParams.bottomMargin = 100;
+        content.addView(footer, footerParams);
+        int exact = View.MeasureSpec.makeMeasureSpec(180, View.MeasureSpec.EXACTLY);
+        root.measure(exact, exact);
+        root.layout(0, 0, 180, 180);
+
+        Bitmap target = create(180, 180);
+        Canvas canvas = new Canvas(target);
+        root.draw(canvas);
+        pixel(target, 90, 166, BLUE);
+        pixel(target, 90, 169, 0);
+
+        scroll.scrollBy(0, 100);
+        int top = content.getTop() + footer.getTop() - scroll.getScrollY();
+        int bottom = top + footer.getHeight();
+        check(scroll.getScrollY() > 0 && top >= 8 && bottom <= 168,
+                "The first scroll viewport clips overflowing content and scrolling reveals the whole footer");
+        target.eraseColor(0);
+        root.draw(canvas);
+        pixel(target, 90, top, BLUE);
+        pixel(target, 90, bottom - 1, BLUE);
+        pixel(target, 90, bottom, 0);
     }
 
     private static Bitmap texture() {

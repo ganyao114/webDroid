@@ -1,0 +1,1334 @@
+--- a/frameworks/base/media/java/android/media/AudioFormat.java
++++ b/frameworks/base/media/java/android/media/AudioFormat.java
+@@ -17,8 +17,4 @@
+ package android.media;
+ 
+-import static android.media.audio.Flags.FLAG_AMBISONICS_SUPPORT_API;
+-import static android.media.audio.Flags.FLAG_DOLBY_AC4_LEVEL4_ENCODING_API;
+-import static android.media.audio.Flags.FLAG_IAMF_DEFINITIONS_API;
+-import static android.media.audio.Flags.FLAG_SONY_360RA_MPEGH_3D_FORMAT;
+ 
+ import android.annotation.FlaggedApi;
+@@ -296,4 +292,14 @@
+ public final class AudioFormat implements Parcelable {
+ 
++    private static final String FLAG_AMBISONICS_SUPPORT_API =
++            "android.media.audio.ambisonics_support_api";
++    private static final String FLAG_DOLBY_AC4_LEVEL4_ENCODING_API =
++            "android.media.audio.dolby_ac4_level4_encoding_api";
++    private static final String FLAG_IAMF_DEFINITIONS_API =
++            "android.media.audio.iamf_definitions_api";
++    private static final String FLAG_SONY_360RA_MPEGH_3D_FORMAT =
++            "android.media.audio.sony_360ra_mpegh_3d_format";
++
++
+     //---------------------------------------------------------
+     // Constants
+@@ -910,5 +916,5 @@
+      */
+     // never unhide
+-    public static final int SAMPLE_RATE_HZ_MIN = AudioSystem.SAMPLE_RATE_HZ_MIN;
++    public static final int SAMPLE_RATE_HZ_MIN = 4000;
+     /** Maximum value for sample rate,
+      *  assuming AudioTrack and AudioRecord share the same limitations.
+@@ -916,5 +922,5 @@
+      */
+     // never unhide
+-    public static final int SAMPLE_RATE_HZ_MAX = AudioSystem.SAMPLE_RATE_HZ_MAX;
++    public static final int SAMPLE_RATE_HZ_MAX = 192000;
+     /** Sample rate will be a route-dependent value.
+      * For AudioTrack, it is usually the sink sample rate,
+--- a/frameworks/base/media/java/android/media/AudioRouting.java
++++ b/frameworks/base/media/java/android/media/AudioRouting.java
+@@ -17,5 +17,4 @@
+ package android.media;
+ 
+-import static android.media.audio.Flags.FLAG_ROUTED_DEVICE_IDS;
+ 
+ import android.annotation.FlaggedApi;
+@@ -32,4 +31,6 @@
+  */
+ public interface AudioRouting {
++
++
+     /**
+      * Specifies an audio device (via an {@link AudioDeviceInfo} object) to route
+@@ -62,5 +63,5 @@
+      * If it is not, <code>getRoutedDevices()</code> will return an empty List.
+      */
+-    @FlaggedApi(FLAG_ROUTED_DEVICE_IDS)
++    @FlaggedApi("android.media.audio.routed_device_ids")
+     default @NonNull List<AudioDeviceInfo> getRoutedDevices() {
+         List<AudioDeviceInfo> audioDeviceInfos = new ArrayList<AudioDeviceInfo>();
+--- a/frameworks/base/media/java/android/media/AudioTrack.java
++++ b/frameworks/base/media/java/android/media/AudioTrack.java
+@@ -17,9 +17,4 @@
+ package android.media;
+ 
+-import static android.media.AudioManager.AUDIO_SESSION_ID_GENERATE;
+-import static android.media.audiopolicy.Flags.multiZoneAudio;
+-import static android.media.audio.Flags.FLAG_CODEC_PROVENANCE_API;
+-import static android.media.audio.Flags.FLAG_ROUTED_DEVICE_IDS;
+-import static android.media.audio.Flags.FLAG_PARTIAL_FLUSH_FOR_PCM_OFFLOAD;
+ 
+ import android.annotation.CallbackExecutor;
+@@ -35,10 +30,5 @@
+ import android.annotation.TestApi;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.content.AttributionSource;
+-import android.content.AttributionSource.ScopedParcelState;
+ import android.content.Context;
+-import android.media.audiopolicy.AudioMix;
+-import android.media.audiopolicy.AudioMixingRule;
+-import android.media.audiopolicy.AudioPolicy;
+ import android.media.metrics.LogSessionId;
+ import android.os.Binder;
+@@ -60,5 +50,4 @@
+ import java.nio.ByteBuffer;
+ import java.nio.ByteOrder;
+-import java.nio.NioUtils;
+ import java.util.ArrayList;
+ import java.util.LinkedList;
+@@ -107,4 +96,12 @@
+                                  , VolumeAutomation
+ {
++
++    private static final String FLAG_CODEC_PROVENANCE_API =
++            "android.media.audio.codec_provenance_api";
++    private static final String FLAG_ROUTED_DEVICE_IDS =
++            "android.media.audio.routed_device_ids";
++    private static final String FLAG_PARTIAL_FLUSH_FOR_PCM_OFFLOAD =
++            "android.media.audio.partial_flush_for_pcm_offload";
++
+     //---------------------------------------------------------
+     // Constants
+@@ -113,4 +110,7 @@
+      *  This value must be exactly equal to 0.0f; do not change it.
+      */
++    private static final int MAX_PCM_CHANNEL_COUNT = 2;
++    private static final int MAX_CHANNEL_INDEX_COUNT = 24;
++
+     private static final float GAIN_MIN = 0.0f;
+     /** Maximum value for a linear gain or auxiliary effect level.
+@@ -177,22 +177,22 @@
+      * Denotes a successful operation.
+      */
+-    public  static final int SUCCESS                               = AudioSystem.SUCCESS;
++    public  static final int SUCCESS                               = 0;
+     /**
+      * Denotes a generic operation failure.
+      */
+-    public  static final int ERROR                                 = AudioSystem.ERROR;
++    public  static final int ERROR                                 = -1;
+     /**
+      * Denotes a failure due to the use of an invalid value.
+      */
+-    public  static final int ERROR_BAD_VALUE                       = AudioSystem.BAD_VALUE;
++    public  static final int ERROR_BAD_VALUE                       = -2;
+     /**
+      * Denotes a failure due to the improper use of a method.
+      */
+-    public  static final int ERROR_INVALID_OPERATION               = AudioSystem.INVALID_OPERATION;
++    public  static final int ERROR_INVALID_OPERATION               = -3;
+     /**
+      * An error code indicating that the object reporting it is no longer valid and needs to
+      * be recreated.
+      */
+-    public  static final int ERROR_DEAD_OBJECT                     = AudioSystem.DEAD_OBJECT;
++    public  static final int ERROR_DEAD_OBJECT                     = -6;
+     /**
+      * {@link #getTimestampWithStatus(AudioTimestamp)} is called in STOPPED or FLUSHED state,
+@@ -200,5 +200,5 @@
+      * @hide
+      */
+-    public  static final int ERROR_WOULD_BLOCK                     = AudioSystem.WOULD_BLOCK;
++    public  static final int ERROR_WOULD_BLOCK                     = -7;
+ 
+     // Error codes:
+@@ -214,5 +214,5 @@
+     // Note: To avoid collisions with other event constants,
+     // do not define an event here that is the same value as
+-    // AudioSystem.NATIVE_EVENT_ROUTING_CHANGE.
++    // Routing change event used by the Android native interface.
+ 
+     /**
+@@ -241,5 +241,5 @@
+      * Event id denotes when the codec format changes.
+      *
+-     * Note: Similar to a device routing change (AudioSystem.NATIVE_EVENT_ROUTING_CHANGE),
++     * Note: Similar to a device routing change (1000),
+      * this event comes from the AudioFlinger Thread / Output Stream management
+      * (not from buffer indications as above).
+@@ -679,6 +679,4 @@
+      */
+     @NonNull private LogSessionId mLogSessionId = LogSessionId.LOG_SESSION_ID_NONE;
+-
+-    private AudioPolicy mAudioPolicy;
+ 
+     //--------------------------------
+@@ -861,5 +859,5 @@
+             @Nullable TunerConfiguration tunerConfiguration, @Nullable String codecProvenance)
+                     throws IllegalArgumentException {
+-        super(attributes, AudioPlaybackConfiguration.PLAYER_TYPE_JAM_AUDIOTRACK);
++        super(attributes);
+         // mState already == STATE_UNINITIALIZED
+ 
+@@ -914,5 +912,5 @@
+         audioParamCheck(rate, channelMask, channelIndexMask, channelAcnMask, encoding, mode);
+         mOffloaded = offload;
+-        mStreamType = AudioSystem.STREAM_DEFAULT;
++        mStreamType = -1;
+ 
+         audioBuffSizeCheck(bufferSizeInBytes);
+@@ -928,7 +926,4 @@
+         session[0] = resolvePlaybackSessionId(context, sessionId);
+ 
+-        AttributionSource attributionSource = context == null
+-                ? AttributionSource.myAttributionSource() : context.getAttributionSource();
+-
+         if (codecProvenance == null) {
+             codecProvenance = "";
+@@ -938,15 +933,13 @@
+ 
+         // native initialization
+-        try (ScopedParcelState attributionSourceState = attributionSource.asScopedParcelState()) {
+-            int initResult = native_setup(new WeakReference<AudioTrack>(this), mAttributes,
+-                    sampleRate, mChannelMasks, mAudioFormat,
+-                    mNativeBufferSizeInBytes, mDataLoadMode, session,
+-                    attributionSourceState.getParcel(), 0 /*nativeTrackInJavaObj*/, offload,
+-                    encapsulationMode, tunerConfiguration, getCurrentOpPackageName(),
+-                    mCodecProvenance);
+-            if (initResult != SUCCESS) {
+-                loge("Error code " + initResult + " when initializing AudioTrack.");
+-                return; // with mState == STATE_UNINITIALIZED
+-            }
++        int initResult = native_setup(new WeakReference<AudioTrack>(this), mAttributes,
++                sampleRate, mChannelMasks, mAudioFormat,
++                mNativeBufferSizeInBytes, mDataLoadMode, session,
++                null /* no AudioFlinger attribution */, 0 /*nativeTrackInJavaObj*/, offload,
++                encapsulationMode, tunerConfiguration, getCurrentOpPackageName(),
++                mCodecProvenance);
++        if (initResult != SUCCESS) {
++            loge("Error code " + initResult + " when initializing AudioTrack.");
++            return; // with mState == STATE_UNINITIALIZED
+         }
+ 
+@@ -989,6 +982,5 @@
+      */
+     /*package*/ AudioTrack(long nativeTrackInJavaObj) {
+-        super(new AudioAttributes.Builder().build(),
+-                AudioPlaybackConfiguration.PLAYER_TYPE_JAM_AUDIOTRACK);
++        super(new AudioAttributes.Builder().build());
+         // "final"s
+         mNativeTrackInJavaObj = 0;
+@@ -1004,5 +996,5 @@
+         // other initialization...
+         if (nativeTrackInJavaObj != 0) {
+-            baseRegisterPlayer(AudioSystem.AUDIO_SESSION_ALLOCATE);
++            baseRegisterPlayer(AUDIO_SESSION_ID_GENERATE);
+             deferred_connect(nativeTrackInJavaObj);
+         } else {
+@@ -1021,24 +1013,21 @@
+             int[] session = { 0 };
+             int[] rates = { 0 };
+-            try (ScopedParcelState attributionSourceState =
+-                         AttributionSource.myAttributionSource().asScopedParcelState()) {
+-                int initResult = native_setup(new WeakReference<AudioTrack>(this),
+-                        null /*mAttributes - NA*/,
+-                        rates /*sampleRate - NA*/,
+-                        null /*mChannelMasks - NA*/,
+-                        0 /*mAudioFormat - NA*/,
+-                        0 /*mNativeBufferSizeInBytes - NA*/,
+-                        0 /*mDataLoadMode - NA*/,
+-                        session,
+-                        attributionSourceState.getParcel(),
+-                        nativeTrackInJavaObj,
+-                        false /*offload*/,
+-                        ENCAPSULATION_MODE_NONE,
+-                        null /* tunerConfiguration */,
+-                        "" /* opPackagename */, "" /* codecProvenance */);
+-                if (initResult != SUCCESS) {
+-                    loge("Error code " + initResult + " when initializing AudioTrack.");
+-                    return; // with mState == STATE_UNINITIALIZED
+-                }
++            int initResult = native_setup(new WeakReference<AudioTrack>(this),
++                    null /*mAttributes - NA*/,
++                    rates /*sampleRate - NA*/,
++                    null /*mChannelMasks - NA*/,
++                    0 /*mAudioFormat - NA*/,
++                    0 /*mNativeBufferSizeInBytes - NA*/,
++                    0 /*mDataLoadMode - NA*/,
++                    session,
++                    null /* no AudioFlinger attribution */,
++                    nativeTrackInJavaObj,
++                    false /*offload*/,
++                    ENCAPSULATION_MODE_NONE,
++                    null /* tunerConfiguration */,
++                    "" /* opPackagename */, "" /* codecProvenance */);
++            if (initResult != SUCCESS) {
++                loge("Error code " + initResult + " when initializing AudioTrack.");
++                return; // with mState == STATE_UNINITIALIZED
+             }
+ 
+@@ -1154,4 +1143,7 @@
+      */
+     public static class Builder {
++        private static final int CALL_REDIRECT_VOIP = 2;
++        private static final int CALL_REDIRECT_PSTN = 1;
++        private static final int CALL_REDIRECT_NONE = 0;
+         private Context mContext;
+         private AudioAttributes mAttributes;
+@@ -1164,5 +1156,5 @@
+         private boolean mOffload = false;
+         private TunerConfiguration mTunerConfiguration;
+-        private int mCallRedirectionMode = AudioManager.CALL_REDIRECT_NONE;
++        private int mCallRedirectionMode = CALL_REDIRECT_NONE;
+         private String mCodecMediaType;
+ 
+@@ -1402,9 +1394,9 @@
+          */
+         public @NonNull Builder setCallRedirectionMode(
+-                @AudioManager.CallRedirectionMode int callRedirectionMode) {
++                int callRedirectionMode) {
+             switch (callRedirectionMode) {
+-                case AudioManager.CALL_REDIRECT_NONE:
+-                case AudioManager.CALL_REDIRECT_PSTN:
+-                case AudioManager.CALL_REDIRECT_VOIP:
++                case CALL_REDIRECT_NONE:
++                case CALL_REDIRECT_PSTN:
++                case CALL_REDIRECT_VOIP:
+                     mCallRedirectionMode = callRedirectionMode;
+                     break;
+@@ -1439,31 +1431,4 @@
+         }
+ 
+-        private @NonNull AudioTrack buildCallInjectionTrack() {
+-            AudioMixingRule audioMixingRule = new AudioMixingRule.Builder()
+-                    .addMixRule(AudioMixingRule.RULE_MATCH_ATTRIBUTE_CAPTURE_PRESET,
+-                            new AudioAttributes.Builder()
+-                                   .setCapturePreset(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+-                                   .setForCallRedirection()
+-                                   .build())
+-                    .setTargetMixRole(AudioMixingRule.MIX_ROLE_INJECTOR)
+-                    .build();
+-            AudioMix audioMix = new AudioMix.Builder(audioMixingRule)
+-                    .setFormat(mFormat)
+-                    .setRouteFlags(AudioMix.ROUTE_FLAG_LOOP_BACK)
+-                    .build();
+-            AudioPolicy audioPolicy =
+-                    new AudioPolicy.Builder(/*context=*/ mContext).addMix(audioMix).build();
+-
+-            if (AudioManager.registerAudioPolicyStatic(audioPolicy) != 0) {
+-                throw new UnsupportedOperationException("Error: could not register audio policy");
+-            }
+-            AudioTrack track = audioPolicy.createAudioTrackSource(audioMix);
+-            if (track == null) {
+-                throw new UnsupportedOperationException("Cannot create injection AudioTrack");
+-            }
+-            track.unregisterAudioPolicyOnRelease(audioPolicy);
+-            return track;
+-        }
+-
+         /**
+          * Builds an {@link AudioTrack} instance initialized with all the parameters set
+@@ -1510,34 +1475,6 @@
+             }
+ 
+-            if (mCallRedirectionMode == AudioManager.CALL_REDIRECT_VOIP) {
+-                return buildCallInjectionTrack();
+-            } else if (mCallRedirectionMode == AudioManager.CALL_REDIRECT_PSTN) {
+-                mAttributes = new AudioAttributes.Builder(mAttributes)
+-                        .setForCallRedirection()
+-                        .build();
+-            }
+-
+-            if (mOffload) {
+-                if (mPerformanceMode == PERFORMANCE_MODE_LOW_LATENCY) {
+-                    throw new UnsupportedOperationException(
+-                            "Offload and low latency modes are incompatible");
+-                }
+-                if (multiZoneAudio()) {
+-                    AttributionSource attributionSource = mContext == null
+-                            ? AttributionSource.myAttributionSource() :
+-                            mContext.getAttributionSource();
+-
+-                    if (AudioSystem.getDirectPlaybackSupport(mFormat, mAttributes,
+-                            attributionSource.getUid()) == AudioSystem.DIRECT_NOT_SUPPORTED) {
+-                        throw new UnsupportedOperationException("Cannot create AudioTrack, "
+-                                + "offload format / attributes not supported");
+-                    }
+-                } else {
+-                    if (AudioSystem.getDirectPlaybackSupport(mFormat, mAttributes)
+-                            == AudioSystem.DIRECT_NOT_SUPPORTED) {
+-                        throw new UnsupportedOperationException("Cannot create AudioTrack, "
+-                                + "offload format / attributes not supported");
+-                    }
+-                }
++            if (mCallRedirectionMode != CALL_REDIRECT_NONE || mOffload) {
++                throw new UnsupportedOperationException("AudioTrack supports local PCM output");
+             }
+ 
+@@ -1580,8 +1517,4 @@
+      * unregister the policy that was used to create the track.
+      */
+-    private void unregisterAudioPolicyOnRelease(AudioPolicy audioPolicy) {
+-        mAudioPolicy = audioPolicy;
+-    }
+-
+     /**
+      * Configures the delay and padding values for the current compressed stream playing
+@@ -1861,5 +1794,5 @@
+     // mask of all the positional channels supported, however the allowed combinations
+     // are further restricted by the matching left/right rule and
+-    // AudioSystem.OUT_CHANNEL_COUNT_MAX
++    // MAX_PCM_CHANNEL_COUNT
+     private static final int SUPPORTED_OUT_CHANNELS =
+             AudioFormat.CHANNEL_OUT_FRONT_LEFT |
+@@ -1929,5 +1862,5 @@
+         // of direct output for these formats
+         if (format.getChannelCount() > 2
+-                || format.getSampleRate() > AudioSystem.SAMPLE_RATE_HZ_MAX) {
++                || format.getSampleRate() > AudioFormat.SAMPLE_RATE_HZ_MAX) {
+             return false;
+         }
+@@ -2012,9 +1945,9 @@
+         if (channelIndexMask != 0) {
+             // As of S, we accept up to 24 channel index mask.
+-            final int fullIndexMask = (1 << AudioSystem.FCC_24) - 1;
++            final int fullIndexMask = (1 << MAX_CHANNEL_INDEX_COUNT) - 1;
+             final int channelIndexCount = Integer.bitCount(channelIndexMask);
+             final boolean accepted = (channelIndexMask & ~fullIndexMask) == 0
+                     && (!AudioFormat.isEncodingLinearFrames(audioFormat)  // compressed OK
+-                            || channelIndexCount <= AudioSystem.OUT_CHANNEL_COUNT_MAX); // PCM
++                            || channelIndexCount <= MAX_PCM_CHANNEL_COUNT); // PCM
+             if (!accepted) {
+                 throw new IllegalArgumentException(
+@@ -2086,6 +2019,6 @@
+         try {
+             channelCountLimit = AudioFormat.isEncodingLinearFrames(encoding)
+-                    ? AudioSystem.OUT_CHANNEL_COUNT_MAX  // PCM limited to OUT_CHANNEL_COUNT_MAX
+-                    : AudioSystem.FCC_24;                // Compressed limited to 24 channels
++                    ? MAX_PCM_CHANNEL_COUNT  // PCM limited to OUT_CHANNEL_COUNT_MAX
++                    : MAX_CHANNEL_INDEX_COUNT;                // Compressed limited to 24 channels
+         } catch (IllegalArgumentException iae) {
+             loge("Unsupported encoding " + iae);
+@@ -2172,9 +2105,4 @@
+             // don't raise an exception, we're releasing the resources.
+         }
+-        if (mAudioPolicy != null) {
+-            AudioManager.unregisterAudioPolicyAsyncStatic(mAudioPolicy);
+-            mAudioPolicy = null;
+-        }
+-
+         baseRelease();
+         native_release();
+@@ -3770,11 +3698,11 @@
+ 
+         int ret = 0;
+-        if (audioData.isDirect()) {
++        if (!audioData.hasArray()) {
+             ret = native_write_native_bytes(audioData,
+                     audioData.position(), sizeInBytes, mAudioFormat,
+                     writeMode == WRITE_BLOCKING);
+         } else {
+-            ret = native_write_byte(NioUtils.unsafeArray(audioData),
+-                    NioUtils.unsafeArrayOffset(audioData) + audioData.position(),
++            ret = native_write_byte(audioData.array(),
++                    audioData.arrayOffset() + audioData.position(),
+                     sizeInBytes, mAudioFormat,
+                     writeMode == WRITE_BLOCKING);
+@@ -4048,18 +3976,5 @@
+      */
+     private @NonNull List<AudioDeviceInfo> getRoutedDevicesInternal() {
+-        List<AudioDeviceInfo> audioDeviceInfos = new ArrayList<AudioDeviceInfo>();
+-        final int[] deviceIds = native_getRoutedDeviceIds();
+-        if (deviceIds == null || deviceIds.length == 0) {
+-            return audioDeviceInfos;
+-        }
+-
+-        for (int i = 0; i < deviceIds.length; i++) {
+-            AudioDeviceInfo audioDeviceInfo = AudioManager.getDeviceForPortId(deviceIds[i],
+-                    AudioManager.GET_DEVICES_OUTPUTS);
+-            if (audioDeviceInfo != null) {
+-                audioDeviceInfos.add(audioDeviceInfo);
+-            }
+-        }
+-        return audioDeviceInfos;
++        return java.util.Collections.emptyList();
+     }
+ 
+@@ -4248,6 +4163,4 @@
+      */
+     private void broadcastRoutingChange() {
+-        AudioManager.resetAudioPortGeneration();
+-        baseUpdateDeviceIds(getRoutedDevicesInternal());
+         synchronized (mRoutingChangeListeners) {
+             for (NativeRoutingEventHandlerDelegate delegate : mRoutingChangeListeners.values()) {
+@@ -4681,5 +4594,5 @@
+         }
+ 
+-        if (what == AudioSystem.NATIVE_EVENT_ROUTING_CHANGE) {
++        if (what == 1000) {
+             track.broadcastRoutingChange();
+             return;
+@@ -4730,5 +4643,5 @@
+             Object /*AudioAttributes*/ attributes,
+             int[] sampleRate, Object /*AudioFormat.ChannelMasks*/ channelMasks, int audioFormat,
+-            int buffSizeInBytes, int mode, int[] sessionId, @NonNull Parcel attributionSource,
++            int buffSizeInBytes, int mode, int[] sessionId, @Nullable Parcel attributionSource,
+             long nativeAudioTrack, boolean offload, int encapsulationMode,
+             Object tunerConfiguration, @NonNull String opPackageName,
+--- a/frameworks/base/media/java/android/media/PlayerBase.java
++++ b/frameworks/base/media/java/android/media/PlayerBase.java
+@@ -17,30 +17,14 @@
+ package android.media;
+ 
+-import static android.companion.virtual.VirtualDeviceParams.DEVICE_POLICY_CUSTOM;
+-import static android.companion.virtual.VirtualDeviceParams.POLICY_TYPE_AUDIO;
+-import static android.content.Context.DEVICE_ID_DEFAULT;
+-import static android.media.AudioManager.AUDIO_SESSION_ID_GENERATE;
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.app.ActivityThread;
+-import android.companion.virtual.VirtualDeviceManager;
+ import android.content.Context;
+-import android.os.IBinder;
+-import android.os.Parcel;
+-import android.os.Parcelable;
+-import android.os.RemoteException;
+-import android.os.ServiceManager;
+ import android.text.TextUtils;
+ import android.util.Log;
+ 
+ import com.android.internal.annotations.GuardedBy;
+-import com.android.internal.app.IAppOpsCallback;
+-import com.android.internal.app.IAppOpsService;
+-
+-import java.lang.ref.WeakReference;
+-import java.util.Arrays;
+-import java.util.List;
+-import java.util.Objects;
++
+ 
+ /**
+@@ -52,11 +36,8 @@
+ public abstract class PlayerBase {
+ 
+-    private static final String TAG = "PlayerBase";
+-    /** Debug app ops */
+-    private static final boolean DEBUG_APP_OPS = false;
+-    private static final boolean DEBUG = DEBUG_APP_OPS || false;
+-    private static IAudioService sService; //lazy initialization, use getService()
+-
+-    // parameters of the player that affect AppOps
++    static final int AUDIO_SESSION_ID_GENERATE = 0;
++    protected int mPlayerIId = -1;
++
++    // Configured audio attributes.
+     protected AudioAttributes mAttributes;
+ 
+@@ -68,21 +49,6 @@
+     protected float mAuxEffectSendLevel = 0.0f;
+ 
+-    // NEVER call into AudioService (see getService()) with mLock held: PlayerBase can run in
+-    // the same process as AudioService, which can synchronously call back into this class,
+-    // causing deadlocks between the two
+     private final Object mLock = new Object();
+ 
+-    // for AppOps
+-    private @Nullable IAppOpsService mAppOps;
+-    private @Nullable IAppOpsCallback mAppOpsCallback;
+-    @GuardedBy("mLock")
+-    private boolean mHasAppOpsPlayAudio = true;
+-
+-    private final int mImplType;
+-    // uniquely identifies the Player Interface throughout the system (P I Id)
+-    protected int mPlayerIId = AudioPlaybackConfiguration.PLAYER_PIID_INVALID;
+-
+-    @GuardedBy("mLock")
+-    private int mState;
+     @GuardedBy("mLock")
+     private int mStartDelayMs = 0;
+@@ -93,6 +59,4 @@
+     @GuardedBy("mLock")
+     private float mVolMultiplier = 1.0f;
+-    @GuardedBy("mLock")
+-    private @NonNull int[] mDeviceIds = AudioPlaybackConfiguration.PLAYER_DEVICEIDS_INVALID;
+ 
+     /**
+@@ -102,12 +66,10 @@
+      * @param sessionId the audio session Id
+      */
+-    PlayerBase(@NonNull AudioAttributes attr, int implType) {
++    PlayerBase(@NonNull AudioAttributes attr) {
+         if (attr == null) {
+             throw new IllegalArgumentException("Illegal null AudioAttributes");
+         }
+         mAttributes = attr;
+-        mImplType = implType;
+-        mState = AudioPlaybackConfiguration.PLAYER_STATE_IDLE;
+-    };
++    }
+ 
+     /** @hide */
+@@ -122,11 +84,5 @@
+      */
+     protected void baseRegisterPlayer(int sessionId) {
+-        try {
+-            mPlayerIId = getService().trackPlayer(
+-                    new PlayerIdCard(mImplType, mAttributes, new IPlayerWrapper(this),
+-                            sessionId));
+-        } catch (RemoteException e) {
+-            Log.e(TAG, "Error talking to audio service, player will not be tracked", e);
+-        }
++        // The browser sink has no process-external player registry.
+     }
+ 
+@@ -139,9 +95,4 @@
+             throw new IllegalArgumentException("Illegal null AudioAttributes");
+         }
+-        try {
+-            getService().playerAttributes(mPlayerIId, attr);
+-        } catch (RemoteException e) {
+-            Log.e(TAG, "Error talking to audio service, audio attributes will not be updated", e);
+-        }
+         synchronized (mLock) {
+             mAttributes = attr;
+@@ -149,60 +100,8 @@
+     }
+ 
+-    /**
+-     * To be called whenever the session ID of the player changes
+-     * @param sessionId, the new session Id
+-     */
+-    void baseUpdateSessionId(int sessionId) {
+-        try {
+-            getService().playerSessionId(mPlayerIId, sessionId);
+-        } catch (RemoteException e) {
+-            Log.e(TAG, "Error talking to audio service, the session ID will not be updated", e);
+-        }
+-    }
+-
+-    void baseUpdateDeviceIds(@NonNull List<AudioDeviceInfo> deviceInfos) {
+-        int[] deviceIds = new int[deviceInfos.size()];
+-        for (int i = 0; i < deviceInfos.size(); i++) {
+-            deviceIds[i] = deviceInfos.get(i).getId();
+-        }
+-
+-        int piid;
+-        synchronized (mLock) {
+-            piid = mPlayerIId;
+-            mDeviceIds = deviceIds;
+-        }
+-        try {
+-            getService().playerEvent(piid,
+-                    AudioPlaybackConfiguration.PLAYER_UPDATE_DEVICE_ID, deviceIds);
+-        } catch (RemoteException e) {
+-            Log.e(TAG, "Error talking to audio service, "
+-                    + Arrays.toString(deviceIds)
+-                    + " device id will not be tracked for piid=" + piid, e);
+-        }
+-    }
+-
+-    private void updateState(int state, @NonNull int[] deviceIds) {
+-        final int piid;
+-        synchronized (mLock) {
+-            mState = state;
+-            piid = mPlayerIId;
+-            mDeviceIds = deviceIds;
+-        }
+-        try {
+-            getService().playerEvent(piid, state, deviceIds);
+-        } catch (RemoteException e) {
+-            Log.e(TAG, "Error talking to audio service, "
+-                    + AudioPlaybackConfiguration.toLogFriendlyPlayerState(state)
+-                    + " state will not be tracked for piid=" + piid, e);
+-        }
+-    }
+-
+-    void baseStart(@NonNull int[] deviceIds) {
+-        if (DEBUG) {
+-            Log.v(TAG, "baseStart() piid=" + mPlayerIId + " deviceId="
+-                    + Arrays.toString(deviceIds));
+-        }
+-        updateState(AudioPlaybackConfiguration.PLAYER_STATE_STARTED, deviceIds);
+-    }
++    // The subclass reports its own play state and routes to the browser sink.
++    void baseStart(@NonNull int[] deviceIds) {}
++    void basePause() {}
++    void baseStop() {}
+ 
+     void baseSetStartDelayMs(int delayMs) {
+@@ -216,14 +115,4 @@
+             return mStartDelayMs;
+         }
+-    }
+-
+-    void basePause() {
+-        if (DEBUG) { Log.v(TAG, "basePause() piid=" + mPlayerIId); }
+-        updateState(AudioPlaybackConfiguration.PLAYER_STATE_PAUSED, new int[0]);
+-    }
+-
+-    void baseStop() {
+-        if (DEBUG) { Log.v(TAG, "baseStop() piid=" + mPlayerIId); }
+-        updateState(AudioPlaybackConfiguration.PLAYER_STATE_STOPPED, new int[0]);
+     }
+ 
+@@ -277,38 +166,5 @@
+      * Releases AppOps related resources.
+      */
+-    void baseRelease() {
+-        if (DEBUG) { Log.v(TAG, "baseRelease() piid=" + mPlayerIId + " state=" + mState); }
+-        boolean releasePlayer = false;
+-        synchronized (mLock) {
+-            if (mState != AudioPlaybackConfiguration.PLAYER_STATE_RELEASED) {
+-                releasePlayer = true;
+-                mState = AudioPlaybackConfiguration.PLAYER_STATE_RELEASED;
+-            }
+-        }
+-        try {
+-            if (releasePlayer) {
+-                getService().releasePlayer(mPlayerIId);
+-            }
+-        } catch (RemoteException e) {
+-            Log.e(TAG, "Error talking to audio service, the player will still be tracked", e);
+-        }
+-        try {
+-            if (mAppOps != null) {
+-                mAppOps.stopWatchingMode(mAppOpsCallback);
+-            }
+-        } catch (Exception e) {
+-            // nothing to do here, the object is supposed to be released anyway
+-        }
+-    }
+-
+-    private static IAudioService getService()
+-    {
+-        if (sService != null) {
+-            return sService;
+-        }
+-        IBinder b = ServiceManager.getService(Context.AUDIO_SERVICE);
+-        sService = IAudioService.Stub.asInterface(b);
+-        return sService;
+-    }
++    void baseRelease() {}
+ 
+     /**
+@@ -369,152 +225,4 @@
+     abstract void playerPause();
+     abstract void playerStop();
+-
+-    //=====================================================================
+-    /**
+-     * Wrapper around an implementation of IPlayer for all subclasses of PlayerBase
+-     * that doesn't keep a strong reference on PlayerBase
+-     */
+-    private static class IPlayerWrapper extends IPlayer.Stub {
+-        private final WeakReference<PlayerBase> mWeakPB;
+-
+-        public IPlayerWrapper(PlayerBase pb) {
+-            mWeakPB = new WeakReference<PlayerBase>(pb);
+-        }
+-
+-        @Override
+-        public void start() {
+-            final PlayerBase pb = mWeakPB.get();
+-            if (pb != null) {
+-                pb.playerStart();
+-            }
+-        }
+-
+-        @Override
+-        public void pause() {
+-            final PlayerBase pb = mWeakPB.get();
+-            if (pb != null) {
+-                pb.playerPause();
+-            }
+-        }
+-
+-        @Override
+-        public void stop() {
+-            final PlayerBase pb = mWeakPB.get();
+-            if (pb != null) {
+-                pb.playerStop();
+-            }
+-        }
+-
+-        @Override
+-        public void setVolume(float vol) {
+-            final PlayerBase pb = mWeakPB.get();
+-            if (pb != null) {
+-                pb.setVolumeMultiplier(vol);
+-            }
+-        }
+-
+-        @Override
+-        public void setPan(float pan) {
+-            final PlayerBase pb = mWeakPB.get();
+-            if (pb != null) {
+-                pb.baseSetPan(pan);
+-            }
+-        }
+-
+-        @Override
+-        public void setStartDelayMs(int delayMs) {
+-            final PlayerBase pb = mWeakPB.get();
+-            if (pb != null) {
+-                pb.baseSetStartDelayMs(delayMs);
+-            }
+-        }
+-
+-        @Override
+-        public void applyVolumeShaper(
+-                @NonNull VolumeShaperConfiguration configuration,
+-                @NonNull VolumeShaperOperation operation) {
+-            final PlayerBase pb = mWeakPB.get();
+-            if (pb != null) {
+-                pb.playerApplyVolumeShaper(VolumeShaper.Configuration.fromParcelable(configuration),
+-                        VolumeShaper.Operation.fromParcelable(operation));
+-            }
+-        }
+-    }
+-
+-    //=====================================================================
+-    /**
+-     * Class holding all the information about a player that needs to be known at registration time
+-     */
+-    public static class PlayerIdCard implements Parcelable {
+-        public final int mPlayerType;
+-
+-        public static final int AUDIO_ATTRIBUTES_NONE = 0;
+-        public static final int AUDIO_ATTRIBUTES_DEFINED = 1;
+-        public final AudioAttributes mAttributes;
+-        public final IPlayer mIPlayer;
+-        public final int mSessionId;
+-
+-        PlayerIdCard(int type, @NonNull AudioAttributes attr, @NonNull IPlayer iplayer,
+-                     int sessionId) {
+-            mPlayerType = type;
+-            mAttributes = attr;
+-            mIPlayer = iplayer;
+-            mSessionId = sessionId;
+-        }
+-
+-        @Override
+-        public int hashCode() {
+-            return Objects.hash(mPlayerType, mSessionId);
+-        }
+-
+-        @Override
+-        public int describeContents() {
+-            return 0;
+-        }
+-
+-        @Override
+-        public void writeToParcel(Parcel dest, int flags) {
+-            dest.writeInt(mPlayerType);
+-            mAttributes.writeToParcel(dest, 0);
+-            dest.writeStrongBinder(mIPlayer == null ? null : mIPlayer.asBinder());
+-            dest.writeInt(mSessionId);
+-        }
+-
+-        public static final @android.annotation.NonNull Parcelable.Creator<PlayerIdCard> CREATOR
+-        = new Parcelable.Creator<PlayerIdCard>() {
+-            /**
+-             * Rebuilds an PlayerIdCard previously stored with writeToParcel().
+-             * @param p Parcel object to read the PlayerIdCard from
+-             * @return a new PlayerIdCard created from the data in the parcel
+-             */
+-            public PlayerIdCard createFromParcel(Parcel p) {
+-                return new PlayerIdCard(p);
+-            }
+-            public PlayerIdCard[] newArray(int size) {
+-                return new PlayerIdCard[size];
+-            }
+-        };
+-
+-        private PlayerIdCard(Parcel in) {
+-            mPlayerType = in.readInt();
+-            mAttributes = AudioAttributes.CREATOR.createFromParcel(in);
+-            // IPlayer can be null if unmarshalling a Parcel coming from who knows where
+-            final IBinder b = in.readStrongBinder();
+-            mIPlayer = (b == null ? null : IPlayer.Stub.asInterface(b));
+-            mSessionId = in.readInt();
+-        }
+-
+-        @Override
+-        public boolean equals(Object o) {
+-            if (this == o) return true;
+-            if (o == null || !(o instanceof PlayerIdCard)) return false;
+-
+-            PlayerIdCard that = (PlayerIdCard) o;
+-
+-            // FIXME change to the binder player interface once supported as a member
+-            return ((mPlayerType == that.mPlayerType) && mAttributes.equals(that.mAttributes)
+-                    && (mSessionId == that.mSessionId));
+-        }
+-    }
+ 
+     //=====================================================================
+@@ -564,25 +272,5 @@
+     protected static int resolvePlaybackSessionId(@Nullable Context context,
+             int requestedSessionId) {
+-        if (requestedSessionId != AUDIO_SESSION_ID_GENERATE) {
+-            // Use explicitly requested session id.
+-            return requestedSessionId;
+-        }
+-
+-        if (context == null) {
+-            return AUDIO_SESSION_ID_GENERATE;
+-        }
+-
+-        int deviceId = context.getDeviceId();
+-        if (deviceId == DEVICE_ID_DEFAULT) {
+-            return AUDIO_SESSION_ID_GENERATE;
+-        }
+-
+-        VirtualDeviceManager vdm = context.getSystemService(VirtualDeviceManager.class);
+-        if (vdm == null || vdm.getDevicePolicy(deviceId, POLICY_TYPE_AUDIO)
+-                != DEVICE_POLICY_CUSTOM) {
+-            return AUDIO_SESSION_ID_GENERATE;
+-        }
+-
+-        return vdm.getAudioPlaybackSessionId(deviceId);
++        return requestedSessionId;
+     }
+ }
+--- a/frameworks/base/media/java/android/media/VolumeShaper.java
++++ b/frameworks/base/media/java/android/media/VolumeShaper.java
+@@ -22,5 +22,4 @@
+ import android.compat.annotation.UnsupportedAppUsage;
+ import android.os.Build;
+-import android.os.BadParcelableException;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+@@ -484,68 +483,11 @@
+         @Override
+         public void writeToParcel(Parcel dest, int flags) {
+-            VolumeShaperConfiguration parcelable = toParcelable();
+-            parcelable.writeToParcel(dest, flags);
+-        }
+-
+-        /** @hide */
+-        public VolumeShaperConfiguration toParcelable() {
+-            VolumeShaperConfiguration parcelable = new VolumeShaperConfiguration();
+-            parcelable.type = typeToAidl(mType);
+-            parcelable.id = mId;
+-            if (mType != TYPE_ID) {
+-                parcelable.optionFlags = optionFlagsToAidl(mOptionFlags);
+-                parcelable.durationMs = mDurationMs;
+-                parcelable.interpolatorConfig = toInterpolatorParcelable();
+-            }
+-            return parcelable;
+-        }
+-
+-        private InterpolatorConfig toInterpolatorParcelable() {
+-            InterpolatorConfig parcelable = new InterpolatorConfig();
+-            parcelable.type = interpolatorTypeToAidl(mInterpolatorType);
+-            parcelable.firstSlope = 0.f; // first slope (specifying for native side)
+-            parcelable.lastSlope = 0.f; // last slope (specifying for native side)
+-            parcelable.xy = new float[mTimes.length * 2];
+-            for (int i = 0; i < mTimes.length; ++i) {
+-                parcelable.xy[i * 2] = mTimes[i];
+-                parcelable.xy[i * 2 + 1] = mVolumes[i];
+-            }
+-            return parcelable;
+-        }
+-
+-        /** @hide */
+-        public static Configuration fromParcelable(VolumeShaperConfiguration parcelable) {
+-            // this needs to match the native VolumeShaper.Configuration parceling
+-            final int type = typeFromAidl(parcelable.type);
+-            final int id = parcelable.id;
+-            if (type == TYPE_ID) {
+-                return new VolumeShaper.Configuration(id);
+-            } else {
+-                final int optionFlags = optionFlagsFromAidl(parcelable.optionFlags);
+-                final double durationMs = parcelable.durationMs;
+-                final int interpolatorType = interpolatorTypeFromAidl(
+-                        parcelable.interpolatorConfig.type);
+-                // parcelable.interpolatorConfig.firstSlope is ignored on the Java side
+-                // parcelable.interpolatorConfig.lastSlope is ignored on the Java side
+-                final int length = parcelable.interpolatorConfig.xy.length;
+-                if (length % 2 != 0) {
+-                    throw new android.os.BadParcelableException("xy length must be even");
+-                }
+-                final float[] times = new float[length / 2];
+-                final float[] volumes = new float[length / 2];
+-                for (int i = 0; i < length / 2; ++i) {
+-                    times[i] = parcelable.interpolatorConfig.xy[i * 2];
+-                    volumes[i] = parcelable.interpolatorConfig.xy[i * 2 + 1];
+-                }
+-
+-                return new VolumeShaper.Configuration(
+-                        type,
+-                        id,
+-                        optionFlags,
+-                        durationMs,
+-                        interpolatorType,
+-                        times,
+-                        volumes);
+-            }
++            dest.writeInt(mType);
++            dest.writeInt(mId);
++            dest.writeInt(mOptionFlags);
++            dest.writeDouble(mDurationMs);
++            dest.writeInt(mInterpolatorType);
++            dest.writeFloatArray(mTimes);
++            dest.writeFloatArray(mVolumes);
+         }
+ 
+@@ -554,5 +496,6 @@
+             @Override
+             public VolumeShaper.Configuration createFromParcel(Parcel p) {
+-                return fromParcelable(VolumeShaperConfiguration.CREATOR.createFromParcel(p));
++                return new VolumeShaper.Configuration(p.readInt(), p.readInt(), p.readInt(),
++                        p.readDouble(), p.readInt(), p.createFloatArray(), p.createFloatArray());
+             }
+ 
+@@ -562,82 +505,4 @@
+             }
+         };
+-
+-        private static @InterpolatorType
+-        int interpolatorTypeFromAidl(@android.media.InterpolatorType int aidl) {
+-            switch (aidl) {
+-                case android.media.InterpolatorType.STEP:
+-                    return INTERPOLATOR_TYPE_STEP;
+-                case android.media.InterpolatorType.LINEAR:
+-                    return INTERPOLATOR_TYPE_LINEAR;
+-                case android.media.InterpolatorType.CUBIC:
+-                    return INTERPOLATOR_TYPE_CUBIC;
+-                case android.media.InterpolatorType.CUBIC_MONOTONIC:
+-                    return INTERPOLATOR_TYPE_CUBIC_MONOTONIC;
+-                default:
+-                    throw new BadParcelableException("Unknown interpolator type");
+-            }
+-        }
+-
+-        private static @android.media.InterpolatorType
+-        int interpolatorTypeToAidl(@InterpolatorType int type) {
+-            switch (type) {
+-                case INTERPOLATOR_TYPE_STEP:
+-                    return android.media.InterpolatorType.STEP;
+-                case INTERPOLATOR_TYPE_LINEAR:
+-                    return android.media.InterpolatorType.LINEAR;
+-                case INTERPOLATOR_TYPE_CUBIC:
+-                    return android.media.InterpolatorType.CUBIC;
+-                case INTERPOLATOR_TYPE_CUBIC_MONOTONIC:
+-                    return android.media.InterpolatorType.CUBIC_MONOTONIC;
+-                default:
+-                    throw new RuntimeException("Unknown interpolator type");
+-            }
+-        }
+-
+-        private static @Type
+-        int typeFromAidl(@android.media.VolumeShaperConfigurationType int aidl) {
+-            switch (aidl) {
+-                case VolumeShaperConfigurationType.ID:
+-                    return TYPE_ID;
+-                case VolumeShaperConfigurationType.SCALE:
+-                    return TYPE_SCALE;
+-                default:
+-                    throw new BadParcelableException("Unknown type");
+-            }
+-        }
+-
+-        private static @android.media.VolumeShaperConfigurationType
+-        int typeToAidl(@Type int type) {
+-            switch (type) {
+-                case TYPE_ID:
+-                    return VolumeShaperConfigurationType.ID;
+-                case TYPE_SCALE:
+-                    return VolumeShaperConfigurationType.SCALE;
+-                default:
+-                    throw new RuntimeException("Unknown type");
+-            }
+-        }
+-
+-        private static int optionFlagsFromAidl(int aidl) {
+-            int result = 0;
+-            if ((aidl & (1 << VolumeShaperConfigurationOptionFlag.VOLUME_IN_DBFS)) != 0) {
+-                result |= OPTION_FLAG_VOLUME_IN_DBFS;
+-            }
+-            if ((aidl & (1 << VolumeShaperConfigurationOptionFlag.CLOCK_TIME)) != 0) {
+-                result |= OPTION_FLAG_CLOCK_TIME;
+-            }
+-            return result;
+-        }
+-
+-        private static int optionFlagsToAidl(int flags) {
+-            int result = 0;
+-            if ((flags & OPTION_FLAG_VOLUME_IN_DBFS) != 0) {
+-                result |= (1 << VolumeShaperConfigurationOptionFlag.VOLUME_IN_DBFS);
+-            }
+-            if ((flags & OPTION_FLAG_CLOCK_TIME) != 0) {
+-                result |= (1 << VolumeShaperConfigurationOptionFlag.CLOCK_TIME);
+-            }
+-            return result;
+-        }
+ 
+         /**
+@@ -1271,22 +1136,7 @@
+         @Override
+         public void writeToParcel(Parcel dest, int flags) {
+-            toParcelable().writeToParcel(dest, flags);
+-        }
+-
+-        /** @hide */
+-        public VolumeShaperOperation toParcelable() {
+-            VolumeShaperOperation result = new VolumeShaperOperation();
+-            result.flags = flagsToAidl(mFlags);
+-            result.replaceId = mReplaceId;
+-            result.xOffset = mXOffset;
+-            return result;
+-        }
+-
+-        /** @hide */
+-        public static Operation fromParcelable(VolumeShaperOperation parcelable) {
+-            return new VolumeShaper.Operation(
+-                    flagsFromAidl(parcelable.flags),
+-                    parcelable.replaceId,
+-                    parcelable.xOffset);
++            dest.writeInt(mFlags);
++            dest.writeInt(mReplaceId);
++            dest.writeFloat(mXOffset);
+         }
+ 
+@@ -1295,5 +1145,5 @@
+             @Override
+             public VolumeShaper.Operation createFromParcel(Parcel p) {
+-                return fromParcelable(VolumeShaperOperation.CREATOR.createFromParcel(p));
++                return new Operation(p.readInt(), p.readInt(), p.readFloat());
+             }
+ 
+@@ -1303,44 +1153,4 @@
+             }
+         };
+-
+-        private static int flagsFromAidl(int aidl) {
+-            int result = 0;
+-            if ((aidl & (1 << VolumeShaperOperationFlag.REVERSE)) != 0) {
+-                result |= FLAG_REVERSE;
+-            }
+-            if ((aidl & (1 << VolumeShaperOperationFlag.TERMINATE)) != 0) {
+-                result |= FLAG_TERMINATE;
+-            }
+-            if ((aidl & (1 << VolumeShaperOperationFlag.JOIN)) != 0) {
+-                result |= FLAG_JOIN;
+-            }
+-            if ((aidl & (1 << VolumeShaperOperationFlag.DELAY)) != 0) {
+-                result |= FLAG_DEFER;
+-            }
+-            if ((aidl & (1 << VolumeShaperOperationFlag.CREATE_IF_NECESSARY)) != 0) {
+-                result |= FLAG_CREATE_IF_NEEDED;
+-            }
+-            return result;
+-        }
+-
+-        private static int flagsToAidl(int flags) {
+-            int result = 0;
+-            if ((flags & FLAG_REVERSE) != 0) {
+-                result |= (1 << VolumeShaperOperationFlag.REVERSE);
+-            }
+-            if ((flags & FLAG_TERMINATE) != 0) {
+-                result |= (1 << VolumeShaperOperationFlag.TERMINATE);
+-            }
+-            if ((flags & FLAG_JOIN) != 0) {
+-                result |= (1 << VolumeShaperOperationFlag.JOIN);
+-            }
+-            if ((flags & FLAG_DEFER) != 0) {
+-                result |= (1 << VolumeShaperOperationFlag.DELAY);
+-            }
+-            if ((flags & FLAG_CREATE_IF_NEEDED) != 0) {
+-                result |= (1 << VolumeShaperOperationFlag.CREATE_IF_NECESSARY);
+-            }
+-            return result;
+-        }
+ 
+         @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+@@ -1538,18 +1348,6 @@
+         @Override
+         public void writeToParcel(Parcel dest, int flags) {
+-            toParcelable().writeToParcel(dest, flags);
+-        }
+-
+-        /** @hide */
+-        public VolumeShaperState toParcelable() {
+-            VolumeShaperState result = new VolumeShaperState();
+-            result.volume = mVolume;
+-            result.xOffset = mXOffset;
+-            return result;
+-        }
+-
+-        /** @hide */
+-        public static State fromParcelable(VolumeShaperState p) {
+-            return new VolumeShaper.State(p.volume, p.xOffset);
++            dest.writeFloat(mVolume);
++            dest.writeFloat(mXOffset);
+         }
+ 
+@@ -1558,5 +1356,5 @@
+             @Override
+             public VolumeShaper.State createFromParcel(Parcel p) {
+-                return fromParcelable(VolumeShaperState.CREATOR.createFromParcel(p));
++                return new State(p.readFloat(), p.readFloat());
+             }
+ 
+--- a/frameworks/base/media/java/android/media/Utils.java
++++ b/frameworks/base/media/java/android/media/Utils.java
+@@ -27,11 +27,5 @@
+ import android.net.Uri;
+ import android.os.Binder;
+-import android.os.Environment;
+-import android.os.FileUtils;
+ import android.os.Handler;
+-import android.os.VibrationEffect;
+-import android.os.Vibrator;
+-import android.os.vibrator.persistence.ParsedVibration;
+-import android.os.vibrator.persistence.VibrationXmlParser;
+ import android.provider.OpenableColumns;
+ import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+@@ -375,33 +369,4 @@
+     }
+ 
+-    /**
+-     * Creates a unique file in the specified external storage with the desired name. If the name is
+-     * taken, the new file's name will have '(%d)' to avoid overwriting files.
+-     *
+-     * @param context {@link Context} to query the file name from.
+-     * @param subdirectory One of the directories specified in {@link android.os.Environment}
+-     * @param fileName desired name for the file.
+-     * @param mimeType MIME type of the file to create.
+-     * @return the File object in the storage, or null if an error occurs.
+-     *
+-     * @hide
+-     */
+-    public static File getUniqueExternalFile(Context context, String subdirectory, String fileName,
+-            String mimeType) {
+-        File externalStorage = Environment.getExternalStoragePublicDirectory(subdirectory);
+-        // Make sure the storage subdirectory exists
+-        externalStorage.mkdirs();
+-
+-        File outFile = null;
+-        try {
+-            // Ensure the file has a unique name, as to not override any existing file
+-            outFile = FileUtils.buildUniqueFile(externalStorage, mimeType, fileName);
+-        } catch (FileNotFoundException e) {
+-            // This might also be reached if the number of repeated files gets too high
+-            Log.e(TAG, "Unable to get a unique file name", e);
+-            return null;
+-        }
+-        return outFile;
+-    }
+ 
+     /**
+@@ -717,106 +682,4 @@
+     }
+ 
+-    /**
+-     * Convert a Bluetooth MAC address to an anonymized one if the internal device type corresponds
+-     * to a Bluetooth.
+-     * @param deviceType the internal type of the audio device
+-     * @param address MAC address to be anonymized
+-     * @return anonymized MAC address
+-     *
+-     * @hide
+-     */
+-    public static @Nullable String anonymizeBluetoothAddress(
+-            int deviceType, @Nullable String address) {
+-        if (!AudioSystem.isBluetoothDevice(deviceType)) {
+-            return address;
+-        }
+-        return anonymizeBluetoothAddress(address);
+-    }
+-
+-    /**
+-     * Whether the device supports ringtone vibration settings.
+-     *
+-     * @param context the {@link Context}
+-     * @return {@code true} if the device supports ringtone vibration
+-     *
+-     * @hide
+-     */
+-    public static boolean isRingtoneVibrationSettingsSupported(Context context) {
+-        final Resources res = context.getResources();
+-        return res != null && res.getBoolean(
+-                com.android.internal.R.bool.config_ringtoneVibrationSettingsSupported);
+-    }
+-
+-    /**
+-     * Whether the given ringtone Uri has vibration Uri parameter
+-     *
+-     * @param ringtoneUri the ringtone Uri
+-     * @return {@code true} if the Uri has vibration parameter
+-     *
+-     * @hide
+-     */
+-    public static boolean hasVibrationParameter(@Nullable Uri ringtoneUri) {
+-        if (ringtoneUri == null) {
+-            return false;
+-        }
+-        final String vibrationUriString = ringtoneUri.getQueryParameter(VIBRATION_URI_PARAM);
+-        return vibrationUriString != null;
+-    }
+-
+-    /**
+-     * Gets the vibration Uri from given ringtone Uri
+-     *
+-     * @param ringtoneUri the ringtone Uri
+-     * @return parsed {@link Uri} of vibration parameter, {@code null} if the vibration parameter
+-     * is not found.
+-     *
+-     * @hide
+-     */
+-    public static @Nullable Uri getVibrationUri(Uri ringtoneUri) {
+-        if (ringtoneUri == null) {
+-            return null;
+-        }
+-        final String vibrationUriString = ringtoneUri.getQueryParameter(VIBRATION_URI_PARAM);
+-        if (vibrationUriString == null) {
+-            return null;
+-        }
+-        return Uri.parse(vibrationUriString);
+-    }
+-
+-    /**
+-     * Returns the parsed {@link VibrationEffect} from given vibration Uri.
+-     *
+-     * @param vibrator the vibrator to resolve the vibration file
+-     * @param vibrationUri the vibration file Uri to represent a vibration
+-     *
+-     * @hide
+-     */
+-    public static VibrationEffect parseVibrationEffect(Vibrator vibrator, Uri vibrationUri) {
+-        if (vibrationUri == null) {
+-            Log.w(TAG, "The vibration Uri is null.");
+-            return null;
+-        }
+-        String filePath = vibrationUri.getPath();
+-        if (filePath == null || filePath.equals(Utils.SYNCHRONIZED_VIBRATION)) {
+-            Log.w(TAG, "Ignore the vibration parsing for file:" + filePath);
+-            return null;
+-        }
+-        File vibrationFile = new File(filePath);
+-        if (vibrationFile.exists() && vibrationFile.canRead()) {
+-            try {
+-                FileInputStream fileInputStream = new FileInputStream(vibrationFile);
+-                ParsedVibration parsedVibration =
+-                        VibrationXmlParser.parseDocument(
+-                                new InputStreamReader(fileInputStream, StandardCharsets.UTF_8));
+-                return parsedVibration.resolve(vibrator);
+-            } catch (IOException e) {
+-                Log.e(TAG, "IOException", e);
+-            }
+-        } else {
+-            // File not found or cannot be read
+-            Log.w(TAG, "File exists:" + vibrationFile.exists()
+-                    + ", canRead:" + vibrationFile.canRead());
+-        }
+-        return null;
+-    }
++
+ }

@@ -1,12 +1,19 @@
 #include "vlc_probe.h"
 
 #include "../../runtime/android_system/foreground_test_access.h"
+#include "../../runtime/android_system/guest_audio.h"
 #include "jni_bridge.h"
+#include <wasmandroid/hal_gfx.h>
 
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <numbers>
 #include <stdexcept>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 
 namespace {
 
@@ -15,6 +22,11 @@ using wa::interp::Object;
 using wa::interp::ScopedHandleScope;
 using wa::interp::Value;
 using wa::interp::Vm;
+using wa::audio::Backend;
+
+// The hosting VM owns these global references between playback probes.
+thread_local std::array<jobject, 3> playback{};
+thread_local std::string_view picked_path;
 
 void Require(bool condition, std::string_view message) {
     if (!condition) throw std::runtime_error(std::string(message));
@@ -144,6 +156,7 @@ std::vector<uint8_t> Wave() {
 }
 
 std::string ProbeMedia(Vm& vm, Object* activity) {
+    Require(!playback[0], "VLC playback is already active");
     ScopedHandleScope roots(vm);
     constexpr auto klass = "Lorg/videolan/libvlc/LibVLC;";
     vm.CallStatic(klass, "loadLibraries", "()V");
@@ -154,15 +167,23 @@ std::string ProbeMedia(Vm& vm, Object* activity) {
     const auto changeset = vm.StringUtf8(vm.CallStatic(klass, "changeset", "()Ljava/lang/String;").ref());
     Require(!changeset.empty(), "LibVLC.changeset");
     std::printf("LibVLC version %s, changeset %s\n", version.c_str(), changeset.c_str());
-    auto* instance = roots.Hold(vm.NewObject(klass, "(Landroid/content/Context;)V",
-        std::array{Value::Ref(activity)}));
+    auto* options = roots.Hold(vm.NewObject("Ljava/util/ArrayList;"));
+    vm.CallVirtual(options, "add", "(Ljava/lang/Object;)Z",
+        std::array{Value::Ref(roots.Hold(vm.NewString("--aout=opensles")))});
+    auto* instance = roots.Hold(vm.NewObject(klass, "(Landroid/content/Context;Ljava/util/List;)V",
+        std::array{Value::Ref(activity), Value::Ref(options)}));
     Require(vm.CallVirtual(instance, "getInstance", "()J").j() != 0, "LibVLC.nativeNew");
     std::puts("LibVLC.nativeNew returned a native instance");
 
-    auto* files = roots.Hold(vm.CallVirtual(activity, "getFilesDir", "()Ljava/io/File;").ref());
-    const auto path = vm.StringUtf8(vm.CallVirtual(files, "getAbsolutePath", "()Ljava/lang/String;").ref()) +
-        "/test_tone.wav";
-    vm.MountReadOnlyFile(path, Wave());
+    std::string path(picked_path);
+    if (path.empty()) {
+        auto* files = roots.Hold(vm.CallVirtual(activity, "getFilesDir", "()Ljava/io/File;").ref());
+        path = vm.StringUtf8(vm.CallVirtual(files, "getAbsolutePath", "()Ljava/lang/String;").ref()) + "/test_tone.wav";
+        vm.MountReadOnlyFile(path, Wave());
+    } else {
+        Require(vm.GetLinkedDeclaredMethodStats("Landroid/app/Activity;", "embeddedDocumentResult",
+            "(I[Ljava/lang/String;Ljava/lang/String;)V").returned > 0, "Android document result was not delivered");
+    }
     auto* file = roots.Hold(vm.NewString(path));
     auto* media = roots.Hold(vm.NewObject("Lorg/videolan/libvlc/Media;",
         "(Lorg/videolan/libvlc/interfaces/ILibVLC;Ljava/lang/String;)V",
@@ -190,12 +211,58 @@ std::string ProbeMedia(Vm& vm, Object* activity) {
     Require(vm.CallVirtual(player, "getInstance", "()J").j() != 0, "MediaPlayer.nativeNewFromLibVlc");
     vm.CallVirtual(player, "setMedia", "(Lorg/videolan/libvlc/interfaces/IMedia;)V",
         std::array{Value::Ref(media)});
+    Require(vm.CallVirtual(player, "setAudioOutput", "(Ljava/lang/String;)Z",
+        std::array{Value::Ref(roots.Hold(vm.NewString("opensles")))}).i(), "Select VLC OpenSL ES output");
     result += ", playerState=" + std::to_string(vm.CallVirtual(player, "getPlayerState", "()I").i()) +
         ", audioOutput=" + vm.StringUtf8(vm.ReadField(player, "mAudioOutput", "Ljava/lang/String;").ref());
-    vm.CallVirtual(player, "release", "()V");
-    vm.CallVirtual(media, "release", "()V");
-    vm.CallVirtual(instance, "release", "()V");
+    wa::audio::ResetMetrics();
+    vm.CallVirtual(player, "play", "()V");
+    auto& jni = JniBridge::From(vm.JniEnv());
+    playback = {jni.Global(player), jni.Global(media), jni.Global(instance)};
     return result;
+}
+
+std::string ProbeAudio(Vm&, Object*) {
+    constexpr std::array backends{Backend::OpenSLES, Backend::AudioTrack};
+    for (const auto backend : backends) {
+        const auto metrics = wa::audio::ReadMetrics(backend);
+        if (!metrics.frames) continue;
+        const auto rms = std::sqrt(metrics.square_sum / (2 * metrics.frames));
+        const auto hz = metrics.rising_edges > 1 ?
+            double(metrics.rising_edges - 1) * WA_AUDIO_SAMPLE_RATE / (metrics.last_edge - metrics.first_edge) : 0;
+        const auto sink = backend == Backend::OpenSLES ? "OpenSLES" : "AudioTrack";
+        return std::string("{\"sink\":\"") + sink + "\",\"frames\":" + std::to_string(metrics.frames) +
+            ",\"nonzeroFrames\":" + std::to_string(metrics.nonzero_frames) + ",\"rms\":" +
+            std::to_string(rms) + ",\"peak\":" + std::to_string(metrics.peak) + ",\"frequency\":" +
+            std::to_string(hz) + '}';
+    }
+    return "{\"frames\":0}";
+}
+
+std::string StopMedia(Vm& vm, Object*) {
+    if (!playback[0]) return "idle";
+    const auto references = std::exchange(playback, {});
+    auto* env = vm.JniEnv();
+    struct ReleaseReferences {
+        JNIEnv* env;
+        const std::array<jobject, 3>& refs;
+        ~ReleaseReferences() { for (auto reference : refs) env->DeleteGlobalRef(reference); }
+    } release{env, references};
+    vm.CallVirtual(JniBridge::Read(references[0]), "stop", "()V");
+    for (auto reference : references) vm.CallVirtual(JniBridge::Read(reference), "release", "()V");
+    return "stopped";
+}
+
+std::string OpenToneDocument(Vm& vm, Object* activity) {
+    ScopedHandleScope roots(vm);
+    auto* action = roots.Hold(vm.NewString("android.intent.action.OPEN_DOCUMENT"));
+    auto* intent = roots.Hold(vm.NewObject("Landroid/content/Intent;", "(Ljava/lang/String;)V",
+        std::array{Value::Ref(action)}));
+    auto* mime = roots.Hold(vm.NewString("audio/wav"));
+    vm.CallVirtual(intent, "setType", "(Ljava/lang/String;)Landroid/content/Intent;", std::array{Value::Ref(mime)});
+    vm.CallVirtual(activity, "startActivityForResult", "(Landroid/content/Intent;I)V",
+        std::array{Value::Ref(intent), Value::Int(0x7212)});
+    return "choosing WAV";
 }
 
 } // namespace
@@ -211,3 +278,40 @@ int32_t wa_test_vlc_labels(char* out, size_t cap) {
 int32_t wa_test_vlc_media(char* out, size_t cap) {
     return wa::system::RunForegroundProbe(ProbeMedia, out, cap);
 }
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int32_t wa_test_vlc_audio(char* out, size_t cap) {
+    return wa::system::RunForegroundProbe(ProbeAudio, out, cap);
+}
+
+#ifdef __EMSCRIPTEN__
+EMSCRIPTEN_KEEPALIVE
+#endif
+int32_t wa_test_vlc_stop(char* out, size_t cap) {
+    return wa::system::RunForegroundProbe(StopMedia, out, cap);
+}
+
+#ifdef __EMSCRIPTEN__
+extern "C" {
+EMSCRIPTEN_KEEPALIVE int32_t wa_test_vlc_open_document(char* out, size_t cap) {
+    return wa::system::RunForegroundProbe(OpenToneDocument, out, cap);
+}
+
+EMSCRIPTEN_KEEPALIVE int32_t wa_test_vlc_picked_media(const char* path, char* out, size_t cap) {
+    if (!path || !std::string_view(path).starts_with("/__wa_documents/")) return WA_ERR_INVALID;
+    picked_path = path;
+    const auto status = wa::system::RunForegroundProbe(ProbeMedia, out, cap);
+    picked_path = {};
+    return status;
+}
+
+EMSCRIPTEN_KEEPALIVE int32_t wa_test_vlc_wave(uint8_t* out, size_t cap) {
+    const auto wave = Wave();
+    if (cap < wave.size()) return WA_ERR_NOMEM;
+    std::memcpy(out, wave.data(), wave.size());
+    return static_cast<int32_t>(wave.size());
+}
+}
+#endif

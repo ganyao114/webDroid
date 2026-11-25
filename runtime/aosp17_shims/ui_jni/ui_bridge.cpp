@@ -1,6 +1,8 @@
 #include "apk_signing.h"
 #include "native_methods.h"
 #include "jni_bridge.h"
+#include "../../android_system/guest_audio.h"
+#include "wasmandroid/hal_gfx.h"
 
 #include <androidfw/AssetManager2.h>
 #include <androidfw/ResourceTypes.h>
@@ -12,6 +14,10 @@
 #include <span>
 #include <stdexcept>
 #include <unordered_map>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 
 #include "view_input_jni.cpp"
 // Both framework targets compile this bridge.
@@ -454,6 +460,9 @@ State& Verify(State& state, interp::Vm& vm) {
 
 } // namespace
 
+#include "audio_track.inc"
+#include "document_picker.inc"
+
 void Throw(JNIEnv* env, const char* type, const char* message) {
     if (env->ExceptionCheck())
         return;
@@ -585,6 +594,7 @@ UiBridge::UiBridge() : state_(std::make_unique<detail::State>()) {}
 UiBridge::~UiBridge() {
     state_->Abort();
     if (state_->env) {
+        detail::ClearDocumentRequest(*state_);
         detail::UnregisterTextLayout(state_->env);
         detail::bindings.erase(state_->env);
     }
@@ -650,6 +660,9 @@ void UiBridge::RegisterNatives(interp::Vm& vm) {
     detail::RegisterPath(vm);
     detail::RegisterBitmaps(vm);
     detail::RegisterVectors(vm);
+    detail::RegisterAudioTrack(vm, *state_);
+    detail::RegisterIfDeclared(vm, "android/app/Activity", Method<detail::OpenDocument>(vm,
+        "nativeOpenEmbeddedDocument", "(ILjava/lang/String;[Ljava/lang/String;Z)Z"));
     detail::RegisterViewInput(vm);
     detail::RegisterTextLayout(vm);
     detail::RegisterTextUtilities(vm);
@@ -765,6 +778,7 @@ int32_t UiBridge::DoFrame(interp::Vm& vm, const wa_sf_vsync_state_t& tick) {
     }
     state.last_frame_ns = tick.frame_time_ns;
     state.uptime_ns = std::max(state.uptime_ns, tick.frame_time_ns);
+    detail::PumpAudio(state);
     state.CollectImages();
 
     int32_t status = state.Begin(tick);
@@ -855,6 +869,7 @@ size_t UiBridge::DispatchInputEvents(interp::Vm& vm, wa_sf_t* sf) {
     auto& state = detail::Verify(*state_, vm);
     if (!sf)
         throw std::invalid_argument("Input dispatch requires a scene");
+    detail::DispatchDocument(state);
     size_t count = 0;
     wa_input_event_t event{};
     auto* ring = wa_sf_input(sf);

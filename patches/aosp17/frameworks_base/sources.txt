@@ -538,7 +538,22 @@ frameworks/base/core/java/android/view/textclassifier/EntityConfidence.java
 frameworks/base/core/java/android/view/textclassifier/TextLinks.java
 frameworks/base/media/java/android/media/AudioAttributes.java
 frameworks/base/media/java/android/media/AudioDeviceCallback.java
+frameworks/base/media/java/android/media/AudioFormat.java
 frameworks/base/media/java/android/media/AudioManager.java
+frameworks/base/media/java/android/media/AudioMetadata.java
+frameworks/base/media/java/android/media/AudioMetadataMap.java
+frameworks/base/media/java/android/media/AudioMetadataReadMap.java
+frameworks/base/media/java/android/media/AudioPresentation.java
+frameworks/base/media/java/android/media/AudioRouting.java
+frameworks/base/media/java/android/media/AudioTimestamp.java
+frameworks/base/media/java/android/media/AudioTrack.java
+frameworks/base/media/java/android/media/NativeRoutingEventHandlerDelegate.java
+frameworks/base/media/java/android/media/PlaybackParams.java
+frameworks/base/media/java/android/media/PlayerBase.java
+frameworks/base/media/java/android/media/Utils.java
+frameworks/base/media/java/android/media/VolumeAutomation.java
+frameworks/base/media/java/android/media/VolumeShaper.java
+frameworks/base/media/java/android/media/metrics/LogSessionId.java
 frameworks/base/core/java/android/media/Image.java
 
 # Activity overlays, menus and software-backed surfaces.
@@ -1486,3 +1501,5 @@ patches/1106-embedded-themed-context-and-render-priority.patch
 patches/1107-embedded-concurrent-skip-list.patch
 patches/1109-embedded-thermal-status-listeners.patch
 patches/1110-embedded-media-store.patch
+patches/1120-embedded-audio-track.patch
+patches/1122-embedded-open-document.patch
