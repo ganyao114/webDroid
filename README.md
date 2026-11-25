@@ -17,6 +17,9 @@ Browser-native **Android 17 (`android-17.0.0_r1`)** runtime running inside stand
 ## Verified Workloads
 
 - **Upstream AOSP 17 Launcher3 + SystemUI + Settings**: 60 FPS WebGPU rendering, 19 upstream Settings categories & 23 subpages, All Apps search, workspace drag/long-press, Home/Back/Recents navigation.
+- **Commercial Flagship APK — WeChat 8.0.80 (`com.tencent.mm`, 273 MB, 18 DEX / 255,001 classes, 209 ARM64 `.so`)**:
+  - Cold-boots all 18 DEX files, verifies APK v2 signing certificates, initializes 27 main-process `ContentProvider`s, maps **104 ARM64 `.so` libraries** in-process (MMKV, XLog, Matrix JNIHook, WCDB, Cronet, V8, PayMars, etc.), and completes `LauncherUI` -> `WelcomeActivity` -> `SettingsLanguageUI` & `MobileInputUI` (with IME phone input and Back navigation) across 65 steady frames with zero uncaught exceptions.
+  - Runs in **Wasm32 Node 26** and **real Chrome 158 WebGPU (`60.002 FPS`, `1.972 ms/frame`, `0 errors`)** using the `768 MiB` `android_system_large.wasm` + dedicated OPFS `FileSystemSyncAccessHandle` worker (`256 KiB` bounded reads, `85.5 MB` free heap headroom).
 - **Production Hybrid ARM64 APK — VLC for Android 3.6.3 (`org.videolan.vlc`, 6 DEX + 4 ARM64 `.so`)**:
   - Boots all 6 DEX files (32,842 classes) + 5 manifest `ContentProvider`s, passes `VLCUtil.hasCompatibleCPU()`, interactively completes `OnboardingActivity` into `MainActivity` (Video / Audio / Browse / Playlists / More) on Native, Wasm32 Node 26, and real Chrome 158 WebGPU.
   - Loads all 4 production ARM64 `.so` libraries (`libc++_shared.so`, `libvlc.so`, `libmla.so`, `libvlcjni.so`) with 0 unresolved imports, constructs `LibVLC` (`3.0.21 Vetinari`) in-process via `System.loadLibrary` + `JNI_OnLoad` within the fixed 256 MiB Wasm32 budget (`51.2 MiB` free heap via demand paging), and parses PCM WAV media (`250 ms, mono S16 LE, 44.1 kHz`).
@@ -99,10 +102,13 @@ The embedded Java TLS boundary reports an unavailable trust provider, which
 WeChat handles through its lifecycle callback. Services assigned to other
 manifest processes require a separate guest. The main guest reports those
 services unavailable when the application requests them.
-Extended ticks after the welcome screen reach a WeChat reporting task that
-uses `org.apache.http.impl.client.DefaultHttpClient`. The APK declares
-`org.apache.http.legacy` as an optional shared library. That library is absent
-from the pinned upstream source profile.
+Upstream `org.apache.http.legacy` (`third_party/aosp17/external/apache-http` at
+`android-17.0.0_r1`) is included in the framework profile, so WeChat's delayed
+reporting task constructs `DefaultHttpClient` and returns cleanly across 65+
+steady frames. Tapping “语言” opens `SettingsLanguageUI` (`English`, `简体中文`),
+and tapping “Log In” opens `MobileInputUI` (`Log In Via Mobile Number`,
+`Other Login Options`) with interactive IME phone-number input and Back return
+to `WelcomeActivity`.
 
 JNI lifecycle hooks use the ELF dependency search order.
 The guest VFS exposes APK-backed library files and ELF metadata for system
