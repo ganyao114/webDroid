@@ -58,18 +58,6 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
 endif()
 
 if(EMSCRIPTEN)
-    add_executable(android_system system_entry.cpp)
-    set_target_properties(android_system PROPERTIES SUFFIX ".mjs"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
-    target_link_libraries(android_system PRIVATE wa_libkern wa_linker_ffi wa_hal_browser svm_wasm
-        svm_arm32_numeric svm_arm64_numeric)
-    target_link_options(android_system PRIVATE
-        --no-entry -O3 -flto=thin
-        -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node
-        -sUSE_WEBGL2=1 -sFULL_ES3=1 -sOFFSCREENCANVAS_SUPPORT=1 -sSHARED_MEMORY=1
-        -sALLOW_MEMORY_GROWTH=0 -sINITIAL_MEMORY=268435456 -sSTACK_SIZE=1048576
-        -sABORTING_MALLOC=0
-    )
     set(runtime_methods HEAPU8,wasmMemory)
     set(exports
         _malloc _free _wa_dbt_free_buffer
@@ -84,19 +72,8 @@ if(EMSCRIPTEN)
         _wa_jit_registry_publish
     )
     if(TARGET wa_android_system_apk)
-        string(APPEND runtime_methods ",FS")
-        target_link_libraries(android_system PRIVATE wa_android_system_apk wa_android_system_binder
-            wa_android_system_foreground)
-        add_dependencies(android_system wa_upstream_launcher_assets)
-        target_sources(android_system PRIVATE ${wa_launcher_runtime_sources})
-        target_include_directories(android_system PRIVATE "${wa_systemui_host}")
-        target_link_libraries(android_system PRIVATE aosp17_ui_jni aosp17_libandroidfw)
-        target_compile_definitions(android_system PRIVATE WA_VERIFY_LAUNCHER_DEX=$<BOOL:${WA_VERIFY_LAUNCHER_DEX}>)
-        target_compile_options(android_system PRIVATE -ffunction-sections -fdata-sections)
+        string(APPEND runtime_methods ",FS,mmapAlloc")
         target_compile_options(aosp17_art_interp PRIVATE -ffunction-sections -fdata-sections)
-        # Accept caller-owned vproc memory through the Emscripten loader.
-        # The ApkAssets path loader uses MEMFS for APKs mounted through the ART entry point.
-        target_link_options(android_system PRIVATE -sIMPORTED_MEMORY=1)
         # Android's liblog supplies these C symbols in the unified runtime. The
         # HAL's NDK routes still use wa_android_log for guest console output.
         target_compile_definitions(wa_hal_browser PRIVATE
@@ -150,12 +127,70 @@ if(EMSCRIPTEN)
         if(BUILD_TESTING)
             list(APPEND exports _wa_canvas_measure_text _wa_test_vlc_abi _wa_test_vlc_labels _wa_test_vlc_media)
         endif()
-    else()
-        target_link_options(android_system PRIVATE -sFILESYSTEM=0)
     endif()
     list(JOIN exports "," exports)
-    target_link_options(android_system PRIVATE "-sEXPORTED_FUNCTIONS=${exports}"
-        "-sEXPORTED_RUNTIME_METHODS=${runtime_methods}")
+
+    function(wa_add_android_system_wasm target memory)
+        add_executable(${target} system_entry.cpp)
+        set_target_properties(${target} PROPERTIES SUFFIX ".mjs"
+            RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+        target_link_libraries(${target} PRIVATE wa_libkern wa_linker_ffi wa_hal_browser svm_wasm
+            svm_arm32_numeric svm_arm64_numeric)
+        target_link_options(${target} PRIVATE
+            --no-entry -O3 -flto=thin
+            -sMODULARIZE=1 -sEXPORT_ES6=1 -sENVIRONMENT=web,worker,node
+            -sUSE_WEBGL2=1 -sFULL_ES3=1 -sOFFSCREENCANVAS_SUPPORT=1 -sSHARED_MEMORY=1
+            -sALLOW_MEMORY_GROWTH=0 "-sINITIAL_MEMORY=${memory}" -sSTACK_SIZE=1048576
+            -sABORTING_MALLOC=0
+            "-sEXPORTED_FUNCTIONS=${exports}" "-sEXPORTED_RUNTIME_METHODS=${runtime_methods}")
+        if(TARGET wa_android_system_apk)
+            add_dependencies(${target} wa_upstream_launcher_assets)
+            target_sources(${target} PRIVATE ${wa_launcher_runtime_sources})
+            target_include_directories(${target} PRIVATE "${wa_systemui_host}")
+            target_link_libraries(${target} PRIVATE wa_android_system_apk wa_android_system_binder
+                wa_android_system_foreground aosp17_ui_jni aosp17_libandroidfw)
+            target_compile_definitions(${target} PRIVATE WA_VERIFY_LAUNCHER_DEX=$<BOOL:${WA_VERIFY_LAUNCHER_DEX}>)
+            target_compile_options(${target} PRIVATE -ffunction-sections -fdata-sections)
+            # Accept caller-owned vproc memory through the Emscripten loader.
+            target_link_options(${target} PRIVATE -sIMPORTED_MEMORY=1)
+        else()
+            target_link_options(${target} PRIVATE -sFILESYSTEM=0)
+        endif()
+    endfunction()
+
+    wa_add_android_system_wasm(android_system 268435456)
+    if(TARGET wa_android_system_apk)
+        option(WA_BUILD_LARGE_APK "Build the separate large-APK Wasm32 runtime" ON)
+    endif()
+    if(TARGET wa_android_system_apk AND WA_BUILD_LARGE_APK)
+        wa_add_android_system_wasm(android_system_large 805306368)
+
+        # The large profile needs Bionic's existing fts wrappers. Emscripten's
+        # musl sysroot does not supply fts(3), so link the portable implementation.
+        FetchContent_Declare(wa_musl_fts
+            URL https://codeload.github.com/void-linux/musl-fts/tar.gz/refs/tags/v1.2.7
+            URL_HASH SHA256=49ae567a96dbab22823d045ffebe0d6b14b9b799925e9ca9274d47d26ff482a6)
+        FetchContent_MakeAvailable(wa_musl_fts)
+        file(CONFIGURE OUTPUT "${wa_musl_fts_BINARY_DIR}/config.h"
+            CONTENT "#define HAVE_DIRFD 1\n#define HAVE_DECL_MAX 1\n")
+        add_library(wa_wasm_fts STATIC "${wa_musl_fts_SOURCE_DIR}/fts.c")
+        target_compile_definitions(wa_wasm_fts PRIVATE _GNU_SOURCE)
+        target_include_directories(wa_wasm_fts PUBLIC "${wa_musl_fts_SOURCE_DIR}"
+            PRIVATE "${wa_musl_fts_BINARY_DIR}")
+
+        # Build the existing file thunks with fts enabled for this module.
+        # Keep the toolchain macros and the shared linker library as configured.
+        set(bionic_files "${CMAKE_CURRENT_SOURCE_DIR}/../linker_ffi/bionic_files.cpp")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${bionic_files}")
+        file(READ "${bionic_files}" bionic_files_source)
+        string(REGEX REPLACE "#if !defined\\(__EMSCRIPTEN__\\)\n([^\n]*(fts|FileTree)[^\n]*)"
+            "#if 1\n\\1" bionic_files_source "${bionic_files_source}")
+        set(bionic_files_fts "${CMAKE_CURRENT_BINARY_DIR}/bionic_files_fts.cpp")
+        file(CONFIGURE OUTPUT "${bionic_files_fts}" CONTENT "@bionic_files_source@" @ONLY)
+        target_sources(android_system_large PRIVATE "${bionic_files_fts}")
+        target_include_directories(android_system_large PRIVATE ../linker_ffi ../softmmu_opfs)
+        target_link_libraries(android_system_large PRIVATE wa_wasm_fts)
+    endif()
 else()
     add_library(wa_android_system STATIC system_entry.cpp)
     target_include_directories(wa_android_system PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -194,7 +229,5 @@ if(BUILD_TESTING AND TARGET wa_android_system_apk)
     add_subdirectory(../../tests/m18_bionic_libcpp_pthread "${CMAKE_BINARY_DIR}/tests/m18_bionic_libcpp_pthread")
     add_subdirectory(../../tests/m18_vlc_framework_compat "${CMAKE_BINARY_DIR}/tests/m18_vlc_framework_compat")
     add_subdirectory(../../tests/m19_vlc_main_libvlc "${CMAKE_BINARY_DIR}/tests/m19_vlc_main_libvlc")
-    if(NOT EMSCRIPTEN)
-        add_subdirectory(../../tests/m20_wechat_compat "${CMAKE_BINARY_DIR}/tests/m20_wechat_compat")
-    endif()
+    add_subdirectory(../../tests/m20_wechat_compat "${CMAKE_BINARY_DIR}/tests/m20_wechat_compat")
 endif()

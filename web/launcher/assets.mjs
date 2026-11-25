@@ -10,9 +10,10 @@ export const manifestName = 'launcher-assets.json';
 export const systemAppNames = [settingsName, 'DeskClock-upstream.apk', 'Browser2-upstream.apk',
   'Gallery2-upstream.apk', 'Music-upstream.apk'];
 
-export async function loadAndroidSystem({ base = buildUrl } = {}) {
-  const { default: createSystem } = await import(new URL('android_system.mjs', base).href);
-  return createSystem({ locateFile: name => new URL(name, base).href });
+export async function loadAndroidSystem({ base = buildUrl, largeApk = false, printErr } = {}) {
+  const runtime = largeApk ? 'android_system_large.mjs' : 'android_system.mjs';
+  const { default: createSystem } = await import(new URL(runtime, base).href);
+  return createSystem({ locateFile: name => new URL(name, base).href, printErr });
 }
 
 export async function loadLauncherAssets({ base = buildUrl, signal } = {}) {

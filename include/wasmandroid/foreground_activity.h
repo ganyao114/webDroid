@@ -23,7 +23,8 @@ int32_t wa_system_app_install_package_catalog_apk(const char* name, const uint8_
                                                 size_t size);
 int32_t wa_system_app_boot_apk(const char* name, const uint8_t* bytes, size_t size,
                                const char* activity_class_or_null);
-// Browser MEMFS inputs are moved into session-owned backing files.
+// A browser staging path can name an in-memory or seekable host APK. The session
+// renames it and keeps it openable until its APK users are destroyed.
 int32_t wa_system_app_install_package_catalog_apk_file(const char* name, const char* path);
 int32_t wa_system_app_boot_apk_file(const char* name, const char* path, const char* activity_class_or_null);
 

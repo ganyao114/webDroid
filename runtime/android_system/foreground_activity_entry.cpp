@@ -631,6 +631,13 @@ int32_t Api(const char* operation, Call call) {
     } catch (const wa::interp::ManagedException&) {
         auto& vm = session->vm;
         last_error = std::string(operation) + ": " + vm.ExceptionSummary();
+        if (session->boot_attempted && !session->booted) {
+            for (const auto& image : vm.GetGuestNativeImages()) {
+                if (image.error.empty()) continue;
+                if (last_error.size() + image.name.size() + image.error.size() + 3 > 4096) break;
+                last_error += "\n" + image.name + ": " + image.error;
+            }
+        }
         for (const auto& frame : vm.ExceptionStackTrace()) {
             if (last_error.size() + frame.size() > 8192) break;
             last_error += "\n" + frame;

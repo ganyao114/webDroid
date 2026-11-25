@@ -1,15 +1,28 @@
 import { copyFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { defaultWasmBuild, stageM9Browser } from '../../tests/m9_launcher3_chrome_e2e/stage_browser.mjs';
+import { WORKTREE } from './serve.mjs';
 
-const { values } = parseArgs({ options: {
-  'build-dir': { type: 'string' }, 'out-dir': { type: 'string' },
-} });
-const wasmBuild = resolve(values['build-dir'] ?? defaultWasmBuild);
-const root = resolve(values['out-dir'] ?? join(wasmBuild, 'launcher-browser'));
-await stageM9Browser(root, { wasmBuild });
-for (const name of ['hybrid_art_ndk.apk', 'hybrid_art_ndk_arm32.apk']) {
-  await copyFile(join(wasmBuild, 'tests/m17_hybrid_art_ndk', name), join(root, 'build', name));
+export async function stageLauncherBrowser(root, wasmBuild = defaultWasmBuild) {
+  await stageM9Browser(root, { wasmBuild });
+  await Promise.all([
+    ...['android_system_large.mjs', 'android_system_large.wasm'].map(name =>
+      copyFile(join(wasmBuild, name), join(root, 'build', name))),
+    ...['hybrid_art_ndk.apk', 'hybrid_art_ndk_arm32.apk'].map(name =>
+      copyFile(join(wasmBuild, 'tests/m17_hybrid_art_ndk', name), join(root, 'build', name))),
+    ...['foreground_worker.mjs', 'foreground_worker_apk.mjs'].map(name =>
+      copyFile(join(WORKTREE, 'web/launcher', name), join(root, 'web/launcher', name))),
+  ]);
 }
-console.log(root);
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const { values } = parseArgs({ options: {
+    'build-dir': { type: 'string' }, 'out-dir': { type: 'string' },
+  } });
+  const wasmBuild = resolve(values['build-dir'] ?? defaultWasmBuild);
+  const root = resolve(values['out-dir'] ?? join(wasmBuild, 'launcher-browser'));
+  await stageLauncherBrowser(root, wasmBuild);
+  console.log(root);
+}

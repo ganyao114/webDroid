@@ -5,7 +5,7 @@ const displays = {
   phone: { width: 448, height: 896 },
 };
 
-export function mountLauncherPlayground(root, options = {}) {
+export function mountLauncherPlayground(root, { initialApk, ...options } = {}) {
   const view = root.querySelector('.wa-device');
   const launcher = root.querySelector('.wa-launcher-surface');
   const appSurface = root.querySelector('.wa-app-surface');
@@ -105,9 +105,8 @@ export function mountLauncherPlayground(root, options = {}) {
   async function installFiles(files) {
     for (const file of files) {
       try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
+        await host.installApkFile(file);
         if (signal.aborted) return;
-        host.installApk(file.name, bytes);
         show(`Installed ${file.name}`);
       } catch (error) {
         show(`${file.name} — ${error.message.split('\n')[0]}`, true);
@@ -142,7 +141,7 @@ export function mountLauncherPlayground(root, options = {}) {
     catch (error) { show(error.message, true); }
   }, 250);
   const ready = host.start();
-  void ready.catch(() => {});
+  void ready.then(() => initialApk && installFiles([initialApk])).catch(() => {});
   return { host, ready, close() {
     abort.abort();
     clearInterval(timer);

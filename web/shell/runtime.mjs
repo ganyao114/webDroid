@@ -117,6 +117,7 @@ export class BrowserRuntime {
 
 const cubeWorkerUrl = new URL('../../tests/m1_chrome_ndk_cube/m1_cube_worker.mjs', import.meta.url);
 const apkWorkerUrl = new URL('../../tests/m6_apk_chrome_e2e/m6_apk_worker.mjs', import.meta.url);
+const cubeApkLimit = 64 * 1024 * 1024;
 const byteFormatter = new Intl.NumberFormat();
 
 function orientCanvas(canvas, rotate) {
@@ -162,8 +163,9 @@ export class CubePlayground {
   #x = 0.5;
   #y = 0.5;
 
-  constructor(root) {
+  constructor(root, { openLargeApk } = {}) {
     this.root = root;
+    this.openLargeApk = openLargeApk;
     this.abi = root.querySelector('#abi');
     this.status = root.querySelector('#runtime-status');
     this.file = root.querySelector('#elf-file');
@@ -371,6 +373,11 @@ export class CubePlayground {
 
   #openFile(file) {
     if (!file.name.toLowerCase().endsWith('.apk')) return this.#inspect(file);
+    if (file.size > cubeApkLimit) {
+      if (this.openLargeApk) return this.openLargeApk(file);
+      this.fileStatus.textContent = 'Open this APK in Launcher3';
+      return;
+    }
     ++this.#inspection;
     this.#inspector?.close();
     this.#inspector = undefined;

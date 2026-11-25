@@ -114,42 +114,50 @@ their local frame, detaches, or exits.
 
 ### WeChat 8.0.80 Wasm memory budget
 
-`android_system` uses 4,096 Wasm pages, or 268,435,456 bytes of fixed shared linear memory.
-The local APK is 286,319,384 bytes. It exceeds the entire linear address budget by
-17,883,928 bytes before the runtime allocates anything. The foreground file API keeps
-the compressed APK in a JS-owned MEMFS buffer and passes its path to C++. The
-pointer-based APK loaders require a full input allocation in Wasm.
+`android_system` uses 4,096 Wasm pages (256 MiB) of fixed shared memory. The
+launcher selects `android_system_large` for APKs over 64 MiB. The large module
+uses 12,288 pages (768 MiB). Both modules are built by default and staged by
+`tools/chrome_harness/stage_launcher_browser.mjs`. A standard-only build can
+use `-DWA_BUILD_LARGE_APK=OFF`.
 
-The 18 DEX files expand from 76,425,486 to 191,163,220 bytes and currently stay
-resident while ART uses their contents. Subtracting those bytes and the 5,637,744-byte
-resource table from 256 MiB leaves 71,634,492 bytes for the framework, DEX indexes,
-managed objects, native pages, ZIP metadata, render buffers, and allocator overhead.
-The 209 ARM64 libraries expand to 373,405,754 bytes in total. The native loader
-reads ELF metadata and faults individual segments in on demand. Their total
-uncompressed size describes the APK, while resident pages depend on the libraries
-and code actually used.
+The 286,319,384-byte APK is exposed as a seekable virtual file with host reads
+up to 256 KiB. Node uses `fs.openSync` and `fs.readSync` with a reusable
+256 KiB buffer. Chrome reads local Blob slices for the launcher catalog, then
+streams the APK to a temporary OPFS file on launch. A dedicated worker owns the
+synchronous OPFS handle and replays SurfaceFlinger display lists on an
+`OffscreenCanvas` with WebGPU. The host removes the OPFS file when the app
+unmounts. [File System Standard](https://fs.spec.whatwg.org/#api-filesystemsyncaccesshandle)
 
-1. Bring up the same boot probe in an opt-in 512 MiB Wasm32 build
-   (`-sINITIAL_MEMORY=536870912 -sALLOW_MEMORY_GROWTH=0`). A caller-provided
-   shared memory needs an initial and maximum of 8,192 pages. Run the existing
-   suite against the standard 4,096-page build. Use the file API and measure
-   `wasmHeapEndBytes`, allocation failures, ZIP backing bytes in JS, DEX bytes,
-   SoftMMU page faults and resident pages at each boot checkpoint. 512 MiB is
-   the initial measurement budget.
-2. Stream the APK into OPFS in a dedicated worker. Use a synchronous access
-   handle for bounded reads at an offset and keep it open until the app unmounts.
-   Expose it as a seekable file for ziparchive, ApkAssets, ART and the native
-   ELF page reader. Read ZIP metadata and entries by range. Reuse the existing
-   deflate reader with bounded buffers and a bounded checkpoint cache. Check
-   entry sizes and CRCs during extraction. This replaces the whole-APK JS
-   buffer and allows a `File` input to stream without `arrayBuffer()`.
-   [File System Standard](https://fs.spec.whatwg.org/#api-filesystemsyncaccesshandle)
-3. Use the measurements to reduce retained DEX and native pages if the 256 MiB
-   profile is required. ART currently uses stable raw pointers into DEX storage
-   for type descriptors and code items. Paging those bytes out requires a
-   refactor to durable offsets or pinned working sets, with coverage for
-   multi-DEX verification, class lookup, reflection and interpreted execution.
-   Consider Memory64 after measuring a Wasm32 limit. It requires auditing the
-   32-bit JS and C++ pointer ABI, shared-memory descriptors, JIT interfaces and
-   target browser support. Storage and working sets determine resident bytes.
-   [Emscripten memory settings](https://emscripten.org/docs/tools_reference/settings_reference.html#initial-memory)
+Ziparchive and ApkAssets map the central directory and individual assets. ART
+keeps the 191,163,220 uncompressed DEX bytes resident, and SoftMMU faults in ELF
+pages from the APK as needed. APK backing bytes stay on the host. The large
+profile links Bionic's file traversal wrappers with a portable FTS library
+for imports used by `libwechatcommon.so`. [musl-fts v1.2.7](https://github.com/void-linux/musl-fts/releases/tag/v1.2.7)
+
+The 512 MiB trial exhausted its heap during native library startup. The
+768 MiB profile reached `WelcomeActivity` on both hosts with 18 DEX files,
+255,001 classes, and 28 initialized providers. Both runs displayed “Log In”,
+“Sign Up”, and “语言” with non-blank bitmap pixels.
+
+| Cold-boot metric | Node 26.13.1 | Chrome 158.0.8127.37 WebGPU |
+| --- | ---: | ---: |
+| `wasmLinearBytes` | 805,306,368 | 805,306,368 |
+| Heap break at boot return (bytes) | 714,113,024 | 713,437,184 |
+| `wasmHeapEndBytes` at welcome frames | 720,695,296 | 719,794,176 |
+| Remaining bytes above the heap break | 84,611,072 | 85,512,192 |
+| `bootMs` | 335,900.166 | 316,010.780 |
+| `avgFrameMs` | 6.695 | 1.972 |
+| Presented frames | 3 display lists | 14 WebGPU frames |
+| Presented FPS | — | 60.002 |
+| `nativeLibraries` | 104 | 104 |
+| `nativeFileFaults` | 9,098 | 9,098 |
+| Host APK read calls | 17,101 | 17,105 |
+| Cumulative host APK read bytes | 793,703,725 | 793,965,869 |
+| Largest host APK read (bytes) | 262,144 | 262,144 |
+
+`wasmHeapEndBytes` is the Wasm allocator's high-water heap break. The largest
+file written to MEMFS in the Node run was 22,731,625 bytes. Chrome took
+317,146.894 ms from the launcher tap to the visible welcome screen, sampled
+4,423 distinct colors from the WebGPU output, and reported zero browser
+errors. The worker renders Android display lists. DOM iframe WebViews use
+the standard foreground renderer.

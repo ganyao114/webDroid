@@ -2,7 +2,7 @@ import { Action, Input } from '../surfaceflinger/abi.mjs';
 import { loadAospRoboto } from '../surfaceflinger/atlas_cache.mjs';
 import { createSurfaceFlingerCompositor } from '../surfaceflinger/compositor.mjs';
 import { attachAndroidInput } from '../surfaceflinger/input_ime.mjs';
-import { LauncherAbi } from './abi_helpers.mjs';
+import { largeApkThreshold, LauncherAbi } from './abi_helpers.mjs';
 import { launcherName, loadAndroidSystem, loadLauncherAssets, systemUiName } from './assets.mjs';
 import { ForegroundApk, LauncherAudio } from './foreground_apk.mjs';
 import { sceneLabels } from './scene_labels.mjs';
@@ -118,7 +118,7 @@ export class LauncherHost {
       abi.setFrameworkResources(this.#assets.resources);
       abi.loadFrameworkDex(this.#assets.frameworkDex);
       abi.loadFallbackDex(this.#assets.fallbackDex);
-      for (const [name, bytes] of this.#apks) abi.installApk(name, bytes);
+      for (const [name, source] of this.#apks) abi.installApk(name, source);
       abi.loadSystemUiApk(systemUiName, this.#assets.systemUi);
       abi.bootApk(launcherName, this.#assets.launcher);
       if (this.gesturalNavigation) abi.setGestureNavigation(true);
@@ -285,13 +285,25 @@ export class LauncherHost {
   appLabels() { return this.#active?.foreground.labels() ?? []; }
   appPixels() { return this.#active?.foreground.pixels() ?? null; }
 
-  installApk(filename, bytes) {
+  async installApkFile(file, filename = file.name) {
+    const source = file.size > largeApkThreshold ? file : new Uint8Array(await file.arrayBuffer());
+    this.#abort.signal.throwIfAborted();
+    return this.installApk(filename, source);
+  }
+
+  installApk(filename, source) {
     if (!this.#session?.ready) throw new Error('Launcher3 is still starting');
     if (!/\.apk$/i.test(filename) || /[\\/\0]/.test(filename)) throw new TypeError('Choose an APK file');
-    if (!(bytes instanceof Uint8Array) || !bytes.byteLength) throw new TypeError('The APK is empty');
+    const isBlob = source instanceof Blob;
+    const size = isBlob ? source.size : source?.byteLength;
+    if (!(isBlob || source instanceof Uint8Array) || !size) {
+      throw new TypeError('The APK is empty');
+    }
+    if (!isBlob && size > largeApkThreshold)
+      throw new TypeError('Choose a File or Blob for an APK over 64 MiB');
     let name = filename;
     for (let n = 2; this.#apks.has(name); ++n) name = `${filename.slice(0, -4)}-${n}.apk`;
-    const owned = new Uint8Array(bytes);
+    const owned = isBlob ? source : new Uint8Array(source);
     this.#session.abi.installApk(name, owned);
     this.#apks.set(name, owned);
     return name;
@@ -315,7 +327,14 @@ export class LauncherHost {
         this.#session.input.blurIME();
         this.onRecents?.(this);
       } else if (active) {
-        if (action !== 'back' || !active.foreground.sendBack()) this.#returnHome();
+        const handled = action === 'back' && active.foreground.sendBack();
+        if (handled instanceof Promise) {
+          void handled.then(result => {
+            if (!result && active === this.#active) this.#returnHome();
+          }).catch(error => this.#launchFailed(active, error));
+        } else if (!handled) {
+          this.#returnHome();
+        }
       } else if (this.#phase === 'launcher') {
         this.#session.input.blurIME();
         if (action === 'back') this.#session.abi.back();
@@ -335,8 +354,8 @@ export class LauncherHost {
     const { abi, input } = this.#session;
     let active;
     try {
-      const bytes = this.#apks.get(launch.apkName);
-      if (!bytes) throw new Error(`The APK for ${launch.package} is unavailable (${launch.apkName})`);
+      const source = this.#apks.get(launch.apkName);
+      if (!source) throw new Error(`The APK for ${launch.package} is unavailable (${launch.apkName})`);
       const { top, bottom } = abi.state().systemUiInsets;
       const height = this.#session.size.height;
       const contentFraction = (height - top - bottom) / height;
@@ -362,7 +381,7 @@ export class LauncherHost {
       });
       active = this.#active = { launch, foreground };
       this.#setPhase('opening-app');
-      await foreground.start(bytes);
+      await foreground.start(source);
     } catch (error) {
       if (!active || active === this.#active) this.#launchFailed(active, error);
     }

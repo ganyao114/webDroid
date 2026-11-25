@@ -275,14 +275,7 @@
   </main>
   <script type="module">
     const params = new URLSearchParams(location.search);
-    if (params.get('mode') === 'apk') {
-      const { CubePlayground } = await import('./runtime.mjs');
-      const root = document.querySelector('#playground');
-      root.hidden = false;
-      const playground = new CubePlayground(root);
-      void playground.start();
-      addEventListener('pagehide', () => playground.close(), { once: true });
-    } else {
+    async function openLauncher(initialApk) {
       const root = document.querySelector('#launcher-playground');
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
@@ -292,6 +285,7 @@
       try {
         const { mountLauncherPlayground } = await import('./launcher_playground.mjs');
         const playground = mountLauncherPlayground(root, {
+          initialApk,
           backend: params.get('backend') ?? 'auto',
           gesturalNavigation: params.get('navigation') === 'gestural',
         });
@@ -300,6 +294,20 @@
       } catch (error) {
         root.querySelector('.wa-status').textContent = error.message;
       }
+    }
+    if (params.get('mode') === 'apk') {
+      const { CubePlayground } = await import('./runtime.mjs');
+      const root = document.querySelector('#playground');
+      root.hidden = false;
+      const playground = new CubePlayground(root, { openLargeApk(file) {
+        playground.close();
+        root.hidden = true;
+        return openLauncher(file);
+      } });
+      void playground.start();
+      addEventListener('pagehide', () => playground.close(), { once: true });
+    } else {
+      await openLauncher();
     }
   </script>
 </body>

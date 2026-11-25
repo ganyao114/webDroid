@@ -13,6 +13,11 @@ namespace wa::system {
 struct ApkEntryReader::Deflate {
     static constexpr size_t kChunkSize = 64 * 1024;
     static constexpr size_t kCheckpointInterval = 512 * 1024;
+    static constexpr size_t kMaxCheckpoints = 64;
+
+    explicit Deflate(uint64_t size)
+        : checkpoint_interval(kChunkSize * std::max<uint64_t>(
+              kCheckpointInterval / kChunkSize, size / kChunkSize / kMaxCheckpoints + 1)) {}
 
     struct Cursor {
         z_stream stream{};
@@ -103,12 +108,13 @@ struct ApkEntryReader::Deflate {
                 cursor->input_end - cursor->stream.avail_in == source.entry_.compressed_length;
         }
         if (cursor->ended) return false;
-        if (cursor->position % kCheckpointInterval == 0 &&
+        if (cursor->position % checkpoint_interval == 0 &&
                 cursor->position > checkpoints.back()->position)
             checkpoints.push_back(cursor->Copy());
         return true;
     }
 
+    const uint64_t checkpoint_interval;
     std::array<uint8_t, kChunkSize> input, chunk;
     uint64_t chunk_start = 0;
     size_t chunk_size = 0;
@@ -149,7 +155,7 @@ int64_t ApkEntryReader::Read(void* output, size_t count, uint64_t offset) try {
         return ReadCompressed(output, count, offset) ? static_cast<int64_t>(count) : WA_ERR_FAULT;
     }
     if (entry_.method != kCompressDeflated) return WA_ERR_NOTSUP;
-    if (!deflate_) deflate_ = std::make_unique<Deflate>();
+    if (!deflate_) deflate_ = std::make_unique<Deflate>(Size());
     for (size_t done = 0; done < count;) {
         if (!deflate_->Seek(*this, offset)) return WA_ERR_FAULT;
         const size_t start = offset - deflate_->chunk_start;

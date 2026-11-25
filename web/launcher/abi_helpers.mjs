@@ -15,13 +15,105 @@ const compositorExports = [
 
 export const frameTimeNs = timestamp => BigInt(Math.max(0, Math.round(timestamp * 1e6)));
 
+export const largeApkThreshold = 64 * 1024 * 1024;
+export const apkReadChunkBytes = 256 * 1024;
+
 let apkFileSequence = 0;
 
-// MEMFS keeps a view of caller-owned JS bytes outside Wasm linear memory.
-export function withApkFile(module, bytes, call) {
+export function measureApkReads(size, read) {
+  const stats = { apkBytes: size, apkReadBytes: 0, apkReadCalls: 0, apkMaxReadBytes: 0 };
+  return { size, stats, read(target, offset) {
+    const count = read(target, offset);
+    stats.apkReadBytes += count;
+    ++stats.apkReadCalls;
+    stats.apkMaxReadBytes = Math.max(stats.apkMaxReadBytes, count);
+    return count;
+  } };
+}
+
+function blobReader(blob) {
+  const sync = typeof FileReaderSync === 'function' ? new FileReaderSync() : null;
+  return { size: blob.size, read(target, offset) {
+    const slice = blob.slice(offset, offset + target.byteLength);
+    if (sync) {
+      target.set(new Uint8Array(sync.readAsArrayBuffer(slice)));
+      return slice.size;
+    }
+    // Launcher3 indexes the catalog and loads icons synchronously on the window.
+    // This URL serves just the requested slice of the local File.
+    // A prefix keeps the text decoder from mistaking APK bytes for a BOM.
+    const url = URL.createObjectURL(new Blob(['\0', slice]));
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', url, false);
+      xhr.overrideMimeType('text/plain; charset=x-user-defined');
+      xhr.send();
+      const bytes = xhr.responseText;
+      if (xhr.status !== 200 || bytes.length !== target.byteLength + 1)
+        throw new Error('Could not read APK slice');
+      for (let i = 0; i < target.byteLength; ++i) target[i] = bytes.charCodeAt(i + 1) & 0xff;
+      return target.byteLength;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  } };
+}
+
+function createSeekableApkFile(module, path, { size, read }) {
+  if (!Number.isSafeInteger(size) || size <= 0 || typeof read !== 'function')
+    throw new TypeError('Expected a nonempty seekable APK');
+  const { FS } = module;
+  // Emscripten uses WASI errno values in its filesystem.
+  const invalid = 28, io = 29, noMemory = 48;
+  const readRange = (buffer, offset, length, position) => {
+    if (!Number.isSafeInteger(position) || position < 0) throw new FS.ErrnoError(invalid);
+    const count = Math.min(length, Math.max(0, size - position));
+    for (let done = 0; done < count;) {
+      const requested = Math.min(apkReadChunkBytes, count - done);
+      const start = offset + done;
+      let received;
+      try {
+        received = read(buffer.subarray(start, start + requested), position + done);
+      } catch {
+        throw new FS.ErrnoError(io);
+      }
+      if (!Number.isInteger(received) || received <= 0 || received > requested) throw new FS.ErrnoError(io);
+      done += received;
+    }
+    return count;
+  };
+
+  // A regular file node supplies fstat, lseek and rename. Its contents belong
+  // to the host reader. Only ziparchive's directory and requested assets are mapped.
+  const node = FS.create(path, 0o444);
+  node.usedBytes = size;
+  node.stream_ops = {
+    llseek: node.stream_ops.llseek,
+    read: (_, buffer, offset, length, position) => readRange(buffer, offset, length, position),
+    mmap(_, length, position) {
+      if (!position && length >= size && size > largeApkThreshold) throw new FS.ErrnoError(invalid);
+      const ptr = module.mmapAlloc(length);
+      if (!ptr) throw new FS.ErrnoError(noMemory);
+      try {
+        readRange(module.HEAPU8, ptr, length, position);
+        return { ptr, allocated: true };
+      } catch (error) {
+        module._free(ptr);
+        throw error;
+      }
+    },
+  };
+}
+
+export function withApkFile(module, source, call) {
   const name = `wa-browser-apk-${++apkFileSequence}`;
   const path = `/tmp/${name}`;
-  module.FS.createDataFile('/tmp', name, bytes, true, false, true);
+  if (source instanceof Uint8Array) {
+    // MEMFS keeps a view of caller-owned small APK bytes outside Wasm linear memory.
+    module.FS.createDataFile('/tmp', name, source, true, false, true);
+  } else {
+    createSeekableApkFile(module, path, source instanceof Blob ? blobReader(source) : source);
+  }
   try {
     return call(path);
   } finally {

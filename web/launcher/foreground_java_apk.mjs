@@ -52,7 +52,7 @@ export function isLegacyCubeApk(module, bytes, packageName) {
   }
 }
 
-class ForegroundActivityAbi {
+export class ForegroundActivityAbi {
   #created = false;
   #scratch;
 
@@ -159,6 +159,40 @@ class ForegroundActivityAbi {
   }
 }
 
+export function bootForegroundActivity(module, { assets, packages, size, locale, launch, source }) {
+  const abi = new ForegroundActivityAbi(module);
+  try {
+    abi.create(size, locale);
+    abi.load('load_framework_dex', assets.frameworkDex);
+    if (assets.fallbackDex) abi.load('load_framework_fallback_dex', assets.fallbackDex);
+    abi.load('set_framework_res_apk', assets.resources);
+    for (const [name, data] of packages ?? []) {
+      // boot_apk adds the active APK to the catalog with its application resources.
+      if (name !== launch.apkName) abi.install(name, data);
+    }
+    abi.boot(launch.apkName, source, launch.activity);
+    const state = abi.state();
+    if (state.package !== launch.package) throw new Error('Foreground Activity package does not match the launch');
+    return { abi, state };
+  } catch (error) {
+    abi.dispose();
+    throw error;
+  }
+}
+
+export function createForegroundSurface(surface, launch) {
+  const doc = surface.ownerDocument;
+  const host = doc.createElement('div');
+  Object.assign(host.style, { position: 'absolute', inset: '0', overflow: 'hidden' });
+  const canvas = doc.createElement('canvas');
+  canvas.tabIndex = 0;
+  canvas.setAttribute('aria-label', launch.label || launch.activity);
+  Object.assign(canvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', objectFit: 'fill' });
+  host.append(canvas);
+  surface.replaceChildren(host);
+  return { host, canvas };
+}
+
 export class ForegroundJavaApk {
   #abi;
   #compositor;
@@ -182,29 +216,15 @@ export class ForegroundJavaApk {
     const module = await loadSystem();
     if (this.#closed) return;
     if (module === launcherModule) throw new Error('The foreground Activity requires an isolated android_system instance');
-    const abi = this.#abi = new ForegroundActivityAbi(module);
     this.#size = viewport();
-    abi.create(this.#size, locale);
-    abi.load('load_framework_dex', assets.frameworkDex);
-    if (assets.fallbackDex) abi.load('load_framework_fallback_dex', assets.fallbackDex);
-    abi.load('set_framework_res_apk', assets.resources);
-    for (const [name, data] of packages ?? []) {
-      // boot_apk adds the active APK to the catalog with its application resources.
-      if (name !== launch.apkName) abi.install(name, data);
-    }
-    abi.boot(launch.apkName, bytes, launch.activity);
-    this.#state = abi.state();
-    if (this.#state.package !== launch.package) throw new Error('Foreground Activity package does not match the launch');
+    const { abi, state } = bootForegroundActivity(module, {
+      assets, packages, size: this.#size, locale, launch, source: bytes,
+    });
+    this.#abi = abi;
+    this.#state = state;
 
-    const doc = surface.ownerDocument;
-    const host = this.#host = doc.createElement('div');
-    Object.assign(host.style, { position: 'absolute', inset: '0', overflow: 'hidden' });
-    const canvas = doc.createElement('canvas');
-    canvas.tabIndex = 0;
-    canvas.setAttribute('aria-label', launch.label || launch.activity);
-    Object.assign(canvas.style, { position: 'absolute', inset: '0', width: '100%', height: '100%', objectFit: 'fill' });
-    host.append(canvas);
-    surface.replaceChildren(host);
+    const { host, canvas } = createForegroundSurface(surface, launch);
+    this.#host = host;
     this.#creating = createSurfaceFlingerCompositor({
       module, scene: abi.scene, canvas, webviewHost: host, viewport, preferredBackend: backend,
       readWebViewFile: (id, url) => abi.readWebViewFile(id, url),

@@ -72,12 +72,19 @@ export class ForegroundApk {
     this.javaOptions = { ...javaOptions, surface, launch, onReady, onError };
   }
 
-  async start(bytes) {
+  async start(source) {
     const { surface, launch } = this;
     const signal = this.#abort.signal;
-    if (!isLegacyCubeApk(this.javaOptions.launcherModule, bytes, launch.package)) {
+    if (source instanceof Blob) {
+      const { ForegroundWorkerApk } = await import('./foreground_worker_apk.mjs');
+      if (signal.aborted) return;
+      this.#java = new ForegroundWorkerApk(this.javaOptions);
+      await this.#java.start(source);
+      return;
+    }
+    if (!isLegacyCubeApk(this.javaOptions.launcherModule, source, launch.package)) {
       this.#java = new ForegroundJavaApk(this.javaOptions);
-      await this.#java.start(bytes);
+      await this.#java.start(source);
       return;
     }
     const canvas = surface.ownerDocument.createElement('canvas');
@@ -87,7 +94,7 @@ export class ForegroundApk {
     this.#bindInput(canvas, signal);
     const offscreen = canvas.transferControlToOffscreen();
     const worker = this.#worker = new WorkerClient(workerUrl, `launcher-apk-${launch.package}`);
-    const data = new Uint8Array(bytes).buffer;
+    const data = new Uint8Array(source).buffer;
     const metadata = await worker.request('open', { canvas: offscreen, bytes: data }, [offscreen, data]);
     if (signal.aborted) return;
     if (metadata.packageName !== launch.package) {
