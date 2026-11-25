@@ -94,6 +94,32 @@ void AuditFrameworkNatives(Vm& vm, std::string_view upstream, std::string_view f
               << "0 duplicate DEX classes, " << primary_methods << " primary DEX method IDs\n";
 }
 
+void VerifyMediaStoreImages(Vm& vm, std::string_view upstream) {
+    constexpr auto images = "Landroid/provider/MediaStore$Images$Media;";
+    constexpr auto uri_type = "Landroid/net/Uri;";
+    constexpr auto string_type = "Ljava/lang/String;";
+    Require(vm.DexLocation(images).starts_with(upstream), "MediaStore images are in the upstream framework archive");
+    wa::interp::ScopedHandleScope roots(vm);
+    const auto uri_string = [&](Value value) {
+        auto* uri = roots.Hold(value.ref());
+        return vm.StringUtf8(vm.CallVirtual(uri, "toString", "()Ljava/lang/String;").ref());
+    };
+    Require(uri_string(vm.ReadStaticField(images, "EXTERNAL_CONTENT_URI", uri_type)) ==
+                "content://media/external/images/media" &&
+            uri_string(vm.ReadStaticField(images, "INTERNAL_CONTENT_URI", uri_type)) ==
+                "content://media/internal/images/media", "MediaStore's image collection URIs");
+    auto* volume = roots.Hold(vm.NewString("external_primary"));
+    Require(uri_string(vm.CallStatic(images, "getContentUri", "(Ljava/lang/String;J)Landroid/net/Uri;",
+                std::array{Value::Ref(volume), Value::Long(42)})) ==
+                "content://media/external_primary/images/media/42", "MediaStore's image row URI");
+    const auto column = [&](std::string_view name) {
+        return vm.StringUtf8(vm.ReadStaticField(images, name, string_type).ref());
+    };
+    Require(column("_ID") == "_id" && column("DISPLAY_NAME") == "_display_name" &&
+            column("BUCKET_DISPLAY_NAME") == "bucket_display_name", "MediaStore's inherited image columns");
+    std::cout << "Verified upstream MediaStore image URIs and columns\n";
+}
+
 void VerifyLegacyHttp(Vm& vm, std::string_view upstream) {
     constexpr auto client_type = "Lorg/apache/http/impl/client/DefaultHttpClient;";
     Require(vm.DexLocation(client_type).starts_with(upstream), "Apache HTTP Legacy is in the primary framework archive");
@@ -446,6 +472,7 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     bridge.BindSurfaceFlinger(sf.get(), kLayer);
     bridge.RegisterNatives(vm);
     AuditFrameworkNatives(vm, upstream, framework);
+    VerifyMediaStoreImages(vm, upstream);
     VerifyLegacyHttp(vm, upstream);
     VerifyVmRuntime(vm);
     {

@@ -30,7 +30,7 @@ Browser-native **Android 17 (`android-17.0.0_r1`)** runtime running inside stand
 ## External Dependencies (Not Committed)
 
 To build locally, provide the following external dependencies (ignored by `.gitignore`):
-- `third_party/aosp17/`: Read-only AOSP `android-17.0.0_r1` repositories (frameworks, system, art, packages/apps/Launcher3, Settings, packages/modules/Connectivity, etc.).
+- `third_party/aosp17/`: Read-only AOSP `android-17.0.0_r1` repositories (frameworks, system, art, packages/apps/Launcher3, Settings, packages/modules/Connectivity, packages/providers/MediaProvider, etc.).
 - `SVM_SOURCE_DIR`: SwiftVM source tree (`-DSVM_SOURCE_DIR=/path/to/SwiftVM`).
 - Android SDK (API 36 `aapt2`/`d8`/`android.jar`), Android NDK (e.g., NDK 29), JDK 17+, Emscripten SDK, Node.js 22+, and Google Chrome (for CDP E2E tests).
 
@@ -112,10 +112,10 @@ the password and SMS-code screens, and the recovery, help, and registration
 terms links. Pointer, scrolling, and IME events go through SurfaceFlinger.
 Language Save uses `CLEAR_TOP` to deliver a new intent to the existing launcher.
 The login close control and child Activity results preserve the foreground task.
-The Terms, recovery, Help Center, Security Center, and Feedback WebViews open.
-Back from these pages initializes WeChat's screenshot observer, which requires
-`MediaStore.Images.Media` from AOSP MediaProvider. The configured upstream
-checkouts omit that repository, so the interaction probe records a Back failure.
+The probe opens the Terms, recovery, Help Center, Security Center, and Feedback
+WebViews and verifies that Back closes each WebView and resumes its parent.
+The framework builds `MediaStore` from AOSP MediaProvider, supplying the image
+collection URIs used by WeChat's screenshot observer.
 
 JNI lifecycle hooks use the ELF dependency search order.
 The guest VFS exposes APK-backed library files and ELF metadata for system

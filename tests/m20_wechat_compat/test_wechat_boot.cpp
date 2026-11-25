@@ -550,6 +550,7 @@ FrameEvidence VerifyWebViewBack(const FrameEvidence& from, std::string_view labe
         closed |= request.action == WA_WEBVIEW_CLOSE && request.webview_id == opened;
     });
     Require(closed && !restored.webviews, std::string(label) + " did not close the WebView on Back");
+    std::cout << "{\"event\":\"webview_back\",\"label\":" << JsonString(label) << "}\n";
     return restored;
 }
 

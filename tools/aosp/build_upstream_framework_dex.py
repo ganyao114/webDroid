@@ -33,8 +33,9 @@ SPARSE_LIBCORE_ROOTS = (JAVA_BASE, LIBCORE_LUNI, LIBCORE_JSON, LIBCORE_DALVIK, L
 SPARSE_FRAMEWORK_ROOTS = ("frameworks/base/core/java", "frameworks/base/media/java")
 CONNECTIVITY_PROJECT = "packages/modules/Connectivity"
 APACHE_HTTP_PROJECT = "external/apache-http"
+MEDIA_PROVIDER_PROJECT = "packages/providers/MediaProvider"
 UPSTREAM_JAVA_PROJECTS = ("frameworks/base/", "libcore/", CONNECTIVITY_PROJECT + "/",
-                          APACHE_HTTP_PROJECT + "/")
+                          APACHE_HTTP_PROJECT + "/", MEDIA_PROVIDER_PROJECT + "/")
 PROGRAM_GROUPS = ("framework", "java-base", "java-xml", "services")
 SPARSE_CONNECTIVITY_ROOT = CONNECTIVITY_PROJECT + "/staticlibs/framework"
 CONNECTIVITY_FRAMEWORK_T = CONNECTIVITY_PROJECT + "/framework-t/src"
@@ -713,7 +714,7 @@ def build(args, stage):
     aconfig = {}
     for name in sorted(groups["aconfig"]):
         path = args.aosp_root / name
-        if not name.startswith(("frameworks/base/", "libcore/")) or path.suffix != ".aconfig":
+        if not name.startswith(("frameworks/base/", "libcore/", MEDIA_PROVIDER_PROJECT + "/")) or path.suffix != ".aconfig":
             raise ValueError(f"{manifest}: expected an upstream aconfig file: {name}")
         inputs.add(path)
         aconfig[name] = path.read_bytes()
@@ -833,7 +834,8 @@ def build(args, stage):
                  framework_base_java=sum(name.startswith("frameworks/base/")
                                          for name in groups["framework"]),
                  connectivity_java=sum(name.startswith(CONNECTIVITY_PROJECT + "/") for name in java),
-                 apache_http_java=sum(name.startswith(APACHE_HTTP_PROJECT + "/") for name in java))
+                 apache_http_java=sum(name.startswith(APACHE_HTTP_PROJECT + "/") for name in java),
+                 media_provider_java=sum(name.startswith(MEDIA_PROVIDER_PROJECT + "/") for name in java))
     report = {"format_version": 1, "upstream_tag": "android-17.0.0_r1",
               "upstream_files": sorted(records, key=lambda item: item["path"]),
               "upstream_resources": resources, "disabled_resource_flags": resource_flags,

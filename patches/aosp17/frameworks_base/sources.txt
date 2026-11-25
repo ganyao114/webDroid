@@ -7,6 +7,7 @@ libcore/luni/src/main/java/libcore/internal/StringPool.java
 libcore/xml/src/main/java/com/android/org/kxml2/io/KXmlParser.java
 libcore/xml/src/main/java/org/xmlpull/v1/XmlPullParser.java
 libcore/xml/src/main/java/org/xmlpull/v1/XmlPullParserException.java
+frameworks/base/core/java/android/content/ContentUris.java
 frameworks/base/core/java/android/content/UriMatcher.java
 frameworks/base/core/java/android/content/MutableContextWrapper.java
 frameworks/base/core/java/android/os/ConditionVariable.java
@@ -67,6 +68,11 @@ packages/modules/Connectivity/framework/src/android/net/UidRange.java
 packages/modules/Connectivity/staticlibs/framework/com/android/net/module/util/BitUtils.java
 packages/modules/Connectivity/staticlibs/framework/com/android/net/module/util/CollectionUtils.java
 packages/modules/Connectivity/staticlibs/framework/com/android/net/module/util/NetworkCapabilitiesUtils.java
+
+# MediaProvider client contract and its shared column interface.
+frameworks/base/core/java/android/provider/BaseColumns.java
+packages/providers/MediaProvider/apex/framework/java/android/provider/Column.java
+packages/providers/MediaProvider/apex/framework/java/android/provider/MediaStore.java
 
 # The Apache HTTP Legacy client, including its bundled Commons dependencies.
 @dir external/apache-http/src/org/apache
@@ -1076,15 +1082,18 @@ android/annotation/AnyThread.java
 android/annotation/ArrayRes.java
 android/annotation/AttrRes.java
 android/annotation/BoolRes.java
+android/annotation/BytesLong.java
 android/annotation/CheckResult.java
 android/annotation/ColorInt.java
 android/annotation/ColorLong.java
 android/annotation/ColorRes.java
 android/annotation/CurrentTimeMillisLong.java
+android/annotation/CurrentTimeSecondsLong.java
 android/annotation/DimenRes.java
 android/annotation/Dimension.java
 android/annotation/Discouraged.java
 android/annotation/DrawableRes.java
+android/annotation/DurationMillisLong.java
 android/annotation/FlaggedApi.java
 android/annotation/FloatRange.java
 android/annotation/FontRes.java
@@ -1102,6 +1111,7 @@ android/annotation/Nullable.java
 android/annotation/PluralsRes.java
 android/annotation/Px.java
 android/annotation/RawRes.java
+android/annotation/RequiresApi.java
 android/annotation/Size.java
 android/annotation/StringDef.java
 android/annotation/StringRes.java
@@ -1148,6 +1158,7 @@ android/annotation/SdkConstant.java
 
 [aconfig]
 libcore/libcore.aconfig
+packages/providers/MediaProvider/mediaprovider_flags.aconfig
 frameworks/base/core/java/android/app/privatecompute/flags/flags.aconfig
 frameworks/base/core/java/android/content/pm/flags.aconfig
 frameworks/base/core/java/android/content/res/flags.aconfig
@@ -1474,3 +1485,4 @@ patches/1105-embedded-webkit-storage-and-scale.patch
 patches/1106-embedded-themed-context-and-render-priority.patch
 patches/1107-embedded-concurrent-skip-list.patch
 patches/1109-embedded-thermal-status-listeners.patch
+patches/1110-embedded-media-store.patch
