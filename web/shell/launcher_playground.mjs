@@ -5,7 +5,7 @@ const displays = {
   phone: { width: 448, height: 896 },
 };
 
-export function mountLauncherPlayground(root, { initialApk, ...options } = {}) {
+export function mountLauncherPlayground(root, { initialApk, initialApkUrl, initialLaunch, form: initialForm, ...options } = {}) {
   const view = root.querySelector('.wa-device');
   const launcher = root.querySelector('.wa-launcher-surface');
   const appSurface = root.querySelector('.wa-app-surface');
@@ -65,7 +65,7 @@ export function mountLauncherPlayground(root, { initialApk, ...options } = {}) {
     stats.fps.textContent = fps ? `${fps.toFixed(1)} FPS` : 'FPS —';
     stats.tick.textContent = elapsed ? `Wasm ${elapsed.toFixed(2)} ms` : 'Wasm —';
     stats.gc.textContent = state?.booted ? `ART GC ${state.gcCollections} · ${state.gcLive} live` : 'ART GC —';
-    stats.activity.textContent = host.activeLaunch?.activity || state?.activity || '';
+    stats.activity.textContent = app?.activity || host.activeLaunch?.activity || state?.activity || '';
   }
 
   function closeRecents() { recents.hidden = true; }
@@ -103,15 +103,30 @@ export function mountLauncherPlayground(root, { initialApk, ...options } = {}) {
   }, { signal });
 
   async function installFiles(files) {
+    let lastInstalled = null;
     for (const file of files) {
       try {
-        await host.installApkFile(file);
-        if (signal.aborted) return;
+        lastInstalled = await host.installApkFile(file);
+        if (signal.aborted) return null;
         show(`Installed ${file.name}`);
       } catch (error) {
         show(`${file.name} — ${error.message.split('\n')[0]}`, true);
       }
     }
+    return lastInstalled;
+  }
+
+  async function installFromUrl(url) {
+    const resolved = new URL(url, location.href);
+    if (resolved.origin !== location.origin) throw new Error('Cross-origin APK URL is not allowed');
+    const name = decodeURIComponent(resolved.pathname.split('/').pop() || 'app.apk');
+    show(`Downloading ${name}…`);
+    const response = await fetch(resolved.href, { signal });
+    if (!response.ok) throw new Error(`Failed to fetch ${name} (${response.status})`);
+    const blob = await response.blob();
+    if (signal.aborted) return null;
+    const file = new File([blob], name, { type: 'application/vnd.android.package-archive' });
+    return installFiles([file]);
   }
 
   install.addEventListener('click', () => input.click(), { signal });
@@ -135,13 +150,26 @@ export function mountLauncherPlayground(root, { initialApk, ...options } = {}) {
     void installFiles([...event.dataTransfer.files]);
   }, { signal });
 
+  if (initialForm === 'phone' || initialForm === 'desktop') {
+    view.dataset.form = initialForm;
+    form.textContent = initialForm === 'phone' ? 'Desktop view' : 'Phone view';
+  }
   updateDevice(host);
   const timer = setInterval(() => {
     try { refreshHud(); }
     catch (error) { show(error.message, true); }
   }, 250);
   const ready = host.start();
-  void ready.then(() => initialApk && installFiles([initialApk])).catch(() => {});
+  void ready.then(async () => {
+    let installedName = null;
+    if (initialApk) installedName = await installFiles([initialApk]);
+    else if (initialApkUrl) installedName = await installFromUrl(initialApkUrl);
+    if (installedName && initialLaunch?.package && !signal.aborted) {
+      host.launchInstalled(installedName, initialLaunch);
+    }
+  }).catch(error => {
+    if (!signal.aborted) show(error.message.split('\n')[0], true);
+  });
   return { host, ready, close() {
     abort.abort();
     clearInterval(timer);

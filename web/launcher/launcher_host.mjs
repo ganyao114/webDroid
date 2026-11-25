@@ -350,6 +350,12 @@ export class LauncherHost {
     if (this.recent && this.#phase === 'launcher') void this.#launch(this.recent);
   }
 
+  launchInstalled(apkName, { package: pkg, activity = '', label = '' } = {}) {
+    if (this.#phase !== 'launcher') return;
+    if (!this.#apks.has(apkName)) throw new Error(`Unknown installed APK ${apkName}`);
+    void this.#launch({ apkName, package: pkg, activity, label: label || pkg });
+  }
+
   async #launch(launch) {
     const { abi, input } = this.#session;
     let active;

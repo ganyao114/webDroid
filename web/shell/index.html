@@ -284,8 +284,16 @@
       root.hidden = false;
       try {
         const { mountLauncherPlayground } = await import('./launcher_playground.mjs');
+        const launchPkg = params.get('launch');
         const playground = mountLauncherPlayground(root, {
           initialApk,
+          initialApkUrl: !initialApk ? params.get('apk') : null,
+          initialLaunch: launchPkg ? {
+            package: launchPkg,
+            activity: params.get('activity') || '',
+            label: params.get('label') || launchPkg,
+          } : null,
+          form: params.get('form'),
           backend: params.get('backend') ?? 'auto',
           gesturalNavigation: params.get('navigation') === 'gestural',
         });
