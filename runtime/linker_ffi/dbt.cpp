@@ -1,5 +1,6 @@
 #include "bionic_internal.h"
 #include "boot_profile.h"
+#include "wasm_jit.h"
 
 #include "runtime/arch/arm32/numeric.h"
 #include "runtime/arch/arm32/service.h"
@@ -25,15 +26,6 @@
 #include <type_traits>
 #include <thread>
 #include <utility>
-#include <variant>
-
-namespace wa::dbt {
-
-struct GuestCpu {
-    std::variant<swift::runtime::arm32::GuestState, swift::runtime::arm64::GuestState> state;
-};
-
-} // namespace wa::dbt
 
 wa_dbt::wa_dbt(wa_guest_arch_t arch, wa_softmmu_t* mmu)
     : arch(arch), mmu(mmu), bionic(std::make_unique<wa::dbt::BionicState>()), running(&bionic->main) {}
@@ -127,6 +119,9 @@ struct ExecutionMemory {
     uint64_t code_base = 0;
     uint64_t fast_instructions = 0;
     size_t blocks_executed = 0;
+#ifdef __EMSCRIPTEN__
+    WasmJit* observe_jit = nullptr;
+#endif
 
     struct MappingPermission {
         uint32_t page = 0, epoch = 0;
@@ -438,7 +433,16 @@ bool ExecuteArm64Fast(const Arm64Decoded& decoded, Arm64State& state, ExecutionM
 rt::frontend::StepResult InterpretArm64Batch(Arm64State& state, ExecutionMemory& memory, size_t budget) {
     // Both the PC and the current instruction word must match. A cache entry can
     // be reused after remapping only if it decodes the same instruction.
-    static thread_local std::array<Arm64Decoded, 4096> cache;
+    using DecodeCache = std::array<Arm64Decoded, 4096>;
+#ifdef __EMSCRIPTEN__
+    // The launcher has its own Wasm instance and does not need a native decode
+    // cache until it actually executes an ARM64 guest.
+    static thread_local std::unique_ptr<DecodeCache> lazy_cache;
+    if (!lazy_cache) lazy_cache = std::make_unique<DecodeCache>();
+    auto& cache = *lazy_cache;
+#else
+    static thread_local DecodeCache cache;
+#endif
     const auto services = memory.Callbacks<swift::arm64::DirectServices>();
     rt::frontend::StepResult out;
     out.pc = out.next_pc = state.pc;
@@ -446,6 +450,11 @@ rt::frontend::StepResult InterpretArm64Batch(Arm64State& state, ExecutionMemory&
     for (size_t i = 0; i < budget; ++i) {
         const auto pc = state.pc;
         if (i && IsSyntheticPc(pc)) break;
+#ifdef __EMSCRIPTEN__
+        if (i && out.instructions == block_start && memory.observe_jit &&
+            memory.observe_jit->Observe(pc))
+            break;
+#endif
         out.pc = out.next_pc = pc;
         if ((pc & 3) || pc > UINT64_MAX - 4) {
             out.kind = StepKind::InvalidEncoding;
@@ -833,7 +842,7 @@ template <typename State> uint64_t GuestAddress(uint64_t pc) {
         return pc;
 }
 
-template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice,
+template <typename State> int32_t Run(wa_dbt& dbt, GuestCpu& cpu, State& state, uint64_t slice,
                                      const GuestWait* caller_wait = nullptr) {
     auto& thread = *dbt.running;
     auto* profile = BootProfile::active;
@@ -842,6 +851,13 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice,
     const rt::frontend::ReadyEntryLookup synthetic_pc{.ready = [](void*, uint64_t pc) noexcept {
         return IsSyntheticPc(GuestAddress<State>(pc));
     }};
+#ifdef __EMSCRIPTEN__
+    if (!dbt.wasm_jit && !dbt.wasm_jit_unavailable) {
+        dbt.wasm_jit.reset(new (std::nothrow) WasmJit(dbt));
+        dbt.wasm_jit_unavailable = !dbt.wasm_jit;
+    }
+    auto* jit = dbt.wasm_jit.get();
+#endif
     while (true) {
         const auto pc = GuestAddress<State>(state.pc);
         if (pc == WA_EXIT_SENTINEL_PC)
@@ -868,7 +884,56 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice,
             continue;
         }
 
-        const auto budget = static_cast<size_t>(std::min({thread.steps_left, slice, uint64_t{256}}));
+        uint64_t interpreter_budget = 256;
+#ifdef __EMSCRIPTEN__
+        memory.observe_jit = jit;
+        if (jit && jit->Observe(state.pc) && jit->Prepare(state.pc)) {
+            // Bound the MMU lock hold even for a non-resumable JNI call.
+            constexpr uint64_t kChainBudget = 65536;
+            const auto allowance = std::min({thread.steps_left, slice, kChainBudget});
+            auto result = jit->Run(cpu, state.pc, static_cast<uint32_t>(allowance));
+            if (result.status != WA_OK) {
+                dbt.last_pc = GuestAddress<State>(state.pc);
+                dbt.last_fault_address = cpu.run.fault_address;
+                state.reservation_valid = 0;
+                return result.status;
+            }
+            if (result.entries) {
+                const auto exit = result.exit;
+                const bool service = exit == rt::ExitValue(rt::NativeExit::StateService) &&
+                                     exit != state.pc;
+                if (service && result.instructions) --result.instructions;
+                thread.steps_left -= result.instructions;
+                slice -= result.instructions;
+                dbt.stats.blocks_executed += result.entries;
+                dbt.stats.insns_executed += result.instructions;
+                if constexpr (std::is_same_v<State, Arm64State>) {
+                    if (profile) profile->arm64_instructions += result.instructions;
+                    if (exit == rt::ExitValue(rt::NativeExit::Syscall)) {
+                        dbt.last_pc = state.pc - 4;
+                        const auto status = Arm64Syscall(dbt, state, dbt.last_pc);
+                        if (status != WA_OK) return status;
+                        memory.InvalidatePermissions();
+                        if (caller_wait && caller_wait->ready) slice = 0;
+                        continue;
+                    }
+                }
+                if (service || exit == rt::ExitValue(rt::NativeExit::UnsupportedAtomic)) {
+                    interpreter_budget = 1;
+                } else if (exit == rt::ExitValue(rt::NativeExit::GuestEvents)) {
+                    if (!slice || !thread.steps_left || !cpu.run.slice_ticks) continue;
+                    interpreter_budget = std::min(interpreter_budget, uint64_t(cpu.run.slice_ticks));
+                } else if (exit && exit != state.pc) {
+                    dbt.last_pc = GuestAddress<State>(state.pc);
+                    return WA_ERR_NOSYS;
+                } else {
+                    continue;
+                }
+                memory.observe_jit = nullptr;
+            }
+        }
+#endif
+        const auto budget = static_cast<size_t>(std::min({thread.steps_left, slice, interpreter_budget}));
         const auto step = [&] {
             if constexpr (std::is_same_v<State, Arm32State>)
                 return swift::arm32::InterpretBlock(
@@ -886,6 +951,8 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice,
         thread.steps_left -= step.instructions;
         slice -= step.instructions;
         dbt.stats.insns_executed += step.instructions;
+        dbt.stats.tier0_insns += step.instructions;
+        if (profile) profile->dbt_stats.tier0_insns += step.instructions;
         if constexpr (std::is_same_v<State, Arm64State>) {
             dbt.stats.blocks_executed += std::exchange(memory.blocks_executed, 0);
             if (profile) {
@@ -941,14 +1008,14 @@ int32_t InitCpu(wa_dbt& dbt, GuestThread& thread, GuestCpu& cpu, uint64_t entry,
     }
 
     if (dbt.arch == WA_ARCH_ARM32) {
-        auto& state = cpu.state.emplace<Arm32State>();
+        auto& state = *std::construct_at(&cpu.arm32);
         std::copy_n(args.gpr, 4, state.r);
         state.r[13] = sp;
         state.r[14] = WA_EXIT_SENTINEL_PC;
         state.pc = Arm32PC(entry);
         state.tpidruro = state.tpidrurw = thread.thread_pointer;
     } else {
-        auto& state = cpu.state.emplace<Arm64State>();
+        auto& state = *std::construct_at(&cpu.arm64);
         std::copy_n(args.gpr, 8, state.gprs);
         for (size_t i = 0; i < 8; ++i)
             std::memcpy(state.q[i], &args.fp_bits[i], sizeof(args.fp_bits[i]));
@@ -960,12 +1027,12 @@ int32_t InitCpu(wa_dbt& dbt, GuestThread& thread, GuestCpu& cpu, uint64_t entry,
     return WA_OK;
 }
 
-void ReadResult(const GuestCpu& cpu, wa_guest_call_result_t& result) {
-    if (const auto* arm = std::get_if<Arm32State>(&cpu.state)) {
-        result.gpr[0] = arm->r[0];
-        result.gpr[1] = arm->r[1];
+void ReadResult(wa_guest_arch_t arch, const GuestCpu& cpu, wa_guest_call_result_t& result) {
+    if (arch == WA_ARCH_ARM32) {
+        result.gpr[0] = cpu.arm32.r[0];
+        result.gpr[1] = cpu.arm32.r[1];
     } else {
-        const auto& arm64 = std::get<Arm64State>(cpu.state);
+        const auto& arm64 = cpu.arm64;
         result.gpr[0] = arm64.gprs[0];
         result.gpr[1] = arm64.gprs[1];
         std::memcpy(&result.fp_bits, arm64.q[0], sizeof(result.fp_bits));
@@ -1017,9 +1084,9 @@ int32_t RunSlice(wa_dbt& dbt, GuestThread& thread, GuestCpu& cpu, bool resumable
                  const GuestWait* caller_wait = nullptr) {
     const CallDepth frame{thread.depth};
     thread.resumable = resumable;
-    return std::visit([&](auto& state) {
-        return Run(dbt, state, resumable ? kTimeSlice : UINT64_MAX, caller_wait);
-    }, cpu.state);
+    const auto slice = resumable ? kTimeSlice : UINT64_MAX;
+    return dbt.arch == WA_ARCH_ARM32 ? Run(dbt, cpu, cpu.arm32, slice, caller_wait)
+                                     : Run(dbt, cpu, cpu.arm64, slice, caller_wait);
 }
 
 int32_t Call(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& args,
@@ -1062,28 +1129,47 @@ int32_t Call(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& args,
             return WA_OK;
         }
     }
-    if (status == WA_OK) ReadResult(cpu, result);
+    if (status == WA_OK) ReadResult(dbt.arch, cpu, result);
     return status;
 }
 
-int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_length) {
+int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_length,
+                    bool foreground = false, bool shared_memory = false, bool single_block = false) {
     const rt::arm32::Location location{key};
     const auto address = dbt.arch == WA_ARCH_ARM32 ? location.Address() : key;
     const auto start = AlignDown(address, WA_PAGE_SIZE);
-    std::array<wa::softmmu::PageWindow, 2> pages;
-    auto access = wa::softmmu::GetUnitWindow(dbt.mmu, start, pages[0]);
+    using wa::softmmu::UnitWindow;
+    std::array<wa::softmmu::PageWindow, 4> pages;
+    std::array<rt::frontend::BlockWindow, 4> windows;
+    size_t count = 0;
+    const auto pin = [&](uint64_t page, UnitWindow mode) {
+        if (foreground && CheckMappedAccess(&dbt, page, 1, WA_PROT_EXEC) != WA_OK)
+            return wa::softmmu::Access{WA_ERR_FAULT, page};
+        const bool writable = !foreground || CheckMappedAccess(&dbt, page, 1, WA_PROT_WRITE) == WA_OK;
+        const auto access = wa::softmmu::GetUnitWindow(dbt.mmu, page, pages[count], mode, writable);
+        if (access.status == WA_OK) {
+            windows[count] = {page, pages[count].bytes};
+            ++count;
+        }
+        return access;
+    };
+    if (foreground && start >= WA_PAGE_SIZE)
+        pin(start - WA_PAGE_SIZE, UnitWindow::JitAdjacent);
+    auto access = pin(start, foreground ? UnitWindow::JitEntry : UnitWindow::Standalone);
     if (access.status != WA_OK)
         return access.status;
-    std::array<rt::frontend::BlockWindow, 2> windows{{{start, pages[0].bytes}, {}}};
-    size_t count = 1;
-    const auto target = wasm::KnownTargetInfo();
-    if (dbt.arch == WA_ARCH_ARM32 && location.Thumb() && start + WA_PAGE_SIZE - address == 2) {
+    if (foreground) {
+        for (auto page = start + WA_PAGE_SIZE; count < pages.size(); page += WA_PAGE_SIZE) {
+            if (page >= WA_HOST_STUB_BASE || pin(page, UnitWindow::JitAdjacent).status != WA_OK)
+                break;
+        }
+    } else if (dbt.arch == WA_ARCH_ARM32 && location.Thumb() &&
+               start + WA_PAGE_SIZE - address == 2) {
         const auto first = swift::arm32::DecodeOne(pages[0].bytes.last(2), key);
         if (first.error == swift::arm32::DecodeError::Truncated) {
-            access = wa::softmmu::GetUnitWindow(dbt.mmu, start + WA_PAGE_SIZE, pages[1]);
+            access = pin(start + WA_PAGE_SIZE, UnitWindow::Standalone);
             if (access.status != WA_OK)
                 return access.status;
-            windows[count++] = {start + WA_PAGE_SIZE, pages[1].bytes};
         }
     }
 
@@ -1091,12 +1177,43 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_
     options.module_mode = wasm::ModuleMode::Standalone;
     options.address_mode = wasm::AddressMode::SoftMMU32;
     options.single_memory = true;
-    // Preserve the full AArch64 address check for each individual access.
-    options.alignment_fault = dbt.arch == WA_ARCH_ARM64;
+    options.alignment_fault = !foreground && dbt.arch == WA_ARCH_ARM64;
     options.entry_pc = key;
     options.gpr_stride = sizeof(uint64_t);
     options.vector_stride = 16;
     const auto region = std::span{windows}.first(count);
+    auto target = wasm::KnownTargetInfo();
+    if (foreground) {
+        target.features |= uint64_t(ir::TargetFeature::FaultLocations);
+        options.wide_softmmu_callbacks = true;
+        options.check_slice_ticks = true;
+        options.shared_memory = shared_memory;
+        if (shared_memory) options.max_memory_pages = wa::softmmu::kAddressLimit / 65536;
+    }
+    const auto build_region = [&]<typename Layout, typename Decode, typename Build>(
+        Layout layout, Decode decode, Build build) -> rt::frontend::BuildResult {
+        const rt::frontend::DecodeLimits limits = single_block
+            ? rt::frontend::DecodeLimits{.max_instructions = 64, .max_blocks = 1}
+            : rt::frontend::DecodeLimits{.max_instructions = 256, .max_blocks = 32};
+        const auto decoded = decode(region, key, limits);
+        if (!decoded || decoded.instructions.empty()) return {};
+        auto built = build(decoded, region, layout, target);
+        if (!built) return built;
+        options.block_ticks.resize(built.program.Blocks().size());
+        options.block_pcs.resize(decoded.blocks.size());
+        for (size_t i = 0; i < decoded.blocks.size(); ++i) {
+            options.block_ticks[i] = decoded.blocks[i].instruction_count;
+            options.block_pcs[i] = decoded.blocks[i].pc;
+        }
+        return built;
+    };
+#ifdef __EMSCRIPTEN__
+    const rt::frontend::ReadyEntryLookup ready{&dbt, [](void* ptr, uint64_t pc) noexcept {
+        const auto& owner = *static_cast<wa_dbt*>(ptr);
+        return IsSyntheticPc(owner.arch == WA_ARCH_ARM32 ? uint64_t(rt::arm32::Location{pc}.Address()) : pc) ||
+               owner.wasm_jit->Ready(pc);
+    }};
+#endif
     auto built = [&] {
         if (dbt.arch == WA_ARCH_ARM32) {
             const swift::arm32::StateLayout layout;
@@ -1109,6 +1226,16 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_
             options.vectors_offset = layout.fprs_offset;
             options.vector_count = 16;
             options.numeric_control_offset = layout.numeric_control_offset;
+#ifdef __EMSCRIPTEN__
+            if (foreground) {
+                return build_region(layout, [&](auto pages, auto pc, auto limits) {
+                    return swift::arm32::DecodeFunction(pages, pc, limits, nullptr, ready);
+                }, [](const auto& decoded, auto pages, auto layout, auto target) {
+                    return swift::arm32::BuildDecodedIR(decoded.instructions, decoded.blocks, pages,
+                        ir::Scope::Function, layout, target, nullptr, decoded.entry_block);
+                });
+            }
+#endif
             return swift::arm32::BuildFunctionIR(region, key, layout, {}, target);
         }
         const swift::arm64::StateLayout layout;
@@ -1123,6 +1250,16 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_
         options.numeric_control_offset = layout.numeric_control_offset;
         options.arm_fpcr_offset = layout.fpcr_offset;
         options.arm_fpsr_offset = layout.fpsr_offset;
+#ifdef __EMSCRIPTEN__
+        if (foreground) {
+            return build_region(layout, [&](auto pages, auto pc, auto limits) {
+                return swift::arm64::DecodeFunction(pages, pc, limits, nullptr, ready);
+            }, [](const auto& decoded, auto pages, auto layout, auto target) {
+                return swift::arm64::BuildDecodedIR(decoded.instructions, decoded.blocks, pages,
+                    ir::Scope::Function, layout, target, nullptr, decoded.entry_block);
+            });
+        }
+#endif
         return swift::arm64::BuildFunctionIR(region, key, layout, {}, target);
     }();
     if (!built)
@@ -1145,12 +1282,29 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_
     std::memcpy(buffer, bytes.data(), bytes.size());
     *out_bytes = buffer;
     *out_length = bytes.size();
-    ++dbt.stats.wasm_units_compiled;
-    dbt.stats.wasm_bytes_emitted += bytes.size();
+    if (!foreground) {
+        ++dbt.stats.wasm_units_compiled;
+        dbt.stats.wasm_bytes_emitted += bytes.size();
+    }
     return WA_OK;
 }
 
 } // namespace
+
+#ifdef __EMSCRIPTEN__
+int32_t wa::dbt::CompileForegroundWasm(wa_dbt& dbt, uint64_t key, bool shared_memory,
+                                       uint8_t** bytes, size_t* size) {
+    try {
+        const auto status = CompileUnit(dbt, key, bytes, size, true, shared_memory);
+        if (status == WA_ERR_NOTSUP) return CompileUnit(dbt, key, bytes, size, true, shared_memory, true);
+        return status;
+    } catch (const std::bad_alloc&) {
+        return WA_ERR_NOMEM;
+    } catch (...) {
+        return WA_ERR_INTERNAL;
+    }
+}
+#endif
 
 void wa::dbt::RegisterGuestJumps(wa_dbt& dbt) {
     const Builtin c[] = {
@@ -1219,7 +1373,7 @@ bool wa::dbt::RunReadyWorker(wa_dbt& dbt) {
             thread.status = status == kThreadExited ? WA_OK : status;
             if (status == WA_OK) {
                 wa_guest_call_result_t result{};
-                ReadResult(*thread.cpu, result);
+                ReadResult(dbt.arch, *thread.cpu, result);
                 thread.result = result.gpr[0];
             }
             RunThreadDestructors(dbt);

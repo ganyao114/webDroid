@@ -151,7 +151,10 @@ struct Class {
   std::map<std::string, Field> fields;
   std::vector<Field*> field_order;
   std::map<std::string, Method> methods;
-  std::unordered_map<std::string, Method*> vtable;
+  using VirtualEntry = std::pair<std::string_view, Method*>;
+  // Keys refer to the owning class's declared method keys. Subclasses keep
+  // only changes to the inherited table, including a null to hide a default.
+  std::vector<VirtualEntry> vtable;
   std::unordered_map<Method*, Method*> itable;
   Object* mirror = nullptr;
   Object* failure = nullptr;
@@ -159,6 +162,7 @@ struct Class {
   bool IsArray() const { return kind == '['; }
   bool IsInterface() const { return (flags & art::kAccInterface) != 0; }
   bool IsPrimitive() const { return !IsReference(kind); }
+  Method* FindVirtual(std::string_view key) const;
 };
 
 struct HashEntries {

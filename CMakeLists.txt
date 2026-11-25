@@ -24,6 +24,10 @@ add_subdirectory(runtime/hal_surfaceflinger)
 add_subdirectory(runtime/art_wasm_backend)
 add_subdirectory(runtime/android_system)
 
+if(BUILD_TESTING AND EMSCRIPTEN)
+    add_subdirectory(tests/m1_dbt_elf)
+endif()
+
 if(BUILD_TESTING AND NOT EMSCRIPTEN)
     set(WA_M2_FFI_TEST_DBT ON CACHE BOOL "Also run an NDK JNI guest through wa_linker_ffi" FORCE)
     add_subdirectory(tests/m1_dbt_elf)

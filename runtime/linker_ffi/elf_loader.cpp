@@ -681,18 +681,25 @@ template <typename Word> class Loader {
 
     int32_t ResolveSymbol(uint64_t index, uint64_t& address) const {
         address = 0;
-        if (!index)
+        if (!index) return WA_OK;
+        if (index >= resolved_symbols.size()) return WA_ERR_INVALID;
+        auto& cached = resolved_symbols[index];
+        if (cached != UINT64_MAX) {
+            address = cached;
             return WA_OK;
-        if (index >= symbols.size() / sizeof(Symbol))
-            return WA_ERR_INVALID;
+        }
         const auto symbol = Read<Symbol>(symbols, index * sizeof(Symbol));
-        if (symbol.section != SHN_UNDEF)
-            return DefinedSymbol(symbol, address);
+        if (symbol.section != SHN_UNDEF) {
+            const auto status = DefinedSymbol(symbol, address);
+            if (status == WA_OK) cached = address;
+            return status;
+        }
         const auto name = StringAt(symbol.name);
-        if (!name)
-            return WA_ERR_INVALID;
-        if (ResolveImport(*dbt, needed, *name, address) || (symbol.info >> 4) == STB_WEAK)
+        if (!name) return WA_ERR_INVALID;
+        if (ResolveImport(*dbt, imports, *name, address) || (symbol.info >> 4) == STB_WEAK) {
+            cached = address;
             return WA_OK;
+        }
         if (error) *error = "unresolved import " + std::string(*name);
         return WA_ERR_NOENT;
     }
@@ -710,50 +717,47 @@ template <typename Word> class Loader {
         }
         const auto name = StringAt(symbol.name);
         if (!name) return WA_ERR_INVALID;
-        std::vector<std::string_view> scope(needed.begin(), needed.end());
-        for (size_t i = 0; i < scope.size(); ++i) {
-            for (const auto& candidate : dbt->images) {
-                if (candidate.soname != scope[i]) continue;
-                if (const auto it = candidate.tls_exports.find(*name); it != candidate.tls_exports.end()) {
-                    module = &candidate;
+        for (const auto& library : imports) {
+            for (const auto* candidate : library.images) {
+                if (const auto it = candidate->tls_exports.find(*name); it != candidate->tls_exports.end()) {
+                    module = candidate;
                     offset = it->second;
                     return WA_OK;
                 }
-                for (const auto& dependency : candidate.needed)
-                    if (std::ranges::find(scope, dependency) == scope.end()) scope.push_back(dependency);
             }
         }
         if (error) *error = "unresolved TLS import " + std::string(*name);
         return WA_ERR_NOENT;
     }
 
-    int32_t ApplyCopy(uint64_t offset, uint64_t index) const {
+    int32_t ApplyCopy(softmmu::CpuAccess& memory, uint64_t offset, uint64_t index) const {
         if (!index || index >= symbols.size() / sizeof(Symbol)) return WA_ERR_INVALID;
         const auto symbol = Read<Symbol>(symbols, index * sizeof(Symbol));
         const auto name = StringAt(symbol.name);
         if (!name || !InMemory(offset, symbol.size, PF_W)) return WA_ERR_INVALID;
         uint64_t source;
-        if (!ResolveImport(*dbt, needed, *name, source)) return WA_ERR_NOENT;
+        if (!ResolveImport(*dbt, imports, *name, source)) return WA_ERR_NOENT;
         std::array<uint8_t, WA_PAGE_SIZE> buffer;
         if (!source || source >= WA_HOST_STUB_BASE || symbol.size > WA_HOST_STUB_BASE - source)
             return WA_ERR_INVALID;
         for (uint64_t done = 0; done < symbol.size;) {
             const auto chunk = std::min<uint64_t>(buffer.size(), symbol.size - done);
-            auto status = wa_softmmu_read(dbt->mmu, source + done, buffer.data(), chunk);
-            if (status == WA_OK)
-                status = wa_softmmu_write(dbt->mmu, bias + offset + done, buffer.data(), chunk);
+            const auto bytes = std::span(buffer).first(chunk);
+            auto status = memory.Read(source + done, bytes, WA_PROT_READ).status;
+            if (status == WA_OK) status = memory.Write(bias + offset + done, bytes).status;
             if (status != WA_OK) return status;
             done += chunk;
         }
         return WA_OK;
     }
 
-    int32_t ApplyRelocation(uint64_t offset, uint64_t info, Word addend, bool implicit) const {
+    int32_t ApplyRelocation(softmmu::CpuAccess& memory, uint64_t offset, uint64_t info,
+                            Word addend, bool implicit) const {
         if (info > std::numeric_limits<Word>::max()) return WA_ERR_INVALID;
         const auto type = Is32 ? info & 0xff : info & UINT32_MAX;
         const auto symbol = info >> (Is32 ? 8 : 32);
         if (!type) return WA_OK;
-        if (type == (Is32 ? R_ARM_COPY : R_AARCH64_COPY)) return ApplyCopy(offset, symbol);
+        if (type == (Is32 ? R_ARM_COPY : R_AARCH64_COPY)) return ApplyCopy(memory, offset, symbol);
         const bool relative = type == (Is32 ? R_ARM_RELATIVE : R_AARCH64_RELATIVE);
         const bool absolute = type == (Is32 ? R_ARM_ABS32 : R_AARCH64_ABS64);
         const bool tls_module = type == (Is32 ? R_ARM_TLS_DTPMOD32 : R_AARCH64_TLS_DTPMOD);
@@ -770,7 +774,7 @@ template <typename Word> class Loader {
         if (!InMemory(offset, sizeof(Word) * (tls_desc ? 2 : 1), PF_W)) return WA_ERR_FAULT;
         const auto target = bias + offset;
         if (implicit && (relative || absolute || tls_offset || tls_static)) {
-            const auto status = wa_softmmu_read(dbt->mmu, target, &addend, sizeof(addend));
+            const auto status = memory.Read(target, {reinterpret_cast<uint8_t*>(&addend), sizeof(addend)}, WA_PROT_READ).status;
             if (status != WA_OK) return status;
         }
         uint64_t address = bias;
@@ -787,7 +791,7 @@ template <typename Word> class Loader {
             if (tls_desc) {
                 const uint64_t descriptor[] = {FindVirtualSymbol(*dbt, "libc.so", "__wa_tlsdesc"),
                                                address + addend};
-                return wa_softmmu_write(dbt->mmu, target, descriptor, sizeof(descriptor));
+                return memory.Write(target, {reinterpret_cast<const uint8_t*>(descriptor), sizeof(descriptor)}).status;
             }
         } else if (!relative) {
             const auto status = ResolveSymbol(symbol, address);
@@ -796,7 +800,7 @@ template <typename Word> class Loader {
             return WA_ERR_INVALID;
         }
         const auto value = static_cast<Word>(address + addend);
-        return wa_softmmu_write(dbt->mmu, target, &value, sizeof(value));
+        return memory.Write(target, {reinterpret_cast<const uint8_t*>(&value), sizeof(value)}).status;
     }
 
     template <typename Relocation> int32_t ApplyTable(uint64_t vaddr, uint64_t length) const {
@@ -805,13 +809,14 @@ template <typename Word> class Loader {
         if (length % sizeof(Relocation) || length > range.size) return WA_ERR_INVALID;
         std::vector<uint8_t> storage;
         const auto table = FileBytes(range.offset, length, storage);
+        softmmu::CpuAccess memory(dbt->mmu);
         for (uint64_t i = 0; i < length; i += sizeof(Relocation)) {
             const auto reloc = Read<Relocation>(table, i);
             int32_t status;
             if constexpr (std::is_same_v<Relocation, Rela<Word>>)
-                status = ApplyRelocation(reloc.offset, reloc.info, reloc.addend, false);
+                status = ApplyRelocation(memory, reloc.offset, reloc.info, reloc.addend, false);
             else
-                status = ApplyRelocation(reloc.offset, reloc.info, 0, true);
+                status = ApplyRelocation(memory, reloc.offset, reloc.info, 0, true);
             if (status != WA_OK) return status;
         }
         return WA_OK;
@@ -825,6 +830,7 @@ template <typename Word> class Loader {
             size % sizeof(Word) || size > range.size) return WA_ERR_INVALID;
         std::vector<uint8_t> storage;
         const auto bytes = FileBytes(range.offset, size, storage);
+        softmmu::CpuAccess memory(dbt->mmu);
 
         constexpr auto relative = Is32 ? R_ARM_RELATIVE : R_AARCH64_RELATIVE;
         constexpr size_t coverage = sizeof(Word) * 8 - 1;
@@ -834,7 +840,7 @@ template <typename Word> class Loader {
             auto entry = Read<Word>(bytes, i);
             if (!(entry & 1)) {
                 if (entry % sizeof(Word)) return WA_ERR_INVALID;
-                const auto status = ApplyRelocation(entry, relative, 0, true);
+                const auto status = ApplyRelocation(memory, entry, relative, 0, true);
                 if (status != WA_OK) return status;
                 have_base = true;
                 where = uint64_t{entry} + sizeof(Word);
@@ -843,7 +849,7 @@ template <typename Word> class Loader {
             if (!have_base || where > WA_HOST_STUB_BASE) return WA_ERR_INVALID;
             for (unsigned bit = 0; (entry >>= 1) != 0; ++bit) {
                 if (!(entry & 1)) continue;
-                const auto status = ApplyRelocation(where + bit * sizeof(Word), relative, 0, true);
+                const auto status = ApplyRelocation(memory, where + bit * sizeof(Word), relative, 0, true);
                 if (status != WA_OK) return status;
             }
             where += coverage * sizeof(Word);
@@ -861,6 +867,7 @@ template <typename Word> class Loader {
         auto bytes = FileBytes(range.offset, size, storage);
         if (std::memcmp(bytes.data(), "APS2", 4)) return WA_ERR_INVALID;
         bytes = bytes.subspan(4);
+        softmmu::CpuAccess memory(dbt->mmu);
         try {
             auto count = ReadSleb(bytes);
             auto offset = ReadSleb(bytes);
@@ -886,7 +893,7 @@ template <typename Word> class Loader {
                         const auto delta = flags & GroupAddend ? addend_delta : ReadSleb(bytes);
                         if (__builtin_add_overflow(addend, delta, &addend)) return WA_ERR_INVALID;
                     }
-                    const auto status = ApplyRelocation(offset, reloc, static_cast<Word>(addend), !rela);
+                    const auto status = ApplyRelocation(memory, offset, reloc, static_cast<Word>(addend), !rela);
                     if (status != WA_OK) return status;
                 }
                 count -= group;
@@ -897,8 +904,10 @@ template <typename Word> class Loader {
         }
     }
 
-    int32_t Relocate() const {
+    int32_t Relocate() {
         const BootProfile::Scope phase(BootProfile::Relocations);
+        imports = MakeImportScope(*dbt, needed);
+        resolved_symbols.assign(symbols.size() / sizeof(Symbol), UINT64_MAX);
         auto packed = ApplyRelr(DT_RELR, DT_RELRSZ, DT_RELRENT);
         if (packed == WA_OK) packed = ApplyRelr(DT_ANDROID_RELR, DT_ANDROID_RELRSZ, DT_ANDROID_RELRENT);
         if (packed == WA_OK) packed = ApplyPacked(DT_ANDROID_REL, DT_ANDROID_RELSZ, false);
@@ -975,6 +984,8 @@ template <typename Word> class Loader {
     std::vector<uint8_t> program_headers, string_storage, symbol_storage;
     Bytes strings, symbols;
     std::vector<std::string_view> needed;
+    ImportScope imports;
+    mutable std::vector<uint64_t> resolved_symbols;
     LoadedImage image;
 };
 
@@ -1047,7 +1058,7 @@ uint64_t wa::dbt::FindElfSymbolInScope(const wa_dbt& dbt, uint64_t base, std::st
         uint64_t address = 0;
         // dlsym(handle) uses the image followed by its breadth-first dependency scope.
         const std::vector<std::string_view> needed(image.needed.begin(), image.needed.end());
-        return ResolveImport(dbt, needed, name, address) ? address : 0;
+        return ResolveImport(dbt, MakeImportScope(dbt, needed), name, address) ? address : 0;
     }
     return 0;
 }

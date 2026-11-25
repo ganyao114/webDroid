@@ -368,21 +368,30 @@ void RunExitHandlers(wa_dbt& dbt) {
     }
 }
 
+static std::span<const size_t> HostSlots(const wa_dbt& dbt, std::string_view name) {
+    const auto entry = dbt.host_slots_by_name.find(name);
+    return entry == dbt.host_slots_by_name.end() ? std::span<const size_t>{} : entry->second;
+}
+
 static void AddHostSlot(wa_dbt& dbt, HostSymbol symbol) {
-    // Stub addresses depend on the slot order. Index the slots without moving them.
-    const auto index = dbt.host_slots_by_name.emplace(symbol.name, dbt.hosts.size());
+    // Stub addresses and resolution precedence both depend on insertion order.
+    auto [entry, inserted] = dbt.host_slots_by_name.try_emplace(symbol.name);
+    const auto index = dbt.hosts.size();
     try {
+        entry->second.push_back(index);
         dbt.hosts.push_back(std::move(symbol));
     } catch (...) {
-        dbt.host_slots_by_name.erase(index);
+        if (inserted) dbt.host_slots_by_name.erase(entry);
+        else if (entry->second.back() == index) entry->second.pop_back();
         throw;
     }
 }
 
 int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name,
                      wa_host_symbol_fn function, void* user, bool builtin, uint64_t* address) {
-    for (auto& symbol : dbt.hosts) {
-        if (symbol.soname == soname && symbol.name == name) {
+    for (const auto slot : HostSlots(dbt, name)) {
+        auto& symbol = dbt.hosts[slot];
+        if (symbol.soname == soname) {
             if (!symbol.function)
                 symbol.address = WA_HOST_STUB_BASE + (&symbol - dbt.hosts.data()) * WA_HOST_STUB_STRIDE;
             symbol.function = function;
@@ -403,8 +412,9 @@ int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name
 int32_t RegisterData(wa_dbt& dbt, std::string_view soname, std::string_view name,
                      uint64_t address, bool builtin) {
     if (!address || address >= WA_HOST_STUB_BASE) return WA_ERR_INVALID;
-    for (auto& symbol : dbt.hosts) {
-        if (symbol.soname == soname && symbol.name == name) {
+    for (const auto slot : HostSlots(dbt, name)) {
+        auto& symbol = dbt.hosts[slot];
+        if (symbol.soname == soname) {
             symbol = {std::string(soname), std::string(name), nullptr, nullptr, builtin, address};
             return WA_OK;
         }
@@ -416,9 +426,10 @@ int32_t RegisterData(wa_dbt& dbt, std::string_view soname, std::string_view name
 }
 
 uint64_t FindVirtualSymbol(const wa_dbt& dbt, std::string_view soname, std::string_view name) {
-    for (const auto& entry : dbt.hosts) {
-        if ((soname.empty() ? (entry.soname.empty() || entry.soname.ends_with(".so")) : entry.soname == soname)
-            && entry.name == name) return entry.address;
+    for (const auto slot : HostSlots(dbt, name)) {
+        const auto& entry = dbt.hosts[slot];
+        if (soname.empty() ? (entry.soname.empty() || entry.soname.ends_with(".so")) : entry.soname == soname)
+            return entry.address;
     }
     return 0;
 }
@@ -428,12 +439,32 @@ bool IsVirtualLibrary(const wa_dbt& dbt, std::string_view soname) {
            std::ranges::any_of(dbt.hosts, [&](const auto& entry) { return entry.soname == soname; });
 }
 
-bool ResolveImport(const wa_dbt& dbt, std::span<const std::string_view> needed,
+ImportScope MakeImportScope(const wa_dbt& dbt, std::span<const std::string_view> needed) {
+    StringMap<std::vector<const LoadedImage*>> by_soname;
+    for (const auto& image : dbt.images) by_soname[image.soname].push_back(&image);
+    ImportScope scope;
+    const auto append = [&](std::string_view soname) {
+        if (std::ranges::find(scope, soname, &ImportLibrary::soname) != scope.end())
+            return;
+        const auto found = by_soname.find(soname);
+        if (found != by_soname.end()) scope.push_back({soname, found->second});
+        else scope.push_back({soname, {}});
+    };
+    for (const auto soname : needed) append(soname);
+    for (size_t i = 0; i < scope.size(); ++i) {
+        const auto images = std::span(scope[i].images);
+        for (const auto* image : images)
+            for (const auto& next : image->needed) append(next);
+    }
+    return scope;
+}
+
+bool ResolveImport(const wa_dbt& dbt, const ImportScope& scope,
                    std::string_view symbol, uint64_t& address) {
-    const auto [first, last] = dbt.host_slots_by_name.equal_range(symbol);
+    const auto slots = HostSlots(dbt, symbol);
     const auto find_host = [&](std::string_view soname, bool builtin) {
-        for (auto it = first; it != last; ++it) {
-            const auto& entry = dbt.hosts[it->second];
+        for (const auto slot : slots) {
+            const auto& entry = dbt.hosts[slot];
             if (entry.builtin == builtin && entry.soname == soname) {
                 address = entry.address;
                 return true;
@@ -441,23 +472,19 @@ bool ResolveImport(const wa_dbt& dbt, std::span<const std::string_view> needed,
         }
         return false;
     };
-    std::vector<std::string_view> scope(needed.begin(), needed.end());
-    for (size_t i = 0; i < scope.size(); ++i) {
-        const auto soname = scope[i];
-        if (find_host(soname, false)) return true;
-        for (const auto& image : dbt.images) {
-            if (image.soname != soname) continue;
-            const auto found = image.exports.find(symbol);
-            if (found != image.exports.end()) {
+    for (const auto& library : scope) {
+        if (find_host(library.soname, false)) return true;
+        for (const auto* image : library.images) {
+            if (const auto found = image->exports.find(symbol); found != image->exports.end()) {
                 address = found->second;
                 return true;
             }
-            for (const auto& dependency : image.needed)
-                if (std::ranges::find(scope, dependency) == scope.end()) scope.emplace_back(dependency);
         }
     }
     if (find_host({}, false)) return true;
-    return std::ranges::any_of(scope, [&](auto name) { return find_host(name, true); });
+    return std::ranges::any_of(scope, [&](const auto& library) {
+        return find_host(library.soname, true);
+    });
 }
 
 void RegisterBuiltins(wa_dbt& dbt) {

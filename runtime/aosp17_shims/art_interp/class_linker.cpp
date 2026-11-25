@@ -144,6 +144,15 @@ bool Method::IsVirtual() const {
   return (flags & (art::kAccStatic | art::kAccPrivate)) == 0 && !name.starts_with('<');
 }
 
+Method* Class::FindVirtual(std::string_view key) const {
+  for (auto* cls = this; cls; cls = cls->super) {
+    const auto& methods = cls->vtable;
+    const auto entry = std::ranges::lower_bound(methods, key, {}, &VirtualEntry::first);
+    if (entry != methods.end() && entry->first == key) return entry->second;
+  }
+  return nullptr;
+}
+
 std::string Method::QualifiedName() const { return owner->descriptor + "->" + name + signature; }
 
 void ClassLinker::LoadDexFile(std::string location, std::vector<uint8_t> bytes, bool fallback) {
@@ -391,17 +400,15 @@ void ClassLinker::Link(Class& cls) {
         if (HasClass(iface)) cls.interfaces.push_back(&Resolve(iface));
       }
     }
-    if (cls.super) {
-      cls.instance_slots = cls.super->instance_slots;
-      cls.vtable = cls.super->vtable;
-    }
+    if (cls.super) cls.instance_slots = cls.super->instance_slots;
     if (cls.IsArray()) cls.component = &Resolve(std::string_view(cls.descriptor).substr(1));
     if (cls.dex) LoadMembers(cls);
     for (Field* field : cls.field_order) {
       if (!field->is_static) field->slot = cls.instance_slots++;
     }
+    std::unordered_map<std::string_view, Method*> overrides;
     for (auto& [key, method] : cls.methods) {
-      if (method.IsVirtual()) cls.vtable.insert_or_assign(key, &method);
+      if (method.IsVirtual()) overrides.emplace(key, &method);
     }
 
     std::vector<Class*> interfaces;
@@ -417,16 +424,18 @@ void ClassLinker::Link(Class& cls) {
 
     // Class methods take precedence. For interface defaults, retain only the most specific
     // declaration. An abstract redeclaration also shadows a less specific default.
-    std::unordered_map<std::string, std::vector<Method*>> candidates;
+    std::unordered_map<std::string_view, std::vector<Method*>> candidates;
     for (Class* iface : interfaces) {
       for (auto& [key, declaration] : iface->methods) {
         if (declaration.IsVirtual()) candidates[key].push_back(&declaration);
       }
     }
     for (const auto& [key, declarations] : candidates) {
-      auto implementation = cls.vtable.find(key);
-      Method* target = implementation == cls.vtable.end() ? nullptr : implementation->second;
+      const auto implementation = overrides.find(key);
+      Method* target = implementation != overrides.end() ? implementation->second :
+          cls.super ? cls.super->FindVirtual(key) : nullptr;
       if (!target || (target->owner != &cls && target->owner->IsInterface())) {
+        Method* inherited = target;
         target = nullptr;
         for (Method* candidate : declarations) {
           if (candidate->IsAbstract()) continue;
@@ -440,11 +449,12 @@ void ClassLinker::Link(Class& cls) {
           }
           target = candidate;
         }
-        if (target) cls.vtable.insert_or_assign(key, target);
-        else cls.vtable.erase(key);
+        if (target != inherited) overrides.insert_or_assign(key, target);
       }
       for (Method* declaration : declarations) cls.itable.emplace(declaration, target);
     }
+    cls.vtable.assign(overrides.begin(), overrides.end());
+    std::ranges::sort(cls.vtable, {}, &Class::VirtualEntry::first);
     cls.link_state = LinkState::Linked;
     if (cls.dex) ++linked_dex_classes_;
   } catch (const ManagedException&) {
@@ -547,8 +557,7 @@ Method& ClassLinker::FindMethod(Class& cls, std::string_view name,
     if ((name.starts_with('<') && !constructor_reference) || (is_static && cls.IsInterface())) break;
   }
   if (!is_static && !name.starts_with('<')) {
-    auto virtual_method = cls.vtable.find(key);
-    if (virtual_method != cls.vtable.end()) return *virtual_method->second;
+    if (auto* method = cls.FindVirtual(key)) return *method;
     for (const auto& [declaration, target] : cls.itable) {
       if (declaration->name == name && declaration->signature == signature) {
         return *declaration;
@@ -567,8 +576,7 @@ Method& ClassLinker::VirtualMethod(Class& receiver, Method& method) {
     const auto it = receiver.itable.find(&method);
     if (it != receiver.itable.end() && it->second) return *it->second;
   } else {
-    const auto it = receiver.vtable.find(MemberKey(method.name, method.signature));
-    if (it != receiver.vtable.end()) return *it->second;
+    if (auto* target = receiver.FindVirtual(MemberKey(method.name, method.signature))) return *target;
   }
   runtime_.Fail("Ljava/lang/AbstractMethodError;", method.QualifiedName());
 }

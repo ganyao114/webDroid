@@ -7,7 +7,7 @@ target_compile_features(wa_guest_audio PUBLIC cxx_std_20)
 target_include_directories(wa_guest_audio PRIVATE ../../include)
 
 add_library(wa_linker_ffi STATIC
-    dbt.cpp elf_loader.cpp guest_format.cpp host_symbols.cpp
+    dbt.cpp wasm_jit.cpp elf_loader.cpp guest_format.cpp host_symbols.cpp
     bionic_symbols.cpp bionic_dl.cpp bionic_errno.cpp bionic_pthread.cpp
     bionic_stdio.cpp bionic_scan.cpp bionic_locale.cpp bionic_string.cpp bionic_math.cpp
     bionic_posix.cpp bionic_fd.cpp bionic_files.cpp bionic_mmap.cpp bionic_network.cpp bionic_gles.cpp

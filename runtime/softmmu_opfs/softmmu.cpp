@@ -39,6 +39,9 @@ struct Entry {
     uint8_t prot = WA_PROT_NONE;
     uint8_t maximum_prot = WA_PROT_NONE;
     bool cow = false;
+#ifdef __EMSCRIPTEN__
+    bool jit_code = false;
+#endif
 
     const Bytes& ReadBytes() const { return data ? *data : kZeroPage; }
     bool IsShared() const {
@@ -183,7 +186,24 @@ struct wa_softmmu {
             table = std::make_unique<PageTable>();
     }
 
+    void Invalidate(PageRange range) noexcept {
+#ifdef __EMSCRIPTEN__
+        for (auto* tlb = iotlbs; tlb; tlb = tlb->next)
+            tlb->Invalidate(range.first, range.end);
+#endif
+    }
+
+    void InvalidateCode(const Entry& entry) noexcept {
+#ifdef __EMSCRIPTEN__
+        if (entry.jit_code) ++code_generation;
+#endif
+    }
+
     mutable std::mutex mutex;
+#ifdef __EMSCRIPTEN__
+    wa::softmmu::Iotlb* iotlbs = nullptr;
+    uint64_t code_generation = 0;
+#endif
     struct Translation {
         uint32_t page = 0;
         Entry* entry = nullptr;
@@ -229,6 +249,7 @@ int32_t Map(wa_softmmu_t* mmu, uint64_t address, size_t bytes, uint32_t prot,
         return WA_ERR_NOMEM;
     }
     mmu->stats.shared_pages_mapped += shared;
+    mmu->Invalidate(range);
     return WA_OK;
 }
 
@@ -320,10 +341,12 @@ wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte
         const auto copy = [&](Entry& entry, uint64_t start, size_t length) {
             const auto offset = start & kPageMask;
             auto* buffer = bytes.data() + (start - address);
-            if constexpr (write)
+            if constexpr (write) {
+                mmu->InvalidateCode(entry);
                 std::memcpy(entry.data->data() + offset, buffer, length);
-            else
+            } else {
                 std::memcpy(buffer, entry.ReadBytes().data() + offset, length);
+            }
         };
 
         if (range.end == range.first + 1) {
@@ -334,8 +357,10 @@ wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte
             if (status != WA_OK)
                 return {status, address};
             if constexpr (write) {
-                if (NeedsPrivatePage(*entry))
+                if (NeedsPrivatePage(*entry)) {
                     InstallPrivatePage(*mmu, *entry, std::make_shared<Bytes>(entry->ReadBytes()));
+                    mmu->Invalidate(range);
+                }
             }
             copy(*entry, address, bytes.size());
             return {WA_OK, 0, write && (entry->prot & WA_PROT_EXEC)};
@@ -364,6 +389,7 @@ wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte
             }
             for (auto& [entry, data] : private_pages)
                 InstallPrivatePage(*mmu, *entry, std::move(data));
+            if (!private_pages.empty()) mmu->Invalidate(range);
         }
         Access result;
         for (auto page = range.first; page < range.end; ++page) {
@@ -464,6 +490,9 @@ int32_t wa_softmmu_clone_shared_mappings(wa_softmmu_t* dst, const wa_softmmu_t* 
         for (uint32_t j = 0; j < kTableSize; ++j) {
             if (source[j].IsShared()) {
                 target[j] = source[j];
+#ifdef __EMSCRIPTEN__
+                target[j].jit_code = false;
+#endif
                 ++dst->stats.shared_pages_mapped;
             }
         }
@@ -501,6 +530,8 @@ int32_t SetPageBytes(wa_softmmu_t* mmu, uint64_t address, std::shared_ptr<PageBy
         return WA_ERR_FAULT;
     if (!entry->data)
         ++mmu->stats.private_pages_allocated;
+    mmu->InvalidateCode(*entry);
+    mmu->Invalidate(Pages(address, WA_PAGE_SIZE));
     entry->data = std::move(bytes);
     return WA_OK;
 }
@@ -517,12 +548,107 @@ Access Write(wa_softmmu_t* mmu, uint64_t address, std::span<const uint8_t> bytes
 CpuAccess::CpuAccess(wa_softmmu_t* mmu) : mmu_(mmu) { mmu_->mutex.lock(); }
 CpuAccess::~CpuAccess() { mmu_->mutex.unlock(); }
 
+#ifdef __EMSCRIPTEN__
+Iotlb::Iotlb(wa_softmmu_t* mmu) : mmu_(mmu) {
+    misses_.fill(UINT32_MAX);
+    const auto miss = reinterpret_cast<uintptr_t>(misses_.data());
+    read_directory_.fill(miss);
+    write_directory_.fill(miss);
+    std::lock_guard lock(mmu_->mutex);
+    next = mmu_->iotlbs;
+    mmu_->iotlbs = this;
+}
+
+Iotlb::~Iotlb() {
+    std::lock_guard lock(mmu_->mutex);
+    auto** current = &mmu_->iotlbs;
+    while (*current != this) current = &(*current)->next;
+    *current = next;
+}
+
+void Iotlb::Invalidate(uint32_t first, uint32_t end) noexcept {
+    while (first < end) {
+        const auto index = first >> kSlabBits;
+        const auto stop = std::min<uint32_t>(end, (index + 1) << kSlabBits);
+        if (auto* slab = slabs_[index].get()) {
+            const auto offset = first & (kSlabEntries - 1);
+            std::fill_n(slab->read.data() + offset, stop - first, UINT32_MAX);
+            std::fill_n(slab->write.data() + offset, stop - first, UINT32_MAX);
+        }
+        first = stop;
+    }
+}
+
+void Iotlb::Set(uint32_t page, uint32_t offset, uint32_t permissions) noexcept {
+    if (!permissions) return;
+    const auto index = page >> kSlabBits;
+    auto& slab = slabs_[index];
+    if (!slab) {
+        slab.reset(new (std::nothrow) Slab);
+        if (!slab) return;
+        slab->read.fill(UINT32_MAX);
+        slab->write.fill(UINT32_MAX);
+        read_directory_[index] = reinterpret_cast<uintptr_t>(slab->read.data());
+        write_directory_[index] = reinterpret_cast<uintptr_t>(slab->write.data());
+    }
+    const auto position = page & (kSlabEntries - 1);
+    if (permissions & WA_PROT_READ) slab->read[position] = offset;
+    if (permissions & WA_PROT_WRITE) slab->write[position] = offset;
+}
+
+uint64_t CpuAccess::CodeGeneration() const noexcept { return mmu_->code_generation; }
+
+void CpuAccess::FillIotlb(Iotlb& tlb, uint64_t address, size_t size, uint32_t permissions) noexcept {
+    if (address >= kAddressLimit) return;
+    const auto range = Pages(address, size);
+    for (auto page = range.first; page < range.end; ++page) {
+        const auto* entry = mmu_->Translate(page);
+        if (!entry || !entry->data || entry->state == WA_PAGE_GUARD) continue;
+        const auto offset = reinterpret_cast<uintptr_t>(entry->data->data()) -
+                            (page << WA_PAGE_SHIFT);
+        if (offset & 1u) continue;
+        auto allowed = entry->prot & permissions;
+        if (entry->state != WA_PAGE_PRIVATE_RW || entry->jit_code) allowed &= ~WA_PROT_WRITE;
+        tlb.Set(page, offset, allowed);
+    }
+}
+
+void InvalidateIotlb(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept {
+    std::lock_guard lock(mmu->mutex);
+    const auto range = Pages(address, length);
+    mmu->Invalidate(range);
+    for (auto page = range.first; page < range.end; ++page) {
+        if (const auto* entry = mmu->Find(page)) mmu->InvalidateCode(*entry);
+    }
+}
+#endif
+
 Access CpuAccess::Read(uint64_t address, std::span<uint8_t> bytes, uint32_t permission) noexcept {
+    const auto offset = address - writable_base_;
+    if (permission == WA_PROT_READ && writable_page_readable_ && offset < WA_PAGE_SIZE &&
+        !bytes.empty() && bytes.size() <= WA_PAGE_SIZE - offset) {
+        std::memcpy(bytes.data(), writable_page_->data() + offset, bytes.size());
+        return {};
+    }
     return Transfer<uint8_t, true>(mmu_, address, bytes, permission);
 }
 
 Access CpuAccess::Write(uint64_t address, std::span<const uint8_t> bytes) noexcept {
-    return Transfer<const uint8_t, true>(mmu_, address, bytes, WA_PROT_WRITE);
+    const auto offset = address - writable_base_;
+    if (writable_page_ && offset < WA_PAGE_SIZE && !bytes.empty() &&
+        bytes.size() <= WA_PAGE_SIZE - offset) {
+        std::memcpy(writable_page_->data() + offset, bytes.data(), bytes.size());
+        return {};
+    }
+    const auto access = Transfer<const uint8_t, true>(mmu_, address, bytes, WA_PROT_WRITE);
+    if (access.status == WA_OK && !access.code_changed && address < kAddressLimit &&
+        !bytes.empty() && bytes.size() <= WA_PAGE_SIZE - (address & kPageMask)) {
+        const auto* entry = mmu_->Translate(static_cast<uint32_t>(address >> WA_PAGE_SHIFT));
+        writable_page_ = entry->data.get();
+        writable_base_ = address & ~uint64_t{kPageMask};
+        writable_page_readable_ = entry->prot & WA_PROT_READ;
+    }
+    return access;
 }
 
 Access CpuAccess::ExecutablePage(uint64_t address, const PageBytes*& page) noexcept {
@@ -584,7 +710,12 @@ int32_t Protect(wa_softmmu_t* mmu, uint64_t address, size_t bytes, uint32_t prot
         if (!entry || entry->state == WA_PAGE_UNMAPPED || entry->state == WA_PAGE_GUARD) return WA_ERR_NOMEM;
         if (prot & ~entry->maximum_prot) return WA_ERR_NOTSUP;
     }
-    for (auto page = range.first; page < range.end; ++page) mmu->Find(page)->prot = prot;
+    mmu->Invalidate(range);
+    for (auto page = range.first; page < range.end; ++page) {
+        auto& entry = *mmu->Find(page);
+        if (entry.prot != prot) mmu->InvalidateCode(entry);
+        entry.prot = prot;
+    }
     return WA_OK;
 }
 
@@ -636,13 +767,15 @@ int32_t AdviseSparse(wa_softmmu_t* mmu, uint64_t address, uint64_t bytes, bool d
     return WA_OK;
 }
 
-Access GetUnitWindow(wa_softmmu_t* mmu, uint64_t address, PageWindow& window) noexcept {
+Access GetUnitWindow(wa_softmmu_t* mmu, uint64_t address, PageWindow& window,
+                     UnitWindow mode, bool guest_writable) noexcept {
     window = {};
     if (!mmu || address >= kArm64AddressLimit)
         return {WA_ERR_FAULT, address};
     try {
         std::lock_guard lock(mmu->mutex);
         if (address >= kAddressLimit) {
+            if (mode != UnitWindow::Standalone) return {WA_ERR_NOTSUP, address};
             if (mmu->sparse.FirstFault(address, address + 1, WA_PROT_EXEC)) return {WA_ERR_FAULT, address};
             auto backing = mmu->sparse.Backing(address);
             window = {backing, std::span{backing ? *backing : kZeroPage}.subspan(address & kPageMask)};
@@ -650,10 +783,22 @@ Access GetUnitWindow(wa_softmmu_t* mmu, uint64_t address, PageWindow& window) no
         }
         auto* entry = mmu->Find(static_cast<uint32_t>(address >> WA_PAGE_SHIFT));
         auto status = CheckPermission(*mmu, entry, WA_PROT_EXEC);
+        // Writable code uses the interpreter. Decode and dispatch must see the
+        // same bytes even when a store targets the currently executing unit.
+        if (status == WA_OK && mode != UnitWindow::Standalone &&
+            (((entry->prot & WA_PROT_WRITE) && guest_writable) ||
+             (mode == UnitWindow::JitAdjacent && !entry->data)))
+            return {WA_ERR_NOTSUP, address};
         if (status == WA_OK)
             status = Materialize(*mmu, *entry);
         if (status != WA_OK)
             return {status, address};
+#ifdef __EMSCRIPTEN__
+        if (mode != UnitWindow::Standalone && !entry->jit_code) {
+            mmu->Invalidate(Pages(address, 1));
+            entry->jit_code = true;
+        }
+#endif
         window = {entry->data, std::span{entry->ReadBytes()}.subspan(address & kPageMask)};
         return {};
     } catch (const std::bad_alloc&) {
@@ -670,6 +815,7 @@ void PublishFileTemplates(wa_softmmu_t* mmu, uint64_t address, size_t length) no
         auto* entry = mmu->Find(page);
         if (entry && entry->state == WA_PAGE_PRIVATE_RW && entry->cow) {
             entry->state = WA_PAGE_SHARED_COW;
+            mmu->Invalidate({page, page + 1});
             ++mmu->stats.shared_pages_mapped;
         }
     }
@@ -678,8 +824,10 @@ void PublishFileTemplates(wa_softmmu_t* mmu, uint64_t address, size_t length) no
 void Unmap(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept {
     std::lock_guard lock(mmu->mutex);
     const auto range = Pages(address, length);
+    mmu->Invalidate(range);
     for (auto page = range.first; page < range.end; ++page) {
         if (auto* entry = mmu->Find(page)) {
+            mmu->InvalidateCode(*entry);
             mmu->stats.shared_pages_mapped -= entry->IsShared();
             *entry = {};
         }

@@ -3,9 +3,13 @@
 #include "art_interp.h"
 #include "wasmandroid/abi.h"
 
+#include <functional>
+
 namespace wa::system {
 
-std::string MountGuestApkLibraries(interp::Vm& vm, const std::string& apk_path, std::string_view package);
+std::string MountGuestApkLibraries(interp::Vm& vm, const std::string& apk_path,
+                                  std::string_view package,
+                                  std::function<void()>* release_inflaters = nullptr);
 
 enum class NativeProbeAction { Lookup, CallString, CallJniOnLoad };
 struct NativeProbeRequest {

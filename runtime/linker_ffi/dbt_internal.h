@@ -2,15 +2,25 @@
 
 #include "wasmandroid/softmmu_linker.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace wa::dbt {
+
+struct StringHash {
+    using is_transparent = void;
+    size_t operator()(std::string_view key) const noexcept { return std::hash<std::string_view>{}(key); }
+};
+
+template <typename Value>
+using StringMap = std::unordered_map<std::string, Value, StringHash, std::equal_to<>>;
 
 struct HostSymbol {
     std::string soname;
@@ -38,9 +48,18 @@ struct LoadedImage {
     std::string filename;
     std::string soname;
     std::vector<std::string> needed;
-    std::map<std::string, uint64_t, std::less<>> exports;
-    std::map<std::string, uint64_t, std::less<>> tls_exports;
+    StringMap<uint64_t> exports;
+    StringMap<uint64_t> tls_exports;
 };
+
+struct ImportLibrary {
+    std::string_view soname;
+    std::vector<const LoadedImage*> images;
+};
+
+// Image and SONAME views are valid while the caller holds the DBT lock and
+// leaves its image list unchanged.
+using ImportScope = std::vector<ImportLibrary>;
 
 struct GuestAllocation {
     size_t mapped_size;
@@ -56,6 +75,9 @@ struct ExitHandler {
 
 struct GuestThread;
 struct BionicState;
+#ifdef __EMSCRIPTEN__
+class WasmJit;
+#endif
 
 inline constexpr uint64_t kHeapBase = 0x40000000;
 inline constexpr uint64_t kHeapLimit = 0xe0000000;
@@ -71,12 +93,16 @@ struct wa_dbt {
     mutable std::recursive_mutex mutex;
     wa_dbt_stats_t stats{};
     std::vector<wa::dbt::HostSymbol> hosts;
-    std::multimap<std::string, size_t, std::less<>> host_slots_by_name;
+    wa::dbt::StringMap<std::vector<size_t>> host_slots_by_name;
     std::vector<std::string_view> virtual_libraries;
     std::vector<wa::dbt::LoadedImage> images;
     std::vector<wa::dbt::ExitHandler> exit_handlers;
     std::map<uint64_t, wa::dbt::GuestAllocation> allocations;
     std::unique_ptr<wa::dbt::BionicState> bionic;
+#ifdef __EMSCRIPTEN__
+    std::unique_ptr<wa::dbt::WasmJit> wasm_jit;
+    bool wasm_jit_unavailable = false;
+#endif
     wa::dbt::GuestThread* running;
     uint64_t heap_hint = wa::dbt::kHeapBase;
     uint64_t next_tls_id = 1, next_tls_offset = 64;
@@ -106,7 +132,8 @@ uint64_t AllocateGuest(wa_dbt& dbt, uint64_t size, uint64_t alignment = WA_PAGE_
                         uint32_t prot = WA_PROT_READ | WA_PROT_WRITE);
 void FreeGuest(wa_dbt& dbt, uint64_t address);
 bool IsExecutable(const wa_dbt& dbt, uint64_t entry);
-bool ResolveImport(const wa_dbt& dbt, std::span<const std::string_view> needed,
+ImportScope MakeImportScope(const wa_dbt& dbt, std::span<const std::string_view> needed);
+bool ResolveImport(const wa_dbt& dbt, const ImportScope& scope,
                    std::string_view symbol, uint64_t& address);
 
 // Standalone Wasm units leave the architecture's GuestState in caller-owned memory.

@@ -38,6 +38,7 @@ class ApkEntryReader {
     uint64_t Size() const { return entry_.uncompressed_length; }
     int64_t Read(void* output, size_t count, uint64_t offset);
     dbt::ElfFile Elf();
+    void ReleaseInflateState() noexcept;
 
   private:
     struct Deflate;

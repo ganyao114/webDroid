@@ -25,10 +25,14 @@ const activity = account + 'WelcomeActivity';
 const login = account + 'MobileInputUI';
 const password = account + 'LoginUI';
 const signup = account + 'RegByMobileRegAIOUI';
+const language = 'com.tencent.mm.plugin.setting.ui.setting.SettingsLanguageUI';
+const webview = 'com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI';
 const welcomeLabels = ['Log In', 'Sign Up', '语言'];
 const loginLabels = ['Log In Via Mobile Number', 'Enter phone number', 'Other Login Options'];
 const errors = [];
 const guestDiagnostics = new Set();
+const webviewNavigations = new Set();
+const interactions = [];
 let browser, server, report, boot;
 
 try {
@@ -40,13 +44,31 @@ try {
   const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: true });
   const sessions = new Set([sessionId]);
+  const interceptWebViews = id => cdp.send('Fetch.enable', {
+    patterns: [{ urlPattern: 'https://*', resourceType: 'Document' }],
+  }, id);
+  cdp.on('Fetch.requestPaused', ({ requestId, request }, id) => {
+    if (!sessions.has(id)) return;
+    // Exercise the real iframe navigation without depending on the help site's
+    // availability or frame policy.
+    void cdp.send('Fetch.fulfillRequest', {
+      requestId, responseCode: 200,
+      responseHeaders: [
+        { name: 'Content-Type', value: 'text/html; charset=utf-8' },
+        { name: 'Cross-Origin-Resource-Policy', value: 'cross-origin' },
+      ],
+      body: Buffer.from('<!doctype html><title>Help Center</title><p>Help Center</p>').toString('base64'),
+    }, id).then(() => webviewNavigations.add(request.url)).catch(error => errors.push(error.message));
+  });
   cdp.on('Target.attachedToTarget', ({ sessionId: child, targetInfo, waitingForDebugger }, parent) => {
     if (!sessions.has(parent)) return;
     sessions.add(child);
     void (async () => {
       try {
         await cdp.send('Runtime.enable', {}, child);
-        if (targetInfo.type === 'iframe') await cdp.send('Log.enable', {}, child);
+        if (targetInfo.type === 'iframe') await Promise.all([
+          cdp.send('Log.enable', {}, child), interceptWebViews(child),
+        ]);
       } finally {
         if (waitingForDebugger) await cdp.send('Runtime.runIfWaitingForDebugger', {}, child);
       }
@@ -131,6 +153,8 @@ try {
     assert.equal(state.backend, 'webgpu');
     assert.equal(state.input_dropped, 0);
     assert.equal(state.finishing, false);
+    const { activity, presentedFrames, inputEventsProcessed, freeHeadroomBytes, gcLive, nativeLibraries } = state;
+    interactions.push({ activity, presentedFrames, inputEventsProcessed, freeHeadroomBytes, gcLive, nativeLibraries });
     return state;
   };
   const back = async () => {
@@ -158,6 +182,7 @@ try {
   try {
     await Promise.all(['Runtime.enable', 'Page.enable', 'Log.enable', 'DOM.enable', 'Page.bringToFront']
       .map(method => send(method)));
+    await interceptWebViews(sessionId);
     await send('Target.setAutoAttach', { autoAttach: true, flatten: true, waitForDebuggerOnStart: true,
       filter: [{ type: 'worker' }, { type: 'iframe' }, { exclude: true }] });
     await send('Emulation.setDeviceMetricsOverride', { width: 1100, height: 1080, deviceScaleFactor: 1, mobile: false });
@@ -216,6 +241,7 @@ try {
     assert.equal(state.dexClasses, 255_001);
     assert.equal(state.dexBytes, 191_163_220);
     assert(state.bootProfile.arm64Instructions > 0 && state.bootProfile.dbtMs > 0);
+    assert(state.bootProfile.wasmUnitsCompiled > 0 && state.bootProfile.jitEntries > 0);
     assert.equal(state.attachBaseContextReturns, 1);
     assert(state.providersCreated >= 27);
     assert.equal(state.applicationCreateReturns, 1);
@@ -228,40 +254,22 @@ try {
     for (const label of welcomeLabels) assert(labels.includes(label), label);
     const pixels = await evaluate('waLauncher.appPixels()');
     assert(pixels?.distinct_colors > 32 && pixels.nontransparent_samples > 1_000, JSON.stringify(pixels));
+    await wait(`waLauncher.app?.presentedFrames >= ${state.presentedFrames + 120}`);
+    const welcomeFps = await evaluate('waLauncher.app.avg_fps');
 
-    await click(await appPoint('Log In'));
-    const loginState = await screen(login, loginLabels);
-    await capture(screenshot);
-    await typeText('Enter phone number', '13000000000');
-    await wait('waLauncher.appLabels().some(({ text }) => text.replace(/\\D/g, "") === "13000000000")');
-    await click(await appPoint('Accept and Continue'));
-    await screen(login, ['Enter WeChat password', 'Log in via SMS code']);
-    await back();
-    await screen(login, ['Other Login Options', 'Accept and Continue']);
-    await touch(await appPoint('Other Login Options'));
-    await screen(login, ['Log in with WeChat ID, QQ, or email', 'Cancel']);
-    await click(await appPoint('Log in with WeChat ID, QQ, or email'));
-    const passwordState = await screen(password, ['Account', 'Password']);
-    const accountText = 'phase11_test';
-    await typeText('Enter WeChat ID/QQ/email', accountText, true);
-    await wait(`waLauncher.appLabels().some(({ text }) => text === ${JSON.stringify(accountText)})`);
+    const languageLabels = ['English', '简体中文', '保存'];
+    await click(await appPoint('语言'));
+    const languageState = await screen(language, languageLabels);
+    await touch(await appPoint('English'));
+    await wait(`waLauncher.app?.inputEventsProcessed >= ${languageState.inputEventsProcessed + 2}`);
     await back();
     await screen(activity, welcomeLabels);
 
-    await click(await appPoint('Log In'));
-    await screen(login, loginLabels);
-    await click(await appPoint('More'));
-    await screen(login, ['Help Center', 'Go to Security Center', 'Cancel']);
-    await back();
-    await wait('waLauncher.app?.activity === ' + JSON.stringify(login) +
-      ' && !waLauncher.appLabels().some(({ text }) => text === "Help Center")');
-    await click(await appPoint({ x: 29, y: 58 }));
-    await screen(activity, welcomeLabels);
-
+    const accountText = 'phase13_test';
     await click(await appPoint('Sign Up'));
     await screen(activity, ['Sign up via Mobile', 'Sign up via  Facebook ', 'Cancel']);
     await click(await appPoint('Sign up via Mobile'));
-    const signupState = await screen(signup, ['Mobile Number', 'Enter alias', 'Sign up via phone number']);
+    await screen(signup, ['Mobile Number', 'Enter alias', 'Sign up via phone number']);
     await capture(signupScreenshot);
     await typeText('Enter alias', accountText, true);
     await wait(`waLauncher.appLabels().some(({ text }) => text === ${JSON.stringify(accountText)})`);
@@ -269,6 +277,36 @@ try {
     await wait('waLauncher.appLabels().some(({ text }) => text.replace(/\\D/g, "") === "13000000000")');
     await back();
     await screen(activity, welcomeLabels);
+
+    await click(await appPoint('Log In'));
+    await screen(login, loginLabels);
+    await capture(screenshot);
+    await typeText('Enter phone number', '13000000000');
+    await wait('waLauncher.appLabels().some(({ text }) => text.replace(/\\D/g, "") === "13000000000")');
+    await click(await appPoint('Accept and Continue'));
+    await screen(login, ['Enter WeChat password', 'Log in via SMS code']);
+    await back();
+    await screen(login, ['Other Login Options', 'Accept and Continue']);
+
+    await click(await appPoint('More'));
+    await screen(login, ['Help Center', 'Go to Security Center', 'Cancel']);
+    await click(await appPoint('Help Center'));
+    await screen(webview, []);
+    const webviewUrl = await wait(`(() => {
+      const frame = document.querySelector('.wa-app-surface iframe[title="Embedded WebView"]');
+      return frame && getComputedStyle(frame).display !== 'none' && frame.src;
+    })()`);
+    await back();
+    await screen(login, ['Other Login Options', 'Accept and Continue']);
+    await wait('!document.querySelector(\'.wa-app-surface iframe[title="Embedded WebView"]\')');
+    assert(webviewNavigations.has(webviewUrl), `Missing iframe navigation for ${webviewUrl}`);
+
+    await touch(await appPoint('Other Login Options'));
+    await screen(login, ['Log in with WeChat ID, QQ, or email', 'Cancel']);
+    await click(await appPoint('Log in with WeChat ID, QQ, or email'));
+    await screen(password, ['Account', 'Password']);
+    await typeText('Enter WeChat ID/QQ/email', accountText, true);
+    await wait(`waLauncher.appLabels().some(({ text }) => text === ${JSON.stringify(accountText)})`);
     assert.equal(await stagedApks(), 1);
     await evaluate('waLauncher.navigate("home")');
     await wait('waLauncher.phase === "launcher"');
@@ -276,11 +314,9 @@ try {
     assert.equal(await stagedApks(), 0);
     assert.deepEqual(errors, []);
     report = { chrome, screenshot, signupScreenshot, launchToWelcomeMs, state, labels, pixels, errors,
-      interactions: [loginState, passwordState, signupState].map(({ activity, presentedFrames, inputEventsProcessed }) =>
-        ({ activity, presentedFrames, inputEventsProcessed })),
-      guestDiagnostics: [...guestDiagnostics] };
+      welcomeFps, webviewUrl, interactions, guestDiagnostics: [...guestDiagnostics] };
   } catch (error) {
-    throw new Error(`${error.message}\n${JSON.stringify({ boot, app: await snapshot().catch(() => null), errors })}`,
+    throw new Error(`${error.message}\n${JSON.stringify({ boot, app: await snapshot().catch(() => null), interactions, errors })}`,
       { cause: error });
   }
 } finally {

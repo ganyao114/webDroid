@@ -475,6 +475,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* unused) {
         {"wide", "(IIIIIIIIIJDDDDDDDDDDF)D", wide},
     };
     if (ENV(env, RegisterNatives, bridge, methods, sizeof(methods) / sizeof(methods[0])) != JNI_OK) return JNI_ERR;
+    if (hybrid_hot_sum(65536) != 17 * 65536) return JNI_ERR;
     ++loads;
     __android_log_print(ANDROID_LOG_INFO, "HybridJNI", "JNI 1.6, constructor count %d", hybrid_constructor_count());
     return JNI_VERSION_1_6;

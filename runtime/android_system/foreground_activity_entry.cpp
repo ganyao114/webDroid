@@ -92,6 +92,15 @@ std::string DescribeBootProfile(const BootProfile& profile) {
     };
     std::string json = "{\"arm64Instructions\":" + std::to_string(profile.arm64_instructions) +
         ",\"arm64FastInstructions\":" + std::to_string(profile.arm64_fast_instructions) +
+        ",\"wasmUnitsCompiled\":" + std::to_string(profile.dbt_stats.wasm_units_compiled) +
+        ",\"wasmBytesEmitted\":" + std::to_string(profile.dbt_stats.wasm_bytes_emitted) +
+        ",\"jitEntries\":" + std::to_string(profile.dbt_stats.jit_entries) +
+        ",\"jitCompileFailures\":" + std::to_string(profile.dbt_stats.jit_compile_failures) +
+        ",\"jitCompileMs\":" + std::to_string(profile.dbt_stats.jit_compile_ms) +
+        ",\"jitExecMs\":" + std::to_string(profile.dbt_stats.jit_exec_ms) +
+        ",\"tier0Insns\":" + std::to_string(profile.dbt_stats.tier0_insns) +
+        ",\"iotlbSlowReads\":" + std::to_string(profile.dbt_stats.iotlb_slow_reads) +
+        ",\"iotlbSlowWrites\":" + std::to_string(profile.dbt_stats.iotlb_slow_writes) +
         ",\"apkEntryReadCalls\":" + std::to_string(profile.entry_read_calls) +
         ",\"apkEntryReadBytes\":" + std::to_string(profile.entry_read_bytes) +
         ",\"apkEntryInflatedBytes\":" + std::to_string(profile.inflated_bytes);
@@ -323,6 +332,16 @@ struct Session {
         if (!FinishRequested(activity)) ui.ResumeActivity(vm);
     }
 
+    void CollectTransitionGarbage() {
+#ifdef __EMSCRIPTEN__
+        // The Wasm heap is fixed. Activity inflation and bitmap allocation may
+        // need space well before the managed object-count threshold is reached.
+        constexpr size_t reserve = 64 * 1024 * 1024;
+        const auto end = reinterpret_cast<uintptr_t>(sbrk(0));
+        if (booted && emscripten_get_heap_size() - end < reserve) vm.Collect();
+#endif
+    }
+
     bool ApplyActivityRequest() {
         ScopedHandleScope roots(vm);
         auto* current = roots.Hold(Activity());
@@ -331,6 +350,7 @@ struct Session {
             "()Landroid/app/Activity$EmbeddedLaunch;").ref());
         const bool finish = Member(current, "mEmbeddedFinishPending", "Z").i() != 0;
         if (!request && !finish) return false;
+        CollectTransitionGarbage();
 
         auto* old_root = roots.Hold(RuntimeField("root", kViewRoot).ref());
         if (request) {
@@ -434,7 +454,10 @@ struct Session {
         if (!vm.HasClass("Landroid/app/Activity$EmbeddedLaunch;")) return false;
         RemoveFinishedParents();
         for (int count = 0;; ++count) {
-            if (!ApplyActivityRequest()) return count != 0;
+            if (!ApplyActivityRequest()) {
+                if (count) CollectTransitionGarbage();
+                return count != 0;
+            }
             if (count == 31) throw std::logic_error("Too many foreground activity transitions in one frame");
         }
     }
@@ -1001,7 +1024,9 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
     }
     if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))
         throw std::invalid_argument("Launcher activity is absent from the APK DEX files");
-    const auto native_library_dir = wa::system::MountGuestApkLibraries(s.vm, apk_path, s.package_name);
+    std::function<void()> release_inflaters;
+    const auto native_library_dir = wa::system::MountGuestApkLibraries(s.vm, apk_path, s.package_name,
+                                                                      &release_inflaters);
     s.ui.RegisterNatives(s.vm);
     s.natives_registered = true;
     s.ui.BindSurfaceFlinger(s.scene.get(), kActivityLayer);
@@ -1050,6 +1075,9 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
     const BootProfile::Scope first_frame(BootProfile::FirstFrame);
     const int32_t frame = s.Draw(0);
     if (frame != WA_OK) return frame;
+    // Keep the shared ZIP windows and mapped guest pages. Cold-start readers'
+    // zlib checkpoints can be recreated when a later fault needs the entry.
+    if (release_inflaters) release_inflaters();
     s.vm.Collect();
     s.booted = true;
     return WA_OK;

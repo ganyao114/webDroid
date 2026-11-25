@@ -1,4 +1,7 @@
 #include "wasmandroid/softmmu_linker.h"
+#ifdef __EMSCRIPTEN__
+#include "softmmu_internal.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -201,6 +204,7 @@ size_t ColdFileOffset(const std::vector<uint8_t>& bytes) {
 }
 
 void EmitWasm(wa_dbt_t* dbt, uint64_t entry, const char* path) {
+    const auto before = DbtStats(dbt);
     uint8_t* bytes = nullptr;
     size_t length = 0;
     OK(wa_dbt_compile_wasm_unit(dbt, entry, &bytes, &length));
@@ -211,7 +215,8 @@ void EmitWasm(wa_dbt_t* dbt, uint64_t entry, const char* path) {
     file.close();
     CHECK(file.good());
     const auto stats = DbtStats(dbt);
-    CHECK(stats.wasm_units_compiled == 1 && stats.wasm_bytes_emitted == length);
+    CHECK(stats.wasm_units_compiled - before.wasm_units_compiled == 1 &&
+          stats.wasm_bytes_emitted - before.wasm_bytes_emitted == length);
 }
 
 void TestELF(wa_guest_arch_t arch, const char* fixture, const char* wasm_output) {
@@ -343,6 +348,77 @@ void TestELF(wa_guest_arch_t arch, const char* fixture, const char* wasm_output)
               << " reverse callbacks\n";
 }
 
+#ifdef __EMSCRIPTEN__
+void TestForegroundJitMemory() {
+    namespace softmmu = wa::softmmu;
+    constexpr uint64_t code = 0x00200000;
+    constexpr uint64_t pc = code + WA_PAGE_SIZE - 4;
+    constexpr uint64_t source = 0x00400000;
+    constexpr uint64_t dest = 0x00500000;
+    constexpr uint32_t rw = WA_PROT_READ | WA_PROT_WRITE;
+    constexpr uint32_t rx = WA_PROT_READ | WA_PROT_EXEC;
+    std::array instructions{
+        0x3dc00000u, // ldr q0, [x0]
+        0x3d800020u, // str q0, [x1]
+        0x71000442u, // subs w2, w2, #1
+        0x54ffffa1u, // b.ne to the load on the previous page
+        0xf9400020u, // ldr x0, [x1]
+        0xd65f03c0u, // ret
+    };
+    BackingFile file{.bytes = std::vector<uint8_t>(WA_PAGE_SIZE), .file_id = 27};
+    Mmu mmu(wa_softmmu_create(BackingFile::Read, &file), wa_softmmu_destroy);
+    Mmu clone(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
+    CHECK(mmu && clone);
+    Dbt dbt(wa_dbt_create(WA_ARCH_ARM64, mmu.get()), wa_dbt_destroy);
+    CHECK(dbt != nullptr);
+    const auto map_code = [&] {
+        OK(wa_softmmu_map_anon(mmu.get(), code, 2 * WA_PAGE_SIZE, rw | rx));
+        Write(mmu.get(), pc, instructions);
+        OK(softmmu::Protect(mmu.get(), code, 2 * WA_PAGE_SIZE, rx));
+    };
+    map_code();
+    OK(wa_softmmu_map_anon(mmu.get(), source, WA_PAGE_SIZE, rw));
+    OK(wa_softmmu_map_file_lazy(mmu.get(), dest, WA_PAGE_SIZE, rw, file.file_id,
+                               0, WA_PAGE_SIZE, 1));
+    OK(wa_softmmu_clone_shared_mappings(clone.get(), mmu.get()));
+    using Vector128 = std::array<uint64_t, 2>;
+    constexpr Vector128 value{0xfedcba9876543210, 0x1234567890abcdef};
+    Write(mmu.get(), source + 3, value);
+    CHECK(Call(dbt.get(), pc, {source + 3, dest + 7, 1024}) == value[0]);
+    const auto warm = DbtStats(dbt.get());
+    CHECK(warm.wasm_units_compiled > 0 && warm.jit_entries > 0 && warm.tier0_insns < 512);
+    CHECK(MemoryStats(mmu.get()).cow_faults == 1);
+    CHECK(Read<uint64_t>(clone.get(), dest + 7) == 0);
+    CHECK(Read<Vector128>(mmu.get(), dest + 7) == value);
+
+    // Warm translations must honor protection changes and replacement.
+    const auto fault = [&](uint64_t read, uint64_t write) {
+        const uint64_t args[]{read, write, 1};
+        uint64_t result{};
+        STATUS(wa_dbt_call(dbt.get(), pc, args, 3, &result), WA_ERR_FAULT);
+    };
+    OK(softmmu::Protect(mmu.get(), dest, WA_PAGE_SIZE, WA_PROT_READ));
+    fault(source + 3, dest + 7);
+    OK(softmmu::Protect(mmu.get(), dest, WA_PAGE_SIZE, rw));
+    constexpr auto crossing = dest + WA_PAGE_SIZE - 8;
+    Write(mmu.get(), crossing, uint64_t{12345});
+    OK(wa_softmmu_map_guard(mmu.get(), dest + WA_PAGE_SIZE, WA_PAGE_SIZE));
+    fault(source + 3, crossing);
+    CHECK(Read<uint64_t>(mmu.get(), crossing) == 12345);
+    fault(source + 3 + softmmu::kAddressLimit, dest + 7);
+    uint64_t high = softmmu::kAddressLimit + source;
+    OK(softmmu::MapSparse(mmu.get(), high, WA_PAGE_SIZE, rw, softmmu::Placement::Fixed));
+    Write(mmu.get(), high + 3, value);
+    CHECK(Call(dbt.get(), pc, {high + 3, dest + 7, 1}) == value[0]);
+    CHECK(DbtStats(dbt.get()).jit_entries > warm.jit_entries);
+
+    softmmu::Unmap(mmu.get(), code, 2 * WA_PAGE_SIZE);
+    instructions[4] = 0x528000e0u; // mov w0, #7
+    map_code();
+    CHECK(Call(dbt.get(), pc, {source + 3, dest + 7, 1}) == 7);
+}
+#endif
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -350,4 +426,7 @@ int main(int argc, char** argv) {
     TestSoftMMU();
     TestELF(WA_ARCH_ARM32, argv[1], argv[3]);
     TestELF(WA_ARCH_ARM64, argv[2], argv[4]);
+#ifdef __EMSCRIPTEN__
+    TestForegroundJitMemory();
+#endif
 }

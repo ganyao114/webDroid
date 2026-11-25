@@ -153,7 +153,12 @@ try {
   assert.equal(state.dexClasses, 255_001);
   assert.equal(state.dexBytes, 191_163_220);
   assert(state.bootProfile.arm64Instructions > 0 && state.bootProfile.dbtMs > 0);
-  const profiledMs = Object.entries(state.bootProfile).filter(([key]) => key.endsWith('Ms'))
+  assert(state.bootProfile.wasmUnitsCompiled > 0 && state.bootProfile.jitEntries > 0,
+    JSON.stringify(state.bootProfile));
+  assert(state.bootProfile.tier0Insns < state.bootProfile.arm64Instructions / 10,
+    `Tier-0 instructions during WeChat boot: ${state.bootProfile.tier0Insns}`);
+  // JIT compile and execution times are already included in dbtMs.
+  const profiledMs = Object.entries(state.bootProfile).filter(([key]) => key.endsWith('Ms') && !key.startsWith('jit'))
     .reduce((total, [, ms]) => total + ms, 0);
   assert(Math.abs(profiledMs - state.bootMs) < 5, `Boot profile summed to ${profiledMs} ms`);
   assert.equal(state.attachBaseContextReturns, 1);
