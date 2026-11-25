@@ -680,7 +680,8 @@ class ApkNativeLibraries final : public interp::GuestNativeLibraries {
 
 } // namespace
 
-std::string MountGuestApkLibraries(interp::Vm& vm, const std::string& apk_path, std::string_view package) {
+std::string MountGuestApkLibraries(interp::Vm& vm, const std::string& apk_path,
+                                  std::string_view package, std::function<void()>* release_inflaters) {
     auto archive = std::make_shared<ApkArchive>(apk_path);
     vm.SetSystemProperty("java.class.path", apk_path);
     for (const auto arch : kArchitectures) {
@@ -700,6 +701,11 @@ std::string MountGuestApkLibraries(interp::Vm& vm, const std::string& apk_path, 
             vm.MountReadOnlyFile(system + '/' + std::string(name), dbt::VirtualLibraryElf(arch, name));
         }
         vm.SetSystemProperty("java.library.path", system);
+        if (release_inflaters) {
+            *release_inflaters = [archive] {
+                for (const auto& [name, file] : archive->files) file->ReleaseInflateState();
+            };
+        }
         vm.SetGuestNativeSource([](JNIEnv* env, const std::shared_ptr<const void>& source)
             -> std::unique_ptr<interp::GuestNativeLibraries> {
             return std::make_unique<ApkNativeLibraries>(env, std::static_pointer_cast<const ApkArchive>(source));

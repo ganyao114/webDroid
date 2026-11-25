@@ -189,6 +189,9 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
             if (shared) return Fail(ctx, ENOTSUP);
             for (uint64_t i = 0; i < size; i += WA_PAGE_SIZE)
                 if (dbt.bionic->map_pages.at(hint + i).shared) return Fail(ctx, ENOTSUP);
+#ifdef __EMSCRIPTEN__
+            softmmu::InvalidateIotlb(dbt.mmu, hint, size);
+#endif
             // In-place replacement preserves the allocation and resets its bytes.
             std::array<uint8_t, WA_PAGE_SIZE> zeros{};
             for (uint64_t i = 0; i < size; i += WA_PAGE_SIZE)
@@ -361,6 +364,9 @@ void Protect(wa_host_call_ctx_t& ctx) {
     }
     for (uint64_t done = 0; done < length; done += WA_PAGE_SIZE)
         dbt.bionic->map_pages.at(address + done).prot = prot;
+#ifdef __EMSCRIPTEN__
+    softmmu::InvalidateIotlb(dbt.mmu, address, length);
+#endif
 }
 
 void Remap(wa_host_call_ctx_t& ctx) {

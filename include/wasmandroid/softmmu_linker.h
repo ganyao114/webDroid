@@ -81,6 +81,13 @@ typedef struct wa_dbt_stats {
     uint64_t wasm_bytes_emitted;
     uint64_t host_calls;
     uint64_t reverse_callbacks;
+    uint64_t jit_entries;
+    uint64_t jit_compile_failures;
+    uint64_t tier0_insns;
+    uint64_t iotlb_slow_reads;
+    uint64_t iotlb_slow_writes;
+    double jit_compile_ms;
+    double jit_exec_ms;
 } wa_dbt_stats_t;
 
 wa_dbt_t* wa_dbt_create(wa_guest_arch_t arch, wa_softmmu_t* mmu);

@@ -33,10 +33,17 @@ struct BootProfile {
     struct Library {
         NativeCalls constructors, jni_on_load;
     };
+    struct DbtCounters {
+        uint64_t wasm_units_compiled = 0, wasm_bytes_emitted = 0;
+        uint64_t jit_entries = 0, jit_compile_failures = 0, tier0_insns = 0;
+        uint64_t iotlb_slow_reads = 0, iotlb_slow_writes = 0;
+        double jit_compile_ms = 0, jit_exec_ms = 0;
+    };
 
     std::array<Duration, PhaseCount> elapsed{};
     std::map<std::string, Library, std::less<>> libraries;
     uint64_t arm64_instructions = 0, arm64_fast_instructions = 0;
+    DbtCounters dbt_stats{};
     uint64_t entry_read_calls = 0, entry_read_bytes = 0, inflated_bytes = 0;
     Phase phase = Setup;
     Clock::time_point last;

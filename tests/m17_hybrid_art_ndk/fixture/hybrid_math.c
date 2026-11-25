@@ -28,3 +28,10 @@ void hybrid_fill_histogram(int seed, int bins[4]) {
 }
 
 int hybrid_constructor_count(void) { return constructor_count; }
+
+uint32_t hybrid_hot_sum(uint32_t count) {
+    static volatile uint32_t word = 17;
+    uint32_t result = 0;
+    for (uint32_t i = 0; i < count; ++i) result += word;
+    return result;
+}

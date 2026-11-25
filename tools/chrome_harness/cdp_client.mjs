@@ -81,7 +81,9 @@ export class CdpClient extends EventEmitter {
         if (reply.exceptionDetails) throw new Error(reply.exceptionDetails.text);
         if (reply.result?.value) return reply.result.value;
       } catch (error) {
-        if (!/context.*(destroyed|not found)|Cannot find (default )?context/i.test(error.message)) {
+        const retry = error.message === 'CDP command timed out: Runtime.evaluate' ||
+          /context.*(destroyed|not found)|Cannot find (default )?context/i.test(error.message);
+        if (!retry) {
           throw error;
         }
       }

@@ -94,6 +94,13 @@ struct ApkEntryReader::Deflate {
                 checkpoints.clear();
                 return false;
             }
+            // Keep the windows just before a seek target. ELF metadata and
+            // demand-paged code often revisit them in descending order.
+            if (source.cache_ && cursor->position <= offset &&
+                offset - cursor->position < 2 * kChunkSize) {
+                source.cache_->Put(ApkEntryCache::Contents::Inflated, source.entry_.offset,
+                                   chunk_start, std::span(chunk).first(chunk_size));
+            }
         }
         return true;
     }
@@ -154,6 +161,8 @@ ApkEntryReader::ApkEntryReader(ZipArchiveHandle zip, const ZipEntry64& entry,
     : fd_(GetFileDescriptor(zip)), entry_(entry), apk_(apk), cache_(cache) {}
 
 ApkEntryReader::~ApkEntryReader() = default;
+
+void ApkEntryReader::ReleaseInflateState() noexcept { deflate_.reset(); }
 
 bool ApkEntryReader::ReadCompressed(void* output, size_t count, uint64_t offset) const {
     if (entry_.offset < 0 || offset > entry_.compressed_length ||

@@ -758,8 +758,8 @@ MethodStats Vm::GetLinkedVirtualMethodStats(std::string_view owner, std::string_
                                             std::string_view signature) const {
   const auto* cls = runtime_->linker.FindLinkedClass(owner);
   if (!cls) return {};
-  const auto method = cls->vtable.find(MemberKey(name, signature));
-  return method == cls->vtable.end() ? MethodStats{} : method->second->stats;
+  const auto* method = cls->FindVirtual(MemberKey(name, signature));
+  return method ? method->stats : MethodStats{};
 }
 MethodStats Vm::GetLinkedDeclaredMethodStats(std::string_view owner, std::string_view name,
                                              std::string_view signature) const {

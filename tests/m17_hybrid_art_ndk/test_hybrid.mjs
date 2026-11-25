@@ -56,6 +56,9 @@ async function run(abi, path) {
     assert.equal(boot.nativeLibraries, 2);
     assert.equal(boot.dexFiles, 2);
     assert(boot.nativeCallbacks > 0, JSON.stringify(boot));
+    const profile = boot.bootProfile;
+    assert(profile.wasmUnitsCompiled > 0 && profile.jitEntries > 0, JSON.stringify(profile));
+    assert(profile.tier0Insns < 65536, `Tier-0 instructions during hybrid boot: ${profile.tier0Insns}`);
     const sf = call('sf_ctx');
     const first = sceneLabels(module, sf);
     for (const text of ['Checksum 4294967297', 'Double score 19.25', 'Callbacks 1', 'CAUGHT_IAE',

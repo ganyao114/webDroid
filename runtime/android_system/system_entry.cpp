@@ -1,16 +1,13 @@
 #include "system_internal.h"
 
 #include "../linker_ffi/dbt_internal.h"
+#include "../linker_ffi/wasm_jit.h"
 #include "../softmmu_opfs/softmmu_internal.h"
 #include "gles_host_bridge.h"
-#include "runtime/arch/arm32/numeric.h"
-#include "runtime/arch/arm32/numeric_registry.h"
 #include "runtime/arch/arm32/state.h"
-#include "runtime/arch/arm64/numeric.h"
 #include "runtime/arch/arm64/state.h"
 #include "runtime/backend/wasm/abi.h"
 #include "runtime/exit.h"
-#include "runtime/ir/opcode.h"
 #include "wasmandroid/hal_gfx.h"
 #include "wasmandroid/libkern.h"
 
@@ -158,6 +155,11 @@ int32_t wa_system_load(wa_guest_arch_t arch, uint32_t file_id, const uint8_t* el
     if (!guest->dbt)
         return WA_ERR_NOMEM;
     auto* dbt = guest->dbt.get();
+#ifdef __EMSCRIPTEN__
+    // The standalone renderer selects its tier explicitly. Keep its
+    // interpreter entry points useful for the renderer's comparison runs.
+    dbt->wasm_jit_unavailable = true;
+#endif
     auto status = wa_hal_register_ndk_symbols(dbt);
     uint64_t base;
     if (status == WA_OK)
@@ -348,22 +350,11 @@ void wa_system_mmu_write64(wa_system_jit_context_t* context, uint32_t address, u
 int32_t wa_system_jit_numeric_lambda(wa_system_jit_context_t* context, uint32_t opcode,
                                      uint64_t callback, uint64_t state_address, uint64_t a,
                                      uint64_t b, uint64_t* out) {
-    if (!context || !context->active || !out || opcode != uint32_t(rt::ir::OpCode::CallLambda))
+    if (!context || !context->active || !out)
         return WA_ERR_INVALID;
-    if (context->owner->dbt->arch == WA_ARCH_ARM32) {
-        if (state_address != reinterpret_cast<uintptr_t>(&context->arm32.fpscr) ||
-            callback > UINTPTR_MAX || !rt::arm32::NumericCallbackIdentity(callback))
-            return WA_ERR_NOTSUP;
-        const auto fn =
-            reinterpret_cast<rt::arm32::NumericCallback>(static_cast<uintptr_t>(callback));
-        *out = fn(state_address, a, b);
-    } else {
-        if (state_address != reinterpret_cast<uintptr_t>(&context->arm64) ||
-            callback != reinterpret_cast<uintptr_t>(&rt::arm64::ExecuteNumeric))
-            return WA_ERR_NOTSUP;
-        *out = rt::arm64::ExecuteNumeric(state_address, a, b);
-    }
-    return WA_OK;
+    const auto arch = context->owner->dbt->arch;
+    void* state = arch == WA_ARCH_ARM32 ? static_cast<void*>(&context->arm32) : &context->arm64;
+    return wa::dbt::CallWasmNumericLambda(arch, state, opcode, callback, state_address, a, b, *out);
 }
 
 int32_t wa_system_bind_audio(void* ring, size_t size, uint32_t capacity) {

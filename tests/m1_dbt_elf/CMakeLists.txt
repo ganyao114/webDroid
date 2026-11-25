@@ -47,6 +47,7 @@ add_executable(test_m1_dbt_elf test_m1_dbt_elf.cpp)
 add_dependencies(test_m1_dbt_elf wa_m1_dbt_elf_fixtures)
 target_link_libraries(test_m1_dbt_elf PRIVATE wa_linker_ffi)
 if(EMSCRIPTEN)
+    target_include_directories(test_m1_dbt_elf PRIVATE "../../runtime/softmmu_opfs")
     target_compile_options(test_m1_dbt_elf PRIVATE
         -O3 -msimd128 -matomics -mbulk-memory -fwasm-exceptions)
     target_link_options(test_m1_dbt_elf PRIVATE -sENVIRONMENT=node -sNODERAWFS=1

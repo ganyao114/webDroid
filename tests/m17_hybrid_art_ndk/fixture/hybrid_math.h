@@ -6,3 +6,4 @@ uint64_t hybrid_mix_checksum(int seed);
 double hybrid_dot_f64(double x, double y, double z);
 void hybrid_fill_histogram(int seed, int bins[4]);
 int hybrid_constructor_count(void);
+uint32_t hybrid_hot_sum(uint32_t count);

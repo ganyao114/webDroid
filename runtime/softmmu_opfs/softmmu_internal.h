@@ -25,6 +25,34 @@ Access Read(wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> bytes,
             uint32_t permission = WA_PROT_READ) noexcept;
 Access Write(wa_softmmu_t* mmu, uint64_t address, std::span<const uint8_t> bytes) noexcept;
 
+#ifdef __EMSCRIPTEN__
+// Two directories index lazily allocated slabs by the 20-bit guest page
+// number. Leaf entries hold wrapping host-minus-guest offsets. Odd entries miss.
+struct Iotlb {
+    static constexpr unsigned kSlabBits = 10;
+    static constexpr size_t kSlabEntries = 1u << kSlabBits;
+    static constexpr size_t kSlabs = kAddressLimit / WA_PAGE_SIZE / kSlabEntries;
+    explicit Iotlb(wa_softmmu_t* mmu);
+    ~Iotlb();
+    Iotlb(const Iotlb&) = delete;
+    Iotlb& operator=(const Iotlb&) = delete;
+
+    const uint32_t* ReadDirectory() const { return read_directory_.data(); }
+    const uint32_t* WriteDirectory() const { return write_directory_.data(); }
+    void Invalidate(uint32_t first, uint32_t end) noexcept;
+    void Set(uint32_t page, uint32_t offset, uint32_t permissions) noexcept;
+    Iotlb* next = nullptr;
+
+  private:
+    wa_softmmu_t* mmu_;
+    using Offsets = std::array<uint32_t, kSlabEntries>;
+    struct Slab { Offsets read, write; };
+    Offsets misses_;
+    std::array<uint32_t, kSlabs> read_directory_, write_directory_;
+    std::array<std::unique_ptr<Slab>, kSlabs> slabs_;
+};
+#endif
+
 // Hold the MMU lock for a bounded interpreter batch. Host thunks and state
 // services run after the batch releases it.
 class CpuAccess {
@@ -38,9 +66,16 @@ class CpuAccess {
     Access Write(uint64_t address, std::span<const uint8_t> bytes) noexcept;
     // A successful lookup pins the returned page for this batch.
     Access ExecutablePage(uint64_t address, const PageBytes*& page) noexcept;
+#ifdef __EMSCRIPTEN__
+    uint64_t CodeGeneration() const noexcept;
+    void FillIotlb(Iotlb& tlb, uint64_t address, size_t size, uint32_t permissions) noexcept;
+#endif
 
   private:
     wa_softmmu_t* mmu_;
+    PageBytes* writable_page_ = nullptr;
+    uint64_t writable_base_ = 0;
+    bool writable_page_readable_ = false;
 };
 bool PageResidency(const wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> pages);
 int32_t Protect(wa_softmmu_t* mmu, uint64_t address, size_t bytes, uint32_t prot);
@@ -61,7 +96,13 @@ struct PageWindow {
 
 // Pin executable bytes from the requested address to the end of its page.
 // Callers serialize decoding with writes to writable executable mappings.
-Access GetUnitWindow(wa_softmmu_t* mmu, uint64_t address, PageWindow& window) noexcept;
+enum class UnitWindow { Standalone, JitEntry, JitAdjacent };
+Access GetUnitWindow(wa_softmmu_t* mmu, uint64_t address, PageWindow& window,
+                     UnitWindow mode = UnitWindow::Standalone, bool guest_writable = true) noexcept;
+
+#ifdef __EMSCRIPTEN__
+void InvalidateIotlb(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept;
+#endif
 
 // Convert the image's relocated and initialized data into a COW template.
 void PublishFileTemplates(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept;

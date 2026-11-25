@@ -1,28 +1,270 @@
 --- a/allocate.cpp
 +++ b/allocate.cpp
-@@ -699,4 +699,4 @@
+@@ -404,7 +404,7 @@
+     a.pc = linked ? 1 : a.AddLocal(I64);
+     a.flags = linked ? 2 : a.AddLocal(I64);
+     a.status = a.AddLocal(I64);
+-    if (linked && options.check_slice_ticks) a.ticks = a.AddLocal(I64);
++    if ((linked || options.wide_softmmu_callbacks) && options.check_slice_ticks) a.ticks = a.AddLocal(I64);
+     for (auto& local : a.temp) local = a.AddLocal(I64);
+     if (options.single_memory && options.address_mode == AddressMode::Memory64) {
+         a.host_value = a.AddLocal(I64);
+@@ -530,7 +530,7 @@
+                 op.opcode == ir::OpCode::LoadImm && ir::IntegerType(op.type) && !op.HasMetadata();
+         if (op.type == ir::Type::V128) needs_vector_temp = true;
+         if (options.address_mode == AddressMode::SoftMMU32) {
+-            a.mmu_imports |= detail::MemoryImports(program, i);
++            a.mmu_imports |= detail::MemoryImports(program, i, options.wide_softmmu_callbacks);
+             if (op.opcode == ir::OpCode::CompareAndSwap128 ||
+                 ((op.opcode == ir::OpCode::LoadMemory || op.opcode == ir::OpCode::LoadMemoryTSO) &&
+                  op.type == ir::Type::V128)) {
+@@ -683,8 +683,8 @@
+         a.mmu_vector = a.AddLocal(V128);
+     if (a.mmu_imports & 0x70u) a.mmu_value32 = a.AddLocal(I32);
+     if (a.mmu_imports & 0x80u) a.mmu_value = a.AddLocal(I64);
+-    const bool needs_iotlb_read = (a.mmu_imports & 0x0fu) != 0;
+-    const bool needs_iotlb_write = (a.mmu_imports & 0xf0u) != 0;
++    const bool needs_iotlb_read = (a.mmu_imports & (0x0fu | (1u << 8))) != 0;
++    const bool needs_iotlb_write = (a.mmu_imports & (0xf0u | (1u << 9))) != 0;
+     if (options.shared_context_globals) {
+         auto& globals = a.context_globals;
+         if (a.ticks != UINT32_MAX) globals.ticks = globals.count++;
+@@ -697,8 +697,8 @@
+         if (needs_iotlb_read) a.iotlb_read = a.AddLocal(I32);
+         if (needs_iotlb_write) a.iotlb_write = a.AddLocal(I32);
      }
 -    if (needs_predicate ||
 -        (linked && (!a.helpers.empty() || (a.mmu_imports && !options.stateless_mmu_callbacks))))
-+    if (needs_predicate || (linked && !a.helpers.empty()) ||
++    if (needs_predicate || ((linked || options.wide_softmmu_callbacks) && !a.helpers.empty()) ||
 +        (a.mmu_imports && !options.stateless_mmu_callbacks))
          a.predicate = a.AddLocal(I32);
+     for (std::uint32_t block = 0; block < program.Blocks().size(); ++block) {
+         const auto& b = program.Blocks()[block];
+--- a/compile.cpp
++++ b/compile.cpp
+@@ -46,7 +46,10 @@
+                 (options.address_mode == AddressMode::Memory64 ? (1ull << 48) : 65536ull) ||
+         (options.max_memory_pages && options.max_memory_pages < options.min_memory_pages) ||
+         (options.shared_memory && !options.max_memory_pages) ||
+-        (options.shared_memory && options.address_mode == AddressMode::SoftMMU32) ||
++        (options.shared_memory && options.address_mode == AddressMode::SoftMMU32 &&
++         !options.wide_softmmu_callbacks) ||
++        (options.wide_softmmu_callbacks && (options.address_mode != AddressMode::SoftMMU32 ||
++                                           options.module_mode != ModuleMode::Standalone)) ||
+         (options.gpr_count &&
+          (options.gprs_offset == UINT32_MAX ||
+           options.gpr_stride < (options.guest_isa == GuestISA::Arm32 ? 4u : 8u))) ||
+@@ -92,7 +95,8 @@
+     auto& m = allocation.module;
+     auto& s = allocation.section;
+     m.insert(m.end(), {0, 0x61, 0x73, 0x6d, 1, 0, 0, 0});
+-    Uleb(s, 3 + unsigned(options.checked_memory) + (allocation.mmu_imports ? 4 : 0));
++    const unsigned mmu_types = allocation.mmu_imports ? 4 + unsigned(options.wide_softmmu_callbacks) : 0;
++    Uleb(s, 3 + unsigned(options.checked_memory) + mmu_types);
+     const auto unit_parameters = UnitParameterCount(options);
+     s.insert(s.end(), {0x60, unit_parameters, wasm::I32});
+     s.insert(s.end(), unit_parameters - 1, wasm::I64);
+@@ -104,10 +108,13 @@
+     if (options.checked_memory)
+         s.insert(s.end(), {0x60, 3, wasm::I64, wasm::I32, wasm::I32, 1, wasm::I64});
+     if (allocation.mmu_imports) {
+-        s.insert(s.end(), {0x60, 3, wasm::I32, wasm::I32, wasm::I64, 1, wasm::I32});
+-        s.insert(s.end(), {0x60, 3, wasm::I32, wasm::I32, wasm::I64, 1, wasm::I64});
+-        s.insert(s.end(), {0x60, 4, wasm::I32, wasm::I32, wasm::I32, wasm::I64, 0});
+-        s.insert(s.end(), {0x60, 4, wasm::I32, wasm::I32, wasm::I64, wasm::I64, 0});
++        const auto address = options.wide_softmmu_callbacks ? wasm::I64 : wasm::I32;
++        s.insert(s.end(), {0x60, 3, wasm::I32, address, wasm::I64, 1, wasm::I32});
++        s.insert(s.end(), {0x60, 3, wasm::I32, address, wasm::I64, 1, wasm::I64});
++        s.insert(s.end(), {0x60, 4, wasm::I32, address, wasm::I32, wasm::I64, 0});
++        s.insert(s.end(), {0x60, 4, wasm::I32, address, wasm::I64, wasm::I64, 0});
++        if (options.wide_softmmu_callbacks)
++            s.insert(s.end(), {0x60, 5, wasm::I32, address, wasm::I64, wasm::I64, wasm::I64, 0});
+     }
+     Section(m, 1, s);
+     const u32 type_size = static_cast<u32>(s.size());
+@@ -115,7 +122,7 @@
+     memory_check = l2 ? 1 : 0;
+     helper_base = memory_check + unsigned(options.checked_memory);
+     imported_functions = helper_base + static_cast<u32>(allocation.helpers.size());
+-    for (unsigned i = 0; i < 8; ++i) {
++    for (unsigned i = 0; i < std::size(mmu_functions); ++i) {
+         if (!(allocation.mmu_imports & (1u << i))) continue;
+         mmu_functions[i] = imported_functions++;
+     }
+@@ -198,18 +205,21 @@
+                0);
+         Uleb(s, abi::HelperType);
+     }
+-    constexpr std::array<std::string_view, 8> mmu_names{"mmu_read8",
++    constexpr std::array<std::string_view, 10> mmu_names{"mmu_read8",
+                                                         "mmu_read16",
+                                                         "mmu_read32",
+                                                         "mmu_read64",
+                                                         "mmu_write8",
+                                                         "mmu_write16",
+                                                         "mmu_write32",
+-                                                        "mmu_write64"};
++                                                        "mmu_write64",
++                                                        "mmu_read128",
++                                                        "mmu_write128"};
+     for (unsigned i = 0; i < mmu_names.size(); ++i) {
+         if (!(allocation.mmu_imports & (1u << i))) continue;
+         import(mmu_names[i], 0);
+-        Uleb(s, 3 + unsigned(options.checked_memory) + unsigned(i >= 4) * 2 + unsigned(i % 4 == 3));
++        constexpr unsigned types[]{0, 0, 0, 1, 2, 2, 2, 3, 1, 4};
++        Uleb(s, 3 + unsigned(options.checked_memory) + types[i]);
+     }
+     Section(m, 2, s);
+     s.clear();
+--- a/compile.h
++++ b/compile.h
+@@ -47,6 +47,10 @@
+     // Share guest_mem with context, state and translation tables (no multi-memory).
+     bool single_memory = false;
+     bool check_slice_ticks = false;
++    // Standalone SoftMMU dispatch can use full guest addresses on a miss.
++    bool wide_softmmu_callbacks = false;
++    // A zero-cost block is a synthetic exit with no guest instructions.
++    std::vector<std::uint64_t> block_pcs;
+     bool relocatable_links = false;
+     // Preserve individual SoftMMU accesses when alignment faults are enabled.
+     bool alignment_fault = false;
+--- a/emit.h
++++ b/emit.h
+@@ -235,7 +235,7 @@
+     bool has_fault_location{};
+     u32 guest_address32{UINT32_MAX}, enter_loop{UINT32_MAX};
+     u32 imported_functions{}, helper_base{}, memory_check{}, link_base_global{};
+-    std::array<u32, 8> mmu_functions{};
++    std::array<u32, 10> mmu_functions{};
+     enum class MmuGroup { None, Adjacent, Span } mmu_group{};
+     std::int32_t mmu_group_displacement{};
+     u32 fused_flags_local{UINT32_MAX};
+@@ -247,5 +247,5 @@
+ inline constexpr u32 SaturatingFloatToInt = 2;
+ bool UsesSaturatingFloatToInt(const Program&, const Operation&);
+ HostSymbol HelperFor(const Program&, u32 node, const CompileOptions&, bool precise_fp);
+-u32 MemoryImports(const Program&, u32 node);
++u32 MemoryImports(const Program&, u32 node, bool wide);
+ }  // namespace swift::runtime::backend::wasm::detail
+--- a/emit_atomic.cpp
++++ b/emit_atomic.cpp
+@@ -5,6 +5,24 @@
+ namespace swift::runtime::backend::wasm::detail {
+ bool Writer::Atomic() {
+     const auto op = Op().opcode;
++    // The foreground owner handles atomics with the interpreter's access
++    // checks and reservation state. Return before the instruction's effects.
++    if (options.wide_softmmu_callbacks &&
++        (op == OpCode::AtomicRMW || op == OpCode::AtomicExchange || op == OpCode::AtomicFetchAdd ||
++         op == OpCode::CompareAndSwap || op == OpCode::CompareAndSwap128)) {
++        I64(guest_pc);
++        Set(allocation.pc);
++        Flush();
++        I64(ExitValue(NativeExit::UnsupportedAtomic));
++        B(0x0f);
++        // Emit a typed placeholder for the unreachable remainder of the block.
++        if (Op().type == Type::V128) ZeroVector();
++        else if (NodeIsI32(node)) I32(0);
++        else I64(0);
++        if (NodeIsI32(node)) ResultI32(false, true);
++        else Result();
++        return true;
++    }
+     if (op == OpCode::CompareAndSwap128) {
+         if (options.shared_memory) return false;
+         if (Op().type != Type::V128) Reject(CompileError::UnsupportedType);
+--- a/emit_calls.cpp
++++ b/emit_calls.cpp
+@@ -61,7 +61,8 @@
+         case OpCode::VecSha256Rnds2:
+             return HostSymbol::Crypto;
+         case OpCode::CompareAndSwap128:
+-            return options.shared_memory ? HostSymbol::CompareExchange128 : HostSymbol::None;
++            return options.shared_memory && !options.wide_softmmu_callbacks
++                           ? HostSymbol::CompareExchange128 : HostSymbol::None;
+         case OpCode::ArmFPBinary:
+             return HostSymbol::ArmFPBinary;
+         case OpCode::ArmFPTernary:
+@@ -182,7 +183,7 @@
+         Store(64, abi::HostMemory, abi::AuxReturnHi);
+     }
+     Reload();
+-    if (Linked()) {
++    if (Linked() || options.wide_softmmu_callbacks) {
+         Get(0);
+         HostLoad32(abi::ExitSubcode);
+         Tee(allocation.predicate);
+@@ -192,7 +193,8 @@
+             Set(allocation.pc);
+         }
+         Flush();
+-        Get(allocation.predicate);
++        if (Linked()) Get(allocation.predicate);
++        else I64(0);
+         B(0x0f);
+         B(0x0b);
+     }
 --- a/emit_control.cpp
 +++ b/emit_control.cpp
-@@ -6,3 +6,4 @@
+@@ -4,7 +4,8 @@
+ void Writer::Prologue(u32 entry) {
+     guest_pc = options.entry_pc;
      Get(0);
 -    if (Linked()) {
 +    if (Linked() || SoftMMU()) {
 +        // Standalone SoftMMU also receives a run context before the CPU state.
          I32(abi::ContextBytes);
-@@ -46,2 +47,6 @@
+         B(0x6a);
+     }
+@@ -44,6 +45,10 @@
+         if (options.pc_offset != UINT32_MAX) {
+             UniformLoad(options.pc_offset, Type::U64);
              Set(allocation.pc);
 +        }
 +        if (SoftMMU() && options.flags_offset != UINT32_MAX) {
 +            UniformLoad(options.flags_offset, Type::U64);
 +            Set(allocation.flags);
          }
-@@ -236,2 +241,8 @@
+     } else if (!options.private_state) {
+         const auto type = options.gpr_stride == 4 ? Type::U32 : Type::U64;
+@@ -95,8 +100,22 @@
+     guest_pc = options.entry_pc;
+     has_fault_location = options.entry_pc != 0;
+     if (allocation.ticks != UINT32_MAX && id < options.block_ticks.size()) {
++        const auto cost = options.block_ticks[id];
++        if (id < options.block_pcs.size() && cost) {
++            guest_pc = options.block_pcs[id];
++            Get(allocation.ticks);
++            I64(cost);
++            B(0x53);  // i64.lt_s
++            Block(0x04);
++            I64(guest_pc);
++            Set(allocation.pc);
++            Flush();
++            I64(ExitValue(NativeExit::GuestEvents));
++            B(0x0f);
++            B(0x0b);
++        }
+         Get(allocation.ticks);
+-        I64(options.block_ticks[id] ? options.block_ticks[id] : 1);
++        I64(cost ? cost : !options.wide_softmmu_callbacks);
+         B(0x7d);
+         Set(allocation.ticks);
+     }
+@@ -106,7 +125,8 @@
+                             ? branch_compare.sub
+                             : b.first_node + b.node_count - static_cast<u32>(bool(branch_compare));
+     for (u32 at = b.first_node; at < end;) {
+-        const auto next = SoftMMU() && !options.alignment_fault ? EmitMmuGroup(at, end) : at;
++        const auto next = SoftMMU() && !options.alignment_fault && !options.wide_softmmu_callbacks
++                                  ? EmitMmuGroup(at, end) : at;
+         if (next == at) {
+             EmitNode(at);
+             ++at;
+@@ -234,6 +254,12 @@
+     Flush();
+     if (Linked()) {
          I32(static_cast<u32>(reason));
 +        B(0x0f);
 +    } else if (SoftMMU() && reason == ExitValue(NativeExit::MemoryFault)) {
@@ -31,10 +273,32 @@
 +        HostStore32(abi::ExitSubcode);
 +        I64(0);
          B(0x0f);
+     } else
+         B(0x00);
+@@ -344,7 +370,10 @@
+                 Dispatch();
+             else {
+                 Flush();
+-                I64(0);
++                if (options.wide_softmmu_callbacks)
++                    Get(allocation.pc);
++                else
++                    I64(0);
+                 B(0x0f);
+             }
+             return;
 --- a/emit_memory.cpp
 +++ b/emit_memory.cpp
-@@ -14,2 +14,18 @@
+@@ -12,6 +12,28 @@
+     }
+
      const bool wasm32 = options.address_mode == AddressMode::Wasm32;
++    if (SoftMMU() && options.wide_softmmu_callbacks) {
++        ReadI64(argument);
++        Tee(T(8));
++        B(0xa7);
++        return;
++    }
 +    if (SoftMMU() && !Linked() && options.guest_isa == GuestISA::Arm64) {
 +        // Check the full AArch64 address before the i32 IOTLB lookup.
 +        ReadI64(argument);
@@ -52,10 +316,103 @@
 +        return;
 +    }
      if (SoftMMU() || (wasm32 && !options.checked_memory)) {
+         ReadI32(argument);
+         if (wasm32 && (Linked() || for_atomic)) {
 --- a/emit_softmmu.cpp
 +++ b/emit_softmmu.cpp
-@@ -332,16 +332,17 @@
-     Reload();
+@@ -210,7 +210,7 @@
+     }
+ }
+
+-u32 MemoryImports(const Program& program, u32 node) {
++u32 MemoryImports(const Program& program, u32 node, bool wide) {
+     const auto& op = program.Operations()[node];
+     unsigned bits = TypeBits(op.type);
+     bool read = true, write = false;
+@@ -249,6 +249,8 @@
+         default:
+             return 0;
+     }
++    if (wide && bits == 128)
++        return (read ? 1u << 8 : 0) | (write ? 1u << 9 : 0);
+     const auto width = WidthIndex(bits);
+     return (read ? 1u << width : 0) | (write ? 1u << (width + 4) : 0);
+ }
+@@ -268,9 +270,24 @@
+             GlobalGet(base_global);
+         else
+             Get(base_local);
++        if (options.wide_softmmu_callbacks) {
++            // The embedder keeps sparse translation slabs behind a directory.
++            // Unpopulated slots point to a shared slab of misses.
++            Get(allocation.mmu_address);
++            I32(22);
++            B(0x76);
++            I32(2);
++            B(0x74);
++            B(0x6a);
++            HostLoad32();
++        }
+         Get(allocation.mmu_address);
+         I32(12);
+         B(0x76);
++        if (options.wide_softmmu_callbacks) {
++            I32(1023);
++            B(0x71);
++        }
+         I32(2);
+         B(0x74);
+         B(0x6a);
+@@ -296,19 +313,25 @@
+         B(0x4b);
+         B(0x72);
+     }
++    if (options.wide_softmmu_callbacks) {
++        Get(T(8));
++        I64(UINT32_MAX);
++        B(0x56);  // A high guest address can only be resolved by SoftMMU.
++        B(0x72);
++    }
+     B(0x45);
+     Set(allocation.mmu_fast);
+ }
+
+ void Writer::MmuCall(unsigned bits, bool write, unsigned offset) {
+-    if (!options.stateless_mmu_callbacks) {
++    if (!options.stateless_mmu_callbacks && !options.wide_softmmu_callbacks) {
+         Flush();
+         Get(0);
+         I32(0);
+         HostStore32(abi::ExitSubcode);
+     }
+     Get(0);
+-    Get(allocation.mmu_address);
++    Get(options.wide_softmmu_callbacks ? T(8) : allocation.mmu_address);
+     if (offset) {
+         I32(offset);
+         B(0x6a);
+@@ -318,6 +341,11 @@
+             Get(allocation.mmu_vector);
+             Simd(0x1d);
+             B(offset / 8);
++            if (options.wide_softmmu_callbacks) {
++                Get(allocation.mmu_vector);
++                Simd(0x1d);
++                B(1);
++            }
+         } else {
+             Get(bits <= 32 ? allocation.mmu_value32 : allocation.mmu_value);
+         }
+@@ -327,23 +355,26 @@
+     else
+         Get(allocation.pc);
+     B(0x10);
+-    U(mmu_functions[WidthIndex(bits) + (write ? 4 : 0)]);
++    const auto index = options.wide_softmmu_callbacks && bits == 128
++                               ? 8 + unsigned(write) : WidthIndex(bits) + (write ? 4 : 0);
++    U(mmu_functions[index]);
+     if (options.stateless_mmu_callbacks) return;
+-    Reload();
 -    if (Linked()) {
 -        Get(0);
 -        HostLoad32(abi::ExitSubcode);
@@ -66,6 +423,7 @@
 -            Set(allocation.pc);
 -        }
 -        Flush();
++    if (!options.wide_softmmu_callbacks) Reload();
 +    Get(0);
 +    HostLoad32(abi::ExitSubcode);
 +    Tee(allocation.predicate);
@@ -85,3 +443,30 @@
 +    B(0x0f);
 +    B(0x0b);
  }
+
+ void Writer::MmuLoad(unsigned bits, bool sign, bool narrow) {
+@@ -357,7 +388,14 @@
+     else
+         Load(bits, 0, 0, sign);
+     B(0x05);
+-    if (bits == 128) {
++    if (bits == 128 && options.wide_softmmu_callbacks) {
++        ZeroVector();
++        MmuCall(bits, false);
++        InsertLane(64, 0);
++        Get(0);
++        Load(64, abi::HostMemory, abi::AuxReturnHi);
++        InsertLane(64, 1);
++    } else if (bits == 128) {
+         ZeroVector();
+         for (unsigned lane = 0; lane < 2; ++lane) {
+             MmuCall(bits, false, lane * 8);
+@@ -393,7 +431,7 @@
+         Store(bits);
+     B(0x05);
+     MmuCall(bits, true);
+-    if (bits == 128) MmuCall(bits, true, 8);
++    if (bits == 128 && !options.wide_softmmu_callbacks) MmuCall(bits, true, 8);
+     B(0x0b);
+ }
+ }  // namespace swift::runtime::backend::wasm::detail
