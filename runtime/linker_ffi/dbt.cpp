@@ -169,8 +169,9 @@ struct ExecutionMemory {
                                               std::span<uint8_t> bytes) noexcept {
         auto& memory = *static_cast<ExecutionMemory*>(opaque);
         const auto status = CheckMappedAccess(&memory.dbt, address, bytes.size(), WA_PROT_EXEC);
-        const auto access = status == WA_OK ? wa::softmmu::Read(memory.dbt.mmu, address, bytes, WA_PROT_EXEC)
-                                            : wa::softmmu::Access{status, address};
+        const auto access = status != WA_OK ? wa::softmmu::Access{status, address} :
+            memory.batch ? memory.batch->Read(address, bytes, WA_PROT_EXEC) :
+                           wa::softmmu::Read(memory.dbt.mmu, address, bytes, WA_PROT_EXEC);
         return {memory.Record(access), access.status == WA_OK ? bytes.size() : 0};
     }
 
@@ -522,6 +523,7 @@ int32_t InvokeHost(wa_dbt& dbt, uint64_t pc, uint64_t sp, wa_host_call_ctx_t& co
     thread.active_sp = sp;
     ++dbt.stats.host_calls;
     context.sp = sp;
+    const BootProfile::HostCall profile(dbt.hosts[index].name);
     try {
         return function(&context, user);
     } catch (const GuestFault& fault) {
@@ -857,6 +859,28 @@ template <typename State> int32_t Run(wa_dbt& dbt, GuestCpu& cpu, State& state, 
         dbt.wasm_jit_unavailable = !dbt.wasm_jit;
     }
     auto* jit = dbt.wasm_jit.get();
+    constexpr uint64_t kChainBudget = 65536;
+    std::optional<wa::softmmu::CpuAccess> batch;
+    uint64_t release_at = 0;
+    const auto release = [&] {
+        memory.batch = nullptr;
+        batch.reset();
+    };
+    const auto access = [&]() -> wa::softmmu::CpuAccess& {
+        if (!batch || thread.steps_left <= release_at) {
+            batch.reset();
+            batch.emplace(dbt.mmu);
+            memory.batch = &*batch;
+            release_at = thread.steps_left - std::min(thread.steps_left, kChainBudget);
+        }
+        return *batch;
+    };
+    const auto prepare_jit = [&] {
+        if (!jit || !jit->Observe(state.pc)) return false;
+        if (jit->Ready(state.pc)) return true;
+        release();
+        return jit->Prepare(state.pc);
+    };
 #endif
     while (true) {
         const auto pc = GuestAddress<State>(state.pc);
@@ -872,6 +896,9 @@ template <typename State> int32_t Run(wa_dbt& dbt, GuestCpu& cpu, State& state, 
         if (IsSyntheticPc(pc)) {
             if (pc >= WA_HOST_STUB_LIMIT)
                 return WA_ERR_FAULT;
+#ifdef __EMSCRIPTEN__
+            release();
+#endif
             --thread.steps_left;
             --slice;
             const auto status = RunHost(dbt, pc, state);
@@ -887,11 +914,10 @@ template <typename State> int32_t Run(wa_dbt& dbt, GuestCpu& cpu, State& state, 
         uint64_t interpreter_budget = 256;
 #ifdef __EMSCRIPTEN__
         memory.observe_jit = jit;
-        if (jit && jit->Observe(state.pc) && jit->Prepare(state.pc)) {
-            // Bound the MMU lock hold even for a non-resumable JNI call.
-            constexpr uint64_t kChainBudget = 65536;
-            const auto allowance = std::min({thread.steps_left, slice, kChainBudget});
-            auto result = jit->Run(cpu, state.pc, static_cast<uint32_t>(allowance));
+        if (prepare_jit()) {
+            auto& locked = access();
+            const auto allowance = std::min(slice, thread.steps_left - release_at);
+            auto result = jit->Run(cpu, state.pc, static_cast<uint32_t>(allowance), locked, caller_wait);
             if (result.status != WA_OK) {
                 dbt.last_pc = GuestAddress<State>(state.pc);
                 dbt.last_fault_address = cpu.run.fault_address;
@@ -902,15 +928,18 @@ template <typename State> int32_t Run(wa_dbt& dbt, GuestCpu& cpu, State& state, 
                 const auto exit = result.exit;
                 const bool service = exit == rt::ExitValue(rt::NativeExit::StateService) &&
                                      exit != state.pc;
-                if (service && result.instructions) --result.instructions;
-                thread.steps_left -= result.instructions;
-                slice -= result.instructions;
+                if (service && result.ticks > result.host_calls) --result.ticks;
+                const auto instructions = result.ticks - result.host_calls;
+                thread.steps_left -= result.ticks;
+                slice -= result.ticks;
+                if (caller_wait && caller_wait->ready) slice = 0;
                 dbt.stats.blocks_executed += result.entries;
-                dbt.stats.insns_executed += result.instructions;
+                dbt.stats.insns_executed += instructions;
                 if constexpr (std::is_same_v<State, Arm64State>) {
-                    if (profile) profile->arm64_instructions += result.instructions;
+                    if (profile) profile->arm64_instructions += instructions;
                     if (exit == rt::ExitValue(rt::NativeExit::Syscall)) {
                         dbt.last_pc = state.pc - 4;
+                        release();
                         const auto status = Arm64Syscall(dbt, state, dbt.last_pc);
                         if (status != WA_OK) return status;
                         memory.InvalidatePermissions();
@@ -935,16 +964,23 @@ template <typename State> int32_t Run(wa_dbt& dbt, GuestCpu& cpu, State& state, 
 #endif
         const auto budget = static_cast<size_t>(std::min({thread.steps_left, slice, interpreter_budget}));
         const auto step = [&] {
+#ifdef __EMSCRIPTEN__
+            access();
+#endif
             if constexpr (std::is_same_v<State, Arm32State>)
                 return swift::arm32::InterpretBlock(
                     state, memory.Callbacks<swift::arm32::DirectServices>(), budget, nullptr,
                     synthetic_pc);
             else {
+#ifndef __EMSCRIPTEN__
                 wa::softmmu::CpuAccess batch(dbt.mmu);
                 memory.batch = &batch;
+#endif
                 memory.code_page = nullptr;
                 const auto next = InterpretArm64Batch(state, memory, budget);
+#ifndef __EMSCRIPTEN__
                 memory.batch = nullptr;
+#endif
                 return next;
             }
         }();
@@ -976,6 +1012,9 @@ template <typename State> int32_t Run(wa_dbt& dbt, GuestCpu& cpu, State& state, 
             dbt.last_pc = GuestAddress<State>(step.pc);
             if constexpr (std::is_same_v<State, Arm64State>) {
                 if (step.service == rt::ExitValue(rt::NativeExit::Syscall)) {
+#ifdef __EMSCRIPTEN__
+                    release();
+#endif
                     if (const auto status = Arm64Syscall(dbt, state, step.pc); status != WA_OK) return status;
                     memory.InvalidatePermissions();
                     break;

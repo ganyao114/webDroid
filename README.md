@@ -180,3 +180,11 @@ the guest through the worker, and Android overlays render above the iframe.
 The Chrome test clicks through mobile login, account login, and mobile signup,
 enters text through Chrome's IME, and uses Back to return to the parent screens.
 It saves the login and signup screenshots alongside each other.
+
+Use a separate Release build with `-DWA_PROFILE_BOOT_HOTSPOTS=ON` to collect the
+20 leading host symbols by call count and inclusive wall time, plus the 20 ZIP
+entries with the most inflated bytes. The arrays appear in `bootProfile` in the
+WeChat Node and Chrome reports. Leave this option off for cold-boot timings.
+`jitExecMs` estimates execution time from sampled chains, with `jitExecSamples`
+giving the sample count. Use `-DWA_JIT_HOT_THRESHOLD` to compare compilation
+thresholds. The default is 32 guest entries.

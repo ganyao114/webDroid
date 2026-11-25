@@ -22,6 +22,11 @@ struct StringHash {
 template <typename Value>
 using StringMap = std::unordered_map<std::string, Value, StringHash, std::equal_to<>>;
 
+#ifdef __EMSCRIPTEN__
+struct FastHostCall;
+using FastHostFn = bool (*)(FastHostCall&);
+#endif
+
 struct HostSymbol {
     std::string soname;
     std::string name;
@@ -29,6 +34,9 @@ struct HostSymbol {
     void* user;
     bool builtin;
     uint64_t address;
+#ifdef __EMSCRIPTEN__
+    FastHostFn fast = nullptr;
+#endif
 };
 
 struct ElfMapping {

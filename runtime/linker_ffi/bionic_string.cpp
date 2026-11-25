@@ -78,6 +78,18 @@ void Compare(wa_host_call_ctx_t& ctx) {
     }
 }
 
+#ifdef __EMSCRIPTEN__
+bool FastCompare(FastHostCall& call) {
+    const auto size = call.args[2];
+    if (!size) return true;
+    const auto* left = call.ResidentRead(call.args[0], size);
+    const auto* right = call.ResidentRead(call.args[1], size);
+    if (!left || !right) return false;
+    call.result = static_cast<uint32_t>(std::memcmp(left, right, size));
+    return true;
+}
+#endif
+
 template <bool Reverse> void MemChar(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     const auto base = ctx.args[0], size = ctx.args[2];
@@ -297,6 +309,9 @@ void RegisterStrings(wa_dbt& dbt) {
         {"__assert2", Dispatch<Assert>},
     };
     Register(dbt, "libc.so", c);
+#ifdef __EMSCRIPTEN__
+    RegisterFastHost(dbt, "memcmp", FastCompare);
+#endif
 }
 
 } // namespace wa::dbt

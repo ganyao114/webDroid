@@ -9,11 +9,30 @@
 #include <unistd.h>
 #include <vector>
 #include <zlib.h>
+#ifdef __EMSCRIPTEN__
+#include <emscripten/heap.h>
+#endif
 
 namespace wa::system {
 
+ApkEntryCache::ApkEntryCache() {
+#ifdef __EMSCRIPTEN__
+    large_ = emscripten_get_heap_size() > 256 * 1024 * 1024;
+#endif
+}
+
+std::span<ApkEntryCache::Window> ApkEntryCache::Candidates(Contents contents, int64_t entry,
+                                                         uint64_t offset) {
+    if (contents == Contents::Compressed) return compressed_;
+    if (!large_) return std::span(inflated_).first(16);
+    // Four windows per set, for a total of 4 MiB of inflated cache in the large heap.
+    const auto key = (static_cast<uint64_t>(entry) * 0x9e3779b97f4a7c15ull) ^
+                     (offset / kWindowBytes * 0xbf58476d1ce4e5b9ull);
+    return std::span(inflated_).subspan((key >> 60) * 4, 4);
+}
+
 std::span<const uint8_t> ApkEntryCache::Get(Contents contents, int64_t entry, uint64_t offset) {
-    for (auto& window : windows_[static_cast<size_t>(contents)]) {
+    for (auto& window : Candidates(contents, entry, offset)) {
         if (window.data && window.entry == entry && window.offset == offset) {
             window.used = ++sequence_;
             return {window.data.get(), window.size};
@@ -24,7 +43,14 @@ std::span<const uint8_t> ApkEntryCache::Get(Contents contents, int64_t entry, ui
 
 void ApkEntryCache::Put(Contents contents, int64_t entry, uint64_t offset, std::span<const uint8_t> bytes) {
     if (bytes.size() > kWindowBytes) return;
-    auto& windows = windows_[static_cast<size_t>(contents)];
+    const auto windows = Candidates(contents, entry, offset);
+    auto match = std::ranges::find_if(windows, [&](const Window& window) {
+        return window.data && window.entry == entry && window.offset == offset;
+    });
+    if (match != windows.end()) {
+        match->used = ++sequence_;
+        return;
+    }
     auto& window = *std::ranges::min_element(windows, {}, &Window::used);
     if (!window.data) window.data.reset(new (std::nothrow) uint8_t[kWindowBytes]);
     if (!window.data) return;
@@ -48,7 +74,6 @@ struct ApkEntryReader::Deflate {
         z_stream stream{};
         uint64_t input_end = 0;
         uint64_t position = 0;
-        uint32_t crc = 0;
         bool ended = false;
 
         ~Cursor() {
@@ -61,7 +86,6 @@ struct ApkEntryReader::Deflate {
             // Refill from the next compressed byte when this state is restored.
             copy->input_end = input_end - stream.avail_in;
             copy->position = position;
-            copy->crc = crc;
             copy->stream.next_in = nullptr;
             copy->stream.avail_in = 0;
             copy->stream.next_out = nullptr;
@@ -92,6 +116,7 @@ struct ApkEntryReader::Deflate {
                 chunk_size = 0;
                 cursor.reset();
                 checkpoints.clear();
+                crc_position = crc = 0;
                 return false;
             }
             // Keep the windows just before a seek target. ELF metadata and
@@ -111,12 +136,14 @@ struct ApkEntryReader::Deflate {
         z.avail_out = static_cast<uInt>(size);
         while (z.avail_out && !cursor->ended) {
             if (!z.avail_in && cursor->input_end < source.entry_.compressed_length) {
+                const auto start = cursor->input_end - cursor->input_end % input.size();
                 const auto count = std::min<uint64_t>(input.size(),
-                    source.entry_.compressed_length - cursor->input_end);
-                if (!source.ReadCompressed(input.data(), count, cursor->input_end)) return false;
-                cursor->input_end += count;
-                z.next_in = input.data();
-                z.avail_in = static_cast<uInt>(count);
+                    source.entry_.compressed_length - start);
+                const auto skip = cursor->input_end - start;
+                if (!source.ReadCompressed(input.data(), count, start)) return false;
+                cursor->input_end = start + count;
+                z.next_in = input.data() + skip;
+                z.avail_in = static_cast<uInt>(count - skip);
             }
             const auto status = inflate(&z, Z_NO_FLUSH);
             if (status == Z_STREAM_END) cursor->ended = true;
@@ -132,13 +159,23 @@ struct ApkEntryReader::Deflate {
         chunk_start = cursor->position;
         chunk_size = count;
         cursor->position += count;
-        cursor->crc = crc32(cursor->crc, chunk.data(), static_cast<uInt>(count));
-        if (auto* profile = BootProfile::active) profile->inflated_bytes += count;
+        // Checkpoints all lie inside the contiguous prefix already checksummed.
+        // Replay covers the same immutable bytes, so add only the new suffix.
+        const auto fresh = cursor->position > crc_position ? cursor->position - crc_position : 0;
+        if (fresh) {
+            crc = crc32(crc, chunk.data() + count - fresh, static_cast<uInt>(fresh));
+            crc_position = cursor->position;
+        }
+        if (auto* profile = BootProfile::active) {
+            profile->inflated_bytes += count;
+            profile->replayed_inflated_bytes += count - fresh;
+            if (profile->collect_hotspots) profile->inflated_entries[source.name_] += count;
+        }
         if (cursor->position == source.Size()) {
             uint8_t extra;
             if (!cursor->ended && (!Inflate(source, &extra, 1) || !cursor->stream.avail_out))
                 return false;
-            return cursor->ended && cursor->crc == source.entry_.crc32 &&
+            return cursor->ended && crc == source.entry_.crc32 &&
                 cursor->input_end - cursor->stream.avail_in == source.entry_.compressed_length;
         }
         if (cursor->ended) return false;
@@ -150,15 +187,16 @@ struct ApkEntryReader::Deflate {
 
     const uint64_t checkpoint_interval;
     std::array<uint8_t, kChunkSize> input, chunk;
-    uint64_t chunk_start = 0;
+    uint64_t chunk_start = 0, crc_position = 0;
+    uint32_t crc = 0;
     size_t chunk_size = 0;
     std::unique_ptr<Cursor> cursor;
     std::vector<std::unique_ptr<Cursor>> checkpoints;
 };
 
 ApkEntryReader::ApkEntryReader(ZipArchiveHandle zip, const ZipEntry64& entry,
-                               std::span<const uint8_t> apk, ApkEntryCache* cache)
-    : fd_(GetFileDescriptor(zip)), entry_(entry), apk_(apk), cache_(cache) {}
+                               std::span<const uint8_t> apk, ApkEntryCache* cache, std::string_view name)
+    : fd_(GetFileDescriptor(zip)), entry_(entry), apk_(apk), cache_(cache), name_(name) {}
 
 ApkEntryReader::~ApkEntryReader() = default;
 

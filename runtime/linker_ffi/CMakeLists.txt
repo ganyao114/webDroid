@@ -18,4 +18,36 @@ target_include_directories(wa_linker_ffi PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../s
 if(EMSCRIPTEN)
     target_compile_options(wa_linker_ffi PRIVATE
         -O3 -msimd128 -matomics -mbulk-memory -fwasm-exceptions)
+    set(WA_JIT_HOT_THRESHOLD 32 CACHE STRING "Guest entry count before compiling a foreground Wasm unit")
+    set_property(SOURCE wasm_jit.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        "WA_JIT_HOT_THRESHOLD=${WA_JIT_HOT_THRESHOLD}")
+
+    execute_process(COMMAND "${EMSCRIPTEN_ROOT_PATH}/em-config${EMCC_SUFFIX}" LLVM_ROOT
+        OUTPUT_VARIABLE wa_llvm_root OUTPUT_STRIP_TRAILING_WHITESPACE
+        COMMAND_ERROR_IS_FATAL ANY)
+    find_program(WA_WASM_LD NAMES wasm-ld HINTS "${wa_llvm_root}" NO_CMAKE_FIND_ROOT_PATH REQUIRED)
+    add_library(wa_jit_dispatcher OBJECT wasm_dispatcher.cpp)
+    target_include_directories(wa_jit_dispatcher PRIVATE ../../include)
+    target_link_libraries(wa_jit_dispatcher PRIVATE svm_wasm)
+    target_compile_options(wa_jit_dispatcher PRIVATE -O3 -fno-lto -matomics -mbulk-memory)
+    set(embed_wasm "${CMAKE_CURRENT_LIST_DIR}/../../cmake/EmbedWasm.cmake")
+    foreach(memory IN ITEMS unshared shared)
+        set(memory_flags)
+        if(memory STREQUAL "shared")
+            set(memory_flags --shared-memory --max-memory=4294967296)
+        endif()
+        set(dispatcher "${CMAKE_CURRENT_BINARY_DIR}/wasm_dispatcher_${memory}.wasm")
+        set(header "${dispatcher}.inc")
+        add_custom_command(OUTPUT "${header}"
+            COMMAND "${WA_WASM_LD}" --no-entry --import-memory --import-table --strip-all
+                    -z stack-size=0 --export=wa_dbt_dispatch ${memory_flags}
+                    $<TARGET_OBJECTS:wa_jit_dispatcher> -o "${dispatcher}"
+            COMMAND "${CMAKE_COMMAND}" "-DWA_WASM=${dispatcher}" "-DWA_WASM_HEADER=${header}"
+                    -P "${embed_wasm}"
+            DEPENDS wa_jit_dispatcher $<TARGET_OBJECTS:wa_jit_dispatcher> "${embed_wasm}"
+            BYPRODUCTS "${dispatcher}"
+            VERBATIM)
+        target_sources(wa_linker_ffi PRIVATE "${header}")
+    endforeach()
+    target_include_directories(wa_linker_ffi PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
 endif()

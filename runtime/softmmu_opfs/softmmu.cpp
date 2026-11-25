@@ -566,6 +566,16 @@ Iotlb::~Iotlb() {
     *current = next;
 }
 
+uint8_t* Iotlb::Resident(uint64_t address, uint64_t size, bool write) const noexcept {
+    if (address >= kAddressLimit || size > WA_PAGE_SIZE - (address & kPageMask)) return nullptr;
+    const auto page = static_cast<uint32_t>(address) >> WA_PAGE_SHIFT;
+    const auto& directory = write ? write_directory_ : read_directory_;
+    const auto* slab = reinterpret_cast<const uint32_t*>(directory[page >> kSlabBits]);
+    const auto offset = slab[page & (kSlabEntries - 1)];
+    if (offset & 1u) return nullptr;
+    return reinterpret_cast<uint8_t*>(static_cast<uint32_t>(address) + offset);
+}
+
 void Iotlb::Invalidate(uint32_t first, uint32_t end) noexcept {
     while (first < end) {
         const auto index = first >> kSlabBits;

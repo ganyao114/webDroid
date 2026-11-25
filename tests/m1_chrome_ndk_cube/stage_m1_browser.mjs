@@ -24,14 +24,13 @@ const files = [
   'web/shell/runtime.mjs',
   'web/shell/elf_inspector.mjs',
 ];
-const artifacts = [
-  [wasmBuild, 'android_system.mjs'],
-  [wasmBuild, 'android_system.wasm'],
-  [ndkBuild, 'libndk_gles3_cube_armv7a.so'],
-  [ndkBuild, 'libndk_gles3_cube_arm64.so'],
-];
-
-export async function stageM1Browser(root) {
+export async function stageM1Browser(root, wasmDir = wasmBuild, ndkDir = ndkBuild) {
+  const artifacts = [
+    [wasmDir, 'android_system.mjs'],
+    [wasmDir, 'android_system.wasm'],
+    [ndkDir, 'libndk_gles3_cube_armv7a.so'],
+    [ndkDir, 'libndk_gles3_cube_arm64.so'],
+  ];
   const inputs = [
     ...files.map(file => [join(WORKTREE, file), file]),
     ...artifacts.map(([dir, name]) => [join(dir, name), `build/${name}`]),

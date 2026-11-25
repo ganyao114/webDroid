@@ -135,6 +135,69 @@ int32_t StringCompare(wa_host_call_ctx_t* ctx, void* bounded) {
     return remaining ? WA_ERR_FAULT : WA_OK;
 }
 
+#ifdef __EMSCRIPTEN__
+template <bool Checked> bool FastCopy(FastHostCall& call) {
+    const auto dst = call.args[0], src = call.args[1], size = call.args[2];
+    if (Checked && size > call.args[3]) return false;
+    if (size) {
+        const auto* from = call.ResidentRead(src, size);
+        auto* to = call.ResidentWrite(dst, size);
+        if (!from || !to) return false;
+        std::memmove(to, from, size);
+    }
+    call.result = dst;
+    return true;
+}
+
+template <bool Checked> bool FastFill(FastHostCall& call) {
+    const auto dst = call.args[0], size = call.args[2];
+    if (Checked && size > call.args[3]) return false;
+    if (size) {
+        auto* to = call.ResidentWrite(dst, size);
+        if (!to) return false;
+        std::memset(to, static_cast<uint8_t>(call.args[1]), size);
+    }
+    call.result = dst;
+    return true;
+}
+
+bool FastStringLength(FastHostCall& call) {
+    const auto first = call.args[0];
+    for (auto address = first;;) {
+        const auto count = PageRemaining(address);
+        const auto* bytes = call.ResidentRead(address, count);
+        if (!bytes) return false;
+        if (auto* zero = static_cast<const uint8_t*>(std::memchr(bytes, 0, count))) {
+            call.result = address - first + (zero - bytes);
+            return true;
+        }
+        address += count;
+    }
+}
+
+template <bool Bounded> bool FastStringCompare(FastHostCall& call) {
+    auto a = call.args[0], b = call.args[1];
+    auto remaining = Bounded ? call.args[2] : UINT64_MAX;
+    while (remaining) {
+        const auto count = std::min<uint64_t>({PageRemaining(a), PageRemaining(b), remaining});
+        const auto* left = call.ResidentRead(a, count);
+        const auto* right = call.ResidentRead(b, count);
+        if (!left || !right) return false;
+        for (size_t i = 0; i < count; ++i) {
+            const auto diff = int32_t{left[i]} - int32_t{right[i]};
+            if (diff || left[i] == 0) {
+                call.result = static_cast<uint32_t>(diff);
+                return true;
+            }
+        }
+        a += count;
+        b += count;
+        remaining -= count;
+    }
+    return true;
+}
+#endif
+
 int32_t Allocate(wa_host_call_ctx_t* ctx, void*) {
     ctx->ret0 = AllocateGuest(*ctx->dbt, ctx->args[0]);
     if (!ctx->ret0) SetErrno(*ctx->dbt, GuestErrno(ENOMEM));
@@ -397,6 +460,9 @@ int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name
             symbol.function = function;
             symbol.user = user;
             symbol.builtin = builtin;
+#ifdef __EMSCRIPTEN__
+            symbol.fast = nullptr;
+#endif
             if (address) *address = symbol.address;
             return WA_OK;
         }
@@ -408,6 +474,16 @@ int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name
     if (address) *address = stub;
     return WA_OK;
 }
+
+#ifdef __EMSCRIPTEN__
+void RegisterFastHost(wa_dbt& dbt, std::string_view name, FastHostFn function) {
+    for (auto slot : HostSlots(dbt, name)) {
+        auto& symbol = dbt.hosts[slot];
+        if (symbol.builtin && symbol.soname == "libc.so" && symbol.function)
+            symbol.fast = function;
+    }
+}
+#endif
 
 int32_t RegisterData(wa_dbt& dbt, std::string_view soname, std::string_view name,
                      uint64_t address, bool builtin) {
@@ -528,6 +604,17 @@ void RegisterBuiltins(wa_dbt& dbt) {
     for (const auto& shim : shims)
         RegisterHost(dbt, shim.soname, shim.name, shim.function, nullptr, true);
     RegisterHost(dbt, "libc.so", "strncmp", StringCompare, &dbt, true);
+#ifdef __EMSCRIPTEN__
+    RegisterFastHost(dbt, "memcpy", FastCopy<false>);
+    RegisterFastHost(dbt, "memmove", FastCopy<false>);
+    RegisterFastHost(dbt, "memset", FastFill<false>);
+    RegisterFastHost(dbt, "__memcpy_chk", FastCopy<true>);
+    RegisterFastHost(dbt, "__memmove_chk", FastCopy<true>);
+    RegisterFastHost(dbt, "__memset_chk", FastFill<true>);
+    RegisterFastHost(dbt, "strlen", FastStringLength);
+    RegisterFastHost(dbt, "strcmp", FastStringCompare<false>);
+    RegisterFastHost(dbt, "strncmp", FastStringCompare<true>);
+#endif
     RegisterSupplementalBuiltins(dbt);
 }
 

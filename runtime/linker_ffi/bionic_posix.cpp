@@ -34,6 +34,13 @@ void Errno(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = ErrnoAddress(*ctx.dbt);
 }
 
+#ifdef __EMSCRIPTEN__
+bool FastErrno(FastHostCall& call) {
+    call.result = call.dbt.running->errno_address;
+    return call.result != 0;
+}
+#endif
+
 enum class ErrorText { Static, Posix, Gnu };
 template <ErrorText mode> void ErrorString(wa_host_call_ctx_t& ctx) {
     const auto code = static_cast<int32_t>(ctx.args[0]);
@@ -1299,6 +1306,9 @@ void RegisterPosix(wa_dbt& dbt) {
         {"pthread_kill", Dispatch<PthreadKill>},
     };
     Register(dbt, "libc.so", c);
+#ifdef __EMSCRIPTEN__
+    RegisterFastHost(dbt, "__errno", FastErrno);
+#endif
     RegisterGuestJumps(dbt);
 }
 
