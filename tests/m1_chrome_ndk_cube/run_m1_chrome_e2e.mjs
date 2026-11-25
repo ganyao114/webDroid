@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 
 import { launchChrome } from '../../tools/chrome_harness/cdp_client.mjs';
 import { startServer } from '../../tools/chrome_harness/serve.mjs';
-import { page, stageM1Browser, wasmBuild } from './stage_m1_browser.mjs';
+import { ndkBuild, page, stageM1Browser, wasmBuild } from './stage_m1_browser.mjs';
 
 const { values } = parseArgs({
   options: {
@@ -12,20 +12,24 @@ const { values } = parseArgs({
     headed: { type: 'boolean' },
     screenshot: { type: 'string' },
     timeout: { type: 'string' },
+    'wasm-build': { type: 'string' },
+    'host-build': { type: 'string' },
   },
 });
 const timeout = Number(values.timeout ?? 90_000);
+const wasmDir = resolve(values['wasm-build'] ?? wasmBuild);
+const ndkDir = values['host-build'] ? resolve(values['host-build'], 'ndk') : ndkBuild;
 let staged, server, browser;
 let result;
 const pageErrors = [];
 
 try {
   if (!Number.isInteger(timeout) || timeout <= 0) throw new RangeError('Invalid CDP timeout');
-  staged = await mkdtemp(join(wasmBuild, 'm1-http-'));
-  await stageM1Browser(staged);
+  staged = await mkdtemp(join(wasmDir, 'm1-http-'));
+  await stageM1Browser(staged, wasmDir, ndkDir);
   const [serving, launching] = await Promise.allSettled([
     startServer({ root: staged }),
-    launchChrome({ buildDir: wasmBuild, chromePath: values.chrome, headless: !values.headed }),
+    launchChrome({ buildDir: wasmDir, chromePath: values.chrome, headless: !values.headed }),
   ]);
   server = serving.value;
   browser = launching.value;

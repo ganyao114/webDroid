@@ -12,12 +12,14 @@
 #include <type_traits>
 
 namespace wa::softmmu {
+class CpuAccess;
 struct Iotlb;
 }
 
 namespace wa::dbt {
 
 struct ActiveJitAccess;
+struct GuestWait;
 struct GuestCpu {
     swift::runtime::backend::wasm::WasmRunContext run{};
     union {
@@ -26,6 +28,7 @@ struct GuestCpu {
     };
 #ifdef __EMSCRIPTEN__
     ActiveJitAccess* jit_access = nullptr;
+    uint32_t jit_fast_calls = 0;
 #endif
     GuestCpu() : arm64{} {}
 };
@@ -37,8 +40,9 @@ static_assert(offsetof(GuestCpu, arm64) == sizeof(GuestCpu::run));
 #ifdef __EMSCRIPTEN__
 struct JitRunResult {
     uint64_t exit = 0;
-    uint32_t instructions = 0;
+    uint32_t ticks = 0;
     uint32_t entries = 0;
+    uint32_t host_calls = 0;
     int32_t status = WA_OK;
 };
 
@@ -50,7 +54,8 @@ class WasmJit {
     bool Observe(uint64_t pc) noexcept;
     bool Prepare(uint64_t pc);
     bool Ready(uint64_t pc) const noexcept;
-    JitRunResult Run(GuestCpu& cpu, uint64_t pc, uint32_t budget);
+    JitRunResult Run(GuestCpu& cpu, uint64_t pc, uint32_t budget, softmmu::CpuAccess& memory,
+                     const GuestWait* caller_wait);
 
   private:
     struct Heat {
@@ -60,11 +65,15 @@ class WasmJit {
     std::span<Heat, 4> Bucket(uint64_t pc) noexcept;
     std::span<const Heat, 4> Bucket(uint64_t pc) const noexcept;
 
+    struct DispatchCache;
     wa_dbt& dbt_;
+    std::unique_ptr<DispatchCache> cache_;
     std::unique_ptr<softmmu::Iotlb> tlb_;
     uint64_t code_generation_ = 0;
     bool disabled_ = false;
-    std::array<Heat, 16384> heat_{};
+    bool shared_memory_ = false;
+    uint32_t profile_sequence_ = 1;
+    std::array<Heat, 32768> heat_{};
 };
 
 int32_t CompileForegroundWasm(wa_dbt& dbt, uint64_t key, bool shared_memory,

@@ -26,6 +26,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/heap.h>
@@ -125,6 +126,10 @@ std::string DescribeBootProfile(const BootProfile& profile) {
         ",\"wasmUnitsCompiled\":" + std::to_string(profile.dbt_stats.wasm_units_compiled) +
         ",\"wasmBytesEmitted\":" + std::to_string(profile.dbt_stats.wasm_bytes_emitted) +
         ",\"jitEntries\":" + std::to_string(profile.dbt_stats.jit_entries) +
+        ",\"jitChains\":" + std::to_string(profile.dbt_stats.jit_chains) +
+        ",\"jitEvictions\":" + std::to_string(profile.dbt_stats.jit_evictions) +
+        ",\"jitFastHostCalls\":" + std::to_string(profile.dbt_stats.jit_fast_host_calls) +
+        ",\"jitExecSamples\":" + std::to_string(profile.dbt_stats.jit_exec_samples) +
         ",\"jitCompileFailures\":" + std::to_string(profile.dbt_stats.jit_compile_failures) +
         ",\"jitCompileMs\":" + std::to_string(profile.dbt_stats.jit_compile_ms) +
         ",\"jitExecMs\":" + std::to_string(profile.dbt_stats.jit_exec_ms) +
@@ -133,7 +138,8 @@ std::string DescribeBootProfile(const BootProfile& profile) {
         ",\"iotlbSlowWrites\":" + std::to_string(profile.dbt_stats.iotlb_slow_writes) +
         ",\"apkEntryReadCalls\":" + std::to_string(profile.entry_read_calls) +
         ",\"apkEntryReadBytes\":" + std::to_string(profile.entry_read_bytes) +
-        ",\"apkEntryInflatedBytes\":" + std::to_string(profile.inflated_bytes);
+        ",\"apkEntryInflatedBytes\":" + std::to_string(profile.inflated_bytes) +
+        ",\"apkEntryReplayedInflatedBytes\":" + std::to_string(profile.replayed_inflated_bytes);
     for (size_t i = 0; i < BootProfile::names.size(); ++i)
         json += ',' + Quote(BootProfile::names[i]) + ':' + ms(profile.elapsed[i]);
 

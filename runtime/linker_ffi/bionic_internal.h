@@ -11,6 +11,11 @@
 #include <set>
 #include <tuple>
 
+namespace wa::softmmu {
+class CpuAccess;
+struct Iotlb;
+}
+
 namespace wa::dbt {
 
 using Clock = std::chrono::steady_clock;
@@ -213,6 +218,24 @@ struct Builtin {
     const char* name;
     wa_host_symbol_fn function;
 };
+
+#ifdef __EMSCRIPTEN__
+// A declined fast call must leave guest state unchanged. It can then run as a
+// normal host thunk, outside the MMU lock, with the full host call context.
+struct FastHostCall {
+    wa_dbt& dbt;
+    softmmu::CpuAccess& memory;
+    softmmu::Iotlb& tlb;
+    const uint64_t* args;
+    uint64_t result = 0;
+
+    const uint8_t* ResidentRead(uint64_t address, uint64_t size) const noexcept;
+    uint8_t* ResidentWrite(uint64_t address, uint64_t size) const noexcept;
+    bool ReadU32(uint64_t address, uint32_t& word) const noexcept;
+};
+
+void RegisterFastHost(wa_dbt& dbt, std::string_view name, FastHostFn function);
+#endif
 
 template <void (*Function)(wa_host_call_ctx_t&)> int32_t Dispatch(wa_host_call_ctx_t* ctx, void*) {
     try {

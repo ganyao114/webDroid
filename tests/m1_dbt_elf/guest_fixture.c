@@ -77,6 +77,22 @@ uint32_t wa_libc_roundtrip(const char* text, uint32_t length) {
     return result;
 }
 
+uint32_t wa_hot_libc(char* buffer, const char* text, uint32_t length, uint32_t rounds) {
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    uint32_t total = 0;
+    while (rounds--) {
+        if (pthread_mutex_lock(&lock)) return 0;
+        // Touch both spans so a warmed unit can hand resident bytes to libc.
+        *(volatile char*)buffer = *(const volatile char*)text;
+        memcpy(buffer, text, length);
+        memmove(buffer + 1, buffer, length);
+        if (memcmp(buffer + 1, text, length)) return 0;
+        total += strlen(buffer + 1);
+        if (pthread_mutex_unlock(&lock)) return 0;
+    }
+    return total;
+}
+
 static int Compare(const void* left, const void* right) {
     const int32_t a = *(const int32_t*)left;
     const int32_t b = *(const int32_t*)right;

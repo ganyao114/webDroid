@@ -1,5 +1,6 @@
 #include "wasmandroid/softmmu_linker.h"
 #ifdef __EMSCRIPTEN__
+#include "boot_profile.h"
 #include "softmmu_internal.h"
 #endif
 
@@ -306,6 +307,22 @@ void TestELF(wa_guest_arch_t arch, const char* fixture, const char* wasm_output)
     Write(source.get(), scratch, message);
     CHECK(Call(dbt.get(), Find(dbt.get(), "wa_libc_roundtrip"), {scratch, sizeof(message) - 1}) ==
           sizeof(message));
+#ifdef __EMSCRIPTEN__
+    if (arch == WA_ARCH_ARM64) {
+        wa::BootProfile profile;
+        profile.collect_hotspots = true;
+        constexpr uint32_t rounds = 1024;
+        {
+            const wa::BootProfile::Capture capture(profile);
+            CHECK(Call(dbt.get(), Find(dbt.get(), "wa_hot_libc"),
+                       {scratch + 128, scratch, sizeof(message), rounds}) == rounds * (sizeof(message) - 1));
+        }
+        CHECK(profile.dbt_stats.jit_fast_host_calls > rounds);
+        for (const auto* name : {"pthread_mutex_lock", "pthread_mutex_unlock", "memcpy", "memmove",
+                                 "memcmp", "strlen"})
+            CHECK(profile.host_calls.at(name).calls == rounds);
+    }
+#endif
     CHECK(Call(dbt.get(), Find(dbt.get(), "wa_call_virtual"), {7, 13}) == 94 && route.calls == 1);
 
     const std::array<int32_t, 8> values{42, -7, 17, INT32_MAX, 9, -7, INT32_MIN, 0};
@@ -365,6 +382,7 @@ void TestForegroundJitMemory() {
     namespace softmmu = wa::softmmu;
     constexpr uint64_t code = 0x00200000;
     constexpr uint64_t pc = code + WA_PAGE_SIZE - 4;
+    constexpr uint64_t grouped_pc = code + WA_PAGE_SIZE + 128;
     constexpr uint64_t source = 0x00400000;
     constexpr uint64_t dest = 0x00500000;
     constexpr uint32_t rw = WA_PROT_READ | WA_PROT_WRITE;
@@ -377,6 +395,14 @@ void TestForegroundJitMemory() {
         0xf9400020u, // ldr x0, [x1]
         0xd65f03c0u, // ret
     };
+    constexpr std::array paired{
+        0xa9401003u, // ldp x3, x4, [x0]
+        0xa9001023u, // stp x3, x4, [x1]
+        0x71000442u, // subs w2, w2, #1
+        0x54ffffa1u, // b.ne to ldp
+        0xf9400020u, // ldr x0, [x1]
+        0xd65f03c0u, // ret
+    };
     BackingFile file{.bytes = std::vector<uint8_t>(WA_PAGE_SIZE), .file_id = 27};
     Mmu mmu(wa_softmmu_create(BackingFile::Read, &file), wa_softmmu_destroy);
     Mmu clone(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
@@ -386,6 +412,7 @@ void TestForegroundJitMemory() {
     const auto map_code = [&] {
         OK(wa_softmmu_map_anon(mmu.get(), code, 2 * WA_PAGE_SIZE, rw | rx));
         Write(mmu.get(), pc, instructions);
+        Write(mmu.get(), grouped_pc, paired);
         OK(softmmu::Protect(mmu.get(), code, 2 * WA_PAGE_SIZE, rx));
     };
     map_code();
@@ -423,6 +450,14 @@ void TestForegroundJitMemory() {
     Write(mmu.get(), high + 3, value);
     CHECK(Call(dbt.get(), pc, {high + 3, dest + 7, 1}) == value[0]);
     CHECK(DbtStats(dbt.get()).jit_entries > warm.jit_entries);
+
+    CHECK(Call(dbt.get(), grouped_pc, {source + 3, dest + 7, 1024}) == value[0]);
+    const auto grouped = DbtStats(dbt.get());
+    constexpr Vector128 high_value{0x456789abcdef0123, 0x56789abcdef01234};
+    Write(mmu.get(), high + 3, high_value);
+    CHECK(Call(dbt.get(), grouped_pc, {high + 3, dest + 7, 1}) == high_value[0]);
+    CHECK(Read<Vector128>(mmu.get(), dest + 7) == high_value);
+    CHECK(DbtStats(dbt.get()).jit_entries > grouped.jit_entries);
 
     softmmu::Unmap(mmu.get(), code, 2 * WA_PAGE_SIZE);
     instructions[4] = 0x528000e0u; // mov w0, #7

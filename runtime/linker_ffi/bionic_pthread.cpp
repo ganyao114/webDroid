@@ -221,30 +221,34 @@ void Exit(wa_host_call_ctx_t& ctx) {
 }
 
 enum class Mutex { Init, Destroy, Lock, Try, Unlock };
-int LockMutex(wa_dbt& dbt, GuestMemory mem, uint64_t address, bool try_only) {
-    const auto flags = mem.Read<uint32_t>(address);
+std::optional<int> TryAcquireMutex(wa_dbt& dbt, uint64_t address, uint32_t flags, bool try_only) {
     if (flags == kDestroyed)
         return Error(EINVAL);
     auto& mutex = dbt.bionic->mutexes[address];
     const auto self = dbt.running->id;
-    const auto type = (flags >> 14) & 3;
-    while (mutex.owner) {
-        if (mutex.owner == self && type == 1) {
-            if (mutex.depth == 0x800)
-                return Error(EAGAIN);
-            ++mutex.depth;
-            return 0;
-        }
-        if (try_only)
-            return Error(EBUSY);
-        if (mutex.owner == self)
-            return Error(EDEADLK);
+    if (!mutex.owner) {
+        dbt.running->wait = {};
+        mutex = {self, 1};
+        return 0;
+    }
+    if (mutex.owner == self && ((flags >> 14) & 3) == 1) {
+        if (mutex.depth == 0x800)
+            return Error(EAGAIN);
+        ++mutex.depth;
+        return 0;
+    }
+    if (try_only) return Error(EBUSY);
+    if (mutex.owner == self) return Error(EDEADLK);
+    return std::nullopt;
+}
+
+int LockMutex(wa_dbt& dbt, GuestMemory mem, uint64_t address, bool try_only) {
+    const auto flags = mem.Read<uint32_t>(address);
+    for (;;) {
+        if (auto status = TryAcquireMutex(dbt, address, flags, try_only)) return *status;
         if (const auto error = Park(dbt, WaitKind::Mutex, address))
             return error;
     }
-    dbt.running->wait = {};
-    mutex = {self, 1};
-    return 0;
 }
 
 int UnlockMutex(wa_dbt& dbt, uint64_t address) {
@@ -258,6 +262,27 @@ int UnlockMutex(wa_dbt& dbt, uint64_t address) {
     }
     return 0;
 }
+
+#ifdef __EMSCRIPTEN__
+template <bool TryOnly> bool FastLockMutex(FastHostCall& call) {
+    uint32_t flags;
+    if (!call.ReadU32(call.args[0], flags)) return false;
+    const auto status = TryAcquireMutex(call.dbt, call.args[0], flags, TryOnly);
+    if (!status) return false;
+    call.result = *status;
+    return true;
+}
+
+bool FastUnlockMutex(FastHostCall& call) {
+    call.result = UnlockMutex(call.dbt, call.args[0]);
+    return true;
+}
+
+bool FastSelf(FastHostCall& call) {
+    call.result = call.dbt.running->id;
+    return true;
+}
+#endif
 
 template <Mutex op> void MutexCall(wa_host_call_ctx_t& ctx) {
     auto& dbt = *ctx.dbt;
@@ -444,20 +469,31 @@ void KeyCreate(wa_host_call_ctx_t& ctx) {
     ErrorResult(ctx, EAGAIN);
 }
 
-enum class Key { Get, Set, Delete };
+uint64_t GetSpecific(const wa_dbt& dbt, uint32_t key) {
+    if (!dbt.bionic->keys.contains(key)) return 0;
+    const auto& values = dbt.running->tls_keys;
+    const auto it = values.find(key);
+    return it == values.end() ? 0 : it->second;
+}
+
+void GetSpecificCall(wa_host_call_ctx_t& ctx) {
+    ctx.ret0 = GetSpecific(*ctx.dbt, static_cast<uint32_t>(ctx.args[0]));
+}
+
+#ifdef __EMSCRIPTEN__
+bool FastGetSpecific(FastHostCall& call) {
+    call.result = GetSpecific(call.dbt, static_cast<uint32_t>(call.args[0]));
+    return true;
+}
+#endif
+
+enum class Key { Set, Delete };
 template <Key op> void KeyAccess(wa_host_call_ctx_t& ctx) {
     auto& state = *ctx.dbt->bionic;
     const auto key = static_cast<uint32_t>(ctx.args[0]);
-    if (!state.keys.contains(key)) {
-        if constexpr (op != Key::Get)
-            ErrorResult(ctx, EINVAL);
-        return;
-    }
+    if (!state.keys.contains(key)) return ErrorResult(ctx, EINVAL);
     auto& values = ctx.dbt->running->tls_keys;
-    if constexpr (op == Key::Get) {
-        if (const auto it = values.find(key); it != values.end())
-            ctx.ret0 = it->second;
-    } else if constexpr (op == Key::Set) {
+    if constexpr (op == Key::Set) {
         if (ctx.args[1])
             values[key] = ctx.args[1];
         else
@@ -795,7 +831,7 @@ void RegisterPthread(wa_dbt& dbt) {
         {"pthread_once", Dispatch<Once>},
         {"pthread_key_create", Dispatch<KeyCreate>},
         {"pthread_key_delete", Dispatch<KeyAccess<Key::Delete>>},
-        {"pthread_getspecific", Dispatch<KeyAccess<Key::Get>>},
+        {"pthread_getspecific", Dispatch<GetSpecificCall>},
         {"pthread_setspecific", Dispatch<KeyAccess<Key::Set>>},
         {"pthread_getschedparam", Dispatch<Sched<false>>},
         {"pthread_setschedparam", Dispatch<Sched<true>>},
@@ -818,6 +854,13 @@ void RegisterPthread(wa_dbt& dbt) {
         {"sched_getscheduler", Dispatch<GetScheduler>},
     };
     Register(dbt, "libc.so", shims);
+#ifdef __EMSCRIPTEN__
+    RegisterFastHost(dbt, "pthread_mutex_lock", FastLockMutex<false>);
+    RegisterFastHost(dbt, "pthread_mutex_trylock", FastLockMutex<true>);
+    RegisterFastHost(dbt, "pthread_mutex_unlock", FastUnlockMutex);
+    RegisterFastHost(dbt, "pthread_self", FastSelf);
+    RegisterFastHost(dbt, "pthread_getspecific", FastGetSpecific);
+#endif
 }
 
 } // namespace wa::dbt

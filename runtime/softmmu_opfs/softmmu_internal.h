@@ -39,6 +39,8 @@ struct Iotlb {
 
     const uint32_t* ReadDirectory() const { return read_directory_.data(); }
     const uint32_t* WriteDirectory() const { return write_directory_.data(); }
+    // Valid while the owning CPU holds the MMU lock. A miss has no side effects.
+    uint8_t* Resident(uint64_t address, uint64_t size, bool write) const noexcept;
     void Invalidate(uint32_t first, uint32_t end) noexcept;
     void Set(uint32_t page, uint32_t offset, uint32_t permissions) noexcept;
     Iotlb* next = nullptr;
@@ -53,8 +55,8 @@ struct Iotlb {
 };
 #endif
 
-// Hold the MMU lock for a bounded interpreter batch. Host thunks and state
-// services run after the batch releases it.
+// Hold the MMU lock while the CPU uses resident pages. Release it before a
+// callback that can take the lock, change mappings, or run another CPU.
 class CpuAccess {
   public:
     explicit CpuAccess(wa_softmmu_t* mmu);
