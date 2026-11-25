@@ -1,6 +1,7 @@
 import { encoder, Memory } from '../surfaceflinger/abi.mjs';
 import { createSurfaceFlingerCompositor } from '../surfaceflinger/compositor.mjs';
-import { attachAndroidInput } from '../surfaceflinger/input_ime.mjs';
+import { attachAndroidInput, BrowserDocumentPicker } from '../surfaceflinger/input_ime.mjs';
+import { PcmAudioOutput } from '../surfaceflinger/mediacodec_bridge.mjs';
 import { frameTimeNs, withApkFile } from './abi_helpers.mjs';
 import { sceneLabels } from './scene_labels.mjs';
 
@@ -143,6 +144,45 @@ export class ForegroundActivityAbi {
     });
   }
 
+  documentRequest() {
+    const length = this.module._wa_document_picker_request?.(this.scene, this.#scratch, textCapacity);
+    if (!length || length < 0) return null;
+    const [id, multiple, ...types] = this.memory.refresh().utf8(this.#scratch, length).split('\n');
+    return { id: Number(id), multiple: multiple === '1', types };
+  }
+
+  async stageDocument(id, index, file, signal) {
+    const { FS } = this.module;
+    const directory = `/__wa_documents/${id}/${index}`;
+    const name = file.name.replace(/[/\\\0]/g, '_');
+    const path = `${directory}/${!name || name === '.' || name === '..' ? 'document' : name}`;
+    FS.mkdirTree(directory);
+    try {
+      const output = FS.open(path, 'w');
+      try {
+        for await (const chunk of file.stream()) {
+          signal.throwIfAborted();
+          FS.write(output, chunk, 0, chunk.byteLength);
+        }
+      } finally {
+        FS.close(output);
+      }
+      signal.throwIfAborted();
+      withString(this.module, path, address => withString(this.module,
+        file.type || 'application/octet-stream', mime => {
+          const status = this.module._wa_document_picker_stage(this.scene, id, address, mime);
+          if (status < 0) throw new Error(`Could not mount selected document (${status})`);
+        }));
+    } finally {
+      if (FS.analyzePath(path).exists) FS.unlink(path);
+      FS.rmdir(directory);
+    }
+  }
+
+  finishDocument(id, accepted) {
+    return this.module._wa_document_picker_complete(this.scene, id, accepted);
+  }
+
   state() {
     const length = this.#check('state_json', this.#call('state_json', this.#scratch, textCapacity));
     return JSON.parse(this.memory.refresh().utf8(this.#scratch, length));
@@ -197,6 +237,10 @@ export class ForegroundJavaApk {
   #abi;
   #compositor;
   #input;
+  #audio;
+  #activation;
+  #documents;
+  #documentError;
   #host;
   #creating;
   #size;
@@ -225,6 +269,12 @@ export class ForegroundJavaApk {
 
     const { host, canvas } = createForegroundSurface(surface, launch);
     this.#host = host;
+    this.#audio = new PcmAudioOutput(module);
+    this.#activation = new AbortController();
+    for (const event of ['pointerdown', 'pointerup', 'keydown']) {
+      host.addEventListener(event, () => this.#audio.unlock(), { signal: this.#activation.signal });
+    }
+    this.#documents = new BrowserDocumentPicker(host, (id, files, signal) => this.#finishDocuments(id, files, signal));
     this.#creating = createSurfaceFlingerCompositor({
       module, scene: abi.scene, canvas, webviewHost: host, viewport, preferredBackend: backend,
       readWebViewFile: (id, url) => abi.readWebViewFile(id, url),
@@ -273,6 +323,8 @@ export class ForegroundJavaApk {
       }
       return;
     }
+    const document = this.#abi.documentRequest();
+    if (document) this.#documents.present(document);
     // Publishing a pending frame skips input dispatch. The next tick consumes queued taps.
     if (!retryingFrame) {
       if (this.#tap && this.#state.imeFocused) this.#input.focusIME(this.#tap.x, this.#tap.y);
@@ -286,9 +338,25 @@ export class ForegroundJavaApk {
     }
   }
 
-  sendBack() { return this.#ready && !this.#closed && this.#abi.sendBack(); }
+  async #finishDocuments(id, files, signal) {
+    this.#documentError = undefined;
+    let accepted = false;
+    try {
+      for (const [index, file] of files.entries()) await this.#abi.stageDocument(id, index, file, signal);
+      accepted = files.length > 0;
+    } catch (error) {
+      if (!signal.aborted) this.#documentError = error.message;
+    }
+    if (!signal.aborted && !this.#closed) this.#abi.finishDocument(id, accepted);
+  }
 
-  stats() { return { ...this.#compositor?.stats(), ...this.#state }; }
+  sendBack() {
+    return this.#ready && !this.#closed && (this.#documents.cancel() || this.#abi.sendBack());
+  }
+
+  stats() {
+    return { ...this.#compositor?.stats(), ...this.#state, ...this.#audio?.stats(), document_error: this.#documentError };
+  }
 
   labels() { return this.#ready && !this.#closed ? sceneLabels(this.#abi.module, this.#abi.scene) : []; }
 
@@ -299,6 +367,9 @@ export class ForegroundJavaApk {
   close() {
     if (this.#closed) return this.#shutdown;
     this.#closed = true;
+    this.#activation?.abort();
+    this.#audio?.dispose();
+    this.#documents?.dispose();
     this.#host?.remove();
     if (this.#creating) {
       this.#shutdown = this.#creating.catch(() => {}).then(() => this.#dispose());

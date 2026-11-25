@@ -10,3 +10,8 @@ export function onboardingAction(labels) {
   }
   return null;
 }
+
+export function validVlcPcm({ sink, frames, nonzeroFrames, peak, rms, frequency }) {
+  return sink === 'OpenSLES' && frames >= 8640 && frames <= 12000 && nonzeroFrames > 8500 &&
+    peak > 0.17 && peak < 0.26 && rms > 0.11 && rms < 0.19 && Math.abs(frequency - 440) < 5;
+}

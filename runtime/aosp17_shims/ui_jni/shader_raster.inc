@@ -10,22 +10,6 @@ int TilePixel(double coordinate, int size, jint mode) {
     return static_cast<int>(wrapped);
 }
 
-uint32_t InterpolateColors(std::span<const uint32_t> colors, std::span<const double> weights) {
-    double alpha = 0;
-    std::array<double, 3> channels{};
-    for (size_t i = 0; i < colors.size(); ++i) {
-        const double weight = (colors[i] >> 24) * weights[i];
-        alpha += weight;
-        for (unsigned channel = 0; channel < channels.size(); ++channel)
-            channels[channel] += ((colors[i] >> (channel * 8)) & 255) * weight;
-    }
-    if (alpha < 0.5) return 0;
-    auto result = static_cast<uint32_t>(std::lround(alpha)) << 24;
-    for (unsigned channel = 0; channel < channels.size(); ++channel)
-        result |= static_cast<uint32_t>(std::lround(channels[channel] / alpha)) << (channel * 8);
-    return result;
-}
-
 uint32_t SampleBitmap(const BitmapData& bitmap, jint tile_x, jint tile_y, bool filter,
                       float x, float y, uint32_t paint_color) {
     if (bitmap.pixels.empty() || !std::isfinite(x) || !std::isfinite(y)) return 0;

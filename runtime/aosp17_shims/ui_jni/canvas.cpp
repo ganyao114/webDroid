@@ -341,7 +341,14 @@ uint32_t PublishBitmapPixels(State& state, std::span<const jint> argb, jint widt
             return image.id;
     }
     const size_t count = argb.size();
-    std::vector<uint8_t> rgba(count * 4);
+    // Most drawable uploads fit in a transient buffer without extending the heap.
+    std::array<uint8_t, 32 * 1024> local;
+    std::unique_ptr<uint8_t[]> large;
+    auto* rgba = local.data();
+    if (count > local.size() / 4) {
+        large = std::make_unique_for_overwrite<uint8_t[]>(count * 4);
+        rgba = large.get();
+    }
     for (size_t i = 0; i < count; ++i) {
         uint32_t color = static_cast<uint32_t>(argb[i]) | tint;
         rgba[i * 4] = color >> 16;
@@ -362,7 +369,7 @@ uint32_t PublishBitmapPixels(State& state, std::span<const jint> argb, jint widt
         id = next_id();
     }
     state.images.push_back({identity, generation, id, tint});
-    state.result = wa_bitmap_put(store, id, width, height, width * 4, rgba.data());
+    state.result = wa_bitmap_put(store, id, width, height, width * 4, rgba);
     if (state.result != WA_SF_OK) {
         state.images.pop_back();
         return 0;

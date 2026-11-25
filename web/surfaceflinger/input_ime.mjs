@@ -231,3 +231,69 @@ export function attachAndroidInput(canvas, writer, {
     },
   };
 }
+
+const mimeType = /^[\w!#$&^_.+-]+\/(?:[\w!#$&^_.+-]+|\*)$/;
+
+export class BrowserDocumentPicker {
+  #selection;
+
+  constructor(host, finish) {
+    this.host = host;
+    this.finish = finish;
+  }
+
+  present({ id, multiple, types }) {
+    if (this.#selection) return;
+    const doc = this.host.ownerDocument;
+    const actions = doc.createElement('div');
+    Object.assign(actions.style, {
+      position: 'absolute', bottom: '16px', left: '50%', transform: 'translateX(-50%)',
+      zIndex: '2147483647', display: 'flex', gap: '8px', padding: '8px',
+      backgroundColor: 'Canvas', borderRadius: '8px',
+    });
+    const input = doc.createElement('input');
+    input.type = 'file';
+    input.hidden = true;
+    input.multiple = multiple;
+    input.accept = types.filter(type => mimeType.test(type)).join(',');
+    input.dataset.androidDocumentPicker = String(id);
+    const choose = doc.createElement('button');
+    choose.type = 'button';
+    choose.textContent = multiple ? 'Choose files' : 'Choose file';
+    const cancel = doc.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    const abort = new AbortController();
+    const selection = this.#selection = { id, actions, abort };
+    const open = () => input.click();
+    choose.onclick = open;
+    cancel.onclick = () => this.cancel();
+    input.oncancel = () => this.cancel();
+    input.onchange = async () => {
+      choose.disabled = true;
+      try {
+        await this.finish(id, [...input.files], abort.signal);
+      } finally {
+        if (this.#selection === selection) this.dispose();
+      }
+    };
+    actions.append(input, choose, cancel);
+    this.host.append(actions);
+    if (doc.defaultView.navigator.userActivation?.isActive) open();
+    else choose.focus({ preventScroll: true });
+  }
+
+  cancel() {
+    const selection = this.#selection;
+    if (!selection) return false;
+    this.dispose();
+    void this.finish(selection.id, [], new AbortController().signal);
+    return true;
+  }
+
+  dispose() {
+    this.#selection?.abort.abort();
+    this.#selection?.actions.remove();
+    this.#selection = undefined;
+  }
+}

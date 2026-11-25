@@ -38,6 +38,8 @@ struct CanvasData;
 struct SvgPathData;
 struct VectorNode;
 struct VectorTree;
+struct AudioTracks;
+struct DocumentRequest;
 
 struct State {
     JNIEnv* env = nullptr;
@@ -86,6 +88,9 @@ struct State {
     std::shared_ptr<GraphicsPeers<CanvasData>> canvases;
     std::shared_ptr<GraphicsPeers<std::shared_ptr<VectorNode>>> vector_nodes;
     std::shared_ptr<GraphicsPeers<VectorTree>> vector_trees;
+    std::shared_ptr<AudioTracks> audio_tracks;
+    std::unique_ptr<DocumentRequest> document;
+    uint32_t document_id = 0;
     std::array<jfieldID, 4> vector_bounds_fields{};
     uint64_t recording_serial = 0;
     jlong default_typeface = 0;

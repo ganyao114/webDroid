@@ -162,3 +162,72 @@ export class MediaCodecBridge {
     for (const id of this.decoders.keys()) this.closeDecoder(id);
   }
 }
+
+const workletUrl = new URL('../gfx/audio_worklet.js', import.meta.url);
+const readPosition = 5;
+
+export async function connectPcmRing(context, buffer, byteOffset) {
+  await context.audioWorklet.addModule(workletUrl);
+  const node = new AudioWorkletNode(context, 'wa-pcm-ring', {
+    numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2],
+    processorOptions: { buffer, byteOffset },
+  });
+  node.connect(context.destination);
+  return node;
+}
+
+export class PcmAudioOutput {
+  #context;
+  #node;
+  #header;
+  #start;
+  #connecting;
+  #closed = false;
+  #error;
+
+  constructor(module) {
+    const offset = module._wa_guest_audio_ring?.() >>> 0;
+    const buffer = module.wasmMemory?.buffer;
+    if (offset && typeof SharedArrayBuffer !== 'undefined' && buffer instanceof SharedArrayBuffer) {
+      this.buffer = buffer;
+      this.offset = offset;
+      this.#header = new Uint32Array(buffer, offset, 8);
+      this.#start = Atomics.load(this.#header, readPosition);
+    }
+  }
+
+  unlock() {
+    if (this.#closed || !this.#header || typeof AudioContext !== 'function') return;
+    try {
+      const context = this.#context ??= new AudioContext({ sampleRate: 48000 });
+      if (context.state !== 'running') {
+        void context.resume().catch(error => { if (!this.#closed) this.#error = error.message; });
+      }
+      this.#connecting ??= connectPcmRing(context, this.buffer, this.offset).then(node => {
+        if (this.#closed) {
+          node.disconnect();
+          node.port.close();
+          return;
+        }
+        this.#node = node;
+      }).catch(error => { if (!this.#closed) this.#error = error.message; });
+    } catch (error) {
+      this.#error = error.message;
+    }
+  }
+
+  stats() {
+    return {
+      audio_frames: this.#header ? (Atomics.load(this.#header, readPosition) - this.#start) >>> 0 : 0,
+      audio_state: this.#context?.state,
+      audio_error: this.#error,
+    };
+  }
+
+  dispose() {
+    this.#closed = true;
+    this.#node?.disconnect();
+    this.#node?.port.close();
+    void this.#context?.close().catch(() => {});
+  }
+}

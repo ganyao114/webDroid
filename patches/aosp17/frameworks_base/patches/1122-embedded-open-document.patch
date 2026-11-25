@@ -1,0 +1,47 @@
+--- a/frameworks/base/core/java/android/app/Activity.java
++++ b/frameworks/base/core/java/android/app/Activity.java
+@@ -1046,5 +1046,4 @@
+ 
+ 
+-    private static native String getDlWarning();
+ 
+     /**
+@@ -8551,4 +8550,10 @@
+     private boolean enqueueEmbeddedLaunch(Intent intent, int requestCode) {
+         if (!Boolean.getBoolean("org.wasmandroid.foreground")) return false;
++        if (requestCode >= 0 && intent.getComponent() == null
++                && Intent.ACTION_OPEN_DOCUMENT.equals(intent.getAction())) {
++            String[] types = intent.getStringArrayExtra(Intent.EXTRA_MIME_TYPES);
++            return nativeOpenEmbeddedDocument(requestCode, intent.getType(), types,
++                    intent.getBooleanExtra(Intent.EXTRA_ALLOW_MULTIPLE, false));
++        }
+         ComponentName name = intent.getComponent();
+         if (name == null || !getPackageName().equals(name.getPackageName())) return false;
+@@ -8563,4 +8568,27 @@
+         mEmbeddedLaunches.add(new EmbeddedLaunch(intent, requestCode));
+         return true;
++    }
++
++    private native boolean nativeOpenEmbeddedDocument(int requestCode, String type,
++            String[] extraTypes, boolean multiple);
++
++    private void embeddedDocumentResult(int requestCode, String[] paths, String type) {
++        if (isFinishing()) return;
++        if (paths == null || paths.length == 0) {
++            onActivityResult(requestCode, RESULT_CANCELED, null);
++            return;
++        }
++        Uri first = Uri.fromFile(new java.io.File(paths[0]));
++        Intent result = new Intent().setDataAndType(first, type)
++                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
++        if (paths.length > 1) {
++            android.content.ClipData clip = android.content.ClipData.newRawUri("", first);
++            for (int i = 1; i < paths.length; i++) {
++                Uri next = Uri.fromFile(new java.io.File(paths[i]));
++                clip.addItem(new android.content.ClipData.Item(next));
++            }
++            result.setClipData(clip);
++        }
++        onActivityResult(requestCode, RESULT_OK, result);
+     }
+ 

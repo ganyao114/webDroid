@@ -391,10 +391,28 @@ jobject DecodeImage(JNIEnv* env, std::span<const uint8_t> bytes, jobject options
     }
     auto bitmap = NewBitmapData(out_w, out_h, config, opts.Bool("inMutable") || reused,
                                 channels == 2 || channels == 4, opts.Bool("inPremultiplied", true));
+    const auto pixel = [&](int x, int y) {
+        const auto* p = rgba.get() + 4 * (size_t(y) * width + x);
+        return uint32_t(p[3]) << 24 | uint32_t(p[0]) << 16 | uint32_t(p[1]) << 8 | p[2];
+    };
+    const bool filter = !chunk.empty() && scaled && (width != out_w || height != out_h);
+    const auto sample_position = [](int index, int source, int dest) {
+        return std::clamp((index + .5) * source / dest - .5, 0., double(source - 1));
+    };
     for (jint y = 0; y < out_h; ++y) {
         for (jint x = 0; x < out_w; ++x) {
-            const auto* p = rgba.get() + 4 * (static_cast<size_t>(y * height / out_h) * width + x * width / out_w);
-            const uint32_t color = uint32_t(p[3]) << 24 | uint32_t(p[0]) << 16 | uint32_t(p[1]) << 8 | p[2];
+            uint32_t color;
+            if (filter) {
+                const double sx = sample_position(x, width, out_w), sy = sample_position(y, height, out_h);
+                const int left = static_cast<int>(sx), top = static_cast<int>(sy);
+                const int right = std::min(left + 1, width - 1), bottom = std::min(top + 1, height - 1);
+                const double fx = sx - left, fy = sy - top;
+                const std::array colors{pixel(left, top), pixel(right, top), pixel(left, bottom), pixel(right, bottom)};
+                const std::array weights{(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy};
+                color = InterpolateColors(colors, weights);
+            } else {
+                color = pixel(x * width / out_w, y * height / out_h);
+            }
             bitmap.pixels[y * out_w + x] = bitmap.PutColor(color);
         }
     }
@@ -425,8 +443,24 @@ jobject DecodeImage(JNIEnv* env, std::span<const uint8_t> bytes, jobject options
             };
             for (size_t at : {12u, 16u}) scale_word(at, out_w, width);
             for (size_t at : {20u, 24u}) scale_word(at, out_h, height);
-            for (size_t i = 0; i < x_count; ++i) scale_word(32 + i * 4, out_w, width);
-            for (size_t i = 0; i < y_count; ++i) scale_word(32 + (x_count + i) * 4, out_h, height);
+            const auto scale_divisions = [&](size_t begin, int count, int dest, int source) {
+                if (dest == source) return;
+                for (int i = 0; i < count; ++i) scale_word(begin + i * 4, dest, source);
+                if (dest < count) return;
+                // Reserve one pixel for each distinct division and for the final fixed region.
+                // Without this, downscaling a one-pixel stretch can collapse it to zero width.
+                int previous = -1;
+                for (int i = 0; i < count; ++i) {
+                    const auto at = begin + i * 4;
+                    const auto v = static_cast<int32_t>(Read32(patch_data.data() + at));
+                    if (v < 0) return;
+                    previous = std::clamp(v, previous + 1, dest - count + i);
+                    for (unsigned byte = 0; byte < 4; ++byte)
+                        patch_data[at + byte] = static_cast<uint8_t>(previous >> (24 - 8 * byte));
+                }
+            };
+            scale_divisions(32, x_count, out_w, width);
+            scale_divisions(32 + x_count * 4, y_count, out_h, height);
         }
         patch = env->NewByteArray(patch_data.size());
         if (!patch) return nullptr;

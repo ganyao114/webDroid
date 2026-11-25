@@ -762,6 +762,16 @@ const PaintData* BitmapPaint(JNIEnv* env, jlong paint) {
     return paint ? Paint(env, paint) : &fallback;
 }
 
+void SnapPatchDivisions(std::span<PatchSpan> spans, float scale, float offset) {
+    // The compositor antialiases each quad. Shared edges on a pixel boundary avoid translucent seams.
+    for (size_t i = 1; i < spans.size(); ++i) {
+        auto& before = spans[i - 1];
+        auto& after = spans[i];
+        const float edge = (std::round(before.dst_to * scale + offset) - offset) / scale;
+        before.dst_to = after.dst_from = std::clamp(edge, before.dst_from, after.dst_to);
+    }
+}
+
 void DrawCanvasNinePatch(JNIEnv* env, jclass, jlong id, jlong bitmap, jlong chunk, jfloat left,
                          jfloat top, jfloat right, jfloat bottom, jlong paint, jint screen_density,
                          jint bitmap_density) {
@@ -773,8 +783,13 @@ void DrawCanvasNinePatch(JNIEnv* env, jclass, jlong id, jlong bitmap, jlong chun
         if (!canvas || !image || !patch || !p || !(right > left && bottom > top)) return;
         const float density = screen_density > 0 && bitmap_density > 0
             ? float(screen_density) / bitmap_density : 1;
-        const auto x = PartitionPatch(patch->x_divisions, image->width, left, right, density);
-        const auto y = PartitionPatch(patch->y_divisions, image->height, top, bottom, density);
+        auto x = PartitionPatch(patch->x_divisions, image->width, left, right, density);
+        auto y = PartitionPatch(patch->y_divisions, image->height, top, bottom, density);
+        const auto& matrix = canvas.data->frame.matrix;
+        if (canvas.display && matrix[1] == 0 && matrix[3] == 0 && matrix[0] != 0 && matrix[4] != 0) {
+            SnapPatchDivisions(x, matrix[0], matrix[2]);
+            SnapPatchDivisions(y, matrix[4], matrix[5]);
+        }
         for (const auto& row : y) {
             for (const auto& col : x) {
                 if (canvas.state->result != WA_SF_OK) return;

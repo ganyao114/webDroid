@@ -5,7 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { launchChrome } from '../../tools/chrome_harness/cdp_client.mjs';
 import { startServer } from '../../tools/chrome_harness/serve.mjs';
-import { mainActivity, onboardingActivity, onboardingAction, onboardingPages, tabs } from './vlc_journey.mjs';
+import { mainActivity, onboardingActivity, onboardingAction, onboardingPages, tabs, validVlcPcm } from './vlc_journey.mjs';
 
 const { values } = parseArgs({ options: {
   root: { type: 'string' }, apk: { type: 'string' }, chrome: { type: 'string' },
@@ -18,6 +18,7 @@ const mainPath = resolve(values['main-screenshot'] ?? 'build-wasm/p9_vlc_main_ch
 await access(apk);
 const profile = await mkdtemp(join(tmpdir(), 'wa-vlc-chrome-'));
 const errors = [];
+const guestDiagnostics = [];
 let browser, server, report;
 
 try {
@@ -35,8 +36,11 @@ try {
     void cdp.send('Runtime.enable', {}, child).catch(error => errors.push(error.message));
   });
   cdp.on('Runtime.consoleAPICalled', ({ type, args }, session) => {
-    if (tracked.has(session) && (type === 'error' || type === 'assert'))
-      errors.push(args.map(arg => arg.description ?? arg.value).join(' '));
+    if (!tracked.has(session) || (type !== 'error' && type !== 'assert')) return;
+    const message = args.map(arg => arg.description ?? arg.value).join(' ');
+    // LibVLC prints the successful native sample-rate lookup to guest stderr.
+    if (type === 'error' && message === 'aout_get_native_sample_rate: 48000') guestDiagnostics.push(message);
+    else errors.push(message);
   });
   cdp.on('Runtime.exceptionThrown', ({ exceptionDetails }, session) => {
     if (tracked.has(session)) errors.push(exceptionDetails.exception?.description ?? exceptionDetails.text);
@@ -107,6 +111,43 @@ try {
     });
     assert(!errorText, errorText);
     await wait('globalThis.waLauncher?.phase === "launcher" && waLauncher.stats().backend === "webgpu"', 60_000);
+    // Keep the test probes on the module that owns VLC and the live AudioWorklet ring.
+    await evaluate(`(async () => {
+      const { ForegroundActivityAbi } = await import('/web/launcher/foreground_java_apk.mjs');
+      const boot = ForegroundActivityAbi.prototype.boot;
+      let abi;
+      ForegroundActivityAbi.prototype.boot = function (...args) {
+        abi = this;
+        return boot.apply(this, args);
+      };
+      globalThis.vlcProbe = (name, path) => {
+        if (name === 'document_request') return abi.documentRequest();
+        const { module, memory } = abi;
+        const capacity = 32768;
+        const scratch = module._malloc(capacity);
+        let input = 0;
+        try {
+          if (!scratch) throw new Error('VLC probe scratch allocation failed');
+          if (path) {
+            const bytes = new TextEncoder().encode(path + '\\0');
+            input = module._malloc(bytes.length);
+            if (!input) throw new Error('VLC probe path allocation failed');
+            memory.bytes.set(bytes, input);
+          }
+          const args = input ? [input, scratch, capacity] : [scratch, capacity];
+          const length = module['_wa_test_vlc_' + name](...args);
+          if (length < 0) {
+            const errorLength = module._wa_system_app_last_error(scratch, capacity);
+            throw new Error(name + ' failed ' + memory.utf8(scratch, Math.max(0, errorLength)));
+          }
+          return name === 'wave' ? Array.from(memory.bytes.subarray(scratch, scratch + length))
+            : memory.utf8(scratch, length);
+        } finally {
+          module._free(input);
+          module._free(scratch);
+        }
+      };
+    })()`);
     await evaluate('document.querySelector("#launcher-form").click()');
     const { root: document } = await send('DOM.getDocument');
     const { nodeId } = await send('DOM.querySelector', { nodeId: document.nodeId, selector: '#launcher-apk' });
@@ -164,8 +205,39 @@ try {
     for (const tab of tabs)
       assert(main.labels.some(text => text.toLowerCase() === tab.toLowerCase()), JSON.stringify(main.labels));
     main.pixels = await capture(mainPath);
+
+    const fixture = join(profile, 'VLC tone.wav');
+    await writeFile(fixture, Buffer.from(await evaluate('vlcProbe("wave")')));
+    await send('Page.setInterceptFileChooserDialog', { enabled: true });
+    const pending = await evaluate('vlcProbe("open_document"), vlcProbe("document_request")');
+    assert(pending?.id > 0, 'VLC did not request an Android document');
+    assert(!pending.multiple);
+    assert.deepEqual(pending.types, ['audio/wav']);
+    const picker = 'input[data-android-document-picker]';
+    const request = await wait(`document.querySelector(${JSON.stringify(picker)})?.dataset.androidDocumentPicker`);
+    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(picker)}).accept`), 'audio/wav');
+    const { root: currentDocument } = await send('DOM.getDocument');
+    const { nodeId: chooser } = await send('DOM.querySelector', { nodeId: currentDocument.nodeId, selector: picker });
+    await send('DOM.setFileInputFiles', { nodeId: chooser, files: [fixture] });
+    await wait(`!document.querySelector(${JSON.stringify(picker)}) && !waLauncher.app?.document_error`);
+    await settleApp();
+    const beforePlayback = await wait('waLauncher.app?.audio_state === "running" && waLauncher.app');
+    const path = `/__wa_documents/${request}/0/${basename(fixture)}`;
+    const media = await evaluate(`vlcProbe("picked_media", ${JSON.stringify(path)})`);
+    let audio;
+    try {
+      await wait('JSON.parse(vlcProbe("audio")).frames >= 8640', 35_000);
+      await settleApp();
+      audio = JSON.parse(await evaluate('vlcProbe("audio")'));
+      assert(validVlcPcm(audio), JSON.stringify(audio));
+      await wait(`waLauncher.app?.audio_frames >= ${beforePlayback.audio_frames + audio.frames}`);
+      audio.workletFrames = await evaluate('waLauncher.app.audio_frames') - beforePlayback.audio_frames;
+      assert.equal(await evaluate('waLauncher.app.audio_error ?? null'), null);
+    } finally {
+      await evaluate('vlcProbe("stop")');
+    }
     assert.deepEqual(errors, []);
-    report = { chrome, onboardingPath, mainPath, onboarding, visited, main, errors };
+    report = { chrome, onboardingPath, mainPath, onboarding, visited, main, media, audio, guestDiagnostics, errors };
   } catch (error) {
     const state = await appSnapshot().catch(() => null);
     throw new Error(`${error.message}\n${JSON.stringify({ state, visited, errors })}`, { cause: error });

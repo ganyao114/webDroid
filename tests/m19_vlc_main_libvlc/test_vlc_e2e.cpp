@@ -6,6 +6,7 @@
 #include <iostream>
 #include <set>
 #include <sstream>
+#include <thread>
 
 namespace {
 
@@ -16,11 +17,19 @@ using hybrid_test::State;
 constexpr auto kOnboarding = "\"activity\":\"org.videolan.vlc.gui.onboarding.OnboardingActivity\"";
 constexpr auto kMain = "\"activity\":\"org.videolan.vlc.gui.MainActivity\"";
 
-size_t Metric(const std::string& state, std::string_view field) {
+std::string_view MetricText(const std::string& state, std::string_view field) {
     const auto key = '"' + std::string(field) + "\":";
     const auto offset = state.find(key);
     Require(offset != state.npos, "Missing " + std::string(field));
-    return std::stoull(state.substr(offset + key.size()));
+    return std::string_view(state).substr(offset + key.size());
+}
+
+size_t Metric(const std::string& state, std::string_view field) {
+    return std::stoull(std::string(MetricText(state, field)));
+}
+
+double AudioMetric(const std::string& state, std::string_view field) {
+    return std::stod(std::string(MetricText(state, field)));
 }
 
 std::string Probe(int32_t (*fn)(char*, size_t), std::string_view label) {
@@ -125,6 +134,29 @@ void Tap(const Target& target, int64_t& now) {
     Tick(now);
 }
 
+void VerifyPlayback(int64_t& now) {
+    std::cout << Probe(wa_test_vlc_media, "Parse WAV and start LibVLC playback") << '\n';
+    std::string audio;
+    size_t previous = 0;
+    int stable = 0;
+    for (int i = 0; i < 150; ++i) {
+        Tick(now, 1);
+        audio = Probe(wa_test_vlc_audio, "Read decoded PCM metrics");
+        const auto frames = Metric(audio, "frames");
+        stable = frames == previous ? stable + 1 : 0;
+        if (frames >= 12000 || (frames >= 8640 && stable >= 10)) break;
+        previous = frames;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    std::cout << "VLC PCM " << audio << std::endl;
+    Probe(wa_test_vlc_stop, "Stop LibVLC playback");
+    Require(audio.contains("\"sink\":\"OpenSLES\"") && Metric(audio, "frames") >= 8640 &&
+        Metric(audio, "frames") <= 12000 && Metric(audio, "nonzeroFrames") > 8500 &&
+        AudioMetric(audio, "peak") > 0.17 && AudioMetric(audio, "peak") < 0.26 &&
+        AudioMetric(audio, "rms") > 0.11 && AudioMetric(audio, "rms") < 0.19 &&
+        std::abs(AudioMetric(audio, "frequency") - 440) < 5, "Unexpected VLC PCM " + audio);
+}
+
 } // namespace
 
 int main(int argc, char** argv) try {
@@ -167,7 +199,7 @@ int main(int argc, char** argv) try {
             std::cout << "MainActivity draws " << main.content << '\n';
             for (const auto tab : {"Video", "Audio", "Browse", "Playlists", "More"})
                 Require(std::ranges::find(main.text, tab) != main.text.end(), std::string("VLC did not draw ") + tab);
-            std::cout << Probe(wa_test_vlc_media, "Probe LibVLC and WAV") << '\n';
+            VerifyPlayback(now);
             const auto native = State();
             Require(native.contains("\"nativeAbi\":\"arm64-v8a\"") && Metric(native, "nativeLibraries") >= 3 &&
                 Metric(native, "nativeLoadReturns") >= 3 && Metric(native, "nativeFileFaults") > 0, native);
