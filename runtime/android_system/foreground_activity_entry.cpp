@@ -132,6 +132,8 @@ std::string DescribeBootProfile(const BootProfile& profile) {
         ",\"jitExecSamples\":" + std::to_string(profile.dbt_stats.jit_exec_samples) +
         ",\"jitCompileFailures\":" + std::to_string(profile.dbt_stats.jit_compile_failures) +
         ",\"jitCompileMs\":" + std::to_string(profile.dbt_stats.jit_compile_ms) +
+        ",\"jitEmitMs\":" + std::to_string(profile.dbt_stats.jit_emit_ms) +
+        ",\"jitInstallMs\":" + std::to_string(profile.dbt_stats.jit_install_ms) +
         ",\"jitExecMs\":" + std::to_string(profile.dbt_stats.jit_exec_ms) +
         ",\"tier0Insns\":" + std::to_string(profile.dbt_stats.tier0_insns) +
         ",\"iotlbSlowReads\":" + std::to_string(profile.dbt_stats.iotlb_slow_reads) +

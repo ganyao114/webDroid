@@ -181,7 +181,7 @@ template <bool Posix> void AlignedAllocate(wa_host_call_ctx_t& ctx) {
     };
     if (!std::has_single_bit(alignment) || (Posix && alignment < mem.width()))
         return error(EINVAL);
-    const auto address = AllocateGuest(*ctx.dbt, size, alignment);
+    const auto address = AllocateGuestHeap(*ctx.dbt, size, alignment);
     if (!address)
         return error(ENOMEM);
     if constexpr (Posix) {

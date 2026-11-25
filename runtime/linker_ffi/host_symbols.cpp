@@ -135,125 +135,6 @@ int32_t StringCompare(wa_host_call_ctx_t* ctx, void* bounded) {
     return remaining ? WA_ERR_FAULT : WA_OK;
 }
 
-#ifdef __EMSCRIPTEN__
-template <bool Checked> bool FastCopy(FastHostCall& call) {
-    const auto dst = call.args[0], src = call.args[1], size = call.args[2];
-    if (Checked && size > call.args[3]) return false;
-    if (size) {
-        const auto* from = call.ResidentRead(src, size);
-        auto* to = call.ResidentWrite(dst, size);
-        if (!from || !to) return false;
-        std::memmove(to, from, size);
-    }
-    call.result = dst;
-    return true;
-}
-
-template <bool Checked> bool FastFill(FastHostCall& call) {
-    const auto dst = call.args[0], size = call.args[2];
-    if (Checked && size > call.args[3]) return false;
-    if (size) {
-        auto* to = call.ResidentWrite(dst, size);
-        if (!to) return false;
-        std::memset(to, static_cast<uint8_t>(call.args[1]), size);
-    }
-    call.result = dst;
-    return true;
-}
-
-bool FastStringLength(FastHostCall& call) {
-    const auto first = call.args[0];
-    for (auto address = first;;) {
-        const auto count = PageRemaining(address);
-        const auto* bytes = call.ResidentRead(address, count);
-        if (!bytes) return false;
-        if (auto* zero = static_cast<const uint8_t*>(std::memchr(bytes, 0, count))) {
-            call.result = address - first + (zero - bytes);
-            return true;
-        }
-        address += count;
-    }
-}
-
-template <bool Bounded> bool FastStringCompare(FastHostCall& call) {
-    auto a = call.args[0], b = call.args[1];
-    auto remaining = Bounded ? call.args[2] : UINT64_MAX;
-    while (remaining) {
-        const auto count = std::min<uint64_t>({PageRemaining(a), PageRemaining(b), remaining});
-        const auto* left = call.ResidentRead(a, count);
-        const auto* right = call.ResidentRead(b, count);
-        if (!left || !right) return false;
-        for (size_t i = 0; i < count; ++i) {
-            const auto diff = int32_t{left[i]} - int32_t{right[i]};
-            if (diff || left[i] == 0) {
-                call.result = static_cast<uint32_t>(diff);
-                return true;
-            }
-        }
-        a += count;
-        b += count;
-        remaining -= count;
-    }
-    return true;
-}
-#endif
-
-int32_t Allocate(wa_host_call_ctx_t* ctx, void*) {
-    ctx->ret0 = AllocateGuest(*ctx->dbt, ctx->args[0]);
-    if (!ctx->ret0) SetErrno(*ctx->dbt, GuestErrno(ENOMEM));
-    return WA_OK;
-}
-
-int32_t Free(wa_host_call_ctx_t* ctx, void*) {
-    if (ctx->args[0] && (!ctx->dbt->allocations.contains(ctx->args[0]) ||
-        ctx->dbt->bionic->map_allocations.contains(ctx->args[0]))) return WA_ERR_FAULT;
-    FreeGuest(*ctx->dbt, ctx->args[0]);
-    return WA_OK;
-}
-
-int32_t UsableSize(wa_host_call_ctx_t* ctx, void*) {
-    const auto allocation = ctx->dbt->allocations.find(ctx->args[0]);
-    if (allocation != ctx->dbt->allocations.end()) ctx->ret0 = allocation->second.size;
-    return WA_OK;
-}
-
-int32_t Calloc(wa_host_call_ctx_t* ctx, void*) {
-    const auto count = ctx->args[0], size = ctx->args[1];
-    if (!size || count <= UINT64_MAX / size) ctx->ret0 = AllocateGuest(*ctx->dbt, count * size);
-    if (!ctx->ret0) SetErrno(*ctx->dbt, GuestErrno(ENOMEM));
-    return WA_OK;
-}
-
-int32_t Reallocate(wa_host_call_ctx_t* ctx, void*) {
-    auto& dbt = *ctx->dbt;
-    const auto old = ctx->args[0], size = ctx->args[1];
-    if (!old) {
-        ctx->ret0 = AllocateGuest(dbt, size);
-        if (!ctx->ret0) SetErrno(dbt, GuestErrno(ENOMEM));
-        return WA_OK;
-    }
-    const auto found = dbt.allocations.find(old);
-    if (found == dbt.allocations.end()) return WA_ERR_FAULT;
-    if (!size) {
-        FreeGuest(dbt, old);
-        return WA_OK;
-    }
-    const auto replacement = AllocateGuest(dbt, size);
-    if (!replacement) {
-        SetErrno(dbt, GuestErrno(ENOMEM));
-        return WA_OK;
-    }
-    wa_host_call_ctx_t copy{.mmu = ctx->mmu, .args = {replacement, old, std::min<uint64_t>(size, found->second.size)}};
-    const auto status = Copy(&copy, nullptr);
-    if (status != WA_OK) {
-        FreeGuest(dbt, replacement);
-        return status;
-    }
-    FreeGuest(dbt, old);
-    ctx->ret0 = replacement;
-    return WA_OK;
-}
-
 // Compare elements in guest memory and keep the array there during the sort.
 class GuestSort {
   public:
@@ -373,49 +254,6 @@ int32_t StackCheckFail(wa_host_call_ctx_t*, void*) {
 
 } // namespace
 
-uint64_t AllocateGuest(wa_dbt& dbt, uint64_t size, uint64_t alignment, uint32_t prot) {
-    const auto bytes = std::max<uint64_t>(size, 1);
-    if (bytes > kHeapLimit - kHeapBase || !std::has_single_bit(alignment) ||
-        alignment > kHeapLimit - kHeapBase) return 0;
-    alignment = std::max<uint64_t>(alignment, WA_PAGE_SIZE);
-    const auto mapped_size = static_cast<size_t>(AlignUp(bytes, WA_PAGE_SIZE));
-    for (auto address = AlignUp(dbt.heap_hint, alignment); address <= kHeapLimit - mapped_size;
-         address = AlignUp(address + WA_PAGE_SIZE, alignment)) {
-        const auto next = dbt.allocations.upper_bound(address);
-        if (next != dbt.allocations.begin()) {
-            const auto& [start, allocation] = *std::prev(next);
-            if (start + allocation.mapped_size > address) {
-                address = start + allocation.mapped_size - WA_PAGE_SIZE;
-                continue;
-            }
-        }
-        if (next != dbt.allocations.end() && next->first < address + mapped_size) {
-            address = next->first + next->second.mapped_size - WA_PAGE_SIZE;
-            continue;
-        }
-        const auto status = wa_softmmu_map_anon(dbt.mmu, address, mapped_size, prot);
-        if (status == WA_ERR_EXIST) continue;
-        if (status != WA_OK) return 0;
-        try {
-            dbt.allocations.emplace_hint(next, address, GuestAllocation{mapped_size, static_cast<size_t>(size)});
-        } catch (const std::bad_alloc&) {
-            softmmu::Unmap(dbt.mmu, address, mapped_size);
-            return 0;
-        }
-        dbt.heap_hint = address + mapped_size;
-        return address;
-    }
-    return 0;
-}
-
-void FreeGuest(wa_dbt& dbt, uint64_t address) {
-    const auto allocation = dbt.allocations.find(address);
-    if (allocation == dbt.allocations.end()) return;
-    softmmu::Unmap(dbt.mmu, address, allocation->second.mapped_size);
-    dbt.heap_hint = std::min(dbt.heap_hint, address);
-    dbt.allocations.erase(allocation);
-}
-
 void RunExitHandlers(wa_dbt& dbt) {
     auto& finalizing = dbt.bionic->finalizing_process;
     struct Restore {
@@ -476,12 +314,20 @@ int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name
 }
 
 #ifdef __EMSCRIPTEN__
-void RegisterFastHost(wa_dbt& dbt, std::string_view name, FastHostFn function) {
+void RegisterFastHost(wa_dbt& dbt, std::string_view name, FastHostFn function,
+                      std::string_view soname) {
     for (auto slot : HostSlots(dbt, name)) {
         auto& symbol = dbt.hosts[slot];
-        if (symbol.builtin && symbol.soname == "libc.so" && symbol.function)
+        if (symbol.builtin && symbol.soname == soname && symbol.function)
             symbol.fast = function;
     }
+}
+
+void RegisterFastHost(wa_dbt& dbt, uint64_t stub, FastHostFn function) {
+    const auto offset = stub - WA_HOST_STUB_BASE;
+    const auto slot = offset / WA_HOST_STUB_STRIDE;
+    if (offset % WA_HOST_STUB_STRIDE == 0 && slot < dbt.hosts.size() && dbt.hosts[slot].function)
+        dbt.hosts[slot].fast = function;
 }
 #endif
 
@@ -590,11 +436,6 @@ void RegisterBuiltins(wa_dbt& dbt) {
         {"libc.so", "__memset_chk", CheckedSet},
         {"libc.so", "strlen", StringLength},
         {"libc.so", "strcmp", StringCompare},
-        {"libc.so", "malloc", Allocate},
-        {"libc.so", "malloc_usable_size", UsableSize},
-        {"libc.so", "calloc", Calloc},
-        {"libc.so", "realloc", Reallocate},
-        {"libc.so", "free", Free},
         {"libc.so", "qsort", Sort},
         {"libc.so", "__cxa_atexit", AtExit},
         {"libc.so", "__cxa_finalize", Finalize},
@@ -604,17 +445,7 @@ void RegisterBuiltins(wa_dbt& dbt) {
     for (const auto& shim : shims)
         RegisterHost(dbt, shim.soname, shim.name, shim.function, nullptr, true);
     RegisterHost(dbt, "libc.so", "strncmp", StringCompare, &dbt, true);
-#ifdef __EMSCRIPTEN__
-    RegisterFastHost(dbt, "memcpy", FastCopy<false>);
-    RegisterFastHost(dbt, "memmove", FastCopy<false>);
-    RegisterFastHost(dbt, "memset", FastFill<false>);
-    RegisterFastHost(dbt, "__memcpy_chk", FastCopy<true>);
-    RegisterFastHost(dbt, "__memmove_chk", FastCopy<true>);
-    RegisterFastHost(dbt, "__memset_chk", FastFill<true>);
-    RegisterFastHost(dbt, "strlen", FastStringLength);
-    RegisterFastHost(dbt, "strcmp", FastStringCompare<false>);
-    RegisterFastHost(dbt, "strncmp", FastStringCompare<true>);
-#endif
+    RegisterHeap(dbt);
     RegisterSupplementalBuiltins(dbt);
 }
 

@@ -181,6 +181,14 @@ HybridJniBridge::HybridJniBridge(JniBridge& jni, wa_dbt& dbt, wa_softmmu_t* mmu,
             uint64_t address;
             CheckGuest(dbt::RegisterHost(dbt, vm ? "JavaVM" : "JNIEnv", names[i], Trampoline,
                                         &thunk, false, &address));
+#ifdef __EMSCRIPTEN__
+            if (!vm) {
+                const auto slot = static_cast<Slot>(i);
+                if (slot == Slot::IsSameObject || slot == Slot::DeleteLocalRef ||
+                    slot == Slot::ExceptionCheck || slot == Slot::GetArrayLength)
+                    dbt::RegisterFastHost(dbt, address, FastEnvCall);
+            }
+#endif
             memory_.WriteWord(table + i * width, address);
         }
     };
@@ -396,6 +404,34 @@ int32_t HybridJniBridge::Trampoline(wa_host_call_ctx_t* ctx, void* user) {
     }
 }
 
+#ifdef __EMSCRIPTEN__
+bool HybridJniBridge::FastEnvCall(dbt::FastHostCall& call) try {
+    const auto& thunk = *static_cast<Thunk*>(call.user);
+    auto& bridge = *thunk.bridge;
+    if (call.args[0] != bridge.jni_env_ || !bridge.HasLocalFrame()) return false;
+    switch (static_cast<Slot>(thunk.slot)) {
+    case Slot::IsSameObject:
+        call.result = bridge.SameObject(call.args[1], call.args[2]);
+        return true;
+    case Slot::DeleteLocalRef:
+        bridge.DeleteReference(call.args[1], JNILocalRefType);
+        return true;
+    case Slot::ExceptionCheck:
+        call.result = bridge.Vm().exception != nullptr;
+        return true;
+    case Slot::GetArrayLength: {
+        const auto* array = JniBridge::Read(bridge.Ref(call.args[1]));
+        if (!array || !array->type->IsArray()) return false;
+        call.result = static_cast<uint32_t>(bridge.Vm().ArrayLength(*array));
+        return true;
+    }
+    default: return false;
+    }
+} catch (const GuestFault&) {
+    return false;
+}
+#endif
+
 template<HybridJniBridge::BitmapOp operation>
 int32_t HybridJniBridge::BitmapCall(wa_host_call_ctx_t* ctx, void* user) {
     auto& bridge = *static_cast<HybridJniBridge*>(user);
@@ -566,6 +602,11 @@ jobject HybridJniBridge::Ref(uint64_t id) const {
     const auto found = refs_.find(static_cast<uint32_t>(id));
     if (id > UINT32_MAX || found == refs_.end()) throw GuestFault{WA_ERR_INVALID};
     return found->second.ref;
+}
+
+bool HybridJniBridge::SameObject(uint64_t left, uint64_t right) const {
+    const auto ref = Ref(left);
+    return left == right || JniBridge::Read(ref) == JniBridge::Read(Ref(right));
 }
 
 Method* HybridJniBridge::Method(uint64_t id) const {
@@ -1203,7 +1244,6 @@ void HybridJniBridge::Dispatch(Slot slot, wa_host_call_ctx_t& ctx) {
     FORWARD(ExceptionDescribe)
     FORWARD(ExceptionClear)
     FORWARD(ExceptionCheck)
-    FORWARD(IsSameObject)
     FORWARD(NewLocalRef)
     FORWARD(EnsureLocalCapacity)
     FORWARD(AllocObject)
@@ -1237,6 +1277,9 @@ void HybridJniBridge::Dispatch(Slot slot, wa_host_call_ctx_t& ctx) {
     case Slot::GetStringRegion: case Slot::GetStringUTFRegion:
     case Slot::GetStringCritical: case Slot::ReleaseStringCritical:
         return DispatchStrings(slot, ctx);
+    case Slot::IsSameObject:
+        ctx.ret0 = SameObject(ctx.args[1], ctx.args[2]);
+        return;
     case Slot::GetObjectRefType: {
         const auto id = ctx.args[1];
         const auto found = refs_.find(static_cast<uint32_t>(id));

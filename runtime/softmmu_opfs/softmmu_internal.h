@@ -108,6 +108,8 @@ void InvalidateIotlb(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcep
 
 // Convert the image's relocated and initialized data into a COW template.
 void PublishFileTemplates(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept;
+int32_t MapAnon(wa_softmmu_t* mmu, uint64_t address, size_t length, uint32_t prot,
+                uint64_t* conflict = nullptr);
 void Unmap(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept;
 
 // Attach storage to an anonymous writable page. Aliases are confined to this MMU.

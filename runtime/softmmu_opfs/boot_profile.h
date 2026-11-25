@@ -38,7 +38,7 @@ struct BootProfile {
         uint64_t jit_entries = 0, jit_compile_failures = 0, tier0_insns = 0;
         uint64_t jit_chains = 0, jit_evictions = 0, jit_fast_host_calls = 0, jit_exec_samples = 0;
         uint64_t iotlb_slow_reads = 0, iotlb_slow_writes = 0;
-        double jit_compile_ms = 0, jit_exec_ms = 0;
+        double jit_compile_ms = 0, jit_emit_ms = 0, jit_install_ms = 0, jit_exec_ms = 0;
     };
     struct HostCallStats {
         Duration elapsed{};

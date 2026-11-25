@@ -150,16 +150,28 @@ void MbCurMax(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = Utf8(*ctx.dbt) ? 4 : 1;
 }
 
+template <int (*Function)(int)> uint64_t Classify(uint64_t arg) {
+    const auto c = static_cast<int32_t>(arg);
+    return c < -1 || c > UCHAR_MAX ? 0 : static_cast<uint64_t>(Function(c));
+}
+
 template <int (*Function)(int), bool Explicit = false> void Character(wa_host_call_ctx_t& ctx) {
-    const auto c = static_cast<int32_t>(ctx.args[0]);
-    if (c < -1 || c > UCHAR_MAX) return;
     if constexpr (Explicit) {
+        const auto c = static_cast<int32_t>(ctx.args[0]);
+        if (c < -1 || c > UCHAR_MAX) return;
         HostLocale scope(Utf8(*ctx.dbt, ctx.args[1]));
         ctx.ret0 = Function(c);
     } else {
-        ctx.ret0 = Function(c);
+        ctx.ret0 = Classify<Function>(ctx.args[0]);
     }
 }
+
+#ifdef __EMSCRIPTEN__
+template <int (*Function)(int)> bool FastCharacter(FastHostCall& call) {
+    call.result = Classify<Function>(call.args[0]);
+    return true;
+}
+#endif
 
 template <auto Function, bool Explicit = false> void WideCharacter(wa_host_call_ctx_t& ctx) {
     HostLocale scope(Utf8(*ctx.dbt, Explicit ? ctx.args[1] : 0));
@@ -555,8 +567,11 @@ void RegisterLocale(wa_dbt& dbt) {
     mem.WriteWord(ctype, ctype + mem.width());
     CheckGuest(RegisterData(dbt, "libc.so", "_ctype_", ctype, true));
 
+#define CTYPE_FUNCTIONS(X) \
+    X(tolower) X(toupper) X(isalnum) X(isalpha) X(isblank) X(iscntrl) X(isdigit) X(isgraph) \
+    X(islower) X(isprint) X(ispunct) X(isspace) X(isupper) X(isxdigit)
 #define CHAR(name) \
-    {#name, Dispatch<Character<::name>>}, {#name "_l", Dispatch<Character<::name, true>>}
+    {#name, Dispatch<Character<::name>>}, {#name "_l", Dispatch<Character<::name, true>>},
 #define WIDE(name)                                                                                 \
     {#name, Dispatch<WideCharacter<::name>>}, {#name "_l", Dispatch<WideCharacter<::name, true>>}
 #define NUM(name, format) {#name, Dispatch<Number<false, Numeric::format>>}
@@ -571,20 +586,8 @@ void RegisterLocale(wa_dbt& dbt) {
         {"freelocale", Dispatch<FreeLocale>},
         {"localeconv", Dispatch<LocaleConv>},
         {"__ctype_get_mb_cur_max", Dispatch<MbCurMax>},
-        CHAR(tolower),
-        CHAR(toupper),
-        CHAR(isalnum),
-        CHAR(isalpha),
-        CHAR(isblank),
-        CHAR(iscntrl),
-        CHAR(isdigit),
-        CHAR(isgraph),
-        CHAR(islower),
-        CHAR(isprint),
-        CHAR(ispunct),
-        CHAR(isspace),
-        CHAR(isupper),
-        CHAR(isxdigit),
+        CTYPE_FUNCTIONS(CHAR)
+        {"isascii", Dispatch<Character<::isascii>>},
         WIDE(towlower),
         WIDE(towupper),
         WIDE(iswalnum),
@@ -661,6 +664,13 @@ void RegisterLocale(wa_dbt& dbt) {
 #undef WIDE
 #undef CHAR
     Register(dbt, "libc.so", c);
+#ifdef __EMSCRIPTEN__
+#define FAST_CHAR(name) RegisterFastHost(dbt, #name, FastCharacter<::name>);
+    CTYPE_FUNCTIONS(FAST_CHAR)
+    FAST_CHAR(isascii)
+#undef FAST_CHAR
+#endif
+#undef CTYPE_FUNCTIONS
 }
 
 } // namespace wa::dbt

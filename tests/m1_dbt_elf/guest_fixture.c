@@ -1,4 +1,5 @@
 #include <arm_neon.h>
+#include <malloc.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdint.h>
@@ -6,6 +7,8 @@
 #include <string.h>
 
 extern uint32_t wa_fixture_route(uint32_t first, uint32_t second);
+// Bypass the NDK's inline ctype implementation to exercise the host symbol.
+extern int guest_isspace(int value) __asm__("isspace");
 
 volatile uint32_t wa_ctor_value;
 volatile uint32_t wa_data = 19;
@@ -91,6 +94,64 @@ uint32_t wa_hot_libc(char* buffer, const char* text, uint32_t length, uint32_t r
         if (pthread_mutex_unlock(&lock)) return 0;
     }
     return total;
+}
+
+uint32_t wa_hot_space(uint32_t rounds) {
+    uint32_t total = 0;
+    while (rounds--)
+        total += guest_isspace((rounds & 1) ? ' ' : 'x') != 0;
+    return total;
+}
+
+uint32_t wa_hot_heap(uint32_t rounds) {
+    uint32_t total = 0;
+    for (uint32_t i = 0; i < rounds; ++i) {
+        char* bytes = malloc(31);
+        if (!bytes) return UINT32_MAX;
+        *(volatile char*)bytes = 7;
+        char* grown = realloc(bytes, 32);
+        if (!grown || malloc_usable_size(grown) < 32) return UINT32_MAX;
+        total += (uint8_t)*grown;
+        free(grown);
+        bytes = calloc(8, 4);
+        if (!bytes) return UINT32_MAX;
+        total += (uint8_t)*bytes;
+        free(bytes);
+    }
+    return total;
+}
+
+uint32_t wa_hot_memory(char* dst, const char* text, uint32_t size, uint32_t rounds) {
+    uint32_t total = 0;
+    while (rounds--) {
+        memset(dst, 0xff, size + 4);
+        memcpy(dst, text, size);
+        memmove(dst + 3, dst, size);
+        if (strcmp(dst + 3, text) || strncmp(dst + 3, text, size) ||
+            memcmp(dst + 3, text, size) || strnlen(dst + 3, size - 1) != size - 1 ||
+            strchr(dst + 3, '\0') != dst + 3 + size - 1 ||
+            memchr(dst + 3, text[0], size) != dst + 3)
+            return UINT32_MAX;
+        total += strlen(dst + 3);
+        strcpy(dst, text);
+        strncpy(dst + 1, text, size + 2);
+        memmove(dst, dst + 1, size + 2);
+        if (dst[size + 1]) return UINT32_MAX;
+    }
+    return total;
+}
+
+typedef uint32_t (*SameObject)(uintptr_t env, uintptr_t left, uintptr_t right);
+
+uint32_t wa_hot_same_object(SameObject same, uint32_t rounds) {
+    uint32_t total = 0;
+    while (rounds--)
+        total += same(5, 1, (rounds & 1) ? 2 : 0);
+    return total;
+}
+
+void* wa_move_bytes(void* dst, const void* src, size_t size) {
+    return memmove(dst, src, size);
 }
 
 static int Compare(const void* left, const void* right) {

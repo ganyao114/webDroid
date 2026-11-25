@@ -79,14 +79,166 @@ void Compare(wa_host_call_ctx_t& ctx) {
 }
 
 #ifdef __EMSCRIPTEN__
-bool FastCompare(FastHostCall& call) {
-    const auto size = call.args[2];
-    if (!size) return true;
-    const auto* left = call.ResidentRead(call.args[0], size);
-    const auto* right = call.ResidentRead(call.args[1], size);
-    if (!left || !right) return false;
-    call.result = static_cast<uint32_t>(std::memcmp(left, right, size));
+uint64_t PageRemaining(uint64_t address) { return WA_PAGE_SIZE - address % WA_PAGE_SIZE; }
+
+bool ResidentRange(const FastHostCall& call, uint64_t address, uint64_t size, bool write) {
+    while (size) {
+        const auto count = std::min(size, PageRemaining(address));
+        if (write ? !call.ResidentWrite(address, count) : !call.ResidentRead(address, count))
+            return false;
+        address += count;
+        size -= count;
+    }
     return true;
+}
+
+bool CopyResident(const FastHostCall& call, uint64_t dst, uint64_t src, uint64_t size) {
+    if (!size) return true;
+    const auto first = std::min(PageRemaining(dst), PageRemaining(src));
+    if (size <= first) {
+        const auto* from = call.ResidentRead(src, size);
+        auto* to = call.ResidentWrite(dst, size);
+        if (!from || !to) return false;
+        std::memmove(to, from, size);
+        return true;
+    }
+    // Preflight before the first store so a declined call can retry on the
+    // slow path, including when the source and destination overlap.
+    if (!ResidentRange(call, src, size, false) || !ResidentRange(call, dst, size, true)) return false;
+    if (dst > src && dst - src < size) {
+        while (size) {
+            const auto count = std::min({size, (dst + size - 1) % WA_PAGE_SIZE + 1,
+                                         (src + size - 1) % WA_PAGE_SIZE + 1});
+            size -= count;
+            std::memmove(call.ResidentWrite(dst + size, count), call.ResidentRead(src + size, count), count);
+        }
+    } else {
+        for (uint64_t done = 0; done < size;) {
+            const auto count = std::min({size - done, PageRemaining(dst + done), PageRemaining(src + done)});
+            std::memmove(call.ResidentWrite(dst + done, count), call.ResidentRead(src + done, count), count);
+            done += count;
+        }
+    }
+    return true;
+}
+
+bool FillResident(const FastHostCall& call, uint64_t dst, uint64_t size, uint8_t value) {
+    if (!size) return true;
+    if (size <= PageRemaining(dst)) {
+        auto* to = call.ResidentWrite(dst, size);
+        if (!to) return false;
+        std::memset(to, value, size);
+        return true;
+    }
+    if (!ResidentRange(call, dst, size, true)) return false;
+    while (size) {
+        const auto count = std::min(size, PageRemaining(dst));
+        std::memset(call.ResidentWrite(dst, count), value, count);
+        dst += count;
+        size -= count;
+    }
+    return true;
+}
+
+template <bool Checked> bool FastCopy(FastHostCall& call) {
+    const auto dst = call.args[0], src = call.args[1], size = call.args[2];
+    if (Checked && size > call.args[3]) return false;
+    if (!CopyResident(call, dst, src, size)) return false;
+    call.result = dst;
+    return true;
+}
+
+template <bool Checked> bool FastFill(FastHostCall& call) {
+    const auto dst = call.args[0], size = call.args[2];
+    if (Checked && size > call.args[3]) return false;
+    if (!FillResident(call, dst, size, static_cast<uint8_t>(call.args[1]))) return false;
+    call.result = dst;
+    return true;
+}
+
+std::optional<uint64_t> ResidentLength(const FastHostCall& call, uint64_t src, uint64_t limit) {
+    for (uint64_t done = 0; done < limit;) {
+        const auto count = std::min(limit - done, PageRemaining(src + done));
+        const auto* bytes = call.ResidentRead(src + done, count);
+        if (!bytes) return std::nullopt;
+        if (const auto* zero = static_cast<const uint8_t*>(std::memchr(bytes, 0, count)))
+            return done + (zero - bytes);
+        done += count;
+    }
+    return limit;
+}
+
+template <bool Bounded> bool FastLength(FastHostCall& call) {
+    const auto limit = Bounded ? std::min<uint64_t>(call.args[1], kStringLimit) : UINT64_MAX;
+    const auto length = ResidentLength(call, call.args[0], limit);
+    if (!length) return false;
+    call.result = *length;
+    return true;
+}
+
+template <bool Bounded> bool FastStringCopy(FastHostCall& call) {
+    const auto dst = call.args[0], src = call.args[1];
+    const auto limit = Bounded ? call.args[2] : kStringLimit;
+    const auto length = ResidentLength(call, src, limit);
+    if (!length || (!Bounded && *length == limit)) return false;
+    if constexpr (Bounded) {
+        if (!ResidentRange(call, dst, limit, true) || !CopyResident(call, dst, src, *length)) return false;
+        FillResident(call, dst + *length, limit - *length, 0);
+    } else if (!CopyResident(call, dst, src, *length + 1)) {
+        return false;
+    }
+    call.result = dst;
+    return true;
+}
+
+template <bool Bounded, bool String> bool FastCompare(FastHostCall& call) {
+    auto a = call.args[0], b = call.args[1];
+    auto remaining = Bounded ? call.args[2] : UINT64_MAX;
+    while (remaining) {
+        const auto count = std::min({PageRemaining(a), PageRemaining(b), remaining});
+        const auto* left = call.ResidentRead(a, count);
+        const auto* right = call.ResidentRead(b, count);
+        if (!left || !right) return false;
+        if constexpr (String) {
+            for (size_t i = 0; i < count; ++i) {
+                const auto diff = int32_t{left[i]} - int32_t{right[i]};
+                if (diff || left[i] == 0) {
+                    call.result = static_cast<uint32_t>(diff);
+                    return true;
+                }
+            }
+        } else if (const auto diff = std::memcmp(left, right, count)) {
+            call.result = static_cast<uint32_t>(diff);
+            return true;
+        }
+        a += count;
+        b += count;
+        remaining -= count;
+    }
+    return true;
+}
+
+template <bool String> bool FastFindChar(FastHostCall& call) {
+    const auto src = call.args[0], limit = String ? kStringLimit : call.args[2];
+    const auto byte = static_cast<uint8_t>(call.args[1]);
+    bool found = false;
+    for (uint64_t done = 0; done < limit;) {
+        const auto count = std::min(limit - done, PageRemaining(src + done));
+        const auto* bytes = call.ResidentRead(src + done, count);
+        if (!bytes) return false;
+        const auto* zero = String ? static_cast<const uint8_t*>(std::memchr(bytes, 0, count)) : nullptr;
+        if (!found) {
+            const auto search = zero ? size_t(zero - bytes) + 1 : size_t(count);
+            const auto* match = static_cast<const uint8_t*>(std::memchr(bytes, byte, search));
+            if (match) {
+                call.result = src + done + (match - bytes);
+                found = true;
+            }
+        }
+        if (zero || (!String && found)) return true;
+        done += count;
+    }
+    return !String;
 }
 #endif
 
@@ -310,7 +462,21 @@ void RegisterStrings(wa_dbt& dbt) {
     };
     Register(dbt, "libc.so", c);
 #ifdef __EMSCRIPTEN__
-    RegisterFastHost(dbt, "memcmp", FastCompare);
+    RegisterFastHost(dbt, "memcpy", FastCopy<false>);
+    RegisterFastHost(dbt, "memmove", FastCopy<false>);
+    RegisterFastHost(dbt, "memset", FastFill<false>);
+    RegisterFastHost(dbt, "__memcpy_chk", FastCopy<true>);
+    RegisterFastHost(dbt, "__memmove_chk", FastCopy<true>);
+    RegisterFastHost(dbt, "__memset_chk", FastFill<true>);
+    RegisterFastHost(dbt, "strlen", FastLength<false>);
+    RegisterFastHost(dbt, "strnlen", FastLength<true>);
+    RegisterFastHost(dbt, "strcmp", FastCompare<false, true>);
+    RegisterFastHost(dbt, "strncmp", FastCompare<true, true>);
+    RegisterFastHost(dbt, "memcmp", FastCompare<true, false>);
+    RegisterFastHost(dbt, "memchr", FastFindChar<false>);
+    RegisterFastHost(dbt, "strchr", FastFindChar<true>);
+    RegisterFastHost(dbt, "strcpy", FastStringCopy<false>);
+    RegisterFastHost(dbt, "strncpy", FastStringCopy<true>);
 #endif
 }
 
