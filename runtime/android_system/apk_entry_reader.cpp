@@ -1,17 +1,42 @@
 #include "apk_entry_reader.h"
+#include "../softmmu_opfs/boot_profile.h"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstring>
+#include <new>
 #include <unistd.h>
 #include <vector>
 #include <zlib.h>
 
 namespace wa::system {
 
+std::span<const uint8_t> ApkEntryCache::Get(Contents contents, int64_t entry, uint64_t offset) {
+    for (auto& window : windows_[static_cast<size_t>(contents)]) {
+        if (window.data && window.entry == entry && window.offset == offset) {
+            window.used = ++sequence_;
+            return {window.data.get(), window.size};
+        }
+    }
+    return {};
+}
+
+void ApkEntryCache::Put(Contents contents, int64_t entry, uint64_t offset, std::span<const uint8_t> bytes) {
+    if (bytes.size() > kWindowBytes) return;
+    auto& windows = windows_[static_cast<size_t>(contents)];
+    auto& window = *std::ranges::min_element(windows, {}, &Window::used);
+    if (!window.data) window.data.reset(new (std::nothrow) uint8_t[kWindowBytes]);
+    if (!window.data) return;
+    std::memcpy(window.data.get(), bytes.data(), bytes.size());
+    window.entry = entry;
+    window.offset = offset;
+    window.size = bytes.size();
+    window.used = ++sequence_;
+}
+
 struct ApkEntryReader::Deflate {
-    static constexpr size_t kChunkSize = 64 * 1024;
+    static constexpr size_t kChunkSize = ApkEntryCache::kWindowBytes;
     static constexpr size_t kCheckpointInterval = 512 * 1024;
     static constexpr size_t kMaxCheckpoints = 64;
 
@@ -47,6 +72,7 @@ struct ApkEntryReader::Deflate {
 
     bool Seek(ApkEntryReader& source, uint64_t offset) {
         if (offset >= chunk_start && offset - chunk_start < chunk_size) return true;
+        const BootProfile::Scope phase(BootProfile::ApkEntryInflate);
         if (!cursor) {
             cursor = std::make_unique<Cursor>();
             if (inflateInit2(&cursor->stream, -MAX_WBITS) != Z_OK) {
@@ -100,6 +126,7 @@ struct ApkEntryReader::Deflate {
         chunk_size = count;
         cursor->position += count;
         cursor->crc = crc32(cursor->crc, chunk.data(), static_cast<uInt>(count));
+        if (auto* profile = BootProfile::active) profile->inflated_bytes += count;
         if (cursor->position == source.Size()) {
             uint8_t extra;
             if (!cursor->ended && (!Inflate(source, &extra, 1) || !cursor->stream.avail_out))
@@ -123,14 +150,27 @@ struct ApkEntryReader::Deflate {
 };
 
 ApkEntryReader::ApkEntryReader(ZipArchiveHandle zip, const ZipEntry64& entry,
-                               std::span<const uint8_t> apk)
-    : fd_(GetFileDescriptor(zip)), entry_(entry), apk_(apk) {}
+                               std::span<const uint8_t> apk, ApkEntryCache* cache)
+    : fd_(GetFileDescriptor(zip)), entry_(entry), apk_(apk), cache_(cache) {}
 
 ApkEntryReader::~ApkEntryReader() = default;
 
 bool ApkEntryReader::ReadCompressed(void* output, size_t count, uint64_t offset) const {
     if (entry_.offset < 0 || offset > entry_.compressed_length ||
             count > entry_.compressed_length - offset) return false;
+    const BootProfile::Scope phase(BootProfile::ApkEntryRead);
+    const bool cache_input = cache_ && entry_.method == kCompressDeflated;
+    if (cache_input) {
+        const auto cached = cache_->Get(ApkEntryCache::Contents::Compressed, entry_.offset, offset);
+        if (cached.size() == count) {
+            std::memcpy(output, cached.data(), count);
+            return true;
+        }
+    }
+    if (auto* profile = BootProfile::active) {
+        ++profile->entry_read_calls;
+        profile->entry_read_bytes += count;
+    }
     const auto position = static_cast<uint64_t>(entry_.offset) + offset;
     if (!apk_.empty()) {
         if (position > apk_.size() || count > apk_.size() - position) return false;
@@ -145,6 +185,8 @@ bool ApkEntryReader::ReadCompressed(void* output, size_t count, uint64_t offset)
         if (got <= 0) return false;
         done += got;
     }
+    if (cache_input) cache_->Put(ApkEntryCache::Contents::Compressed, entry_.offset, offset,
+        {static_cast<const uint8_t*>(output), count});
     return true;
 }
 
@@ -157,10 +199,17 @@ int64_t ApkEntryReader::Read(void* output, size_t count, uint64_t offset) try {
     if (entry_.method != kCompressDeflated) return WA_ERR_NOTSUP;
     if (!deflate_) deflate_ = std::make_unique<Deflate>(Size());
     for (size_t done = 0; done < count;) {
-        if (!deflate_->Seek(*this, offset)) return WA_ERR_FAULT;
-        const size_t start = offset - deflate_->chunk_start;
-        const size_t size = std::min(count - done, deflate_->chunk_size - start);
-        std::memcpy(static_cast<uint8_t*>(output) + done, deflate_->chunk.data() + start, size);
+        const auto base = offset - offset % Deflate::kChunkSize;
+        auto chunk = cache_ ? cache_->Get(ApkEntryCache::Contents::Inflated, entry_.offset, base) :
+            std::span<const uint8_t>{};
+        if (chunk.empty()) {
+            if (!deflate_->Seek(*this, offset)) return WA_ERR_FAULT;
+            chunk = std::span(deflate_->chunk).first(deflate_->chunk_size);
+            if (cache_) cache_->Put(ApkEntryCache::Contents::Inflated, entry_.offset, base, chunk);
+        }
+        const size_t start = offset - base;
+        const size_t size = std::min(count - done, chunk.size() - start);
+        std::memcpy(static_cast<uint8_t*>(output) + done, chunk.data() + start, size);
         offset += size;
         done += size;
     }

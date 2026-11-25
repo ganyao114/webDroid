@@ -1,13 +1,16 @@
 #include "bionic_internal.h"
+#include "boot_profile.h"
 
 #include "runtime/arch/arm32/numeric.h"
 #include "runtime/arch/arm32/service.h"
 #include "runtime/arch/arm64/service.h"
+#include "runtime/arch/x86/flags.h"
 #include "runtime/backend/wasm/compile.h"
 #include "runtime/exit.h"
 #include "runtime/frontend/arm32/build_ir.h"
 #include "runtime/frontend/arm32/interpreter.h"
 #include "runtime/frontend/arm64/build_ir.h"
+#include "runtime/frontend/arm64/instruction.h"
 #include "runtime/frontend/arm64/interpreter.h"
 #include "runtime/ir/optimize.h"
 #include "softmmu_internal.h"
@@ -48,6 +51,7 @@ wa_dbt::~wa_dbt() {
 namespace {
 
 using namespace wa::dbt;
+using wa::BootProfile;
 namespace rt = swift::runtime;
 namespace ir = rt::ir;
 namespace wasm = rt::backend::wasm;
@@ -118,6 +122,44 @@ struct ExecutionMemory {
     wa_dbt& dbt;
     int32_t status = WA_OK;
     uint64_t fault_address = 0;
+    wa::softmmu::CpuAccess* batch = nullptr;
+    const wa::softmmu::PageBytes* code_page = nullptr;
+    uint64_t code_base = 0;
+    uint64_t fast_instructions = 0;
+    size_t blocks_executed = 0;
+
+    struct MappingPermission {
+        uint32_t page = 0, epoch = 0;
+        uint8_t prot = WA_PROT_NONE;
+    };
+    std::array<MappingPermission, 128> permissions{};
+    uint32_t epoch = 1;
+
+    void InvalidatePermissions() {
+        // A host call can change Bionic's mmap permissions or run another guest CPU.
+        if (++epoch == 0) {
+            permissions = {};
+            epoch = 1;
+        }
+    }
+
+    int32_t Check(uint64_t address, size_t bytes, uint32_t permission) {
+        if (!bytes) return WA_OK;
+        if (address < kHeapBase && bytes <= kHeapBase - address) return WA_OK;
+        constexpr uint64_t page_mask = WA_PAGE_SIZE - 1;
+        if (address < kHeapBase || address >= kHeapLimit || bytes > WA_PAGE_SIZE - (address & page_mask))
+            return CheckMappedAccess(&dbt, address, bytes, permission);
+        const auto page = static_cast<uint32_t>(address >> WA_PAGE_SHIFT);
+        auto& cached = permissions[(page ^ (page >> 7)) & (permissions.size() - 1)];
+        if (cached.page != page || cached.epoch != epoch) {
+            const auto& pages = dbt.bionic->map_pages;
+            const auto found = pages.find(address & ~page_mask);
+            const auto allowed = found == pages.end() ? WA_PROT_READ | WA_PROT_WRITE | WA_PROT_EXEC :
+                found->second.prot;
+            cached = {page, epoch, static_cast<uint8_t>(allowed)};
+        }
+        return (cached.prot & permission) == permission ? WA_OK : WA_ERR_FAULT;
+    }
 
     AccessResult Record(wa::softmmu::Access access) {
         if (access.status != WA_OK) {
@@ -140,23 +182,318 @@ struct ExecutionMemory {
     static AccessResult Read(void* opaque, uint64_t address, std::span<uint8_t> bytes,
                              bool) noexcept {
         auto& memory = *static_cast<ExecutionMemory*>(opaque);
-        const auto status = CheckMappedAccess(&memory.dbt, address, bytes.size(), WA_PROT_READ);
-        return memory.Record(status == WA_OK ? wa::softmmu::Read(memory.dbt.mmu, address, bytes)
-                                             : wa::softmmu::Access{status, address});
+        const auto status = memory.Check(address, bytes.size(), WA_PROT_READ);
+        if (status != WA_OK) return memory.Record({status, address});
+        return memory.Record(memory.batch ? memory.batch->Read(address, bytes, WA_PROT_READ) :
+            wa::softmmu::Read(memory.dbt.mmu, address, bytes));
     }
 
     static AccessResult Write(void* opaque, uint64_t address, std::span<const uint8_t> bytes,
                               bool) noexcept {
         auto& memory = *static_cast<ExecutionMemory*>(opaque);
-        const auto status = CheckMappedAccess(&memory.dbt, address, bytes.size(), WA_PROT_WRITE);
-        return memory.Record(status == WA_OK ? wa::softmmu::Write(memory.dbt.mmu, address, bytes)
-                                             : wa::softmmu::Access{status, address});
+        const auto status = memory.Check(address, bytes.size(), WA_PROT_WRITE);
+        if (status != WA_OK) return memory.Record({status, address});
+        return memory.Record(memory.batch ? memory.batch->Write(address, bytes) :
+            wa::softmmu::Write(memory.dbt.mmu, address, bytes));
+    }
+
+    bool FetchArm64(uint64_t pc, uint32_t& word) {
+        const auto base = AlignDown(pc, WA_PAGE_SIZE);
+        if (!code_page || code_base != base) {
+            const auto status = Check(pc, sizeof(word), WA_PROT_EXEC);
+            const auto access = status == WA_OK ? batch->ExecutablePage(pc, code_page) :
+                wa::softmmu::Access{status, pc};
+            if (access.status != WA_OK) {
+                Record(access);
+                return false;
+            }
+            code_base = base;
+        }
+        std::memcpy(&word, code_page->data() + (pc - base), sizeof(word));
+        return true;
     }
 
     template <typename Services> Services Callbacks() {
         return {.opaque = this, .fetch = Fetch, .read = Read, .write = Write};
     }
 };
+
+uint64_t MaskBits(unsigned bits) { return bits == 64 ? UINT64_MAX : (uint64_t{1} << bits) - 1; }
+
+uint64_t SignExtend(uint64_t value, unsigned bits) {
+    const uint64_t sign = uint64_t{1} << (bits - 1);
+    return ((value & MaskBits(bits)) ^ sign) - sign;
+}
+
+template <typename Word> Word ShiftArm64(Word value, unsigned kind, unsigned count) {
+    switch (kind) {
+    case 0: return value << count;
+    case 1: return value >> count;
+    case 2: return static_cast<std::make_signed_t<Word>>(value) >> count;
+    default: return std::rotr(value, count);
+    }
+}
+
+namespace Flags = rt::x86::flags;
+constexpr uint64_t kNzcv = Flags::Sign | Flags::Zero | Flags::Carry | Flags::Overflow;
+
+void SetArm64Flags(Arm64State& state, uint64_t result, uint64_t sign, bool carry, bool overflow) {
+    state.packed_flags = (state.packed_flags & ~kNzcv) | (result & sign ? Flags::Sign : 0) |
+        (result == 0 ? Flags::Zero : 0) | (carry ? Flags::Carry : 0) | (overflow ? Flags::Overflow : 0);
+}
+
+bool Arm64Condition(uint64_t flags, unsigned condition) {
+    bool passes;
+    switch (condition >> 1) {
+    case 0: passes = Flags::GetZF(flags); break;
+    case 1: passes = Flags::GetCF(flags); break;
+    case 2: passes = Flags::GetSF(flags); break;
+    case 3: passes = Flags::GetOF(flags); break;
+    case 4: passes = Flags::GetCF(flags) && !Flags::GetZF(flags); break;
+    case 5: passes = Flags::GetSF(flags) == Flags::GetOF(flags); break;
+    case 6: passes = !Flags::GetZF(flags) && Flags::GetSF(flags) == Flags::GetOF(flags); break;
+    default: return true;
+    }
+    return passes != bool(condition & 1);
+}
+
+using Arm64Family = swift::arm64::detail::Family;
+
+struct Arm64Decoded {
+    swift::arm64::Instruction instruction;
+    uint64_t logical_immediate = 0;
+    bool valid = false;
+};
+
+uint64_t Arm64LogicalImmediate(uint32_t word) {
+    const unsigned width = word >> 31 ? 64 : 32;
+    const unsigned length = std::bit_width(((word >> 16) & 64) | (~(word >> 10) & 63));
+    if (length < 2) return 0;
+    const unsigned size = 1u << (length - 1);
+    const unsigned count = ((word >> 10) & (size - 1)) + 1;
+    if (size > width || count == size) return 0;
+    const unsigned rotation = (word >> 16) & (size - 1);
+    auto bits = MaskBits(count);
+    if (rotation) bits = ((bits >> rotation) | (bits << (size - rotation))) & MaskBits(size);
+    for (unsigned filled = size; filled < width; filled *= 2) bits |= bits << filled;
+    return bits;
+}
+
+// These integer instructions are already validated by SwiftVM's decoder.
+// Unhandled forms use the same decoded instruction in the general interpreter.
+bool ExecuteArm64Fast(const Arm64Decoded& decoded, Arm64State& state, ExecutionMemory& memory,
+                      rt::frontend::StepResult& step) {
+    const auto& instruction = decoded.instruction;
+    const auto family = static_cast<Arm64Family>(instruction.FamilyCode());
+    const uint32_t word = instruction.Word();
+    const bool wide = word >> 31;
+    const unsigned width = wide ? 64 : 32;
+    const unsigned rd = word & 31, rn = (word >> 5) & 31, rm = (word >> 16) & 31;
+    const auto read = [&](unsigned reg) { return reg == 31 ? uint64_t{0} : state.gprs[reg]; };
+    const auto narrow = [](uint64_t value, bool wide) { return wide ? value : uint64_t(uint32_t(value)); };
+    const auto shifted = [&](uint64_t value, unsigned kind, unsigned shift) -> uint64_t {
+        return wide ? ShiftArm64(value, kind, shift) : ShiftArm64(uint32_t(value), kind, shift);
+    };
+    const auto pc = state.pc;
+    uint64_t next = pc + 4;
+    switch (family) {
+    case Arm64Family::AddSubImmediate:
+    case Arm64Family::AddSubShifted: {
+        const bool immediate = family == Arm64Family::AddSubImmediate;
+        const bool subtract = word & (1u << 30), flags = word & (1u << 29);
+        const unsigned shift = immediate ? ((word >> 22) & 1) * 12 : (word >> 10) & 63;
+        const unsigned kind = (word >> 22) & 3;
+        if (!immediate && (shift >= width || kind == 3)) return false;
+        const auto lhs = narrow(immediate ? state.gprs[rn] : read(rn), wide);
+        const auto rhs = immediate ? uint64_t((word >> 10) & 4095) << shift : shifted(read(rm), kind, shift);
+        const auto value = narrow(subtract ? lhs - rhs : lhs + rhs, wide);
+        if (flags) {
+            const uint64_t sign = uint64_t{1} << (width - 1);
+            const auto overflow = (lhs ^ value) & (subtract ? lhs ^ rhs : ~(lhs ^ rhs)) & sign;
+            SetArm64Flags(state, value, sign, subtract ? lhs >= rhs : value < lhs, overflow != 0);
+        }
+        if (rd != 31 || (immediate && !flags)) state.gprs[rd] = value;
+        break;
+    }
+    case Arm64Family::LogicalImmediate:
+    case Arm64Family::LogicalShifted: {
+        const bool immediate = family == Arm64Family::LogicalImmediate;
+        const unsigned op = (word >> 29) & 3, shift = (word >> 10) & 63;
+        if (immediate ? decoded.logical_immediate == 0 : shift >= width) return false;
+        auto rhs = immediate ? decoded.logical_immediate : shifted(read(rm), (word >> 22) & 3, shift);
+        if (!immediate && (word & (1u << 21))) rhs = ~rhs;
+        const auto lhs = read(rn);
+        const auto value = narrow(op == 1 ? lhs | rhs : op == 2 ? lhs ^ rhs : lhs & rhs, wide);
+        if (op == 3) SetArm64Flags(state, value, uint64_t{1} << (width - 1), false, false);
+        if (rd != 31 || (immediate && op != 3)) state.gprs[rd] = value;
+        break;
+    }
+    case Arm64Family::MoveWideImmediate: {
+        const unsigned op = (word >> 29) & 3, shift = ((word >> 21) & 3) * 16;
+        if (op == 1 || shift >= width) return false;
+        const uint64_t immediate = uint64_t((word >> 5) & 65535) << shift;
+        if (rd != 31) {
+            const auto value = op == 0 ? ~immediate : op == 2 ? immediate :
+                (state.gprs[rd] & ~(uint64_t{65535} << shift)) | immediate;
+            state.gprs[rd] = narrow(value, wide);
+        }
+        break;
+    }
+    case Arm64Family::Bitfield: {
+        const unsigned op = (word >> 29) & 3, start = rm | ((word >> 16) & 32), end = (word >> 10) & 63;
+        if ((op != 0 && op != 2) || ((word >> 22) & 1) != wide || start >= width || end >= width) return false;
+        const bool extract = end >= start;
+        const unsigned bits = extract ? end - start + 1 : end + 1;
+        const auto source = extract ? read(rn) >> start : read(rn);
+        auto value = op == 0 ? SignExtend(source, bits) : source & MaskBits(bits);
+        if (!extract) value <<= width - start;
+        if (rd != 31) state.gprs[rd] = narrow(value, wide);
+        break;
+    }
+    case Arm64Family::ConditionalSelect: {
+        if (word & (1u << 11)) return false;
+        const bool alternative = word & (1u << 30), increment = word & (1u << 10);
+        const auto rhs = read(rm);
+        const auto miss = alternative ? (increment ? -rhs : ~rhs) : rhs + increment;
+        if (rd != 31) state.gprs[rd] = narrow(
+            Arm64Condition(state.packed_flags, (word >> 12) & 15) ? read(rn) : miss, wide);
+        break;
+    }
+    case Arm64Family::UnconditionalBranch:
+        if (wide) state.gprs[30] = next;
+        next = pc + SignExtend(word, 26) * 4;
+        break;
+    case Arm64Family::ConditionalBranch:
+        if (word & (1u << 4)) return false;
+        if (Arm64Condition(state.packed_flags, word & 15)) next = pc + SignExtend(word >> 5, 19) * 4;
+        break;
+    case Arm64Family::CompareBranch:
+        if (bool(narrow(read(rd), wide)) == bool(word & (1u << 24))) next = pc + SignExtend(word >> 5, 19) * 4;
+        break;
+    case Arm64Family::TestBranch: {
+        const unsigned bit = ((word >> 19) & 31) + 32 * wide;
+        if (((read(rd) >> bit) & 1) == ((word >> 24) & 1)) next = pc + SignExtend(word >> 5, 14) * 4;
+        break;
+    }
+    case Arm64Family::UnconditionalBranchToRegister: {
+        constexpr uint32_t br = 0xd61f0000, blr = 0xd63f0000, ret = 0xd65f0000;
+        const auto op = word & ~uint32_t(31 << 5);
+        if (op != br && op != blr && op != ret) return false;
+        const auto target = read(rn);
+        if (op == blr) state.gprs[30] = next;
+        next = target;
+        break;
+    }
+    case Arm64Family::LoadStoreUnsignedOffset:
+    case Arm64Family::LoadStoreUnscaledOffset:
+    case Arm64Family::LoadStoreRegisterOffset:
+    case Arm64Family::LoadStorePreIndex:
+    case Arm64Family::LoadStorePostIndex: {
+        if (word & (1u << 26)) return false; // SIMD and floating-point registers.
+        const unsigned size = word >> 30, op = (word >> 22) & 3;
+        if ((op >= 2 && size == 3) || (op == 3 && size == 2)) return false;
+        const bool pre = family == Arm64Family::LoadStorePreIndex;
+        const bool post = family == Arm64Family::LoadStorePostIndex;
+        if ((pre || post) && rn == rd && rn != 31) return false;
+        uint64_t offset;
+        if (family == Arm64Family::LoadStoreUnsignedOffset) offset = uint64_t((word >> 10) & 4095) << size;
+        else if (family == Arm64Family::LoadStoreRegisterOffset) {
+            const unsigned extend = (word >> 13) & 7;
+            const auto index = read(rm);
+            if (extend == 2) offset = uint32_t(index);
+            else if (extend == 6) offset = SignExtend(index, 32);
+            else if (extend == 3 || extend == 7) offset = index;
+            else return false;
+            offset <<= (word & (1u << 12)) ? size : 0;
+        } else offset = SignExtend(word >> 12, 9);
+        const auto base = state.gprs[rn];
+        const auto address = post ? base : base + offset;
+        uint64_t data = op ? 0 : read(rd);
+        auto bytes = std::span(reinterpret_cast<uint8_t*>(&data), size_t{1} << size);
+        const auto access = op ? ExecutionMemory::Read(&memory, address, bytes, false) :
+            ExecutionMemory::Write(&memory, address, bytes, false);
+        if (access.status != AccessStatus::Completed) {
+            state.reservation_valid = 0;
+            step.kind = StepKind::Fault;
+            step.fault_address = access.fault_address;
+            return true;
+        }
+        if (op && rd != 31) {
+            if (op >= 2) data = SignExtend(data, 8u << size);
+            state.gprs[rd] = op == 3 ? uint32_t(data) : data;
+        }
+        if (!op) state.reservation_valid = 0;
+        if (pre || post) state.gprs[rn] = base + offset;
+        step.code_changed = access.code_changed;
+        break;
+    }
+    default: return false;
+    }
+    step.instructions = 1;
+    step.decoded_bytes = 4;
+    step.next_pc = state.pc = next;
+    return true;
+}
+
+rt::frontend::StepResult InterpretArm64Batch(Arm64State& state, ExecutionMemory& memory, size_t budget) {
+    // Both the PC and the current instruction word must match. A cache entry can
+    // be reused after remapping only if it decodes the same instruction.
+    static thread_local std::array<Arm64Decoded, 4096> cache;
+    const auto services = memory.Callbacks<swift::arm64::DirectServices>();
+    rt::frontend::StepResult out;
+    out.pc = out.next_pc = state.pc;
+    size_t block_start = 0;
+    for (size_t i = 0; i < budget; ++i) {
+        const auto pc = state.pc;
+        if (i && IsSyntheticPc(pc)) break;
+        out.pc = out.next_pc = pc;
+        if ((pc & 3) || pc > UINT64_MAX - 4) {
+            out.kind = StepKind::InvalidEncoding;
+            break;
+        }
+        uint32_t word;
+        if (!memory.FetchArm64(pc, word)) {
+            out.kind = StepKind::Fault;
+            out.fault_address = memory.fault_address;
+            break;
+        }
+        const auto bytes = std::bit_cast<std::array<uint8_t, 4>>(word);
+        auto& entry = cache[((pc >> 2) ^ (pc >> 14)) & (cache.size() - 1)];
+        if (!entry.valid || entry.instruction.PC() != pc || entry.instruction.Word() != word) {
+            const auto decoded = swift::arm64::DecodeOne(bytes, pc);
+            if (!decoded) {
+                out.kind = StepKind::InvalidEncoding;
+                break;
+            }
+            const auto family = static_cast<Arm64Family>(decoded.instruction.FamilyCode());
+            entry = {decoded.instruction, family == Arm64Family::LogicalImmediate ? Arm64LogicalImmediate(word) : 0,
+                     true};
+        }
+        rt::frontend::StepResult step{.pc = pc, .next_pc = pc};
+        if (std::endian::native == std::endian::little && ExecuteArm64Fast(entry, state, memory, step)) {
+            memory.fast_instructions += step.instructions;
+        } else {
+            step = swift::arm64::InterpretDecoded(entry.instruction, bytes, state, services);
+        }
+        out.instructions += step.instructions;
+        out.decoded_bytes += step.decoded_bytes;
+        out.next_pc = step.next_pc;
+        out.code_changed |= step.code_changed;
+        if (step.kind != StepKind::Completed) {
+            out.kind = step.kind;
+            out.service = step.service;
+            out.fault_address = step.fault_address;
+            break;
+        }
+        if (entry.instruction.Boundary()) {
+            ++memory.blocks_executed;
+            block_start = out.instructions;
+        }
+        if (step.code_changed) break;
+    }
+    memory.blocks_executed += out.instructions != block_start;
+    return out;
+}
 
 int32_t InvokeHost(wa_dbt& dbt, uint64_t pc, uint64_t sp, wa_host_call_ctx_t& context) {
     const auto offset = pc - WA_HOST_STUB_BASE;
@@ -499,6 +836,7 @@ template <typename State> uint64_t GuestAddress(uint64_t pc) {
 template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice,
                                      const GuestWait* caller_wait = nullptr) {
     auto& thread = *dbt.running;
+    auto* profile = BootProfile::active;
     ExecutionMemory memory{dbt};
     Exclusive exclusive;
     const rt::frontend::ReadyEntryLookup synthetic_pc{.ready = [](void*, uint64_t pc) noexcept {
@@ -523,6 +861,7 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice,
             const auto status = RunHost(dbt, pc, state);
             if (status != WA_OK)
                 return status;
+            memory.InvalidatePermissions();
             // Resume a synchronous caller as soon as its worker wakes it.
             // The host call has completed, so the worker resumes at its return PC.
             if (caller_wait && caller_wait->ready) slice = 0;
@@ -535,15 +874,28 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice,
                 return swift::arm32::InterpretBlock(
                     state, memory.Callbacks<swift::arm32::DirectServices>(), budget, nullptr,
                     synthetic_pc);
-            else
-                return swift::arm64::InterpretBlock(
-                    state, memory.Callbacks<swift::arm64::DirectServices>(), budget, nullptr,
-                    synthetic_pc);
+            else {
+                wa::softmmu::CpuAccess batch(dbt.mmu);
+                memory.batch = &batch;
+                memory.code_page = nullptr;
+                const auto next = InterpretArm64Batch(state, memory, budget);
+                memory.batch = nullptr;
+                return next;
+            }
         }();
         thread.steps_left -= step.instructions;
         slice -= step.instructions;
-        dbt.stats.blocks_executed += step.instructions != 0;
         dbt.stats.insns_executed += step.instructions;
+        if constexpr (std::is_same_v<State, Arm64State>) {
+            dbt.stats.blocks_executed += std::exchange(memory.blocks_executed, 0);
+            if (profile) {
+                profile->arm64_instructions += step.instructions;
+                profile->arm64_fast_instructions += memory.fast_instructions;
+            }
+            memory.fast_instructions = 0;
+        } else {
+            dbt.stats.blocks_executed += step.instructions != 0;
+        }
         switch (step.kind) {
         case StepKind::Completed:
             if (step.instructions == 0)
@@ -558,6 +910,7 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice,
             if constexpr (std::is_same_v<State, Arm64State>) {
                 if (step.service == rt::ExitValue(rt::NativeExit::Syscall)) {
                     if (const auto status = Arm64Syscall(dbt, state, step.pc); status != WA_OK) return status;
+                    memory.InvalidatePermissions();
                     break;
                 }
             }
@@ -1034,6 +1387,7 @@ static int32_t CallAbi(wa_dbt_t* dbt, uint64_t entry_vaddr, const wa_guest_call_
         !ValidEntry(dbt->arch, entry_vaddr))
         return WA_ERR_INVALID;
     try {
+        const BootProfile::Scope phase(BootProfile::Dbt);
         std::lock_guard lock(dbt->mutex);
         wa_guest_call_result_t result{};
         const auto status = Call(*dbt, entry_vaddr, *frame, result, budget);

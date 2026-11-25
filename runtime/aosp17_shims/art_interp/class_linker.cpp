@@ -26,6 +26,7 @@ namespace {
 std::unique_ptr<const art::DexFile> OpenDex(art::ArtDexFileLoader& loader,
                                            const std::string& location, bool verify,
                                            uint32_t checksum = 0) {
+  const BootProfile::Scope phase(BootProfile::DexVerify);
   std::string error;
   auto dex = loader.OpenOne(0, checksum, nullptr, verify, verify, &error);
   if (!dex) throw std::runtime_error("DEX " + location + ": " + error);
@@ -67,9 +68,13 @@ std::unique_ptr<const art::DexFile> OpenApkEntry(ZipArchiveHandle archive, const
 #endif
   // A compressed entry needs a backing buffer. Wasm also uses this path because
   // mmap of a virtual filesystem file copies it into linear memory.
-  std::vector<uint8_t> bytes(size);
-  if (const auto status = ExtractToMemory(archive, &entry, bytes.data(), size); status != 0) {
-    throw std::runtime_error("DEX " + location + ": " + ErrorCodeString(status));
+  std::vector<uint8_t> bytes;
+  {
+    const BootProfile::Scope phase(BootProfile::DexExtract);
+    bytes.resize(size);
+    if (const auto status = ExtractToMemory(archive, &entry, bytes.data(), size); status != 0) {
+      throw std::runtime_error("DEX " + location + ": " + ErrorCodeString(status));
+    }
   }
   art::ArtDexFileLoader loader(std::move(bytes), location);
   return OpenDex(loader, location, verify, entry.crc32);
@@ -100,6 +105,10 @@ std::vector<std::unique_ptr<const art::DexFile>> ReadDexArchive(
   std::vector<std::unique_ptr<const art::DexFile>> files;
   files.reserve(entries.size());
   for (const auto& [number, entry] : entries) {
+    // Memory-backed class path archives use consecutive framework shard names.
+    if (!file_backed && number != files.size() + 1)
+      throw std::runtime_error("DEX archive " + path + ": missing " +
+                               art::DexFileLoader::GetMultiDexZipEntryName(files.size()));
     const std::string location = path + '!' + art::DexFileLoader::GetMultiDexZipEntryName(number - 1);
     files.push_back(OpenApkEntry(handle, entry, location, verify, file_backed));
   }

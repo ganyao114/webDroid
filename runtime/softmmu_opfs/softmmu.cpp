@@ -1,4 +1,5 @@
 #include "softmmu_internal.h"
+#include "boot_profile.h"
 
 #include <algorithm>
 #include <array>
@@ -168,6 +169,14 @@ struct wa_softmmu {
         return table ? &(*table)[page & (kTableSize - 1)] : nullptr;
     }
 
+    Entry* Translate(uint32_t page) {
+        // Page tables live for the lifetime of the MMU. Cache the entry, and
+        // check its current protection and backing on every access.
+        auto& cached = translations[(page ^ (page >> 8)) & (translations.size() - 1)];
+        if (cached.page != page || !cached.entry) cached = {page, Find(page)};
+        return cached.entry;
+    }
+
     void EnsureTable(uint32_t index) {
         auto& table = directory[index];
         if (!table)
@@ -175,6 +184,11 @@ struct wa_softmmu {
     }
 
     mutable std::mutex mutex;
+    struct Translation {
+        uint32_t page = 0;
+        Entry* entry = nullptr;
+    };
+    std::array<Translation, 256> translations{};
     std::array<std::unique_ptr<PageTable>, kTableSize> directory;
     SparseAnonymousPages sparse;
     wa_page_read_fn reader;
@@ -244,6 +258,7 @@ void InstallPrivatePage(wa_softmmu_t& mmu, Entry& entry, std::shared_ptr<Bytes> 
 
 int32_t Materialize(wa_softmmu_t& mmu, Entry& entry) {
     if (entry.state == WA_PAGE_UNMAPPED_FILE) {
+        const wa::BootProfile::Scope phase(wa::BootProfile::PageFault);
         if (entry.file) {
             auto& file = *entry.file;
             {
@@ -269,7 +284,7 @@ int32_t Materialize(wa_softmmu_t& mmu, Entry& entry) {
     return WA_OK;
 }
 
-template <typename Byte>
+template <typename Byte, bool Locked = false>
 wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte> bytes,
                              uint32_t permission) noexcept {
     using wa::softmmu::Access;
@@ -280,7 +295,8 @@ wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte
         if (!ValidSparseRange(address, bytes.size())) return {WA_ERR_FAULT, address};
         if (bytes.empty()) return {};
         try {
-            std::lock_guard lock(mmu->mutex);
+            std::unique_lock lock(mmu->mutex, std::defer_lock);
+            if constexpr (!Locked) lock.lock();
             return mmu->sparse.Transfer(address, bytes, permission, mmu->stats);
         } catch (const std::bad_alloc&) {
             return {WA_ERR_NOMEM, address};
@@ -295,7 +311,8 @@ wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte
 
     auto fault_address = address;
     try {
-        std::lock_guard lock(mmu->mutex);
+        std::unique_lock lock(mmu->mutex, std::defer_lock);
+        if constexpr (!Locked) lock.lock();
         const auto range = Pages(address, bytes.size());
         const auto at = [&](uint32_t page) {
             return std::max(address, uint64_t{page} << WA_PAGE_SHIFT);
@@ -310,7 +327,7 @@ wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte
         };
 
         if (range.end == range.first + 1) {
-            auto* entry = mmu->Find(range.first);
+            auto* entry = mmu->Translate(range.first);
             auto status = CheckPermission(*mmu, entry, permission);
             if (status == WA_OK)
                 status = Materialize(*mmu, *entry);
@@ -495,6 +512,41 @@ Access Read(wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> bytes,
 
 Access Write(wa_softmmu_t* mmu, uint64_t address, std::span<const uint8_t> bytes) noexcept {
     return Transfer(mmu, address, bytes, WA_PROT_WRITE);
+}
+
+CpuAccess::CpuAccess(wa_softmmu_t* mmu) : mmu_(mmu) { mmu_->mutex.lock(); }
+CpuAccess::~CpuAccess() { mmu_->mutex.unlock(); }
+
+Access CpuAccess::Read(uint64_t address, std::span<uint8_t> bytes, uint32_t permission) noexcept {
+    return Transfer<uint8_t, true>(mmu_, address, bytes, permission);
+}
+
+Access CpuAccess::Write(uint64_t address, std::span<const uint8_t> bytes) noexcept {
+    return Transfer<const uint8_t, true>(mmu_, address, bytes, WA_PROT_WRITE);
+}
+
+Access CpuAccess::ExecutablePage(uint64_t address, const PageBytes*& page) noexcept {
+    page = nullptr;
+    try {
+        if (address >= kAddressLimit) {
+            if (address >= kArm64AddressLimit ||
+                mmu_->sparse.FirstFault(address, address + 1, WA_PROT_EXEC))
+                return {WA_ERR_FAULT, address};
+            const auto data = mmu_->sparse.Backing(address);
+            page = data ? data.get() : &kZeroPage;
+        } else {
+            auto* entry = mmu_->Translate(static_cast<uint32_t>(address >> WA_PAGE_SHIFT));
+            auto status = CheckPermission(*mmu_, entry, WA_PROT_EXEC);
+            if (status == WA_OK) status = Materialize(*mmu_, *entry);
+            if (status != WA_OK) return {status, address};
+            page = &entry->ReadBytes();
+        }
+        return {};
+    } catch (const std::bad_alloc&) {
+        return {WA_ERR_NOMEM, address};
+    } catch (...) {
+        return {WA_ERR_INTERNAL, address};
+    }
 }
 
 bool PageResidency(const wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> pages) {

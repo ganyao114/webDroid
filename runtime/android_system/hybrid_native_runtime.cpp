@@ -1,4 +1,5 @@
 #include "hybrid_native_runtime.h"
+#include "../softmmu_opfs/boot_profile.h"
 
 #include "apk_entry_reader.h"
 #include "bionic_internal.h"
@@ -82,7 +83,8 @@ class ApkArchive {
         if (!entry || !entry->uncompressed_length ||
                 entry->uncompressed_length >= dbt::kHeapBase - kFirstImage)
             throw std::runtime_error("Missing or invalid ELF entry " + key);
-        return *files.emplace(key, std::make_unique<ApkEntryReader>(zip.get(), *entry)).first->second;
+        return *files.emplace(key, std::make_unique<ApkEntryReader>(zip.get(), *entry,
+            std::span<const uint8_t>{}, &cache)).first->second;
     }
 
     std::vector<std::string> Libraries(wa_guest_arch_t arch) const {
@@ -104,6 +106,7 @@ class ApkArchive {
 
     const std::string path;
     std::unique_ptr<ZipArchive, decltype(&CloseArchive)> zip{nullptr, CloseArchive};
+    mutable ApkEntryCache cache;
     mutable std::map<std::string, std::unique_ptr<ApkEntryReader>, std::less<>> files;
 };
 
@@ -245,6 +248,8 @@ class HybridNativeRuntime {
         try {
             if (const auto on_load = dbt::FindElfSymbolInScope(*dbt_, library.base, "JNI_OnLoad")) {
                 library.has_on_load = true;
+                const BootProfile::LibraryCall profile(name, &BootProfile::Library::jni_on_load,
+                                                       dbt_->stats.insns_executed);
                 library.java_error = jni_->OnLoad(on_load);
             }
         } catch (const GuestFault& fault) {

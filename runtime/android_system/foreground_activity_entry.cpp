@@ -1,6 +1,7 @@
 #include "wasmandroid/foreground_activity.h"
 
 #include "apk_manifest.h"
+#include "../softmmu_opfs/boot_profile.h"
 #include "art_interp.h"
 #include "hybrid_native_runtime.h"
 #include "jni_bridge.h"
@@ -32,6 +33,7 @@
 namespace {
 
 using Clock = std::chrono::steady_clock;
+using wa::BootProfile;
 using wa::interp::Object;
 using wa::interp::ScopedHandleScope;
 using wa::interp::Value;
@@ -82,6 +84,40 @@ std::string Quote(std::string_view text) {
         }
     }
     return result + '"';
+}
+
+std::string DescribeBootProfile(const BootProfile& profile) {
+    const auto ms = [](auto duration) {
+        return std::to_string(std::chrono::duration<double, std::milli>(duration).count());
+    };
+    std::string json = "{\"arm64Instructions\":" + std::to_string(profile.arm64_instructions) +
+        ",\"arm64FastInstructions\":" + std::to_string(profile.arm64_fast_instructions) +
+        ",\"apkEntryReadCalls\":" + std::to_string(profile.entry_read_calls) +
+        ",\"apkEntryReadBytes\":" + std::to_string(profile.entry_read_bytes) +
+        ",\"apkEntryInflatedBytes\":" + std::to_string(profile.inflated_bytes);
+    for (size_t i = 0; i < BootProfile::names.size(); ++i)
+        json += ',' + Quote(BootProfile::names[i]) + ':' + ms(profile.elapsed[i]);
+
+    // Bound the state JSON even when the APK loads hundreds of libraries.
+    using Library = decltype(profile.libraries)::value_type;
+    std::vector<const Library*> libraries;
+    for (const auto& library : profile.libraries) libraries.push_back(&library);
+    const size_t count = std::min<size_t>(8, libraries.size());
+    std::partial_sort(libraries.begin(), libraries.begin() + count, libraries.end(),
+        [](const Library* a, const Library* b) {
+            return a->second.constructors.elapsed + a->second.jni_on_load.elapsed >
+                   b->second.constructors.elapsed + b->second.jni_on_load.elapsed;
+        });
+    json += ",\"slowestLibraryInitializers\":[";
+    for (size_t i = 0; i < count; ++i) {
+        const auto& [name, calls] = *libraries[i];
+        if (i) json += ',';
+        json += "{\"library\":" + Quote(name) + ",\"constructorsMs\":" + ms(calls.constructors.elapsed) +
+            ",\"constructorInstructions\":" + std::to_string(calls.constructors.instructions) +
+            ",\"jniOnLoadMs\":" + ms(calls.jni_on_load.elapsed) +
+            ",\"jniOnLoadInstructions\":" + std::to_string(calls.jni_on_load.instructions) + '}';
+    }
+    return json + "]}";
 }
 
 std::string Descriptor(std::string name) {
@@ -493,7 +529,10 @@ struct Session {
         vm.CollectIfNeeded();
         bool activity_changed = false;
         if (!frame_pending) {
-            activity_changed = ApplyActivityRequests();
+            {
+                const BootProfile::Scope phase(BootProfile::ActivityTransition);
+                activity_changed = ApplyActivityRequests();
+            }
             vm.RunReadyThreads();
         }
         vm.SetGcPaused(true);
@@ -566,13 +605,14 @@ struct Session {
         std::snprintf(numbers, sizeof(numbers),
             ",\"frames\":%u,\"bootMs\":%.3f,\"lastFrameMs\":%.3f,\"avgFrameMs\":%.3f,"
             "\"drawCommands\":%zu,\"inputEventsProcessed\":%zu,\"gcLive\":%zu,\"gcCollections\":%zu,"
-            "\"dexFiles\":%zu,\"dexClasses\":%zu,\"dexLoadMs\":%.3f,\"iconResource\":%u,\"catalogPackages\":%zu,"
+            "\"dexFiles\":%zu,\"dexClasses\":%zu,\"dexBytes\":%zu,\"dexLoadMs\":%.3f,"
+            "\"iconResource\":%u,\"catalogPackages\":%zu,"
             "\"executedActivityMethods\":%zu,\"executedApplicationMethods\":%zu,"
             "\"attachBaseContextCalls\":%llu,\"attachBaseContextReturns\":%llu,"
             "\"applicationCreateCalls\":%llu,\"applicationCreateReturns\":%llu,\"providersCreated\":%llu,"
             "\"onCreateCalls\":%llu,\"onStartCalls\":%llu,\"onResumeCalls\":%llu,\"onDestroyCalls\":%llu",
             frames, boot_ms, frames ? frame_ms[(frames - 1) % frame_ms.size()] : 0.0, average,
-            draw_commands, input_events, gc.live, gc.collections, dex_files, dex_classes, dex_load_ms,
+            draw_commands, input_events, gc.live, gc.collections, dex_files, dex_classes, dex_bytes, dex_load_ms,
             icon_resource, catalog.size(), vm.InterpretedMethodCount(activity_descriptor),
             vm.InterpretedMethodCount(application_descriptor),
             static_cast<unsigned long long>(app_attach.invocations),
@@ -598,6 +638,10 @@ struct Session {
             ",\"nativeHostCalls\":" + std::to_string(native.calls) +
             ",\"nativeCallbacks\":" + std::to_string(native.callbacks) +
             ",\"nativeFileFaults\":" + std::to_string(native.file_faults);
+        if (boot_attempted) {
+            if (boot_profile_json.empty()) boot_profile_json = DescribeBootProfile(boot_profile);
+            state += ",\"bootProfile\":" + boot_profile_json;
+        }
 #ifdef __EMSCRIPTEN__
         state += ",\"wasmLinearBytes\":" + std::to_string(emscripten_get_heap_size()) +
             ",\"wasmHeapEndBytes\":" + std::to_string(reinterpret_cast<uintptr_t>(sbrk(0)));
@@ -623,9 +667,11 @@ struct Session {
         application_descriptor, launch_activity, launch_descriptor, icon_name;
     uint32_t frames = 0, sequence = 0, icon_resource = 0;
     uint64_t last_time = 0;
-    size_t input_events = 0, draw_commands = 0, dex_files = 0, dex_classes = 0;
+    size_t input_events = 0, draw_commands = 0, dex_files = 0, dex_classes = 0, dex_bytes = 0;
     unsigned long long on_create = 0, on_start = 0, on_resume = 0;
     double boot_ms = 0, dex_load_ms = 0;
+    BootProfile boot_profile;
+    std::string boot_profile_json;
     std::array<double, 120> frame_ms{};
     bool framework_loaded = false, fallback_loaded = false, boot_attempted = false, booted = false;
     bool natives_registered = false;
@@ -813,10 +859,10 @@ void wa_system_app_destroy() {
 wa_sf_t* wa_system_app_sf_ctx() { return session ? session->scene.get() : nullptr; }
 
 int32_t wa_system_app_load_framework_dex(const uint8_t* bytes, size_t size) {
-    return Prepared("Load upstream framework DEX", [&](Session& s) -> int32_t {
+    return Prepared("Load upstream framework DEX archive", [&](Session& s) -> int32_t {
         if (!bytes || !size) return WA_ERR_INVALID;
         if (s.framework_loaded) return WA_ERR_BUSY;
-        s.vm.LoadDexFile("aosp17_upstream_framework.dex", {bytes, bytes + size});
+        s.vm.LoadDexFile("aosp17_upstream_framework.jar", {bytes, bytes + size});
         s.framework_loaded = true;
         return WA_OK;
     });
@@ -916,6 +962,7 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
         Clock::time_point start = Clock::now();
         ~BootTimer() { elapsed = MillisecondsSince(start); }
     } timer{s.boot_ms};
+    const BootProfile::Capture profile(s.boot_profile);
     const auto& pkg = package.manifest.package;
     const auto requested = wa::system::ActivityClassName(pkg, activity ? activity : "");
     const auto chosen = std::ranges::find_if(package.manifest.activities,
@@ -940,13 +987,17 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
     MountProcessFiles(s.vm, process);
     s.vm.MountReadOnlyHostFile(apk_path);
     const auto dex_start = Clock::now();
-    s.vm.LoadApkDexFiles(apk_path);
+    {
+        const BootProfile::Scope phase(BootProfile::Dex);
+        s.vm.LoadApkDexFiles(apk_path);
+    }
     s.dex_load_ms = MillisecondsSince(dex_start);
     const auto prefix = apk_path + '!';
     for (const auto& file : s.vm.GetDexStats().files) {
         if (!file.location.starts_with(prefix)) continue;
         ++s.dex_files;
         s.dex_classes += file.class_definitions;
+        s.dex_bytes += file.bytes;
     }
     if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))
         throw std::invalid_argument("Launcher activity is absent from the APK DEX files");
@@ -968,6 +1019,7 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
         s.on_start = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onStart", "()V").returned;
         s.on_resume = s.vm.GetLinkedVirtualMethodStats(s.launch_descriptor, "onResume", "()V").returned;
     };
+    const BootProfile::Scope java(BootProfile::Java);
     try {
         s.ui.LaunchActivity(s.vm, {.apk_path = apk_path, .class_name = s.activity_class,
             .locale = s.locale, .density_dpi = static_cast<int32_t>(s.display.density_dpi),
@@ -995,6 +1047,7 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
         s.application_descriptor = Descriptor(s.application_class);
         s.ReadIcon(current);
     }
+    const BootProfile::Scope first_frame(BootProfile::FirstFrame);
     const int32_t frame = s.Draw(0);
     if (frame != WA_OK) return frame;
     s.vm.Collect();

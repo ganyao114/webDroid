@@ -76,12 +76,30 @@ function readFrame(module, memory, scene) {
   }
 }
 
+function readCoverage(ranges) {
+  let unique = 0, end = 0;
+  const repeated = new Map();
+  for (const [start, stop] of ranges.sort((a, b) => a[0] - b[0])) {
+    unique += Math.max(0, stop - Math.max(start, end));
+    end = Math.max(stop, end);
+    const key = `${start}/${stop}`;
+    const group = repeated.get(key) ?? { start, bytes: stop - start, calls: 0 };
+    ++group.calls;
+    repeated.set(key, group);
+  }
+  const repeatedRanges = [...repeated.values()].filter(({ calls }) => calls > 1)
+    .sort((a, b) => b.bytes * (b.calls - 1) - a.bytes * (a.calls - 1)).slice(0, 8);
+  return { apkUniqueReadBytes: unique, repeatedRanges };
+}
+
 let abi;
 try {
   const scratch = Buffer.allocUnsafe(apkReadChunkBytes);
+  let bootRanges = [];
   const source = measureApkReads(fstatSync(fd).size, (target, offset) => {
     const count = readSync(fd, scratch, 0, target.byteLength, offset);
     target.set(scratch.subarray(0, count));
+    bootRanges?.push([offset, offset + count]);
     return count;
   });
   assert.equal(source.size, 286_319_384);
@@ -103,7 +121,11 @@ try {
     ['load_framework_dex', framework], ['load_framework_fallback_dex', fallback],
     ['set_framework_res_apk', resources],
   ]) abi.load(method, await readFile(file));
+  const bootStart = performance.now();
   abi.boot(basename(apkPath), source);
+  const bootCallMs = performance.now() - bootStart;
+  const bootApkReads = { ...source.stats, ...readCoverage(bootRanges) };
+  bootRanges = null;
   let state = abi.state(), frame;
   const bootHeapEndBytes = state.wasmHeapEndBytes;
   let welcomeFrames = 0;
@@ -121,14 +143,19 @@ try {
   }
   const { wasmLinearBytes, wasmHeapEndBytes } = state;
   const freeHeadroomBytes = wasmLinearBytes - wasmHeapEndBytes;
-  console.log(JSON.stringify({ node: process.version, ...state, bootHeapEndBytes, freeHeadroomBytes,
-    ...source.stats, memfsPeakFileBytes, welcomeFrames, frame }));
+  console.log(JSON.stringify({ node: process.version, ...state, bootCallMs, bootApkReads,
+    bootHeapEndBytes, freeHeadroomBytes, ...source.stats, memfsPeakFileBytes, welcomeFrames, frame }));
   assert(state.booted);
   assert.equal(state.package, 'com.tencent.mm');
   assert.equal(state.launchActivity, 'com.tencent.mm.ui.LauncherUI');
   assert.equal(state.activity, activity);
   assert.equal(state.dexFiles, 18);
   assert.equal(state.dexClasses, 255_001);
+  assert.equal(state.dexBytes, 191_163_220);
+  assert(state.bootProfile.arm64Instructions > 0 && state.bootProfile.dbtMs > 0);
+  const profiledMs = Object.entries(state.bootProfile).filter(([key]) => key.endsWith('Ms'))
+    .reduce((total, [, ms]) => total + ms, 0);
+  assert(Math.abs(profiledMs - state.bootMs) < 5, `Boot profile summed to ${profiledMs} ms`);
   assert.equal(state.attachBaseContextReturns, 1);
   assert(state.providersCreated >= 27);
   assert.equal(state.applicationCreateReturns, 1);

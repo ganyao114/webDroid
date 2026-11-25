@@ -100,7 +100,8 @@ add_custom_command(OUTPUT "${wa_builtin_provenance}" ${WA_BUILTIN_APKS}
 add_custom_target(wa_upstream_builtin_apps DEPENDS "${wa_builtin_provenance}" ${WA_BUILTIN_APKS})
 set_target_properties(wa_upstream_builtin_apps PROPERTIES WA_BUILTIN_APPS_DIR "${WA_BUILTIN_APPS_DIR}")
 
-add_custom_target(wa_foreground_framework_assets)
+add_custom_target(wa_foreground_framework_assets
+    DEPENDS "${WA_LAUNCHER_FRAMEWORK_DEX}" "${WA_LAUNCHER_FRAMEWORK_RES}")
 add_dependencies(wa_foreground_framework_assets aosp17_upstream_framework aosp17_framework_core)
 
 add_custom_target(wa_upstream_launcher_assets)

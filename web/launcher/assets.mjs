@@ -4,6 +4,7 @@ export const systemUiName = 'SystemUI-upstream.apk';
 export const cubeName = 'wa_cube_app.apk';
 export const settingsName = 'Settings-upstream.apk';
 export const frameworkDexName = 'aosp17_upstream_framework.dex';
+export const frameworkArchiveName = 'aosp17_upstream_framework.jar';
 export const fallbackDexName = 'aosp17_framework_core.dex';
 export const resourcesName = 'framework-res.apk';
 export const manifestName = 'launcher-assets.json';
@@ -31,7 +32,7 @@ export async function loadLauncherAssets({ base = buildUrl, signal } = {}) {
   const assets = configuration ? await configuration.json() : {};
   const names = [cubeName, ...systemAppNames];
   const [frameworkDex, fallbackDex, launcher, systemUi, resources, apks] = await Promise.all([
-    bytes(frameworkDexName), bytes(fallbackDexName), bytes(launcherName), bytes(systemUiName),
+    bytes(assets.frameworkDex ?? frameworkDexName), bytes(fallbackDexName), bytes(launcherName), bytes(systemUiName),
     bytes(assets.resources ?? resourcesName),
     Promise.all(names.map(async name => ({ name, bytes: await bytes(name) }))),
   ]);

@@ -24,6 +24,24 @@ struct Access {
 Access Read(wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> bytes,
             uint32_t permission = WA_PROT_READ) noexcept;
 Access Write(wa_softmmu_t* mmu, uint64_t address, std::span<const uint8_t> bytes) noexcept;
+
+// Hold the MMU lock for a bounded interpreter batch. Host thunks and state
+// services run after the batch releases it.
+class CpuAccess {
+  public:
+    explicit CpuAccess(wa_softmmu_t* mmu);
+    ~CpuAccess();
+    CpuAccess(const CpuAccess&) = delete;
+    CpuAccess& operator=(const CpuAccess&) = delete;
+
+    Access Read(uint64_t address, std::span<uint8_t> bytes, uint32_t permission) noexcept;
+    Access Write(uint64_t address, std::span<const uint8_t> bytes) noexcept;
+    // A successful lookup pins the returned page for this batch.
+    Access ExecutablePage(uint64_t address, const PageBytes*& page) noexcept;
+
+  private:
+    wa_softmmu_t* mmu_;
+};
 bool PageResidency(const wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> pages);
 int32_t Protect(wa_softmmu_t* mmu, uint64_t address, size_t bytes, uint32_t prot);
 

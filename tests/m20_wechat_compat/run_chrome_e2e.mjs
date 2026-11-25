@@ -29,7 +29,7 @@ const welcomeLabels = ['Log In', 'Sign Up', '语言'];
 const loginLabels = ['Log In Via Mobile Number', 'Enter phone number', 'Other Login Options'];
 const errors = [];
 const guestDiagnostics = new Set();
-let browser, server, report;
+let browser, server, report, boot;
 
 try {
   server = await startServer({ root });
@@ -207,12 +207,15 @@ try {
       getComputedStyle(document.querySelector(".wa-app-surface")).opacity === "1"`, 600_000);
     const launchToWelcomeMs = performance.now() - launchStart;
     const { state, labels } = await snapshot();
+    boot = { launchToWelcomeMs, state, labels };
     assert.equal(state.activity, activity);
     assert.equal(state.package, 'com.tencent.mm');
     assert(state.booted && state.presentedFrames >= 3);
     assert.equal(state.backend, 'webgpu');
     assert.equal(state.dexFiles, 18);
     assert.equal(state.dexClasses, 255_001);
+    assert.equal(state.dexBytes, 191_163_220);
+    assert(state.bootProfile.arm64Instructions > 0 && state.bootProfile.dbtMs > 0);
     assert.equal(state.attachBaseContextReturns, 1);
     assert(state.providersCreated >= 27);
     assert.equal(state.applicationCreateReturns, 1);
@@ -221,6 +224,7 @@ try {
     assert.equal(state.wasmLinearBytes, 768 * 1024 * 1024);
     assert(state.freeHeadroomBytes > 0);
     assert(state.apkReadCalls > 1 && state.apkMaxReadBytes <= apkReadChunkBytes);
+    assert(state.apkReadMs > 0);
     for (const label of welcomeLabels) assert(labels.includes(label), label);
     const pixels = await evaluate('waLauncher.appPixels()');
     assert(pixels?.distinct_colors > 32 && pixels.nontransparent_samples > 1_000, JSON.stringify(pixels));
@@ -276,7 +280,7 @@ try {
         ({ activity, presentedFrames, inputEventsProcessed })),
       guestDiagnostics: [...guestDiagnostics] };
   } catch (error) {
-    throw new Error(`${error.message}\n${JSON.stringify({ app: await snapshot().catch(() => null), errors })}`,
+    throw new Error(`${error.message}\n${JSON.stringify({ boot, app: await snapshot().catch(() => null), errors })}`,
       { cause: error });
   }
 } finally {

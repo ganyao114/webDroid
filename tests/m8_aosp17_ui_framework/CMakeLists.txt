@@ -18,15 +18,17 @@ get_target_property(upstream_res aosp17_upstream_framework WA_FRAMEWORK_RES)
 file(GLOB_RECURSE fixture_files CONFIGURE_DEPENDS LIST_DIRECTORIES false
     "${CMAKE_CURRENT_SOURCE_DIR}/fixture/*")
 set(apk "${CMAKE_CURRENT_BINARY_DIR}/ui_smoke_app.apk")
-add_custom_command(OUTPUT "${apk}"
+set(split_framework "${CMAKE_CURRENT_BINARY_DIR}/ui_smoke_framework.jar")
+add_custom_command(OUTPUT "${apk}" "${split_framework}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/build_smoke_apk.py"
         --out "${apk}" --aapt2 "${WA_AAPT2_EXECUTABLE}" --javac "${WA_JAVAC_EXECUTABLE}"
         --d8 "${WA_D8_EXECUTABLE}" --android-jar "${WA_ANDROID_JAR}" --zipalign "${WA_ZIPALIGN_EXECUTABLE}"
-        --framework-jar "${framework_classes}"
+        --framework-jar "${framework_classes}" --framework-dex "${upstream_dex}"
+        --split-framework "${split_framework}"
     DEPENDS aosp17_framework_core "${framework_classes}" "${CMAKE_CURRENT_SOURCE_DIR}/build_smoke_apk.py"
-        "${WA_AAPT2_EXECUTABLE}" "${WA_ZIPALIGN_EXECUTABLE}" ${fixture_files}
+        "${upstream_dex}" "${WA_AAPT2_EXECUTABLE}" "${WA_ZIPALIGN_EXECUTABLE}" ${fixture_files}
     VERBATIM)
-add_custom_target(aosp17_ui_smoke_apk DEPENDS "${apk}")
+add_custom_target(aosp17_ui_smoke_apk DEPENDS "${apk}" "${split_framework}")
 add_executable(test_aosp17_ui_framework test_ui.cpp)
 add_dependencies(test_aosp17_ui_framework aosp17_ui_smoke_apk)
 target_link_libraries(test_aosp17_ui_framework PRIVATE aosp17_ui_jni)
@@ -39,8 +41,8 @@ if(EMSCRIPTEN)
         -sSTACK_SIZE=2097152 "-sEXPORTED_RUNTIME_METHODS=FS,callMain")
     add_test(NAME m8_aosp17_ui_framework COMMAND "${WA_NODE_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/run_wasm.mjs" "$<TARGET_FILE:test_aosp17_ui_framework>"
-        "${upstream_dex}" "${framework_dex}" "${apk}" "${upstream_res}")
+        "${split_framework}" "${framework_dex}" "${apk}" "${upstream_res}")
 else()
     add_test(NAME m8_aosp17_ui_framework COMMAND test_aosp17_ui_framework
-        "${upstream_dex}" "${framework_dex}" "${apk}" "${upstream_res}")
+        "${split_framework}" "${framework_dex}" "${apk}" "${upstream_res}")
 endif()

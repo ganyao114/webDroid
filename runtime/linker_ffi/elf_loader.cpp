@@ -1,4 +1,5 @@
 #include "bionic_internal.h"
+#include "boot_profile.h"
 #include "elf_image.h"
 
 #include "softmmu_internal.h"
@@ -358,7 +359,7 @@ template <typename Word> class Loader {
         InitializeThreadTls(*dbt, dbt->bionic->main, dbt->images.back());
         for (auto& [id, thread] : dbt->bionic->threads)
             InitializeThreadTls(*dbt, thread, dbt->images.back());
-        status = RunInitializers();
+        status = RunInitializers(name);
         if (status != WA_OK) return status;
         rollback.committed = true;
         name_storage.address = 0;
@@ -897,6 +898,7 @@ template <typename Word> class Loader {
     }
 
     int32_t Relocate() const {
+        const BootProfile::Scope phase(BootProfile::Relocations);
         auto packed = ApplyRelr(DT_RELR, DT_RELRSZ, DT_RELRENT);
         if (packed == WA_OK) packed = ApplyRelr(DT_ANDROID_RELR, DT_ANDROID_RELRSZ, DT_ANDROID_RELRENT);
         if (packed == WA_OK) packed = ApplyPacked(DT_ANDROID_REL, DT_ANDROID_RELSZ, false);
@@ -925,7 +927,7 @@ template <typename Word> class Loader {
         }
     }
 
-    int32_t RunInitializers() const {
+    int32_t RunInitializers(std::string_view name) const {
         const auto init = Tag(DT_INIT);
         const auto array = Tag(DT_INIT_ARRAY);
         const auto length = Tag(DT_INIT_ARRAYSZ);
@@ -933,6 +935,9 @@ template <typename Word> class Loader {
             (length && (!tags.contains(DT_INIT_ARRAY) || length % sizeof(Word) ||
                         !InMemory(array, length, PF_R))))
             return WA_ERR_INVALID;
+        if (!init && !length) return WA_OK;
+        const BootProfile::LibraryCall profile(name, &BootProfile::Library::constructors,
+                                               dbt->stats.insns_executed);
 
         if (init) {
             const auto status = CallInitializer(*dbt, bias + init);
@@ -988,6 +993,7 @@ int32_t wa::dbt::InspectElf(wa_guest_arch_t arch, std::span<const uint8_t> bytes
 
 int32_t wa::dbt::InspectElf(wa_guest_arch_t arch, const ElfFile& file, ElfInfo& info,
                            bool include_symbols) {
+    const BootProfile::Scope phase(BootProfile::Elf);
     try {
         if (arch == WA_ARCH_ARM32) return Loader<uint32_t>{nullptr, file, 0}.Inspect(info, include_symbols);
         if (arch == WA_ARCH_ARM64) return Loader<uint64_t>{nullptr, file, 0}.Inspect(info, include_symbols);
@@ -1004,6 +1010,7 @@ int32_t wa::dbt::LoadElf(wa_dbt& dbt, uint32_t file_id, std::span<const uint8_t>
 
 int32_t wa::dbt::LoadElf(wa_dbt& dbt, uint32_t file_id, const ElfFile& file, uint64_t bias,
                         std::string_view name, uint64_t& base, std::string* error) {
+    const BootProfile::Scope phase(BootProfile::Elf);
     if (!file.size || bias >= WA_HOST_STUB_BASE || (bias & kPageMask)) return WA_ERR_INVALID;
     std::lock_guard lock(dbt.mutex);
     try {

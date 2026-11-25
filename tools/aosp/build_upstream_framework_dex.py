@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -56,13 +57,14 @@ SPARSE_SOURCE_MIRRORS = {
     f"{CONNECTIVITY_FRAMEWORK_T}/android/app/usage/NetworkStatsManager.java":
         "1081-network-stats-source-mirror.patch",
 }
-FRAMEWORK_DEX = "aosp17_upstream_framework.dex"
+FRAMEWORK_ARCHIVE = "aosp17_upstream_framework.jar"
+FRAMEWORK_DEX = "aosp17_upstream_framework.dex"  # Existing consumers of the same archive.
 FRAMEWORK_JAR = "aosp17_upstream_framework_classes.jar"
 SERVICES_DEX = "aosp17_upstream_services.dex"
 SERVICES_JAR = "aosp17_upstream_services_classes.jar"
 FRAMEWORK_RES = "framework-res-upstream.apk"
 PROVENANCE = "framework_provenance.json"
-ARTIFACTS = (FRAMEWORK_DEX, FRAMEWORK_JAR, SERVICES_DEX, FRAMEWORK_RES, PROVENANCE)
+ARTIFACTS = (FRAMEWORK_DEX, FRAMEWORK_ARCHIVE, FRAMEWORK_JAR, SERVICES_DEX, FRAMEWORK_RES, PROVENANCE)
 HUNK = re.compile(rb"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?\n")
 RESOURCE_FLAG = re.compile(rb'\bandroid:featureFlag\s*=\s*"!?([\w.]+)"')
 SYMBOL_FLAG = re.compile(rb"@android\.annotation\.FlaggedApi\(([\w.]+)\.Flags\.(FLAG_[A-Z0-9_]+)\)")
@@ -620,27 +622,34 @@ def sdk_annotation_sources(args, names, inputs):
         yield path
 
 
-def dex_from_jar(args, stage, jar, output, classpath, *, compressed_archive=False):
+def dex_entry_name(number):
+    return "classes.dex" if number == 1 else f"classes{number}.dex"
+
+
+def write_dex_archive(path, shards, compression=zipfile.ZIP_DEFLATED):
+    with zipfile.ZipFile(path, "w") as archive:
+        for number, data in enumerate(shards, 1):
+            archive.writestr(zipfile.ZipInfo(dex_entry_name(number)), data,
+                             compress_type=compression, compresslevel=9)
+
+
+def dex_from_jar(args, stage, jar, output, classpath, *, compressed_archive=False, artifact_name=None):
     out = stage / output
     out.mkdir()
     libraries = [arg for path in classpath for arg in ("--classpath", path)]
     run(args.d8, "--release", "--min-api", "26", "--lib", args.android_jar,
         *libraries, "--output", out, jar)
     count = len(list(out.glob("*.dex")))
-    names = ["classes.dex", *(f"classes{i}.dex" for i in range(2, count + 1))]
+    names = [dex_entry_name(i) for i in range(1, count + 1)]
     if not count or any(not (out / name).is_file() for name in names):
         raise ValueError(f"{output}: expected consecutive classes*.dex from D8")
-    artifact = stage / (output + ".dex")
+    artifact = stage / (artifact_name or output + ".dex")
     if count == 1 and not compressed_archive:
         (out / names[0]).replace(artifact)
-    elif compressed_archive:
-        # The guest loads the ZIP entry and the inflated DEX into linear memory.
-        with zipfile.ZipFile(artifact, "w") as archive:
-            for name in sorted(names):
-                archive.writestr(zipfile.ZipInfo(name), (out / name).read_bytes(),
-                                 compress_type=zipfile.ZIP_DEFLATED, compresslevel=9)
     else:
-        write_jar(artifact, {name: (out / name).read_bytes() for name in names})
+        # The guest loads the ZIP entry and the inflated DEX into linear memory.
+        compression = zipfile.ZIP_DEFLATED if compressed_archive else zipfile.ZIP_STORED
+        write_dex_archive(artifact, ((out / name).read_bytes() for name in names), compression)
     return names
 
 
@@ -653,15 +662,26 @@ def dex_entries(path):
         yield path.read_bytes()
 
 
-def defined_methods(stage):
+def audit_dex_files(stage, dex_files):
     counts = {}
-    for artifact in (FRAMEWORK_DEX, SERVICES_DEX):
-        for dex in dex_entries(stage / artifact):
-            for line in dex_profile(dex, set(), set()).splitlines():
+    seen = set()
+    shards = {}
+    for artifact, names in dex_files.items():
+        shards[artifact] = []
+        for name, dex in zip(names, dex_entries(stage / artifact), strict=True):
+            profile = dex_profile(dex, set(), set())
+            method_ids, _, classes = struct.unpack_from("<3I", dex, 88)
+            if method_ids > 1 << 16:
+                raise ValueError(f"{artifact}!{name}: {method_ids} method IDs exceed the DEX limit")
+            shards[artifact].append({"entry": name, "method_ids": method_ids, "class_definitions": classes})
+            for line in profile.splitlines():
                 if line.startswith("L"):
                     descriptor, methods, _ = line.split()
+                    if descriptor in seen:
+                        raise ValueError(f"{artifact}!{name}: duplicate DEX class {descriptor}")
+                    seen.add(descriptor)
                     counts[descriptor[1:-1].replace("/", ".")] = int(methods)
-    return {name: counts.get(name) for name in METHODS_TO_AUDIT}
+    return {name: counts.get(name) for name in METHODS_TO_AUDIT}, shards
 
 
 def build(args, stage):
@@ -819,11 +839,14 @@ def build(args, stage):
     jar_from_classes(framework_program, framework, core_library, xml_library, exclude=compile_only_symbols)
     write_jar(framework_symbols, {name: (framework / name).read_bytes() for name in compile_only_symbols})
     dex_files = {
-        FRAMEWORK_DEX: dex_from_jar(args, stage, framework_program, Path(FRAMEWORK_DEX).stem,
+        FRAMEWORK_ARCHIVE: dex_from_jar(args, stage, framework_program, Path(FRAMEWORK_ARCHIVE).stem,
                                     [framework_symbols],
-                                    compressed_archive=True),
+                                    compressed_archive=True, artifact_name=FRAMEWORK_ARCHIVE),
         SERVICES_DEX: dex_from_jar(args, stage, services_jar, Path(SERVICES_DEX).stem, [framework_jar]),
     }
+    defined_methods, shards = audit_dex_files(stage, dex_files)
+    shutil.copyfile(stage / FRAMEWORK_ARCHIVE, stage / FRAMEWORK_DEX)
+    dex_files[FRAMEWORK_DEX] = dex_files[FRAMEWORK_ARCHIVE]
 
     records.extend({"path": name, "kind": "aconfig", "sha256": digest(data)}
                    for name, data in aconfig.items())
@@ -839,7 +862,7 @@ def build(args, stage):
     report = {"format_version": 1, "upstream_tag": "android-17.0.0_r1",
               "upstream_files": sorted(records, key=lambda item: item["path"]),
               "upstream_resources": resources, "disabled_resource_flags": resource_flags,
-              "defined_methods": defined_methods(stage), "dex_files": dex_files,
+              "defined_methods": defined_methods, "dex_files": dex_files, "dex_shards": shards,
               "patches": patches, "stats": stats, "generated": generated,
               "compile_only_resource_symbols": sorted(compile_only_symbols),
               "sdk_compile_only_annotations": sdk_sources,
@@ -907,7 +930,7 @@ def main():
                 write_depfile(args.depfile, args.out_dir / FRAMEWORK_DEX, inputs)
         verb = "Verified" if args.check else "Built"
         print(f"{verb} framework and services DEX in {args.out_dir} "
-              f"({stats['framework_base_java']} frameworks/base Java files in the primary DEX, "
+              f"({stats['framework_base_java']} frameworks/base Java files in the framework archive, "
               f"{stats['verbatim']} verbatim, {stats['patched']} patched, "
               f"+{stats['added']}/-{stats['removed']} lines)")
     except (OSError, ValueError, subprocess.SubprocessError, zipfile.BadZipFile) as error:

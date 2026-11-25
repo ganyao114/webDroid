@@ -21,9 +21,11 @@ export const apkReadChunkBytes = 256 * 1024;
 let apkFileSequence = 0;
 
 export function measureApkReads(size, read) {
-  const stats = { apkBytes: size, apkReadBytes: 0, apkReadCalls: 0, apkMaxReadBytes: 0 };
+  const stats = { apkBytes: size, apkReadBytes: 0, apkReadCalls: 0, apkMaxReadBytes: 0, apkReadMs: 0 };
   return { size, stats, read(target, offset) {
+    const start = performance.now();
     const count = read(target, offset);
+    stats.apkReadMs += performance.now() - start;
     stats.apkReadBytes += count;
     ++stats.apkReadCalls;
     stats.apkMaxReadBytes = Math.max(stats.apkMaxReadBytes, count);

@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
-"""Compile resources and app code, then pack them into a zipaligned smoke APK."""
+"""Build the smoke APK and a framework bundle with an extra DEX shard."""
 
 import argparse
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
+
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools/aosp"))
+from build_upstream_framework_dex import dex_entries, write_dex_archive
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("out", "aapt2", "javac", "d8", "zipalign", "android-jar", "framework-jar"):
+    for name in ("out", "aapt2", "javac", "d8", "zipalign", "android-jar", "framework-jar",
+                 "framework-dex", "split-framework"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     args = parser.parse_args()
     fixture = Path(__file__).resolve().parent / "fixture"
@@ -49,6 +55,16 @@ def main():
             output.writestr(zipfile.ZipInfo("classes.dex"), (stage / "classes.dex").read_bytes())
         run(args.zipalign, "-f", "4", unaligned, apk)
         run(args.zipalign, "-c", "4", apk)
+
+        probe = stage / "probe"
+        probe.mkdir()
+        run(args.javac, "--release", "17", "-proc:none", "-classpath", args.framework_jar,
+            "-d", probe, fixture / "framework/FrameworkShardProbe.java")
+        run(args.d8, "--release", "--min-api", "26", "--lib", args.android_jar, "--classpath",
+            args.framework_jar, "--output", probe, probe / "org/wasmandroid/frameworktest/FrameworkShardProbe.class")
+        split = stage / "framework.jar"
+        write_dex_archive(split, [*dex_entries(args.framework_dex), (probe / "classes.dex").read_bytes()])
+        shutil.move(split, args.split_framework)
         shutil.move(apk, args.out)
 
 

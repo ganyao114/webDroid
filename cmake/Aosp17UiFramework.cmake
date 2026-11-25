@@ -25,12 +25,15 @@ set(WA_AAPT2_EXECUTABLE "${WA_ANDROID_SDK}/build-tools/36.0.0/aapt2" CACHE FILEP
 set(_wa_upstream_output "${CMAKE_CURRENT_BINARY_DIR}/upstream-framework")
 set(_wa_upstream_profile "${_wa_ui_root}/patches/aosp17/frameworks_base")
 set(_wa_upstream_builder "${_wa_ui_root}/tools/aosp/build_upstream_framework_dex.py")
-set(_wa_upstream_dex "${_wa_upstream_output}/aosp17_upstream_framework.dex")
+set(_wa_upstream_legacy_dex "${_wa_upstream_output}/aosp17_upstream_framework.dex")
+set(_wa_upstream_dex "${_wa_upstream_output}/aosp17_upstream_framework.jar")
 set(_wa_upstream_classes "${_wa_upstream_output}/aosp17_upstream_framework_classes.jar")
 set(_wa_upstream_res "${_wa_upstream_output}/framework-res-upstream.apk")
 file(GLOB _wa_upstream_patches CONFIGURE_DEPENDS
     "${_wa_upstream_profile}/*.patch" "${_wa_upstream_profile}/patches/*.patch")
-add_custom_command(OUTPUT "${_wa_upstream_dex}" "${_wa_upstream_classes}" "${_wa_upstream_res}"
+# Keep the legacy filename first because standalone framework builds use it as the depfile target.
+add_custom_command(OUTPUT "${_wa_upstream_legacy_dex}" "${_wa_upstream_dex}"
+    "${_wa_upstream_classes}" "${_wa_upstream_res}"
     BYPRODUCTS "${_wa_upstream_output}/aosp17_upstream_services.dex"
         "${_wa_upstream_output}/framework_provenance.json"
     COMMAND "${Python3_EXECUTABLE}" "${_wa_upstream_builder}"
@@ -40,10 +43,10 @@ add_custom_command(OUTPUT "${_wa_upstream_dex}" "${_wa_upstream_classes}" "${_wa
         --out-dir "${_wa_upstream_output}" --depfile "${_wa_upstream_output}/framework.d"
     DEPENDS "${_wa_upstream_builder}" "${_wa_upstream_profile}/sources.txt" ${_wa_upstream_patches}
     DEPFILE "${_wa_upstream_output}/framework.d"
-    COMMENT "Building the upstream framework DEX and resource APK"
+    COMMENT "Building the upstream framework DEX archive and resource APK"
     VERBATIM)
 add_custom_target(aosp17_upstream_framework
-    DEPENDS "${_wa_upstream_dex}" "${_wa_upstream_classes}" "${_wa_upstream_res}")
+    DEPENDS "${_wa_upstream_dex}" "${_wa_upstream_legacy_dex}" "${_wa_upstream_classes}" "${_wa_upstream_res}")
 set_target_properties(aosp17_upstream_framework PROPERTIES WA_FRAMEWORK_DEX "${_wa_upstream_dex}"
     WA_FRAMEWORK_CLASSES "${_wa_upstream_classes}" WA_FRAMEWORK_RES "${_wa_upstream_res}")
 

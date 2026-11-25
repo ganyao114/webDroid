@@ -446,6 +446,7 @@ int32_t CheckMappedAccess(const wa_dbt* dbt, uint64_t address, uint64_t size, un
     // Sparse anonymous ranges enforce protection directly in SoftMMU.
     if (address >= softmmu::kAddressLimit) return WA_OK;
     if (size > softmmu::kAddressLimit - address) return WA_ERR_FAULT;
+    if (address + size <= kHeapBase || address >= kHeapLimit) return WA_OK;
     const auto& pages = dbt->bionic->map_pages;
     const auto first = address & ~uint64_t(WA_PAGE_SIZE - 1);
     for (auto page = pages.lower_bound(first); page != pages.end() && page->first < address + size;

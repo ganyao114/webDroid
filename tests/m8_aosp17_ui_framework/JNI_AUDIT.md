@@ -1,7 +1,8 @@
 # Upstream framework JNI audit
 
-The UI smoke test reads native declarations from the loaded
-`aosp17_upstream_framework.dex` and checks the linked VM methods. The audit covers
+The UI smoke test reads native declarations from every shard of the upstream framework
+archive and checks the linked VM methods. It appends a probe DEX that calls methods
+on its framework superclass from a different shard. The audit covers
 `android.graphics` and its subpackages, `AndroidCharacter`, `Hyphenator`,
 `MotionEvent`, `KeyEvent`, and `com.android.internal.util`.
 

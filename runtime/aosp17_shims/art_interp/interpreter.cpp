@@ -520,8 +520,32 @@ void MethodCodeCache::PrepareSites() {
   sites_prepared = true;
 }
 
-Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value> args,
-                         std::span<const SuspendedFrame> suspended) {
+static BootProfile::Phase InterpreterPhase(const Method& method) {
+  const auto* profile = BootProfile::active;
+  if (!profile) return BootProfile::Java;
+  if (method.name == "attachBaseContext" || method.name == "onCreate") {
+    for (const auto* cls = method.owner; cls; cls = cls->super) {
+      if (cls->descriptor == "Landroid/app/Application;") {
+        return method.name == "onCreate" ? BootProfile::ApplicationCreate : BootProfile::AttachBaseContext;
+      }
+    }
+  }
+  if (method.name == "installEmbeddedProviders" &&
+      method.owner->descriptor == "Landroid/content/pm/PackageManager;") return BootProfile::Providers;
+  if ((method.name == "performCreate" || method.name == "performStart" || method.name == "performResume") &&
+      method.owner->descriptor == "Landroid/app/Activity;") return BootProfile::ActivityLifecycle;
+  // Java can be entered again by a native JNI callback.
+  return profile->phase == BootProfile::Dbt ? BootProfile::Java : profile->phase;
+}
+
+[[gnu::noinline]] Value Runtime::InterpretProfiled(Method& method, Object* receiver, std::span<const Value> args,
+                                                  std::span<const SuspendedFrame> suspended) {
+  const BootProfile::Scope phase(InterpreterPhase(method));
+  return InterpretCode(method, receiver, args, suspended);
+}
+
+Value Runtime::InterpretCode(Method& method, Object* receiver, std::span<const Value> args,
+                             std::span<const SuspendedFrame> suspended) {
   const auto& dex = *method.owner->dex;
   if (!method.code_cache) {
     auto cache = std::make_unique<MethodCodeCache>(dex, method.code);

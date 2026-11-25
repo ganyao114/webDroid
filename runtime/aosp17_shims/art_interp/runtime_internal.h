@@ -2,6 +2,7 @@
 
 #include "art_interp.h"
 #include "native_thunk.h"
+#include "../../softmmu_opfs/boot_profile.h"
 
 #include <array>
 #include <chrono>
@@ -347,8 +348,15 @@ struct Runtime {
     return InvokeSlow(method, receiver, args);
   }
   Value InvokeSlow(Method& method, Object* receiver, std::span<const Value> args);
-  Value Interpret(Method& method, Object* receiver, std::span<const Value> args,
-                  std::span<const SuspendedFrame> suspended = {});
+  [[gnu::always_inline]] Value Interpret(Method& method, Object* receiver, std::span<const Value> args,
+                                        std::span<const SuspendedFrame> suspended = {}) {
+    if (BootProfile::active) [[unlikely]] return InterpretProfiled(method, receiver, args, suspended);
+    return InterpretCode(method, receiver, args, suspended);
+  }
+  Value InterpretProfiled(Method& method, Object* receiver, std::span<const Value> args,
+                          std::span<const SuspendedFrame> suspended);
+  Value InterpretCode(Method& method, Object* receiver, std::span<const Value> args,
+                      std::span<const SuspendedFrame> suspended);
   Value ResumeSuspendedLoop(std::span<const SuspendedFrame> frames);
   Value DispatchMainMessage(Object& looper, Value now);
   [[noreturn]] void SuspendMainLooper();

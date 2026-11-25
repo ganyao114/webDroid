@@ -670,10 +670,10 @@ void wa_system_launcher_destroy() {
 wa_sf_t* wa_system_launcher_sf_ctx() { return session ? session->sf.get() : nullptr; }
 
 int32_t wa_system_launcher_load_framework_dex(const uint8_t* bytes, size_t length) {
-    return Active("Load framework DEX", [&](Session& s) -> int32_t {
+    return Active("Load framework DEX archive", [&](Session& s) -> int32_t {
         if (!bytes || !length) return WA_ERR_INVALID;
         if (s.booted || s.runtime) return WA_ERR_BUSY;
-        // Keep the retry image in the backing filesystem. The VM owns the loaded DEX.
+        // Keep the retry archive in the backing filesystem. The VM owns all loaded shards.
         auto dex = std::make_unique<MountedApk>(std::span(bytes, length));
         auto next = std::make_unique<LauncherRuntime>();
         next->vm.LoadDexFile(dex->path());

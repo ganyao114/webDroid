@@ -4,6 +4,7 @@
 #include "../../runtime/hal_surfaceflinger/font_advances.h"
 
 #include <dex/class_accessor-inl.h>
+#include <dex/dex_file_loader.h>
 #include <ziparchive/zip_archive.h>
 
 #include <algorithm>
@@ -39,15 +40,19 @@ void AuditFrameworkNatives(Vm& vm, std::string_view upstream, std::string_view f
     auto& linker = wa::interp::JniBridge::From(vm.JniEnv()).Vm().linker;
     const auto archive = [](std::string_view name) { return name.substr(0, name.rfind('!')); };
     std::unordered_set<std::string_view> classes;
-    uint32_t primary_methods = 0;
+    std::vector<uint32_t> method_ids;
     size_t declarations = 0;
     std::string missing;
     for (const auto& dex : linker.LoadedDexFiles()) {
         const std::string_view location = dex->GetLocation();
         const auto owner = archive(location);
         if (owner != upstream && owner != fallback) continue;
-        if (owner == upstream && (location == owner || location.ends_with("!classes.dex"))) {
-            primary_methods = dex->NumMethodIds();
+        if (owner == upstream) {
+            const auto name = art::DexFileLoader::GetMultiDexZipEntryName(method_ids.size());
+            Require(location.substr(owner.size()) == "!" + name, "Framework DEX shard order");
+            const uint32_t methods = dex->NumMethodIds();
+            Require(methods > 0 && methods <= (1u << 16), "DEX method ID limit in " + name);
+            method_ids.push_back(methods);
         }
         for (uint32_t i = 0; i < dex->NumClassDefs(); ++i) {
             const auto& definition = dex->GetClassDef(i);
@@ -86,12 +91,23 @@ void AuditFrameworkNatives(Vm& vm, std::string_view upstream, std::string_view f
             }
         }
     }
-    Require(primary_methods > 0 && primary_methods <= 65'535,
-            "Primary framework DEX method IDs " + std::to_string(primary_methods));
+    Require(method_ids.size() >= 2, "The framework fixture spans multiple DEX shards");
     Require(declarations != 0, "The upstream DEX declares native methods");
     Require(missing.empty(), "Unregistered upstream JNI declarations\n" + missing);
     std::cout << "Audited " << declarations << " upstream framework JNI declarations, 0 unbound native methods, "
-              << "0 duplicate DEX classes, " << primary_methods << " primary DEX method IDs\n";
+              << "0 duplicate DEX classes. Framework DEX method IDs by shard";
+    for (const auto methods : method_ids) std::cout << ' ' << methods;
+    std::cout << '\n';
+}
+
+void VerifyCrossShardLinkage(Vm& vm, std::string_view upstream) {
+    constexpr auto probe = "Lorg/wasmandroid/frameworktest/FrameworkShardProbe;";
+    const auto probe_location = vm.DexLocation(probe);
+    const auto base_location = vm.DexLocation("Landroid/graphics/Point;");
+    Require(probe_location.starts_with(upstream) && base_location.starts_with(upstream) &&
+            probe_location != base_location, "The probe and its superclass come from different framework shards");
+    Require(vm.CallStatic(probe, "run", "()I").i() == 69,
+            "A class in a secondary framework shard can call methods on its superclass");
 }
 
 void VerifyMediaStoreImages(Vm& vm, std::string_view upstream) {
@@ -472,6 +488,7 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     bridge.BindSurfaceFlinger(sf.get(), kLayer);
     bridge.RegisterNatives(vm);
     AuditFrameworkNatives(vm, upstream, framework);
+    VerifyCrossShardLinkage(vm, upstream);
     VerifyMediaStoreImages(vm, upstream);
     VerifyLegacyHttp(vm, upstream);
     VerifyVmRuntime(vm);
@@ -777,7 +794,7 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
 int main(int argc, char** argv) {
     if (argc != 5) {
         std::cerr
-            << "Usage: test_aosp17_ui_framework UPSTREAM.dex CORE.dex APP.apk PLATFORM_RESOURCES.apk\n";
+            << "Usage: test_aosp17_ui_framework FRAMEWORK.jar CORE.dex APP.apk PLATFORM_RESOURCES.apk\n";
         return 2;
     }
     Vm vm({.gc_interval = 137, .capture_exception_stack = true});
