@@ -1,0 +1,23 @@
+--- a/libcore/luni/src/main/java/org/apache/harmony/xml/parsers/DocumentBuilderImpl.java
++++ b/libcore/luni/src/main/java/org/apache/harmony/xml/parsers/DocumentBuilderImpl.java
+@@ -21,7 +21,6 @@
+ import java.net.URL;
+ import java.net.URLConnection;
+ import javax.xml.parsers.DocumentBuilder;
+-import libcore.io.IoUtils;
+ import org.apache.harmony.xml.dom.CDATASectionImpl;
+ import org.apache.harmony.xml.dom.DOMImplementationImpl;
+ import org.apache.harmony.xml.dom.DocumentImpl;
+@@ -152,7 +151,11 @@
+ 
+             throw newEx;
+         } finally {
+-            IoUtils.closeQuietly(parser);
++            try {
++                parser.close();
++            } catch (IOException ignored) {
++                // Preserve the parse result if closing the input fails.
++            }
+         }
+ 
+         return document;

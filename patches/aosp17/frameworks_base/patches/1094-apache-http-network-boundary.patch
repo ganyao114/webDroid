@@ -1,0 +1,95 @@
+--- a/external/apache-http/src/org/apache/http/impl/conn/DefaultClientConnectionOperator.java
++++ b/external/apache-http/src/org/apache/http/impl/conn/DefaultClientConnectionOperator.java
+@@ -30,6 +30,8 @@
+  */
+ 
+ package org.apache.http.impl.conn;
++
++import android.net.Network;
+ 
+ import java.io.IOException;
+ import java.net.ConnectException;
+@@ -139,7 +141,8 @@
+             plain_sf = sf;
+             layered_sf = null;
+         }
+-        InetAddress[] addresses = InetAddress.getAllByName(target.getHostName());
++        // Use the guest DNS transport for the default network (netId 0).
++        InetAddress[] addresses = new Network(0).getAllByName(target.getHostName());
+ 
+         for (int i = 0; i < addresses.length; ++i) {
+             Socket sock = plain_sf.createSocket();
+--- a/frameworks/base/core/java/org/apache/http/conn/ssl/SSLSocketFactory.java
++++ b/frameworks/base/core/java/org/apache/http/conn/ssl/SSLSocketFactory.java
+@@ -43,6 +43,7 @@
+ import java.net.InetAddress;
+ import java.net.InetSocketAddress;
+ import java.net.Socket;
++import java.net.SocketException;
+ import java.net.UnknownHostException;
+ import java.security.KeyManagementException;
+ import java.security.KeyStore;
+@@ -51,7 +52,6 @@
+ import java.security.SecureRandom;
+ import java.security.UnrecoverableKeyException;
+ 
+-import javax.net.ssl.HttpsURLConnection;
+ import javax.net.ssl.KeyManager;
+ import javax.net.ssl.KeyManagerFactory;
+ import javax.net.ssl.SSLContext;
+@@ -258,7 +258,9 @@
+     private SSLSocketFactory() {
+         super();
+         this.sslcontext = null;
+-        this.socketfactory = HttpsURLConnection.getDefaultSSLSocketFactory();
++        // The embedded runtime has no system TLS provider. Plain HTTP clients still
++        // register this scheme, so report the error only when a socket is requested.
++        this.socketfactory = null;
+         this.nameResolver = null;
+     }
+ 
+@@ -287,12 +289,19 @@
+     }
+ 
+ 
++    private javax.net.ssl.SSLSocketFactory requireSocketFactory() throws SocketException {
++        if (socketfactory == null) {
++            throw new SocketException("No embedded TLS transport");
++        }
++        return socketfactory;
++    }
++
+     // non-javadoc, see interface org.apache.http.conn.SocketFactory
+     public Socket createSocket()
+         throws IOException {
+ 
+         // the cast makes sure that the factory is working as expected
+-        return (SSLSocket) this.socketfactory.createSocket();
++        return (SSLSocket) requireSocketFactory().createSocket();
+     }
+ 
+ 
+@@ -403,7 +412,7 @@
+         final int port,
+         final boolean autoClose
+     ) throws IOException, UnknownHostException {
+-        SSLSocket sslSocket = (SSLSocket) this.socketfactory.createSocket(
++        SSLSocket sslSocket = (SSLSocket) requireSocketFactory().createSocket(
+               socket,
+               host,
+               port,
+--- a/external/apache-http/src/org/apache/http/conn/params/ConnRouteParams.java
++++ b/external/apache-http/src/org/apache/http/conn/params/ConnRouteParams.java
+@@ -182,10 +182,8 @@
+         if (params == null) {
+             throw new IllegalArgumentException("Parameters must not be null.");
+         }
+-        InetAddress local = (InetAddress)
+-            params.getParameter(LOCAL_ADDRESS);
+-        // no explicit unsetting
+-        return local;
++        Object local = params.getParameter(LOCAL_ADDRESS);
++        return local == null ? null : (InetAddress) local;
+     }
+ 
+ 

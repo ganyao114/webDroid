@@ -64,7 +64,8 @@ void AuditFrameworkNatives(Vm& vm, std::string_view upstream, std::string_view f
                 name == "Ljava/util/zip/CRC32;" || name == "Ljava/util/zip/Deflater;" ||
                 name == "Landroid/net/LocalSocketImpl;";
             const bool package_manager = name == "Landroid/content/pm/PackageManager;";
-            if (!art_boot && !package_manager && !name.starts_with("Landroid/graphics/") &&
+            const bool apache = name.starts_with("Lorg/apache/");
+            if (!art_boot && !package_manager && !apache && !name.starts_with("Landroid/graphics/") &&
                 !name.starts_with("Lcom/android/internal/util/") &&
                 name != "Landroid/text/AndroidCharacter;" && name != "Landroid/text/Hyphenator;" &&
                 name != "Landroid/view/MotionEvent;" && name != "Landroid/view/KeyEvent;")
@@ -91,6 +92,30 @@ void AuditFrameworkNatives(Vm& vm, std::string_view upstream, std::string_view f
     Require(missing.empty(), "Unregistered upstream JNI declarations\n" + missing);
     std::cout << "Audited " << declarations << " upstream framework JNI declarations, 0 unbound native methods, "
               << "0 duplicate DEX classes, " << primary_methods << " primary DEX method IDs\n";
+}
+
+void VerifyLegacyHttp(Vm& vm, std::string_view upstream) {
+    constexpr auto client_type = "Lorg/apache/http/impl/client/DefaultHttpClient;";
+    Require(vm.DexLocation(client_type).starts_with(upstream), "Apache HTTP Legacy is in the primary framework archive");
+    wa::interp::ScopedHandleScope roots(vm);
+    auto* client = roots.Hold(vm.NewObject(client_type));
+    const auto url = roots.Hold(Value::Ref(vm.NewString("https://example.invalid/hello%20%E4%BD%A0")));
+    auto* post = roots.Hold(vm.NewObject("Lorg/apache/http/client/methods/HttpPost;",
+        "(Ljava/lang/String;)V", std::array{url}));
+    auto* uri = roots.Hold(vm.CallVirtual(post, "getURI", "()Ljava/net/URI;").ref());
+    Require(vm.StringUtf8(vm.CallVirtual(uri, "getPath", "()Ljava/lang/String;").ref()) == "/hello 你",
+            "Apache HttpPost decodes percent-encoded UTF-8 using libcore URI");
+    try {
+        vm.CallVirtual(client, "execute",
+            "(Lorg/apache/http/client/methods/HttpUriRequest;)Lorg/apache/http/HttpResponse;",
+            std::array{Value::Ref(post)});
+    } catch (const wa::interp::ManagedException&) {
+        const auto failure = vm.ExceptionSummary();
+        vm.ClearException();
+        Require(failure == "Ljava/net/UnknownHostException;: example.invalid", failure);
+        return;
+    }
+    throw std::runtime_error("Apache HTTP must report unavailable guest DNS through IOException");
 }
 
 std::vector<uint8_t> ExtractDex(const char* apk) {
@@ -421,6 +446,7 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     bridge.BindSurfaceFlinger(sf.get(), kLayer);
     bridge.RegisterNatives(vm);
     AuditFrameworkNatives(vm, upstream, framework);
+    VerifyLegacyHttp(vm, upstream);
     VerifyVmRuntime(vm);
     {
         wa::interp::ScopedHandleScope scope(vm);
@@ -457,6 +483,10 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     Require(ReadInt(vm, "verifyLegacyFieldReflection") == 1, "Legacy Android apps can reflectively update static final fields");
     vm.SetAndroidTargetSdkVersion(0);
     Require(ReadInt(vm, "verifyBigInteger") == 1, "BigInteger performs pure Java multiplication, division and modular exponentiation");
+    Require(ReadInt(vm, "verifyDecimalRounding") == 1, "BigDecimal rounds compact decimal values");
+    Require(ReadInt(vm, "verifyArrayListHierarchy") == 1, "ArrayList dispatches through the libcore AbstractCollection hierarchy");
+    Require(ReadInt(vm, "verifySlashWrapping") == 1, "Text wraps at the slash in compound labels");
+    Require(ReadInt(vm, "verifyEmbeddedDom") == 1, "Java DOM parses XML streams and reports malformed input with a location");
     Require(ReadInt(vm, "verifyDigest") == 1, "Guest digest API matches SHA-1, MD5, and SHA-256 test vectors");
     Require(ReadInt(vm, "verifyJson") == 1, "Upstream JSON serializes and reads nested values");
     Require(ReadInt(vm, "verifyEmbeddedUrl") == 1, "URL resolves paths and reports unavailable transports as I/O errors");

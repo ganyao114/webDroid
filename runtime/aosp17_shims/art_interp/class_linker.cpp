@@ -200,7 +200,9 @@ void ClassLinker::IndexDexFiles(DexFiles files, DexSource source) {
     }
     definitions += dex->NumClassDefs();
   }
-  decltype(dex_index_) pending;
+  // Keep a sorted, contiguous index for each load so each DEX class needs no
+  // individual heap allocation and existing indices can retain their storage.
+  DexIndex pending;
   pending.reserve(definitions);
   for (const auto& dex : files) {
     for (uint32_t i = 0; i < dex->NumClassDefs(); ++i) {
@@ -209,27 +211,40 @@ void ClassLinker::IndexDexFiles(DexFiles files, DexSource source) {
       // Installed boot classes are always the parent namespace.
       const auto loaded = classes_.find(descriptor);
       if (loaded != classes_.end() && !loaded->second.dex) continue;
-      const auto existing = dex_index_.find(descriptor);
-      const bool inherits = existing != dex_index_.end() &&
-          (fallback || (from_apk && !existing->second.from_apk));
-      if ((existing != dex_index_.end() && !inherits) ||
-          !pending.try_emplace(descriptor, DexClass{dex.get(), definition, from_apk}).second) {
-        throw std::runtime_error("Duplicate DEX class " + std::string(descriptor) + " from " +
-                                 dex->GetLocation());
-      }
+      pending.push_back({descriptor, dex.get(), definition, from_apk});
     }
   }
-  if (source != DexSource::File) {
-    std::erase_if(pending, [&](const auto& entry) { return dex_index_.contains(entry.first); });
+  const auto duplicate_class = [](const DexClass& entry) {
+    return std::runtime_error("Duplicate DEX class " + std::string(entry.descriptor) + " from " +
+                              entry.dex->GetLocation());
+  };
+  std::ranges::sort(pending, {}, &DexClass::descriptor);
+  if (const auto duplicate = std::ranges::adjacent_find(pending, {}, &DexClass::descriptor);
+      duplicate != pending.end()) {
+    throw duplicate_class(*(duplicate + 1));
   }
+  std::erase_if(pending, [&](const DexClass& entry) {
+    const DexClass* existing = FindDexClass(entry.descriptor);
+    if (!existing) return false;
+    if (fallback || (from_apk && !existing->from_apk)) return true;
+    throw duplicate_class(entry);
+  });
   dex_files_.reserve(dex_files_.size() + files.size());
-  dex_index_.reserve(dex_index_.size() + pending.size());
-  dex_index_.merge(pending);
+  if (!pending.empty()) dex_indices_.push_back(std::move(pending));
   for (auto& dex : files) dex_files_.push_back(std::move(dex));
 }
 
+const ClassLinker::DexClass* ClassLinker::FindDexClass(std::string_view descriptor) const {
+  for (const auto& index : dex_indices_) {
+    const auto found = std::ranges::lower_bound(index, descriptor, {}, &DexClass::descriptor);
+    if (found != index.end() && found->descriptor == descriptor) return &*found;
+  }
+  return nullptr;
+}
+
 DexStats ClassLinker::GetDexStats() const {
-  DexStats stats{dex_index_.size(), linked_dex_classes_, {}};
+  DexStats stats{0, linked_dex_classes_, {}};
+  for (const auto& index : dex_indices_) stats.indexed_classes += index.size();
   stats.files.reserve(dex_files_.size());
   for (const auto& dex : dex_files_) {
     stats.files.push_back({dex->GetLocation(), dex->Size(), dex->NumClassDefs()});
@@ -238,13 +253,13 @@ DexStats ClassLinker::GetDexStats() const {
 }
 
 std::string ClassLinker::DexLocation(std::string_view descriptor) const {
-  const auto it = dex_index_.find(descriptor);
-  return it == dex_index_.end() ? std::string{} : it->second.dex->GetLocation();
+  const DexClass* entry = FindDexClass(descriptor);
+  return entry ? entry->dex->GetLocation() : std::string{};
 }
 
 Class& ClassLinker::Define(std::string_view name, std::string_view super, uint32_t flags,
                           std::initializer_list<std::string_view> interfaces) {
-  if (dex_index_.contains(name)) throw std::logic_error("Duplicate boot class " + std::string(name));
+  if (FindDexClass(name)) throw std::logic_error("Duplicate boot class " + std::string(name));
   auto [it, added] = classes_.try_emplace(std::string(name));
   if (!added) throw std::logic_error("Duplicate boot class " + std::string(name));
   Class& cls = it->second;
@@ -279,12 +294,12 @@ Method& ClassLinker::AddMethod(Class& cls, std::string_view name, std::string_vi
 Class& ClassLinker::Resolve(std::string_view descriptor) {
   auto it = classes_.find(descriptor);
   if (it == classes_.end()) {
-    if (const auto dex = dex_index_.find(descriptor); dex != dex_index_.end()) {
+    if (const DexClass* entry = FindDexClass(descriptor)) {
       it = classes_.try_emplace(std::string(descriptor)).first;
       Class& cls = it->second;
       cls.descriptor = descriptor;
-      cls.dex = dex->second.dex;
-      cls.definition = dex->second.definition;
+      cls.dex = entry->dex;
+      cls.definition = entry->definition;
     } else {
       if (!descriptor.starts_with('[') || descriptor.size() == 1 || descriptor.substr(1) == "V") {
         runtime_.Fail("Ljava/lang/NoClassDefFoundError;", descriptor);
@@ -305,7 +320,7 @@ bool ClassLinker::HasClass(std::string_view descriptor) const {
   if (component == std::string_view::npos || component > 255) return false;
   descriptor.remove_prefix(component);
   return (component == 0 || descriptor != "V") &&
-      (classes_.contains(descriptor) || dex_index_.contains(descriptor));
+      (classes_.contains(descriptor) || FindDexClass(descriptor));
 }
 
 void ClassLinker::AddBootNative(std::string_view owner, std::string_view name,

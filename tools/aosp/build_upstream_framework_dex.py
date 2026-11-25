@@ -25,13 +25,17 @@ JAVA_BASE = Path("libcore/ojluni/src/main/java")
 LIBCORE_LUNI = Path("libcore/luni/src/main/java")
 LIBCORE_JSON = Path("libcore/json/src/main/java")
 LIBCORE_DALVIK = Path("libcore/dalvik/src/main/java")
+LIBCORE_XML = Path("libcore/xml/src/main/java")
 JAVA_BASE_ADAPTERS = {
     Path("java/util/Collections.java"): Path("java/util/EmbeddedSynchronizedCollections.java"),
 }
-SPARSE_LIBCORE_ROOTS = (JAVA_BASE, LIBCORE_LUNI, LIBCORE_JSON, LIBCORE_DALVIK)
+SPARSE_LIBCORE_ROOTS = (JAVA_BASE, LIBCORE_LUNI, LIBCORE_JSON, LIBCORE_DALVIK, LIBCORE_XML)
 SPARSE_FRAMEWORK_ROOTS = ("frameworks/base/core/java", "frameworks/base/media/java")
 CONNECTIVITY_PROJECT = "packages/modules/Connectivity"
-UPSTREAM_JAVA_PROJECTS = ("frameworks/base/", "libcore/", CONNECTIVITY_PROJECT + "/")
+APACHE_HTTP_PROJECT = "external/apache-http"
+UPSTREAM_JAVA_PROJECTS = ("frameworks/base/", "libcore/", CONNECTIVITY_PROJECT + "/",
+                          APACHE_HTTP_PROJECT + "/")
+PROGRAM_GROUPS = ("framework", "java-base", "java-xml", "services")
 SPARSE_CONNECTIVITY_ROOT = CONNECTIVITY_PROJECT + "/staticlibs/framework"
 CONNECTIVITY_FRAMEWORK_T = CONNECTIVITY_PROJECT + "/framework-t/src"
 SPARSE_SOURCE_ROOTS = {
@@ -249,7 +253,7 @@ def profile_sources(aosp_root, inputs, manifest=PROFILE / "sources.txt"):
         line = line.partition("#")[0].strip()
         if not line:
             continue
-        if line in ("[framework]", "[java-base]", "[services]", "[annotations]", "[sdk-support]",
+        if line in ("[framework]", "[java-base]", "[java-xml]", "[services]", "[annotations]", "[sdk-support]",
                     "[aconfig]", "[aidl]", "[patches]"):
             group = line[1:-1]
             continue
@@ -260,9 +264,9 @@ def profile_sources(aosp_root, inputs, manifest=PROFILE / "sources.txt"):
             raise ValueError(f"{manifest}:{number}: invalid source path {name!r}")
         if not directive and not name.startswith("@"):
             groups[group].append(name)
-        elif group in ("framework", "services") and directive == "@dir":
+        elif group in ("framework", "java-xml", "services") and directive == "@dir":
             directories[group].append(path)
-        elif group in ("framework", "services") and directive == "@exclude":
+        elif group in ("framework", "java-xml", "services") and directive == "@exclude":
             if name in exclusions[group]:
                 raise ValueError(f"{manifest}:{number}: repeated source exclusion {name}")
             exclusions[group].add(name)
@@ -672,7 +676,7 @@ def build(args, stage):
         toolchain["d8_jar"] = d8_jar
 
     java = {}
-    for group in ("framework", "java-base", "services"):
+    for group in PROGRAM_GROUPS:
         for name in groups[group]:
             if not name.startswith(UPSTREAM_JAVA_PROJECTS) or not name.endswith(".java"):
                 raise ValueError(f"{manifest}: expected an upstream Java file in [{group}]: {name}")
@@ -688,16 +692,19 @@ def build(args, stage):
     records = []
     staged = defaultdict(list)
     java_base = stage / "java-base"
-    for group in ("framework", "java-base", "services"):
+    java_xml = stage / "java-xml"
+    for group in PROGRAM_GROUPS:
         for name in sorted(groups[group]):
             data = java[name]
             if group == "java-base":
                 staged[group].append(stage_java(java_base, java_base_path(name), data))
+            elif group == "java-xml":
+                staged[group].append(stage_java(java_xml, Path(name).relative_to(LIBCORE_LUNI), data))
             else:
                 staged[group].append(stage_java(stage / "upstream", name, data))
             applied = {patch: stat["files"][name] for patch, stat in patches.items()
                        if name in stat["files"]}
-            target = "framework" if group == "java-base" else group
+            target = "services" if group == "services" else "framework"
             records.append({"path": name, "target": target, "kind": "patched" if applied else "verbatim",
                             "sha256": originals[name], "compiled_sha256": digest(data),
                             "patches": applied, "added": sum(p["added"] for p in applied.values()),
@@ -767,16 +774,11 @@ def build(args, stage):
     javac(args, annotation_files, annotations, [args.android_jar])
     framework = stage / "framework-classes"
     core_library = stage / "java-base-classes"
+    xml_library = stage / "java-xml-classes"
     services = stage / "services-classes"
     api, api_records = compile_only_api(args, stage, inputs)
     records.extend(api_records)
     sdk_classpath = [annotations, api, args.android_jar]
-    # XML Pull supplies the interface and event constants. The parser's
-    # implementation comes from the upstream XmlBlock.Parser class.
-    parser_entry = "org/xmlpull/v1/XmlPullParser.java"
-    parser_source = args.sdk_sources / parser_entry
-    inputs.add(parser_source)
-    staged["framework"].append(parser_source)
     sdk_runtime_sources = []
     for name in sorted(groups["sdk-support"]):
         path = args.sdk_sources / name
@@ -796,10 +798,13 @@ def build(args, stage):
     javac(args, [*staged["java-base"], boot_thread_context], core_library, sdk_classpath,
           "--patch-module", f"java.base={java_base_inputs}", debug_info="none")
     (core_library / (thread_api + ".class")).unlink()
+    java_xml_inputs = os.pathsep.join(map(str, (java_xml, annotations, framework)))
+    javac(args, staged["java-xml"], xml_library, sdk_classpath,
+          "--patch-module", f"java.xml={java_xml_inputs}", debug_info="none")
     javac(args, staged["services"], services, [framework, *sdk_classpath])
     framework_jar = stage / FRAMEWORK_JAR
     services_jar = stage / SERVICES_JAR
-    jar_from_classes(framework_jar, framework, core_library)
+    jar_from_classes(framework_jar, framework, core_library, xml_library)
     jar_from_classes(services_jar, services)
     # Javac inlines these hidden scalar resource constants. Keep them in the
     # compiler JAR and resolve resource names from framework-res.apk at runtime.
@@ -810,7 +815,7 @@ def build(args, stage):
     }
     framework_program = stage / "framework-program.jar"
     framework_symbols = stage / "framework-symbols.jar"
-    jar_from_classes(framework_program, framework, core_library, exclude=compile_only_symbols)
+    jar_from_classes(framework_program, framework, core_library, xml_library, exclude=compile_only_symbols)
     write_jar(framework_symbols, {name: (framework / name).read_bytes() for name in compile_only_symbols})
     dex_files = {
         FRAMEWORK_DEX: dex_from_jar(args, stage, framework_program, Path(FRAMEWORK_DEX).stem,
@@ -827,7 +832,8 @@ def build(args, stage):
                  removed=sum(p["removed"] for p in patches.values()),
                  framework_base_java=sum(name.startswith("frameworks/base/")
                                          for name in groups["framework"]),
-                 connectivity_java=sum(name.startswith(CONNECTIVITY_PROJECT + "/") for name in java))
+                 connectivity_java=sum(name.startswith(CONNECTIVITY_PROJECT + "/") for name in java),
+                 apache_http_java=sum(name.startswith(APACHE_HTTP_PROJECT + "/") for name in java))
     report = {"format_version": 1, "upstream_tag": "android-17.0.0_r1",
               "upstream_files": sorted(records, key=lambda item: item["path"]),
               "upstream_resources": resources, "disabled_resource_flags": resource_flags,
@@ -835,7 +841,7 @@ def build(args, stage):
               "patches": patches, "stats": stats, "generated": generated,
               "compile_only_resource_symbols": sorted(compile_only_symbols),
               "sdk_compile_only_annotations": sdk_sources,
-              "sdk_runtime_interfaces": [{"path": parser_entry, "sha256": digest(parser_source.read_bytes())}],
+              "sdk_runtime_interfaces": [],
               "sdk_runtime_sources": sdk_runtime_sources,
               "toolchain_sha256": {name: digest(path.read_bytes()) for name, path in toolchain.items()},
               "artifacts": {name: digest((stage / name).read_bytes())

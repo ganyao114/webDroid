@@ -71,6 +71,7 @@ struct wa_dbt {
     mutable std::recursive_mutex mutex;
     wa_dbt_stats_t stats{};
     std::vector<wa::dbt::HostSymbol> hosts;
+    std::multimap<std::string, size_t, std::less<>> host_slots_by_name;
     std::vector<std::string_view> virtual_libraries;
     std::vector<wa::dbt::LoadedImage> images;
     std::vector<wa::dbt::ExitHandler> exit_handlers;

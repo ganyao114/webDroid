@@ -356,8 +356,9 @@ void InstallListCursor(ClassLinker& cl) {
 
 void InstallList(ClassLinker& cl, Class& iface) {
   InstallListCursor(cl);
-  Class& list = cl.Define(kArrayList, kObject, 0,
+  Class& list = cl.Define(kArrayList, "Ljava/util/AbstractList;", 0,
       {kList, "Ljava/lang/Cloneable;", "Ljava/io/Serializable;", "Ljava/util/RandomAccess;"});
+  list.fallback_boot_superclass = kObject;
   const auto add = [&](auto name, auto sig, Builtin body) { cl.AddMethod(list, name, sig, 0, std::move(body)); };
   add("<init>", "()V", NoOp);
   add("<init>", "(I)V", [](Runtime& vm, Object* self, Values a) {

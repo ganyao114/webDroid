@@ -3,7 +3,12 @@
 [framework]
 libcore/dalvik/src/main/java/dalvik/annotation/compat/VersionCodes.java
 libcore/libart/src/main/java/dalvik/system/VMRuntime.java
+libcore/luni/src/main/java/libcore/internal/StringPool.java
+libcore/xml/src/main/java/com/android/org/kxml2/io/KXmlParser.java
+libcore/xml/src/main/java/org/xmlpull/v1/XmlPullParser.java
+libcore/xml/src/main/java/org/xmlpull/v1/XmlPullParserException.java
 frameworks/base/core/java/android/content/UriMatcher.java
+frameworks/base/core/java/android/content/MutableContextWrapper.java
 frameworks/base/core/java/android/os/ConditionVariable.java
 frameworks/base/core/java/com/android/internal/pm/pkg/component/ParsedProviderUtils.java
 frameworks/base/telephony/java/android/telephony/SubscriptionManager.java
@@ -61,6 +66,24 @@ packages/modules/Connectivity/framework/src/android/net/UidRange.java
 packages/modules/Connectivity/staticlibs/framework/com/android/net/module/util/BitUtils.java
 packages/modules/Connectivity/staticlibs/framework/com/android/net/module/util/CollectionUtils.java
 packages/modules/Connectivity/staticlibs/framework/com/android/net/module/util/NetworkCapabilitiesUtils.java
+
+# The Apache HTTP Legacy client, including its bundled Commons dependencies.
+@dir external/apache-http/src/org/apache
+# Android keeps the connection interfaces and TLS implementation in frameworks/base.
+frameworks/base/core/java/org/apache/http/conn/ConnectTimeoutException.java
+frameworks/base/core/java/org/apache/http/conn/scheme/HostNameResolver.java
+frameworks/base/core/java/org/apache/http/conn/scheme/LayeredSocketFactory.java
+frameworks/base/core/java/org/apache/http/conn/scheme/SocketFactory.java
+frameworks/base/core/java/org/apache/http/conn/ssl/AbstractVerifier.java
+frameworks/base/core/java/org/apache/http/conn/ssl/AllowAllHostnameVerifier.java
+frameworks/base/core/java/org/apache/http/conn/ssl/AndroidDistinguishedNameParser.java
+frameworks/base/core/java/org/apache/http/conn/ssl/BrowserCompatHostnameVerifier.java
+frameworks/base/core/java/org/apache/http/conn/ssl/SSLSocketFactory.java
+frameworks/base/core/java/org/apache/http/conn/ssl/StrictHostnameVerifier.java
+frameworks/base/core/java/org/apache/http/conn/ssl/X509HostnameVerifier.java
+frameworks/base/core/java/org/apache/http/params/CoreConnectionPNames.java
+frameworks/base/core/java/org/apache/http/params/HttpConnectionParams.java
+frameworks/base/core/java/org/apache/http/params/HttpParams.java
 
 # Predictive back
 frameworks/base/core/java/android/window/BackEvent.java
@@ -669,9 +692,12 @@ libcore/ojluni/src/main/java/java/util/zip/ZipException.java
 libcore/ojluni/src/main/java/java/util/zip/CRC32.java
 libcore/ojluni/src/main/java/java/util/zip/Deflater.java
 libcore/ojluni/src/main/java/java/net/SocketTimeoutException.java
+libcore/ojluni/src/main/java/java/math/BigDecimal.java
 libcore/ojluni/src/main/java/java/math/BigInteger.java
 libcore/ojluni/src/main/java/java/math/BitSieve.java
+libcore/ojluni/src/main/java/java/math/MathContext.java
 libcore/ojluni/src/main/java/java/math/MutableBigInteger.java
+libcore/ojluni/src/main/java/java/math/RoundingMode.java
 libcore/ojluni/src/main/java/java/math/SignedMutableBigInteger.java
 libcore/ojluni/src/main/java/java/lang/annotation/AnnotationFormatError.java
 libcore/ojluni/src/main/java/java/lang/annotation/AnnotationTypeMismatchException.java
@@ -804,6 +830,7 @@ libcore/ojluni/src/main/java/java/security/NoSuchProviderException.java
 libcore/luni/src/main/java/libcore/reflect/AnnotatedElements.java
 libcore/ojluni/src/main/java/java/net/MalformedURLException.java
 libcore/ojluni/src/main/java/java/net/UnknownHostException.java
+libcore/ojluni/src/main/java/java/net/URI.java
 libcore/ojluni/src/main/java/java/net/URISyntaxException.java
 libcore/ojluni/src/main/java/java/net/URL.java
 libcore/ojluni/src/main/java/java/net/URLEncoder.java
@@ -949,6 +976,8 @@ libcore/ojluni/src/main/java/java/net/Proxy.java
 libcore/ojluni/src/main/java/java/net/ProxySelector.java
 libcore/ojluni/src/main/java/java/net/SocketAddress.java
 libcore/ojluni/src/main/java/java/net/SocketException.java
+libcore/ojluni/src/main/java/java/util/Dictionary.java
+libcore/ojluni/src/main/java/java/util/Hashtable.java
 libcore/ojluni/src/main/java/javax/net/SocketFactory.java
 libcore/ojluni/src/main/java/javax/net/ssl/HostnameVerifier.java
 libcore/ojluni/src/main/java/javax/net/ssl/TrustManager.java
@@ -976,6 +1005,25 @@ libcore/ojluni/src/main/java/sun/nio/cs/StreamEncoder.java
 libcore/ojluni/src/main/java/sun/net/util/IPAddressUtil.java
 libcore/ojluni/src/main/java/java/util/Timer.java
 libcore/ojluni/src/main/java/java/util/TimerTask.java
+
+[java-xml]
+# JAXP DOM APIs and Android's Harmony implementation for XML streams.
+libcore/luni/src/main/java/javax/xml/parsers/DocumentBuilder.java
+libcore/luni/src/main/java/javax/xml/parsers/DocumentBuilderFactory.java
+libcore/luni/src/main/java/javax/xml/parsers/FactoryConfigurationError.java
+libcore/luni/src/main/java/javax/xml/parsers/FilePathToURI.java
+libcore/luni/src/main/java/javax/xml/parsers/ParserConfigurationException.java
+libcore/luni/src/main/java/org/apache/harmony/xml/parsers/DocumentBuilderFactoryImpl.java
+libcore/luni/src/main/java/org/apache/harmony/xml/parsers/DocumentBuilderImpl.java
+@dir libcore/luni/src/main/java/org/apache/harmony/xml/dom
+@dir libcore/luni/src/main/java/org/w3c/dom
+libcore/luni/src/main/java/org/xml/sax/EntityResolver.java
+libcore/luni/src/main/java/org/xml/sax/ErrorHandler.java
+libcore/luni/src/main/java/org/xml/sax/InputSource.java
+libcore/luni/src/main/java/org/xml/sax/Locator.java
+libcore/luni/src/main/java/org/xml/sax/SAXException.java
+libcore/luni/src/main/java/org/xml/sax/SAXParseException.java
+libcore/luni/src/main/java/org/xml/sax/helpers/LocatorImpl.java
 
 [services]
 frameworks/base/services/core/java/com/android/server/IntentResolver.java
@@ -1070,6 +1118,7 @@ dalvik/annotation/optimization/NeverInline.java
 android/annotation/SdkConstant.java
 
 [aconfig]
+libcore/libcore.aconfig
 frameworks/base/core/java/android/app/privatecompute/flags/flags.aconfig
 frameworks/base/core/java/android/content/pm/flags.aconfig
 frameworks/base/core/java/android/content/res/flags.aconfig
@@ -1378,4 +1427,9 @@ patches/1088-embedded-os-stat.patch
 patches/1089-embedded-picture.patch
 patches/1090-embedded-virtual-keyboard.patch
 patches/1091-embedded-deflater.patch
+patches/1092-embedded-uri-encoding.patch
+patches/1093-hashtable-jdk17.patch
+patches/1094-apache-http-network-boundary.patch
+patches/1095-embedded-dom-parser.patch
+patches/1096-embedded-phone-text-direction.patch
 patches/1053-embedded-dex-class-loader.patch

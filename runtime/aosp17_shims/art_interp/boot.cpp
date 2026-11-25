@@ -1566,13 +1566,6 @@ void InstallThrowable(Runtime& vm) {
   define("Ljava/lang/CloneNotSupportedException;", exception);
   define("Ljava/lang/InstantiationException;", "Ljava/lang/ReflectiveOperationException;");
   define("Landroid/os/RemoteException;", exception);
-  Class& xml = define("Lorg/xmlpull/v1/XmlPullParserException;", exception);
-  cl.AddMethod(xml, "<init>", "(Ljava/lang/String;Lorg/xmlpull/v1/XmlPullParser;Ljava/lang/Throwable;)V", 0,
-      [](Runtime&, Object* self, Values args) {
-        if (args[0].ref()) self->text = args[0].ref()->text;
-        self->payload = args[2];
-        return Value{};
-      });
   for (auto type : {"Ljava/lang/ArithmeticException;", "Ljava/lang/NullPointerException;",
       "Ljava/lang/ClassCastException;", "Ljava/lang/ArrayStoreException;", "Ljava/lang/SecurityException;",
       "Ljava/security/ProviderException;",
@@ -3463,6 +3456,13 @@ void InstallNumbers(Runtime& vm) {
     return Value::Int(std::bit_cast<int32_t>(std::rotr(static_cast<uint32_t>(a[0].i()), a[1].i())));
   });
   auto& lng = *classes['J'];
+  cl.AddMethod(lng, "signum", "(J)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    const auto value = a[0].j();
+    return Value::Int((value > 0) - (value < 0));
+  });
+  cl.AddMethod(lng, "numberOfLeadingZeros", "(J)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
+    return Value::Int(std::countl_zero(static_cast<uint64_t>(a[0].j())));
+  });
   const auto radix_text = [](Runtime& vm, int64_t value, int radix) {
     char buffer[65];
     const auto result = std::to_chars(buffer, buffer + sizeof(buffer), value, radix >= 2 && radix <= 36 ? radix : 10);

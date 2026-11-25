@@ -1,6 +1,7 @@
 package org.wasmandroid.uismoke;
 
 import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
@@ -10,9 +11,12 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
 import java.io.RandomAccessFile;
+import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 
@@ -53,6 +57,8 @@ import android.os.ResultReceiver;
 import android.os.UserHandle;
 import android.text.Editable;
 import android.text.Layout;
+import android.text.StaticLayout;
+import android.text.TextPaint;
 import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.KeyEvent;
@@ -76,6 +82,9 @@ import java.lang.ref.ReferenceQueue;
 import java.lang.ref.WeakReference;
 import java.net.URL;
 import java.net.URISyntaxException;
+import java.util.AbstractCollection;
+import java.util.AbstractList;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
@@ -102,8 +111,11 @@ import java.util.stream.Collectors;
 import java.util.zip.CRC32;
 import java.util.zip.Deflater;
 import java.util.stream.IntStream;
+import javax.xml.parsers.DocumentBuilderFactory;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.w3c.dom.Element;
+import org.xml.sax.SAXParseException;
 import org.xmlpull.v1.XmlPullParser;
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -1050,6 +1062,41 @@ public final class SmokeActivity extends Activity {
                 && BigInteger.valueOf(7).modPow(BigInteger.valueOf(37), BigInteger.valueOf(101)).intValue() == 35
                 ? 1 : 0;
     }
+
+    public static int verifyDecimalRounding() {
+        return "17.38".equals(BigDecimal.valueOf(17.375).setScale(2, RoundingMode.HALF_UP).toString()) ? 1 : 0;
+    }
+
+    public static int verifyArrayListHierarchy() {
+        AbstractCollection<String> items = new ArrayList<>();
+        return items.add("login") && items.contains("login")
+                && items.getClass().getSuperclass() == AbstractList.class ? 1 : 0;
+    }
+
+    public static int verifySlashWrapping() {
+        var paint = new TextPaint();
+        paint.setTextSize(20);
+        String text = "Country/Region";
+        int width = (int) Math.ceil(paint.measureText("Country/R"));
+        var layout = StaticLayout.Builder.obtain(text, 0, text.length(), paint, width).build();
+        return layout.getLineCount() == 2 && layout.getLineEnd(0) == "Country/".length() ? 1 : 0;
+    }
+
+    public static int verifyEmbeddedDom() throws Exception {
+        var builder = DocumentBuilderFactory.newInstance().newDocumentBuilder();
+        String xml = "<countries><country code='1'>A &amp; B</country></countries>";
+        var document = builder.parse(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+        document.getDocumentElement().normalize();
+        var country = (Element) document.getElementsByTagName("country").item(0);
+        if (!"1".equals(country.getAttribute("code")) || !"A & B".equals(country.getTextContent())) return 0;
+        try {
+            builder.parse(new ByteArrayInputStream("<country>".getBytes(StandardCharsets.UTF_8)));
+            return 0;
+        } catch (SAXParseException expected) {
+            return expected.getLineNumber() >= 1 ? 1 : 0;
+        }
+    }
+
     public static int verifyEmbeddedPackage() throws PackageManager.NameNotFoundException {
         String name = active.getPackageName();
         PackageManager manager = active.getPackageManager();

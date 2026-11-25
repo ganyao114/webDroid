@@ -1,0 +1,11 @@
+--- a/libcore/ojluni/src/main/java/java/util/Hashtable.java
++++ b/libcore/ojluni/src/main/java/java/util/Hashtable.java
+@@ -1270,7 +1270,7 @@
+         float lf = fields.get("loadFactor", 0.75f);
+         if (lf <= 0 || Float.isNaN(lf))
+             throw new StreamCorruptedException("Illegal load factor: " + lf);
+-        lf = Math.clamp(lf, 0.25f, 4.0f);
++        lf = Math.max(0.25f, Math.min(4.0f, lf));
+ 
+         // Read the original length of the array and number of elements
+         int origlength = s.readInt();
