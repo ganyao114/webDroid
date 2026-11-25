@@ -1,0 +1,25 @@
+--- a/libcore/ojluni/src/main/java/java/util/Vector.java
++++ b/libcore/ojluni/src/main/java/java/util/Vector.java
+@@ -31,8 +31,6 @@
+ import java.util.function.Consumer;
+ import java.util.function.Predicate;
+ import java.util.function.UnaryOperator;
+-
+-import jdk.internal.util.ArraysSupport;
+ 
+ /**
+  * The {@code Vector} class implements a growable array of
+@@ -255,10 +253,9 @@
+      */
+     private Object[] grow(int minCapacity) {
+         int oldCapacity = elementData.length;
+-        int newCapacity = ArraysSupport.newLength(oldCapacity,
+-                minCapacity - oldCapacity, /* minimum growth */
+-                capacityIncrement > 0 ? capacityIncrement : oldCapacity
+-                                           /* preferred growth */);
++        if (minCapacity < 0) throw new OutOfMemoryError("Required array length overflow");
++        long preferred = (long) oldCapacity + (capacityIncrement > 0 ? capacityIncrement : oldCapacity);
++        int newCapacity = (int) Math.max(minCapacity, Math.min(preferred, Integer.MAX_VALUE - 8L));
+         return elementData = Arrays.copyOf(elementData, newCapacity);
+     }
+ 

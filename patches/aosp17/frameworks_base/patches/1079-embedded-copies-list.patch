@@ -1,0 +1,214 @@
+--- a/libcore/ojluni/src/main/java/java/util/Collections.java
++++ b/libcore/ojluni/src/main/java/java/util/Collections.java
+@@ -33,6 +33,7 @@
+ import java.util.function.IntFunction;
+ import java.util.function.Predicate;
+ import java.util.function.UnaryOperator;
++import java.util.stream.IntStream;
+ import java.util.stream.Stream;
+ 
+ final class EmbeddedSynchronizedCollections {
+@@ -348,4 +349,179 @@
+         }
+     }
+ 
++    /**
++     * Returns an immutable list consisting of {@code n} copies of the
++     * specified object.  The newly allocated data object is tiny (it contains
++     * a single reference to the data object).  This method is useful in
++     * combination with the {@code List.addAll} method to grow lists.
++     * The returned list is serializable.
++     *
++     * @param  <T> the class of the object to copy and of the objects
++     *         in the returned list.
++     * @param  n the number of elements in the returned list.
++     * @param  o the element to appear repeatedly in the returned list.
++     * @return an immutable list consisting of {@code n} copies of the
++     *         specified object.
++     * @throws IllegalArgumentException if {@code n < 0}
++     * @see    List#addAll(Collection)
++     * @see    List#addAll(int, Collection)
++     */
++    public static <T> List<T> nCopies(int n, T o) {
++        if (n < 0)
++            throw new IllegalArgumentException("List length = " + n);
++        return new CopiesList<>(n, o);
++    }
++
++    /**
++     * @serial include
++     */
++    private static class CopiesList<E>
++        extends AbstractList<E>
++        implements RandomAccess, Serializable
++    {
++        @java.io.Serial
++        private static final long serialVersionUID = 2739099268398711800L;
++
++        /** @serial */
++        final int n;
++        /** @serial */
++        @SuppressWarnings("serial") // Conditionally serializable
++        final E element;
++
++        CopiesList(int n, E e) {
++            assert n >= 0;
++            this.n = n;
++            element = e;
++        }
++
++        public int size() {
++            return n;
++        }
++
++        public boolean contains(Object obj) {
++            return n != 0 && Objects.equals(obj, element);
++        }
++
++        public int indexOf(Object o) {
++            return contains(o) ? 0 : -1;
++        }
++
++        public int lastIndexOf(Object o) {
++            return contains(o) ? n - 1 : -1;
++        }
++
++        public E get(int index) {
++            Objects.checkIndex(index, n);
++            return element;
++        }
++
++        @Override
++        public void forEach(Consumer<? super E> action) {
++            Objects.requireNonNull(action);
++            int n = this.n;
++            E element = this.element;
++            for (int i = 0; i < n; i++) {
++                action.accept(element);
++            }
++        }
++
++        public Object[] toArray() {
++            final Object[] a = new Object[n];
++            if (element != null)
++                Arrays.fill(a, 0, n, element);
++            return a;
++        }
++
++        @SuppressWarnings("unchecked")
++        public <T> T[] toArray(T[] a) {
++            final int n = this.n;
++            if (a.length < n) {
++                a = (T[])java.lang.reflect.Array
++                    .newInstance(a.getClass().getComponentType(), n);
++                if (element != null)
++                    Arrays.fill(a, 0, n, element);
++            } else {
++                Arrays.fill(a, 0, n, element);
++                if (a.length > n)
++                    a[n] = null;
++            }
++            return a;
++        }
++
++        public List<E> subList(int fromIndex, int toIndex) {
++            if (fromIndex < 0)
++                throw new IndexOutOfBoundsException("fromIndex = " + fromIndex);
++            if (toIndex > n)
++                throw new IndexOutOfBoundsException("toIndex = " + toIndex);
++            if (fromIndex > toIndex)
++                throw new IllegalArgumentException("fromIndex(" + fromIndex +
++                                                   ") > toIndex(" + toIndex + ")");
++            return new CopiesList<>(toIndex - fromIndex, element);
++        }
++
++        @Override
++        public int hashCode() {
++            if (n == 0) return 1;
++            // hashCode of n repeating elements is 31^n + elementHash * Sum(31^k, k = 0..n-1)
++            // this implementation completes in O(log(n)) steps taking advantage of
++            // 31^(2*n) = (31^n)^2 and Sum(31^k, k = 0..(2*n-1)) = Sum(31^k, k = 0..n-1) * (31^n + 1)
++            int pow = 31;
++            int sum = 1;
++            for (int i = Integer.numberOfLeadingZeros(n) + 1; i < Integer.SIZE; i++) {
++                sum *= pow + 1;
++                pow *= pow;
++                if ((n << i) < 0) {
++                    pow *= 31;
++                    sum = sum * 31 + 1;
++                }
++            }
++            return pow + sum * (element == null ? 0 : element.hashCode());
++        }
++
++        @Override
++        public boolean equals(Object o) {
++            if (o == this)
++                return true;
++            // Android-changed: (b/247094511) instanceof pattern variable is not yet supported.
++            // if (o instanceof CopiesList<?> other) {
++            if (o instanceof CopiesList<?>) {
++                CopiesList<?> other = (CopiesList<?>) o;
++                return n == other.n && (n == 0 || Objects.equals(element, other.element));
++            }
++            if (!(o instanceof List))
++                return false;
++
++            int remaining = n;
++            E e = element;
++            Iterator<?> itr = ((List<?>) o).iterator();
++            if (e == null) {
++                while (itr.hasNext() && remaining-- > 0) {
++                    if (itr.next() != null)
++                        return false;
++                }
++            } else {
++                while (itr.hasNext() && remaining-- > 0) {
++                    if (!e.equals(itr.next()))
++                        return false;
++                }
++            }
++            return remaining == 0 && !itr.hasNext();
++        }
++
++        // Override default methods in Collection
++        @Override
++        public Stream<E> stream() {
++            return IntStream.range(0, n).mapToObj(i -> element);
++        }
++
++        @Override
++        public Stream<E> parallelStream() {
++            return IntStream.range(0, n).parallel().mapToObj(i -> element);
++        }
++
++        @Override
++        public Spliterator<E> spliterator() {
++            return stream().spliterator();
++        }
++    }
+ }
+--- a/libcore/ojluni/src/main/java/java/util/AbstractCollection.java
++++ b/libcore/ojluni/src/main/java/java/util/AbstractCollection.java
+@@ -24,8 +24,6 @@
+  */
+ 
+ package java.util;
+-
+-import jdk.internal.util.ArraysSupport;
+ 
+ /**
+  * This class provides a skeletal implementation of the {@code Collection}
+@@ -221,9 +219,9 @@
+         int i = len;
+         while (it.hasNext()) {
+             if (i == len) {
+-                len = ArraysSupport.newLength(len,
+-                        1,             /* minimum growth */
+-                        (len >> 1) + 1 /* preferred growth */);
++                if (len == Integer.MAX_VALUE)
++                    throw new OutOfMemoryError("Required array length too large");
++                len = (int) Math.min((long) len + (len >> 1) + 1, Integer.MAX_VALUE);
+                 r = Arrays.copyOf(r, len);
+             }
+             r[i++] = (T)it.next();

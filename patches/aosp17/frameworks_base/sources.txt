@@ -1,12 +1,15 @@
 # Upstream program sources are relative to the android-17.0.0_r1 checkout.
 # @dir includes all Java sources recursively. @exclude omits one named file.
 [framework]
+libcore/dalvik/src/main/java/dalvik/annotation/compat/VersionCodes.java
+libcore/libart/src/main/java/dalvik/system/VMRuntime.java
 frameworks/base/core/java/android/content/UriMatcher.java
 frameworks/base/core/java/android/os/ConditionVariable.java
 frameworks/base/core/java/com/android/internal/pm/pkg/component/ParsedProviderUtils.java
 frameworks/base/telephony/java/android/telephony/SubscriptionManager.java
 frameworks/base/telephony/java/android/telephony/TelephonyManager.java
 frameworks/base/core/java/android/telephony/PhoneStateListener.java
+frameworks/base/core/java/android/telephony/TelephonyCallback.java
 frameworks/base/core/java/android/os/FileUtils.java
 frameworks/base/core/java/android/window/OnBackInvokedDispatcher.java
 frameworks/base/core/java/android/window/WindowOnBackInvokedDispatcher.java
@@ -19,6 +22,12 @@ frameworks/base/core/java/android/util/JsonScope.java
 frameworks/base/core/java/android/os/Debug.java
 frameworks/base/core/java/android/os/Environment.java
 libcore/luni/src/main/java/android/system/StructStatVfs.java
+libcore/luni/src/main/java/android/system/ErrnoException.java
+libcore/luni/src/main/java/android/system/Os.java
+libcore/luni/src/main/java/android/system/OsConstants.java
+libcore/luni/src/main/java/android/system/StructStat.java
+libcore/luni/src/main/java/android/system/StructTimespec.java
+libcore/luni/src/main/java/libcore/util/Objects.java
 frameworks/base/core/java/android/os/StatFs.java
 frameworks/base/core/java/android/webkit/URLUtil.java
 frameworks/base/core/java/android/webkit/CookieManager.java
@@ -39,6 +48,7 @@ frameworks/base/core/java/android/net/StringNetworkSpecifier.java
 frameworks/base/core/java/android/net/WebAddress.java
 packages/modules/Connectivity/framework/src/android/net/ParseException.java
 packages/modules/Connectivity/framework-t/src/android/net/TrafficStats.java
+packages/modules/Connectivity/framework-t/src/android/app/usage/NetworkStatsManager.java
 packages/modules/Connectivity/framework/src/android/net/ConnectivityManager.java
 packages/modules/Connectivity/framework/src/android/net/LocalNetworkInfo.java
 packages/modules/Connectivity/framework/src/android/net/Network.java
@@ -166,6 +176,7 @@ frameworks/base/core/java/android/os/BadTypeParcelableException.java
 frameworks/base/core/java/android/os/BaseBundle.java
 frameworks/base/core/java/android/os/Bundle.java
 frameworks/base/core/java/android/os/Handler.java
+frameworks/base/core/java/android/os/HandlerThread.java
 frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
 frameworks/base/core/java/android/os/AsyncTask.java
 libcore/dalvik/src/main/java/dalvik/system/ZipPathValidator.java
@@ -175,6 +186,8 @@ libcore/dalvik/src/main/java/dalvik/system/PathClassLoader.java
 frameworks/base/core/java/android/os/LocaleList.java
 frameworks/base/core/java/android/os/Looper.java
 frameworks/base/core/java/android/os/Message.java
+frameworks/base/core/java/android/os/Messenger.java
+frameworks/base/core/java/android/os/ResultReceiver.java
 frameworks/base/core/java/android/os/Parcelable.java
 frameworks/base/core/java/android/os/PatternMatcher.java
 frameworks/base/core/java/android/os/SimpleClock.java
@@ -280,6 +293,7 @@ frameworks/base/graphics/java/android/graphics/BlendMode.java
 frameworks/base/graphics/java/android/graphics/BlendModeColorFilter.java
 frameworks/base/graphics/java/android/graphics/BlurMaskFilter.java
 frameworks/base/graphics/java/android/graphics/Canvas.java
+frameworks/base/graphics/java/android/graphics/Picture.java
 frameworks/base/graphics/java/android/graphics/Color.java
 frameworks/base/graphics/java/android/graphics/ColorFilter.java
 frameworks/base/graphics/java/android/graphics/ColorSpace.java
@@ -321,6 +335,9 @@ frameworks/base/core/java/android/app/WindowConfiguration.java
 # Phase 3 W2: upstream android.app & android.content.pm
 frameworks/base/core/java/android/app/Activity.java
 frameworks/base/core/java/android/app/ActivityManager.java
+frameworks/base/core/java/android/app/TaskInfo.java
+frameworks/base/core/java/android/app/ActivityThread.java
+frameworks/base/apex/jobscheduler/framework/java/android/app/AlarmManager.java
 frameworks/base/core/java/android/app/Application.java
 frameworks/base/core/java/android/app/BackStackRecord.java
 frameworks/base/core/java/android/app/Fragment.java
@@ -368,6 +385,7 @@ frameworks/base/core/java/android/content/pm/InstallSourceInfo.java
 frameworks/base/core/java/android/content/pm/LauncherActivityInfo.java
 frameworks/base/core/java/android/content/pm/LauncherActivityInfoInternal.java
 frameworks/base/core/java/android/content/pm/LauncherApps.java
+frameworks/base/core/java/android/content/pm/ShortcutManager.java
 frameworks/base/core/java/android/content/pm/LauncherUserInfo.java
 frameworks/base/core/java/android/content/pm/PackageInstaller.java
 frameworks/base/core/java/android/content/pm/PackageItemInfo.java
@@ -384,6 +402,7 @@ frameworks/base/core/java/android/util/SuperNotCalledException.java
 frameworks/base/core/java/android/util/ArraySet.java
 frameworks/base/core/java/android/util/PathParser.java
 frameworks/base/core/java/android/util/SparseIntArray.java
+frameworks/base/core/java/android/util/AndroidRuntimeException.java
 frameworks/base/core/java/com/android/internal/util/Parcelling.java
 frameworks/base/core/java/com/android/internal/util/VirtualRefBasePtr.java
 frameworks/base/graphics/java/android/graphics/CanvasProperty.java
@@ -400,6 +419,7 @@ frameworks/base/core/java/android/view/DisplayEventReceiver.java
 frameworks/base/core/java/android/view/DisplayShape.java
 frameworks/base/core/java/android/view/InflateException.java
 frameworks/base/core/java/android/view/KeyEvent.java
+frameworks/base/core/java/android/view/KeyCharacterMap.java
 frameworks/base/core/java/android/view/MotionEvent.java
 frameworks/base/core/java/android/view/PrivacyIndicatorBounds.java
 frameworks/base/core/java/android/view/RemotableViewMethod.java
@@ -454,6 +474,7 @@ frameworks/base/core/java/android/view/accessibility/AccessibilityManager.java
 frameworks/base/core/java/android/view/accessibility/AccessibilityRequestPreparer.java
 
 # Embedded services and their value types.
+frameworks/base/core/java/android/app/IntentService.java
 frameworks/base/core/java/android/app/KeyguardManager.java
 frameworks/base/core/java/android/app/Notification.java
 frameworks/base/core/java/android/app/NotificationChannel.java
@@ -485,6 +506,8 @@ frameworks/base/core/java/android/view/textclassifier/EntityConfidence.java
 frameworks/base/core/java/android/view/textclassifier/TextLinks.java
 frameworks/base/media/java/android/media/AudioAttributes.java
 frameworks/base/media/java/android/media/AudioDeviceCallback.java
+frameworks/base/media/java/android/media/AudioManager.java
+frameworks/base/core/java/android/media/Image.java
 
 # Activity overlays, menus and software-backed surfaces.
 frameworks/base/core/java/android/app/ActionBar.java
@@ -627,10 +650,24 @@ org/ccil/cowan/tagsoup/Scanner.java
 org/ccil/cowan/tagsoup/Schema.java
 
 [java-base]
+libcore/ojluni/src/main/java/java/util/Vector.java
+libcore/ojluni/src/main/java/java/util/Calendar.java
+libcore/ojluni/src/main/java/java/util/GregorianCalendar.java
+libcore/ojluni/src/main/java/sun/util/calendar/AbstractCalendar.java
+libcore/ojluni/src/main/java/sun/util/calendar/BaseCalendar.java
+libcore/ojluni/src/main/java/sun/util/calendar/CalendarDate.java
+libcore/ojluni/src/main/java/sun/util/calendar/CalendarSystem.java
+libcore/ojluni/src/main/java/sun/util/calendar/CalendarUtils.java
+libcore/ojluni/src/main/java/sun/util/calendar/Era.java
+libcore/ojluni/src/main/java/sun/util/calendar/Gregorian.java
+libcore/ojluni/src/main/java/sun/util/calendar/ImmutableGregorianDate.java
+libcore/ojluni/src/main/java/sun/util/calendar/JulianCalendar.java
+libcore/ojluni/src/main/java/sun/util/calendar/LocalGregorianCalendar.java
 libcore/ojluni/src/main/java/java/lang/InternalError.java
 libcore/ojluni/src/main/java/java/util/zip/Checksum.java
 libcore/ojluni/src/main/java/java/util/zip/ZipException.java
 libcore/ojluni/src/main/java/java/util/zip/CRC32.java
+libcore/ojluni/src/main/java/java/util/zip/Deflater.java
 libcore/ojluni/src/main/java/java/net/SocketTimeoutException.java
 libcore/ojluni/src/main/java/java/math/BigInteger.java
 libcore/ojluni/src/main/java/java/math/BitSieve.java
@@ -644,6 +681,9 @@ libcore/luni/src/main/java/libcore/reflect/AnnotationMember.java
 libcore/ojluni/src/main/java/java/util/WeakHashMap.java
 libcore/ojluni/src/main/java/java/lang/ThreadGroup.java
 libcore/ojluni/src/main/java/java/lang/StackTraceElement.java
+libcore/ojluni/src/main/java/java/lang/ref/PhantomReference.java
+libcore/ojluni/src/main/java/java/lang/ref/ReferenceQueue.java
+libcore/ojluni/src/main/java/java/lang/ref/SoftReference.java
 libcore/ojluni/src/main/java/java/util/BitSet.java
 libcore/ojluni/src/main/java/java/util/concurrent/PriorityBlockingQueue.java
 libcore/ojluni/src/main/java/java/util/concurrent/ForkJoinPool.java
@@ -658,12 +698,18 @@ libcore/ojluni/src/main/java/sun/misc/Unsafe.java
 libcore/ojluni/src/main/java/java/util/EnumMap.java
 libcore/ojluni/src/main/java/java/security/AccessController.java
 libcore/ojluni/src/main/java/java/security/PrivilegedAction.java
+libcore/ojluni/src/main/java/java/security/PrivilegedActionException.java
+libcore/ojluni/src/main/java/java/security/PrivilegedExceptionAction.java
 libcore/ojluni/src/main/java/java/util/ServiceConfigurationError.java
 libcore/ojluni/src/main/java/java/util/ServiceLoader.java
 libcore/ojluni/src/main/java/java/util/Collections.java
+libcore/ojluni/src/main/java/java/util/AbstractCollection.java
+libcore/ojluni/src/main/java/java/util/AbstractList.java
+libcore/ojluni/src/main/java/java/util/PriorityQueue.java
 libcore/ojluni/src/main/java/java/lang/reflect/InvocationHandler.java
 libcore/ojluni/src/main/java/java/lang/reflect/Proxy.java
 libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentLinkedQueue.java
+libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentLinkedDeque.java
 libcore/ojluni/src/main/java/java/sql/Timestamp.java
 libcore/ojluni/src/main/java/java/util/concurrent/SynchronousQueue.java
 libcore/ojluni/src/main/java/java/net/URLDecoder.java
@@ -701,6 +747,7 @@ libcore/ojluni/src/main/java/java/io/Reader.java
 libcore/ojluni/src/main/java/java/io/StringReader.java
 libcore/ojluni/src/main/java/java/io/InputStreamReader.java
 libcore/ojluni/src/main/java/java/io/FileInputStream.java
+libcore/ojluni/src/main/java/java/io/FileFilter.java
 libcore/ojluni/src/main/java/java/io/FilenameFilter.java
 libcore/ojluni/src/main/java/java/io/FileOutputStream.java
 libcore/ojluni/src/main/java/java/io/FilterOutputStream.java
@@ -725,11 +772,29 @@ libcore/ojluni/src/main/java/java/lang/Readable.java
 libcore/ojluni/src/main/java/java/lang/Runnable.java
 libcore/ojluni/src/main/java/java/lang/Package.java
 libcore/ojluni/src/main/java/java/lang/ThreadDeath.java
+libcore/ojluni/src/main/java/java/lang/TypeNotPresentException.java
 libcore/ojluni/src/main/java/java/lang/reflect/Modifier.java
 libcore/ojluni/src/main/java/java/lang/reflect/AnnotatedElement.java
+libcore/ojluni/src/main/java/java/lang/reflect/Executable.java
+libcore/ojluni/src/main/java/java/lang/reflect/GenericDeclaration.java
+libcore/ojluni/src/main/java/java/lang/reflect/GenericArrayType.java
+libcore/ojluni/src/main/java/java/lang/reflect/GenericSignatureFormatError.java
 libcore/ojluni/src/main/java/java/lang/reflect/Field.java
+libcore/ojluni/src/main/java/java/lang/reflect/MalformedParameterizedTypeException.java
 libcore/ojluni/src/main/java/java/lang/reflect/Member.java
+libcore/ojluni/src/main/java/java/lang/reflect/ParameterizedType.java
 libcore/ojluni/src/main/java/java/lang/reflect/Type.java
+libcore/ojluni/src/main/java/java/lang/reflect/TypeVariable.java
+libcore/ojluni/src/main/java/java/lang/reflect/WildcardType.java
+libcore/luni/src/main/java/libcore/reflect/GenericArrayTypeImpl.java
+libcore/luni/src/main/java/libcore/reflect/GenericSignatureParser.java
+libcore/luni/src/main/java/libcore/reflect/ListOfTypes.java
+libcore/luni/src/main/java/libcore/reflect/ListOfVariables.java
+libcore/luni/src/main/java/libcore/reflect/ParameterizedTypeImpl.java
+libcore/luni/src/main/java/libcore/reflect/TypeVariableImpl.java
+libcore/luni/src/main/java/libcore/reflect/Types.java
+libcore/luni/src/main/java/libcore/reflect/WildcardTypeImpl.java
+libcore/luni/src/main/java/libcore/util/EmptyArray.java
 libcore/ojluni/src/main/java/java/security/DigestException.java
 libcore/ojluni/src/main/java/java/security/GeneralSecurityException.java
 libcore/ojluni/src/main/java/java/security/MessageDigest.java
@@ -754,6 +819,7 @@ libcore/ojluni/src/main/java/java/util/StringTokenizer.java
 libcore/ojluni/src/main/java/java/util/concurrent/CompletableFuture.java
 libcore/ojluni/src/main/java/java/util/concurrent/CompletionStage.java
 libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentMap.java
+libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentHashMap.java
 libcore/ojluni/src/main/java/java/util/concurrent/CopyOnWriteArrayList.java
 libcore/ojluni/src/main/java/java/util/concurrent/CountDownLatch.java
 libcore/ojluni/src/main/java/java/util/concurrent/Executor.java
@@ -855,6 +921,40 @@ libcore/ojluni/src/main/java/java/nio/HeapCharBuffer.java
 libcore/ojluni/src/main/java/java/nio/StringCharBuffer.java
 libcore/ojluni/src/main/java/java/nio/InvalidMarkException.java
 libcore/ojluni/src/main/java/java/nio/ReadOnlyBufferException.java
+libcore/ojluni/src/main/java/java/nio/channels/Channel.java
+libcore/ojluni/src/main/java/java/nio/channels/ReadableByteChannel.java
+libcore/ojluni/src/main/java/java/nio/channels/WritableByteChannel.java
+libcore/ojluni/src/main/java/java/nio/channels/ByteChannel.java
+libcore/ojluni/src/main/java/java/nio/file/CopyOption.java
+libcore/ojluni/src/main/java/java/nio/file/FileAlreadyExistsException.java
+libcore/ojluni/src/main/java/java/nio/file/FileSystem.java
+libcore/ojluni/src/main/java/java/nio/file/FileSystemException.java
+libcore/ojluni/src/main/java/java/nio/file/FileSystems.java
+libcore/ojluni/src/main/java/java/nio/file/Files.java
+libcore/ojluni/src/main/java/java/nio/file/InvalidPathException.java
+libcore/ojluni/src/main/java/java/nio/file/LinkOption.java
+libcore/ojluni/src/main/java/java/nio/file/NoSuchFileException.java
+libcore/ojluni/src/main/java/java/nio/file/OpenOption.java
+libcore/ojluni/src/main/java/java/nio/file/Path.java
+libcore/ojluni/src/main/java/java/nio/file/Paths.java
+libcore/ojluni/src/main/java/java/nio/file/ProviderMismatchException.java
+libcore/ojluni/src/main/java/java/nio/file/StandardOpenOption.java
+libcore/ojluni/src/main/java/java/nio/file/Watchable.java
+libcore/ojluni/src/main/java/java/nio/file/attribute/FileAttribute.java
+libcore/ojluni/src/main/java/sun/nio/fs/Globs.java
+libcore/ojluni/src/main/java/sun/nio/fs/UnixFileSystem.java
+libcore/ojluni/src/main/java/sun/nio/fs/UnixPath.java
+libcore/ojluni/src/main/java/sun/nio/fs/Util.java
+libcore/ojluni/src/main/java/java/net/Proxy.java
+libcore/ojluni/src/main/java/java/net/ProxySelector.java
+libcore/ojluni/src/main/java/java/net/SocketAddress.java
+libcore/ojluni/src/main/java/java/net/SocketException.java
+libcore/ojluni/src/main/java/javax/net/SocketFactory.java
+libcore/ojluni/src/main/java/javax/net/ssl/HostnameVerifier.java
+libcore/ojluni/src/main/java/javax/net/ssl/TrustManager.java
+libcore/ojluni/src/main/java/javax/net/ssl/TrustManagerFactory.java
+libcore/ojluni/src/main/java/javax/net/ssl/TrustManagerFactorySpi.java
+libcore/ojluni/src/main/java/javax/net/ssl/ManagerFactoryParameters.java
 libcore/ojluni/src/main/java/java/util/concurrent/Delayed.java
 libcore/ojluni/src/main/java/java/util/concurrent/RejectedExecutionHandler.java
 libcore/ojluni/src/main/java/java/util/concurrent/RunnableScheduledFuture.java
@@ -991,8 +1091,15 @@ frameworks/base/core/java/android/widget/flags/flags.aconfig
 frameworks/base/core/java/android/content/UriRelativeFilterGroupParcel.aidl
 frameworks/base/core/java/android/content/UriRelativeFilterParcel.aidl
 frameworks/base/core/java/android/os/IMessenger.aidl
+frameworks/base/core/java/com/android/internal/os/IResultReceiver.aidl
 
 [patches]
+patches/1060-embedded-vm-runtime.patch
+patches/1061-embedded-reflection.patch
+patches/1062-embedded-concurrent-linked-deque.patch
+patches/1064-embedded-time-zone.patch
+patches/1065-embedded-calendar.patch
+patches/1066-embedded-vector.patch
 patches/701-back-motion-event-sdk-boundary.patch
 patches/702-window-insets-host-boundary.patch
 patches/703-embedded-view-parent.patch
@@ -1246,4 +1353,29 @@ patches/1049-cooperative-buffered-input.patch
 patches/1050-restore-looper-thread-local.patch
 patches/1051-embedded-async-task.patch
 patches/1052-embedded-phone-state-listener.patch
+patches/1063-embedded-telephony-callback.patch
+patches/1067-embedded-handler-thread.patch
+patches/1068-embedded-media-image.patch
+patches/1069-embedded-alarm-manager.patch
+patches/1070-embedded-activity-thread.patch
+patches/1071-embedded-audio-manager.patch
+patches/1072-embedded-concurrent-hash-map.patch
+patches/1073-embedded-network-active-listener.patch
+patches/1074-embedded-reference-queue.patch
+patches/1075-embedded-task-info.patch
+patches/1076-embedded-provider-query.patch
+patches/1077-embedded-debug-heap.patch
+patches/1078-embedded-shortcut-manager.patch
+patches/1079-embedded-copies-list.patch
+patches/1080-cooperative-thread-pool.patch
+patches/1082-embedded-network-stats-manager.patch
+patches/1083-embedded-priority-queue.patch
+patches/1084-embedded-proxy-selector.patch
+patches/1085-embedded-trust-manager-factory.patch
+patches/1086-scheduled-executor-workers.patch
+patches/1087-embedded-nio-paths.patch
+patches/1088-embedded-os-stat.patch
+patches/1089-embedded-picture.patch
+patches/1090-embedded-virtual-keyboard.patch
+patches/1091-embedded-deflater.patch
 patches/1053-embedded-dex-class-loader.patch

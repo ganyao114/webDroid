@@ -359,9 +359,13 @@ void ClassLinker::Link(Class& cls) {
     } else {
       if (!cls.superclass_descriptor.empty()) {
         const auto& super = cls.superclass_descriptor;
-        cls.super = &Resolve(cls.optional_boot_superclass && !HasClass(super) ? "Ljava/lang/Object;" : super);
+        cls.super = &Resolve(!cls.fallback_boot_superclass.empty() && !HasClass(super)
+            ? cls.fallback_boot_superclass : std::string_view(super));
       }
       for (const auto& iface : cls.interface_descriptors) cls.interfaces.push_back(&Resolve(iface));
+      for (const auto iface : cls.optional_boot_interfaces) {
+        if (HasClass(iface)) cls.interfaces.push_back(&Resolve(iface));
+      }
     }
     if (cls.super) {
       cls.instance_slots = cls.super->instance_slots;

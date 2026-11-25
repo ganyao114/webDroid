@@ -53,6 +53,8 @@ int CloseFd(wa_dbt& dbt, int descriptor) {
     }
     const auto result = found->second.owned ? close(found->second.host) : 0;
     descriptors.erase(found);
+    RemoveEpollInterests(dbt, descriptor);
+    DropDescriptorFromLoopers(dbt, descriptor);
     return result;
 }
 
@@ -88,6 +90,17 @@ void StorePipe(wa_host_call_ctx_t& ctx, int read_end, int write_end, uint64_t de
 std::shared_ptr<GuestEvent> EventFor(const wa_dbt& dbt, int descriptor) {
     const auto found = dbt.bionic->descriptors.find(descriptor);
     return found == dbt.bionic->descriptors.end() ? nullptr : found->second.event;
+}
+
+std::shared_ptr<GuestEpoll> EpollFor(const wa_dbt& dbt, int descriptor) {
+    const auto found = dbt.bionic->descriptors.find(descriptor);
+    return found == dbt.bionic->descriptors.end() ? nullptr : found->second.epoll;
+}
+
+void RemoveEpollInterests(wa_dbt& dbt, int descriptor) {
+    for (const auto& [id, entry] : dbt.bionic->descriptors) {
+        if (entry.epoll) entry.epoll->interests.erase(descriptor);
+    }
 }
 
 } // namespace wa::dbt

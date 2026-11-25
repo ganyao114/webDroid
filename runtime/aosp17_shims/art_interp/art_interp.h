@@ -18,6 +18,7 @@ namespace wa::interp {
 
 struct Object;
 struct Method;
+class DirectBufferMemory;
 struct Runtime;
 struct RootScope;
 
@@ -70,6 +71,11 @@ struct GuestNativeImage {
   std::string error;
 };
 
+struct GuestNativeHeapStats {
+  uint64_t reserved = 0;
+  uint64_t allocated = 0;
+};
+
 // The embedder supplies the APK namespace. ART continues to use its existing
 // JNI adapters for platform natives.
 class GuestNativeLibraries {
@@ -78,7 +84,9 @@ class GuestNativeLibraries {
   virtual std::string FindLibrary(std::string_view name) = 0;
   virtual std::string Load(std::string_view path) = 0;
   virtual std::optional<Value> Invoke(Method& method, Object* receiver, std::span<const Value> args) = 0;
+  virtual std::unique_ptr<DirectBufferMemory> AllocateMemory(size_t size) = 0;
   virtual GuestNativeStats Stats() const = 0;
+  virtual GuestNativeHeapStats HeapStats() const = 0;
   virtual std::vector<GuestNativeImage> Images() const = 0;
   virtual std::string ProcessMaps() const = 0;
   virtual void Shutdown() noexcept = 0;

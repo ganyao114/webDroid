@@ -127,19 +127,16 @@ template <Open op> void OpenFile(wa_host_call_ctx_t& ctx) {
         } else {
             const auto path = GuestPath(ctx, ctx.args[0]);
             if constexpr (op == Open::Path) {
-                const auto& lookup = ctx.dbt->bionic->read_guest_file;
-                if (lookup && path.starts_with('/')) {
-                    if (const auto data = lookup(path)) {
-                        const auto flags = mode.starts_with('r') && mode.find('+') == mode.npos ? O_RDONLY : O_RDWR;
-                        const auto fd = OpenMountedFile(*data, flags);
-                        auto* file = fd >= 0 ? fdopen(fd, mode.c_str()) : nullptr;
-                        if (!file && fd >= 0) {
-                            const auto error = errno;
-                            close(fd);
-                            errno = error;
-                        }
-                        return InstallStream(ctx, file, ModeFlags(mode));
+                if (const auto data = FindMountedFile(*ctx.dbt, path)) {
+                    const auto flags = mode.starts_with('r') && mode.find('+') == mode.npos ? O_RDONLY : O_RDWR;
+                    const auto fd = OpenMountedFile(*data, flags);
+                    auto* file = fd >= 0 ? fdopen(fd, mode.c_str()) : nullptr;
+                    if (!file && fd >= 0) {
+                        const auto error = errno;
+                        close(fd);
+                        errno = error;
                     }
+                    return InstallStream(ctx, file, ModeFlags(mode));
                 }
                 InstallStream(ctx, std::fopen(path.c_str(), mode.c_str()), ModeFlags(mode));
             } else {
@@ -555,6 +552,7 @@ void RegisterStdio(wa_dbt& dbt) {
         {"tmpfile", Dispatch<OpenFile<Open::Temporary>>},
         {"fclose", Dispatch<CloseFile>},
         {"fread", Dispatch<Transfer<true>>},
+        {"__fread_chk", Dispatch<Transfer<true, true>>},
         {"fwrite", Dispatch<Transfer<false>>},
         {"__fwrite_chk", Dispatch<Transfer<false, true>>},
         {"fgetc", Dispatch<FileChar<Character::Get>>},

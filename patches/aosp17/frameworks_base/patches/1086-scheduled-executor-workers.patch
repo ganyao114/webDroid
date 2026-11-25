@@ -1,0 +1,66 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/Executors.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/Executors.java
+@@ -695,6 +695,33 @@
+             }
+         }
+ 
++        // A scheduled task can wait for work from the Looper that delivered it.
++        // Start a guest worker so that waiting yields back to that Looper.
++        final void runScheduledTask(Runnable command) {
++            if (running) {
++                queue.addLast(command);
++                return;
++            }
++            Thread scheduled = factory.newThread(() -> {
++                try {
++                    drain();
++                } finally {
++                    running = false;
++                }
++            });
++            if (scheduled == null) throw new RejectedExecutionException("Thread factory returned null");
++            queue.addLast(command);
++            running = true;
++            try {
++                scheduled.start();
++            } catch (RuntimeException | Error failure) {
++                running = false;
++                queue.removeLast();
++                throw failure;
++            }
++            org.wasmandroid.ui.ThreadContext.runReadyThreads();
++        }
++
+         private void drain() {
+             Runnable next;
+             while ((next = queue.pollFirst()) != null) {
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ScheduledThreadPoolExecutor.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ScheduledThreadPoolExecutor.java
+@@ -364,7 +364,7 @@
+     private void post(RunnableScheduledFuture<?> task) {
+         Runnable callback = () -> {
+             if (callbacks.remove(task) == null || !super.getQueue().remove(task)) return;
+-            worker.runTask(task);
++            worker.runScheduledTask(task);
+         };
+         long delay = task.getDelay(NANOSECONDS);
+         long millis = delay <= 0 ? 0 : 1 + (delay - 1) / 1_000_000;
+--- a/frameworks/base/core/java/android/os/Looper.java
++++ b/frameworks/base/core/java/android/os/Looper.java
+@@ -372,12 +372,10 @@
+ 
+     /** Drive existing cooperative worker queues, then the main queue, once per frame. */
+     public static void dispatchAllDueMessages(long now) {
+-        if (!sWorkers.isEmpty()) {
+-            for (int i = 0; i < sWorkers.size(); i++) {
+-                sWorkers.get(i).mQueue.wakeIfReady(now);
+-            }
+-            ThreadContext.runReadyThreads();
+-        }
++        for (int i = 0; i < sWorkers.size(); i++) {
++            sWorkers.get(i).mQueue.wakeIfReady(now);
++        }
++        ThreadContext.runReadyThreads();
+         Looper main = getMainLooper();
+         if (main != null) {
+             main.dispatchDueMessages(now);

@@ -1,0 +1,197 @@
+--- a/libcore/ojluni/src/main/java/java/util/Calendar.java
++++ b/libcore/ojluni/src/main/java/java/util/Calendar.java
+@@ -49,10 +49,6 @@
+ import java.text.DateFormat;
+ import java.text.DateFormatSymbols;
+ import java.time.Instant;
+-import java.util.concurrent.ConcurrentHashMap;
+-import java.util.concurrent.ConcurrentMap;
+-import libcore.icu.ICU;
+-import libcore.icu.LocaleData;
+ import sun.util.locale.provider.CalendarDataUtility;
+ 
+ // Android-changed: Remove "rg" support in the javadoc. See http://b/228322300.
+@@ -927,13 +923,6 @@
+      * @serial
+      */
+     private int             minimalDaysInFirstWeek;
+-
+-    /**
+-     * Cache to hold the firstDayOfWeek and minimalDaysInFirstWeek
+-     * of a Locale.
+-     */
+-    private static final ConcurrentMap<Locale, int[]> cachedLocaleData
+-        = new ConcurrentHashMap<>(3);
+ 
+     // Special values of stamp[]
+     /**
+@@ -1594,7 +1583,7 @@
+      */
+     protected Calendar()
+     {
+-        this(TimeZone.getDefaultRef(), Locale.getDefault(Locale.Category.FORMAT));
++        this(TimeZone.getDefaultRef(), Locale.getDefault());
+         sharedZone = true;
+     }
+ 
+@@ -1638,7 +1627,7 @@
+      */
+     public static Calendar getInstance()
+     {
+-        Locale aLocale = Locale.getDefault(Locale.Category.FORMAT);
++        Locale aLocale = Locale.getDefault();
+         return createCalendar(defaultTimeZone(aLocale), aLocale);
+     }
+ 
+@@ -1653,7 +1642,7 @@
+      */
+     public static Calendar getInstance(TimeZone zone)
+     {
+-        return createCalendar(zone, Locale.getDefault(Locale.Category.FORMAT));
++        return createCalendar(zone, Locale.getDefault());
+     }
+ 
+     // Android-changed: Support the "tz" extension since Android 13.
+@@ -1705,14 +1694,7 @@
+         if (l == null) {
+             return defaultTZ;
+         }
+-        String shortTZID = l.getUnicodeLocaleType("tz");
+-        return shortTZID != null ?
+-            // Android-changed: Use ICU to convert LDML short ID
+-            // TimeZoneNameUtility.convertLDMLShortID(shortTZID)
+-            Optional.ofNullable(ICU.convertToTzId(shortTZID))
+-                .map(TimeZone::getTimeZone)
+-                .orElse(defaultTZ) :
+-            defaultTZ;
++        return defaultTZ;
+     }
+ 
+     private static Calendar createCalendar(TimeZone zone,
+@@ -2770,11 +2752,7 @@
+                 lenient == that.lenient &&
+                 firstDayOfWeek == that.firstDayOfWeek &&
+                 minimalDaysInFirstWeek == that.minimalDaysInFirstWeek &&
+-                // Android-changed: We have no sun.util.calendar.ZoneInfo. Use libcore.util.ZoneInfo
+-                // (zone instanceof ZoneInfo ?
+-                (zone instanceof libcore.util.ZoneInfo ?
+-                    zone.equals(that.zone) :
+-                    zone.equals(that.getTimeZone()));
++                zone.equals(that.getTimeZone());
+         } catch (Exception e) {
+             // Note: GregorianCalendar.computeTime throws
+             // IllegalArgumentException if the ERA value is invalid
+@@ -3456,22 +3434,11 @@
+      */
+     private void setWeekCountData(Locale desiredLocale)
+     {
+-        desiredLocale = LocaleData.getCompatibleLocaleForBug159514442(desiredLocale);
+-        /* try to get the Locale data from the cache */
+-        int[] data = cachedLocaleData.get(desiredLocale);
+-        if (data == null) {  /* cache miss */
+-            data = new int[2];
+-            // BEGIN Android-changed: Use ICU4C to get week data.
+-            // data[0] = CalendarDataUtility.retrieveFirstDayOfWeek(desiredLocale);
+-            // data[1] = CalendarDataUtility.retrieveMinimalDaysInFirstWeek(desiredLocale);
+-            LocaleData localeData = LocaleData.get(desiredLocale);
+-            data[0] = localeData.firstDayOfWeek.intValue();
+-            data[1] = localeData.minimalDaysInFirstWeek.intValue();
+-            // END Android-changed: Use ICU4C to get week data.
+-            cachedLocaleData.putIfAbsent(desiredLocale, data);
+-        }
+-        firstDayOfWeek = data[0];
+-        minimalDaysInFirstWeek = data[1];
++        // Regional week data is unavailable in the embedded calendar.
++        // Use the US convention for US locales and ISO week numbering otherwise.
++        boolean us = "US".equals(desiredLocale.getCountry());
++        firstDayOfWeek = us ? SUNDAY : MONDAY;
++        minimalDaysInFirstWeek = us ? 1 : 4;
+     }
+ 
+     /**
+--- a/libcore/ojluni/src/main/java/java/util/GregorianCalendar.java
++++ b/libcore/ojluni/src/main/java/java/util/GregorianCalendar.java
+@@ -44,7 +44,6 @@
+ import java.time.Instant;
+ import java.time.ZonedDateTime;
+ import java.time.temporal.ChronoField;
+-import libcore.util.ZoneInfo;
+ import sun.util.calendar.BaseCalendar;
+ import sun.util.calendar.CalendarDate;
+ import sun.util.calendar.CalendarSystem;
+@@ -590,7 +589,7 @@
+      * {@link Locale.Category#FORMAT FORMAT} locale.
+      */
+     public GregorianCalendar() {
+-        this(TimeZone.getDefaultRef(), Locale.getDefault(Locale.Category.FORMAT));
++        this(TimeZone.getDefaultRef(), Locale.getDefault());
+         setZoneShared(true);
+     }
+ 
+@@ -602,7 +601,7 @@
+      * @param zone the given time zone.
+      */
+     public GregorianCalendar(TimeZone zone) {
+-        this(zone, Locale.getDefault(Locale.Category.FORMAT));
++        this(zone, Locale.getDefault());
+     }
+ 
+     /**
+@@ -2306,18 +2305,7 @@
+             zoneOffsets = new int[2];
+         }
+         if (tzMask != (ZONE_OFFSET_MASK|DST_OFFSET_MASK)) {
+-            if (tz instanceof ZoneInfo) {
+-                // BEGIN Android-changed: use libcore.util.ZoneInfo.
+-                // The method name to get offsets differs from sun.util.calendar.ZoneInfo
+-                // zoneOffset = ((ZoneInfo)tz).getOffsets(time, zoneOffsets);
+-                ZoneInfo zoneInfo = (ZoneInfo) tz;
+-                zoneOffset = zoneInfo.getOffsetsByUtcTime(time, zoneOffsets);
+-                // END Android-changed: use libcore.util.ZoneInfo.
+-            } else {
+-                zoneOffset = tz.getOffset(time);
+-                zoneOffsets[0] = tz.getRawOffset();
+-                zoneOffsets[1] = zoneOffset - zoneOffsets[0];
+-            }
++            zoneOffset = tz.getOffsets(time, zoneOffsets);
+         }
+         if (tzMask != 0) {
+             if (isFieldSet(tzMask, ZONE_OFFSET)) {
+@@ -2869,13 +2857,7 @@
+             long standardTimeInZone = utcTimeInMillis - gmtOffset;
+ 
+             // Retrieve the correct zone and DST offsets from the time zone.
+-            if (zone instanceof ZoneInfo) {
+-                // Android-changed: libcore ZoneInfo uses different method to get offsets.
+-                ZoneInfo zoneInfo = (ZoneInfo) zone;
+-                zoneInfo.getOffsetsByUtcTime(standardTimeInZone, zoneOffsets);
+-            } else {
+-                zone.getOffsets(standardTimeInZone, zoneOffsets);
+-            }
++            zone.getOffsets(standardTimeInZone, zoneOffsets);
+             zoneOffset = zoneOffsets[0];
+             dstOffset = zoneOffsets[1];
+ 
+--- a/libcore/ojluni/src/main/java/sun/util/calendar/AbstractCalendar.java
++++ b/libcore/ojluni/src/main/java/sun/util/calendar/AbstractCalendar.java
+@@ -123,17 +123,9 @@
+         TimeZone zi = date.getZone();
+         if (zi != null) {
+             int[] offsets = new int[2];
+-            // BEGIN Android-changed: Android doesn't have sun.util.calendar.ZoneInfo.
+-            // if (zi instanceof ZoneInfo) {
+-            //    zoneOffset = ((ZoneInfo)zi).getOffsets(millis, offsets);
+-            if (zi instanceof libcore.util.ZoneInfo) {
+-                zoneOffset = ((libcore.util.ZoneInfo) zi).getOffsetsByUtcTime(millis, offsets);
+-            // END Android-changed: Android doesn't have sun.util.calendar.ZoneInfo.
+-            } else {
+-                zoneOffset = zi.getOffset(millis);
+-                offsets[0] = zi.getRawOffset();
+-                offsets[1] = zoneOffset - offsets[0];
+-            }
++            zoneOffset = zi.getOffset(millis);
++            offsets[0] = zi.getRawOffset();
++            offsets[1] = zoneOffset - offsets[0];
+ 
+             // We need to calculate the given millis and time zone
+             // offset separately for java.util.GregorianCalendar

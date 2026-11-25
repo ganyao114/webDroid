@@ -56,9 +56,13 @@ void AuditFrameworkNatives(Vm& vm, std::string_view upstream, std::string_view f
             if (owner != upstream) continue;
             const bool art_boot = name == "Ljava/io/FileInputStream;" || name == "Ljava/io/FileOutputStream;" ||
                 name == "Ljava/io/RandomAccessFile;" || name == "Ljava/util/regex/Pattern;" ||
-                name == "Ljava/lang/reflect/Field;" || name == "Ljava/security/MessageDigest$EmbeddedDigest;" ||
+                name == "Ljava/lang/ref/ReferenceQueue;" ||
+                name == "Landroid/os/Debug;" || name == "Landroid/system/Os;" ||
+                name == "Ljava/lang/reflect/Field;" || name == "Ljava/lang/reflect/Executable;" ||
+                name == "Ldalvik/system/VMRuntime;" || name == "Ljava/security/MessageDigest$EmbeddedDigest;" ||
                 name == "Lsun/misc/Unsafe;" || name == "Ljava/lang/ThreadGroup;" ||
-                name == "Ljava/util/zip/CRC32;" || name == "Landroid/net/LocalSocketImpl;";
+                name == "Ljava/util/zip/CRC32;" || name == "Ljava/util/zip/Deflater;" ||
+                name == "Landroid/net/LocalSocketImpl;";
             const bool package_manager = name == "Landroid/content/pm/PackageManager;";
             if (!art_boot && !package_manager && !name.starts_with("Landroid/graphics/") &&
                 !name.starts_with("Lcom/android/internal/util/") &&
@@ -367,6 +371,45 @@ void PrintList(std::string_view label, const DisplayList& frame) {
               << " round_clip=" << frame.counts[WA_CANVAS_CLIP_ROUND_RECT] << '\n';
 }
 
+void VerifyVmRuntime(Vm& vm) {
+    constexpr auto owner = "Ldalvik/system/VMRuntime;";
+    constexpr auto runtime_type = "()Ldalvik/system/VMRuntime;";
+    wa::interp::ScopedHandleScope scope(vm);
+    auto* runtime = scope.Hold(vm.CallStatic(owner, "getRuntime", runtime_type).ref());
+    Require(runtime && runtime == vm.CallStatic(owner, "getRuntime", runtime_type).ref(), "VMRuntime singleton");
+    Require(vm.CallVirtual(runtime, "is64Bit", "()Z").i() &&
+            vm.StringUtf8(vm.CallVirtual(runtime, "vmInstructionSet", "()Ljava/lang/String;").ref()) == "arm64",
+            "VMRuntime reports the Android guest architecture");
+    const auto previous = vm.CallVirtual(runtime, "getTargetSdkVersion", "()I");
+    vm.SetAndroidTargetSdkVersion(34);
+    Require(vm.CallVirtual(runtime, "getTargetSdkVersion", "()I").i() == 34, "VMRuntime sees the manifest target SDK");
+    vm.CallVirtual(runtime, "setTargetSdkVersion", "(I)V", std::array{Value::Int(31)});
+    Require(vm.CallVirtual(runtime, "getTargetSdkVersion", "()I").i() == 31, "VMRuntime updates the target SDK");
+    vm.CallVirtual(runtime, "setTargetSdkVersion", "(I)V", std::array{previous});
+
+    const auto component = vm.ReadStaticField("Ljava/lang/Integer;", "TYPE", "Ljava/lang/Class;");
+    const auto array = scope.Hold(vm.CallVirtual(runtime, "newNonMovableArray", "(Ljava/lang/Class;I)Ljava/lang/Object;",
+        std::array{component, Value::Int(2)}));
+    const auto address_of = [&] {
+        return vm.CallVirtual(runtime, "addressOf", "(Ljava/lang/Object;)J", std::array{array}).j();
+    };
+    const auto address = address_of();
+    Require(address != 0, "Non-movable primitive array has an address");
+    auto* env = vm.JniEnv();
+    auto& jni = wa::interp::JniBridge::From(env);
+    auto ref = static_cast<jintArray>(jni.Local(array.ref()));
+    jint written = 0x12345678, read = 0;
+    env->SetIntArrayRegion(ref, 1, 1, &written);
+    auto* data = reinterpret_cast<jint*>(static_cast<uintptr_t>(address));
+    Require(data[1] == written && address_of() == address, "JNI writes use stable non-movable array storage");
+    data[0] = 37;
+    env->GetIntArrayRegion(ref, 0, 1, &read);
+    Require(read == 37, "JNI reads reflect writes to the backing storage");
+    jni.DeleteLocal(ref);
+    auto* prefixes = scope.Hold(jni.Vm().NewArray(jni.Vm().linker.Resolve("[Ljava/lang/String;"), 0));
+    vm.CallVirtual(runtime, "setHiddenApiExemptions", "([Ljava/lang/String;)V", std::array{Value::Ref(prefixes)});
+}
+
 void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, const char* system_resources) {
     vm.LoadDexFile(upstream);
     vm.LoadFallbackDexFile(framework);
@@ -378,6 +421,7 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     bridge.BindSurfaceFlinger(sf.get(), kLayer);
     bridge.RegisterNatives(vm);
     AuditFrameworkNatives(vm, upstream, framework);
+    VerifyVmRuntime(vm);
     {
         wa::interp::ScopedHandleScope scope(vm);
         auto* local = scope.Hold(vm.NewObject("Ljava/lang/ThreadLocal;", "()V"));
@@ -388,10 +432,26 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
     vm.MountReadOnlyFile("/data/mounted.bin", mounted);
     Require(ReadInt(vm, "verifyFileStreams") == 1, "Guest stream and read-only file operations");
     Require(ReadInt(vm, "verifyReadWriteLock") == 1, "Cooperative locks preserve hold counts and park permits");
+    Require(ReadInt(vm, "verifyThreadStack") == 1, "Thread stack traces report the active guest frames");
+    Require(ReadInt(vm, "verifyHandlerThread") == 1, "HandlerThread signals a waiting caller and resumes its callback");
+    Require(ReadInt(vm, "verifyReferenceQueue") == 1, "ReferenceQueue wakes its removal consumer and preserves FIFO state");
     Require(ReadInt(vm, "verifyForkJoin") == 1, "ForkJoin workers join, complete, and compensate for blocking");
     Require(ReadInt(vm, "verifyLocalSockets") == 1, "Guest local sockets bind, transfer streams, and release addresses");
     Require(ReadInt(vm, "verifyCrc32") == 1, "Upstream CRC32 handles single bytes and read-only buffers");
+    Require(ReadInt(vm, "verifyDeflater") == 1, "Upstream Deflater completes a zlib stream in partial writes");
     Require(ReadInt(vm, "verifyRegex") == 1, "Upstream regex captures and Unicode classes use the guest backend");
+    Require(ReadInt(vm, "verifyLegacyTime") == 1, "Android Time round-trips a fixed-offset timestamp");
+    Require(ReadInt(vm, "verifyGenericSuperclass") == 1, "Class reflection parses DEX generic superclass signatures");
+    Require(ReadInt(vm, "verifyConcurrentKeySet") == 1, "ConcurrentHashMap exposes a mutable backed key set");
+    Require(ReadInt(vm, "verifyCopiesList") == 1, "Collections.nCopies keeps an immutable repeated-value view");
+    Require(ReadInt(vm, "verifyPriorityQueue") == 1, "PriorityQueue grows while preserving comparator order");
+    Require(ReadInt(vm, "verifyUtf32") == 1, "UTF-32 preserves supplementary characters in both byte orders");
+    Require(ReadInt(vm, "verifyTlsProviderUnavailable") == 1, "Java TLS reports an unavailable trust provider");
+    Require(ReadInt(vm, "verifyWebp") == 1, "BitmapFactory decodes WebP bounds, color and transparency");
+    Require(ReadInt(vm, "verifyNioPaths") == 1, "NIO paths and directory operations share the guest file system");
+    Require(ReadInt(vm, "verifyOsStat") == 1, "Android stat reports guest file metadata and typed path errors");
+    Require(ReadInt(vm, "verifyPicture") == 1, "Picture records, copies, and scales real canvas output");
+    Require(ReadInt(vm, "verifyVirtualKeyboard") == 1, "The virtual keyboard exposes its AOSP layout and produces key events");
     Require(ReadInt(vm, "verifyFieldReflection") == 1, "Field reflection reads DEX metadata and respects final fields");
     vm.SetAndroidTargetSdkVersion(34);
     Require(ReadInt(vm, "verifyLegacyFieldReflection") == 1, "Legacy Android apps can reflectively update static final fields");
@@ -451,6 +511,10 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
                                .height = kHeight,
                                .framework_resource_apk = system_resources});
     Require(ReadInt(vm, "lifecycle") == 123, "Launch ran onCreate/onStart/onResume");
+    Require(ReadInt(vm, "verifyResultReceiver") == 1, "Parcel ResultReceiver delivers results on its Handler");
+    Require(ReadInt(vm, "verifyRunningTask") == 1, "ActivityManager reports the current embedded task");
+    Require(ReadInt(vm, "verifyProviderQuery") == 1, "ContentResolver queries installed providers in its user");
+    Require(ReadInt(vm, "verifyManifestServiceProcess") == 1, "Only services assigned to the current process start locally");
     Require(ReadBool(vm, "resourcesVerified"),
             "Compiled resources, styles, included layout, and merge inflated");
     Require(ReadBool(vm, "packagesVerified") && user_forwarded && queried == 2 && applications >= 1,
@@ -633,6 +697,7 @@ void Run(Vm& vm, const char* upstream, const char* framework, const char* apk, c
                 "AOSP resource selection resolves zh-rCN and records UTF-8 text");
     }
     Require(ReadInt(vm, "verifyScheduledExecutor") == 1, "Scheduled work runs through the guest Looper");
+    Require(ReadInt(vm, "verifyScheduledWorkerWait") == 1, "A scheduled worker can wait for the main Looper");
     Require(ReadInt(vm, "verifyNestedLooper") == 1, "Nested main Looper resumes into its original exception handlers");
     Require(ReadInt(vm, "verifyEmbeddedPackage") == 1, "Embedded package exposes manifest version and mount source");
     Require(ReadInt(vm, "verifyExecutorAndRegisterShutdownHook") == 1, "Executor honors its rejection policy");

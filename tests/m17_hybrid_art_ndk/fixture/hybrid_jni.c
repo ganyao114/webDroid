@@ -1,6 +1,10 @@
 #include "hybrid_math.h"
 
+#include <android/asset_manager_jni.h>
+#include <android/bitmap.h>
+#include <android/looper.h>
 #include <android/log.h>
+#include <android/native_window_jni.h>
 #include <dlfcn.h>
 #include <jni.h>
 #include <pthread.h>
@@ -9,6 +13,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/timerfd.h>
+#include <unistd.h>
 
 #define ENV(env, name, ...) (*(env))->name((env), ##__VA_ARGS__)
 
@@ -32,6 +40,101 @@ static jint load_count(JNIEnv* env, jclass unused) {
     return loads;
 }
 
+static jint patched_load_count(JNIEnv* env, jclass unused) {
+    return loads + 7;
+}
+
+static jboolean (*original_is_64_bit)(JNIEnv*, jobject);
+
+static jboolean patched_is_64_bit(JNIEnv* env, jobject runtime) {
+    return !original_is_64_bit(env, runtime);
+}
+
+static jboolean verify_method_id(JNIEnv* env) {
+    jmethodID id = ENV(env, GetStaticMethodID, bridge, "loadCount", "()I");
+    if (!id) return JNI_FALSE;
+    jobject reflected = ENV(env, ToReflectedMethod, bridge, id, JNI_TRUE);
+    jclass executable = ENV(env, FindClass, "java/lang/reflect/Executable");
+    if (!executable || !reflected || ENV(env, FromReflectedMethod, reflected) != id) return JNI_FALSE;
+    jfieldID art_method = ENV(env, GetFieldID, executable, "artMethod", "J");
+    if (!art_method || (uintptr_t)ENV(env, GetLongField, reflected, art_method) != (uintptr_t)id) return JNI_FALSE;
+
+    // ArtMethod has 16 bytes of fixed fields before its pointer-sized fields.
+    volatile uintptr_t* entry = (volatile uintptr_t*)((uintptr_t)id + 16);
+    if (*entry != (uintptr_t)load_count) return JNI_FALSE;
+    *entry = (uintptr_t)patched_load_count;
+    const jint patched = ENV(env, CallStaticIntMethod, bridge, id);
+    *entry = (uintptr_t)load_count;
+    if (patched != loads + 7 || ENV(env, CallStaticIntMethod, bridge, id) != loads) return JNI_FALSE;
+
+    jclass vm = ENV(env, FindClass, "dalvik/system/VMRuntime");
+    if (!vm) return JNI_FALSE;
+    jmethodID get_runtime = ENV(env, GetStaticMethodID, vm, "getRuntime", "()Ldalvik/system/VMRuntime;");
+    jmethodID is_64_bit = ENV(env, GetMethodID, vm, "is64Bit", "()Z");
+    if (!get_runtime || !is_64_bit) return JNI_FALSE;
+    jobject runtime = ENV(env, CallStaticObjectMethod, vm, get_runtime);
+    if (!runtime) return JNI_FALSE;
+    entry = (volatile uintptr_t*)((uintptr_t)is_64_bit + 16);
+    original_is_64_bit = (jboolean (*)(JNIEnv*, jobject))*entry;
+    if (!original_is_64_bit) return JNI_FALSE;
+    const jboolean original = ENV(env, CallBooleanMethod, runtime, is_64_bit);
+    *entry = (uintptr_t)patched_is_64_bit;
+    const jboolean inverted = ENV(env, CallBooleanMethod, runtime, is_64_bit);
+    *entry = (uintptr_t)original_is_64_bit;
+    return inverted == !original && ENV(env, CallBooleanMethod, runtime, is_64_bit) == original;
+}
+
+static jboolean verify_non_movable_array(JNIEnv* env) {
+    jclass vm = ENV(env, FindClass, "dalvik/system/VMRuntime");
+    jclass integer = ENV(env, FindClass, "java/lang/Integer");
+    if (!vm || !integer) return JNI_FALSE;
+    jfieldID type = ENV(env, GetStaticFieldID, integer, "TYPE", "Ljava/lang/Class;");
+    jmethodID get_runtime = ENV(env, GetStaticMethodID, vm, "getRuntime", "()Ldalvik/system/VMRuntime;");
+    jmethodID allocate = ENV(env, GetMethodID, vm, "newNonMovableArray", "(Ljava/lang/Class;I)Ljava/lang/Object;");
+    jmethodID address_of = ENV(env, GetMethodID, vm, "addressOf", "(Ljava/lang/Object;)J");
+    if (!type || !get_runtime || !allocate || !address_of) return JNI_FALSE;
+    jobject runtime = ENV(env, CallStaticObjectMethod, vm, get_runtime);
+    jobject component = ENV(env, GetStaticObjectField, integer, type);
+    if (!runtime || !component) return JNI_FALSE;
+    jintArray array = ENV(env, CallObjectMethod, runtime, allocate, component, (jint)2);
+    if (!array) return JNI_FALSE;
+    jint* storage = (jint*)(uintptr_t)ENV(env, CallLongMethod, runtime, address_of, array);
+    if (!storage || ENV(env, GetArrayLength, array) != 2) return JNI_FALSE;
+    storage[0] = 123;
+    jint value = 0;
+    ENV(env, GetIntArrayRegion, array, 0, 1, &value);
+    ENV(env, SetIntArrayRegion, array, 1, 1, &value);
+    return value == 123 && storage[1] == 123;
+}
+
+static jboolean read_elf_header(const char* path) {
+    struct stat info;
+    if (stat(path, &info) || !S_ISREG(info.st_mode) || info.st_size < 5) return JNI_FALSE;
+    FILE* file = fopen(path, "rb");
+    if (!file) return JNI_FALSE;
+    unsigned char header[5];
+    const size_t count = fread(header, 1, sizeof(header), file);
+    fclose(file);
+    return count == sizeof(header) && memcmp(header, "\177ELF", 4) == 0 &&
+           header[4] == (sizeof(void*) == 8 ? 2 : 1);
+}
+
+static jboolean verify_library_paths(void) {
+#if defined(__aarch64__)
+    const char* system = "/system/lib64/libc.so";
+    const char* app = "/data/app/com.wasmandroid.hybrid/lib/arm64/libhybrid_math.so";
+#else
+    const char* system = "/system/lib/libc.so";
+    const char* app = "/data/app/com.wasmandroid.hybrid/lib/arm/libhybrid_math.so";
+#endif
+    if (!read_elf_header(system) || !read_elf_header(app)) return JNI_FALSE;
+    void* handle = dlopen(system, RTLD_NOW);
+    if (!handle) return JNI_FALSE;
+    size_t (*length)(const char*) = (size_t (*)(const char*))dlsym(handle, "strlen");
+    const jboolean valid = length && length("libc") == 4;
+    return dlclose(handle) == 0 && valid;
+}
+
 static jlong checksum(JNIEnv* env, jclass unused, jint seed) {
     return (jlong)hybrid_mix_checksum(seed);
 }
@@ -50,6 +153,138 @@ static jobject native_buffer(JNIEnv* env, jclass unused) {
 
 static jint read_native_buffer(JNIEnv* env, jclass unused) {
     return native_bytes[1];
+}
+
+static jboolean edit_bitmap(JNIEnv* env, jclass unused, jobject bitmap) {
+    AndroidBitmapInfo info;
+    if (AndroidBitmap_getInfo(env, bitmap, &info) != ANDROID_BITMAP_RESULT_SUCCESS ||
+        info.width != 2 || info.height != 1 || info.stride != 8 ||
+        info.format != ANDROID_BITMAP_FORMAT_RGBA_8888) return JNI_FALSE;
+    void* address;
+    if (AndroidBitmap_lockPixels(env, bitmap, &address) != ANDROID_BITMAP_RESULT_SUCCESS) return JNI_FALSE;
+    uint32_t* pixels = address;
+    const jboolean read_ok = pixels && pixels[1] == UINT32_C(0xff332211);
+    if (read_ok) pixels[1] = UINT32_C(0xff445566);
+    return AndroidBitmap_unlockPixels(env, bitmap) == ANDROID_BITMAP_RESULT_SUCCESS && read_ok;
+}
+
+static jboolean read_asset(JNIEnv* env, jclass unused, jobject manager) {
+    static const char expected[] = "Android asset\n";
+    AAssetManager* assets = AAssetManager_fromJava(env, manager);
+    if (!assets || AAssetManager_open(assets, "absent", AASSET_MODE_BUFFER)) return JNI_FALSE;
+    AAsset* asset = AAssetManager_open(assets, "native-probe.txt", AASSET_MODE_BUFFER);
+    if (!asset) return JNI_FALSE;
+    const void* buffer = AAsset_getBuffer(asset);
+    char readback[sizeof(expected) - 1];
+    const jboolean matches = AAsset_getLength(asset) == sizeof(expected) - 1 && buffer &&
+        memcmp(buffer, expected, sizeof(expected) - 1) == 0 && AAsset_isAllocated(asset) &&
+        AAsset_read(asset, readback, sizeof(readback)) == sizeof(readback) &&
+        memcmp(readback, expected, sizeof(readback)) == 0 && AAsset_read(asset, readback, 1) == 0;
+    AAsset_close(asset);
+    return matches;
+}
+
+struct looper_lock_probe {
+    pthread_mutex_t mutex;
+    int acquired;
+    int polled;
+};
+
+static int lock_from_callback(int fd, int events, void* data) {
+    struct looper_lock_probe* probe = data;
+    if ((events & ALOOPER_EVENT_INPUT) && pthread_mutex_lock(&probe->mutex) == 0) {
+        probe->acquired = 1;
+        pthread_mutex_unlock(&probe->mutex);
+    }
+    return 0;
+}
+
+static void* poll_with_caller_lock(void* data) {
+    struct looper_lock_probe* probe = data;
+    int descriptors[2];
+    if (pipe(descriptors) != 0) return NULL;
+    ALooper* looper = ALooper_prepare(0);
+    const char ready = 1;
+    if (looper && ALooper_addFd(looper, descriptors[0], ALOOPER_POLL_CALLBACK,
+            ALOOPER_EVENT_INPUT, lock_from_callback, probe) == 1 &&
+            write(descriptors[1], &ready, 1) == 1) {
+        probe->polled = ALooper_pollOnce(500, NULL, NULL, NULL) == ALOOPER_POLL_CALLBACK;
+        ALooper_removeFd(looper, descriptors[0]);
+    }
+    close(descriptors[0]);
+    close(descriptors[1]);
+    return NULL;
+}
+
+static jboolean run_looper_lock_probe(void) {
+    struct looper_lock_probe probe = {.mutex = PTHREAD_MUTEX_INITIALIZER};
+    pthread_t thread;
+    if (pthread_mutex_lock(&probe.mutex) != 0) return JNI_FALSE;
+    const int created = pthread_create(&thread, NULL, poll_with_caller_lock, &probe) == 0;
+    if (created) {
+        // Cross several guest time slices with the mutex still held.
+        volatile unsigned checksum = 0;
+        for (unsigned i = 0; i < 20000; ++i) checksum += i;
+    }
+    pthread_mutex_unlock(&probe.mutex);
+    const int joined = created && pthread_join(thread, NULL) == 0;
+    pthread_mutex_destroy(&probe.mutex);
+    return joined && probe.polled && probe.acquired;
+}
+
+static jboolean poll_timer(JNIEnv* env, jclass unused) {
+    ALooper* looper = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
+    if (!looper || ALooper_forThread() != looper || ALooper_pollOnce(0, NULL, NULL, NULL) != ALOOPER_POLL_TIMEOUT)
+        return JNI_FALSE;
+    ALooper_wake(looper);
+    if (ALooper_pollOnce(0, NULL, NULL, NULL) != ALOOPER_POLL_WAKE) return JNI_FALSE;
+    const int timer = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
+    if (timer < 0) return JNI_FALSE;
+    const struct itimerspec time = {.it_value = {.tv_nsec = 2000000}};
+    int ready = -1, events = 0;
+    void* data = NULL;
+    uint64_t ticks = 0;
+    const jboolean ok = ALooper_addFd(looper, timer, 5, ALOOPER_EVENT_INPUT, NULL, &ticks) == 1 &&
+        timerfd_settime(timer, 0, &time, NULL) == 0 && ALooper_pollOnce(500, &ready, &events, &data) == 5 &&
+        ready == timer && events == ALOOPER_EVENT_INPUT && data == &ticks &&
+        read(timer, &ticks, sizeof(ticks)) == sizeof(ticks) && ticks == 1 &&
+        ALooper_pollOnce(0, NULL, NULL, NULL) == ALOOPER_POLL_TIMEOUT;
+    ALooper_removeFd(looper, timer);
+    close(timer);
+    return ok && run_looper_lock_probe();
+}
+
+static jboolean protect_image_data(JNIEnv* env, jclass unused) {
+    static volatile int value = 7;
+    const long size = sysconf(_SC_PAGESIZE);
+    if (size <= 0) return JNI_FALSE;
+    void* page = (void*)((uintptr_t)&value & ~((uintptr_t)size - 1));
+    if (mprotect(page, size, PROT_READ) != 0) return JNI_FALSE;
+    const jboolean readable = value == 7;
+    const jboolean rejected = mprotect(page, size, PROT_READ | PROT_EXEC) != 0;
+    if (mprotect(page, size, PROT_READ | PROT_WRITE) != 0) return JNI_FALSE;
+    value = 8;
+    const jboolean writable = value == 8;
+    value = 7;
+    return readable && rejected && writable;
+}
+
+static jboolean post_surface(JNIEnv* env, jclass unused, jobject surface) {
+    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
+    if (!window) return JNI_FALSE;
+    ANativeWindow_Buffer buffer;
+    ARect dirty = {0, 0, 3, 2};
+    jboolean ok = ANativeWindow_getWidth(window) == 3 && ANativeWindow_getHeight(window) == 2 &&
+        ANativeWindow_getFormat(window) == WINDOW_FORMAT_RGBA_8888 &&
+        ANativeWindow_lock(window, &buffer, &dirty) == 0;
+    if (ok) {
+        ok = buffer.width == 3 && buffer.height == 2 && buffer.stride >= 3 &&
+            buffer.format == WINDOW_FORMAT_RGBA_8888 && buffer.bits;
+        if (ok) ((uint32_t*)buffer.bits)[1] = UINT32_C(0xff776655);
+        ok = ANativeWindow_unlockAndPost(window) == 0 && ok;
+    }
+    ANativeWindow_release(window);
+    return ok;
 }
 
 static void require_positive(JNIEnv* env, jclass unused, jint input) {
@@ -144,6 +379,7 @@ static int print_v(char* dst, size_t size, const char* format, ...) {
     0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 0.25
 
 static jboolean verify_abi(JNIEnv* env, jclass unused) {
+    if (!verify_method_id(env) || !verify_non_movable_array(env) || !verify_library_paths()) return JNI_FALSE;
     jmethodID mix = ENV(env, GetStaticMethodID, bridge, "sumMixed", "(IIIIIIIIIJDDDDDDDDDDF)D");
     if (!mix) return JNI_FALSE;
     const jdouble direct = ENV(env, CallStaticDoubleMethod, bridge, mix, WIDE_ARGUMENTS);
@@ -231,6 +467,11 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* unused) {
         {"readNativeBuffer", "()I", read_native_buffer},
         {"requirePositive", "(I)V", require_positive},
         {"verifyAbi", "()Z", verify_abi},
+        {"editBitmap", "(Landroid/graphics/Bitmap;)Z", edit_bitmap},
+        {"readAsset", "(Landroid/content/res/AssetManager;)Z", read_asset},
+        {"postSurface", "(Landroid/view/Surface;)Z", post_surface},
+        {"pollTimer", "()Z", poll_timer},
+        {"protectImageData", "()Z", protect_image_data},
         {"wide", "(IIIIIIIIIJDDDDDDDDDDF)D", wide},
     };
     if (ENV(env, RegisterNatives, bridge, methods, sizeof(methods) / sizeof(methods[0])) != JNI_OK) return JNI_ERR;

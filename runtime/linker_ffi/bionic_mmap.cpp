@@ -64,6 +64,16 @@ namespace {
 
 constexpr size_t kMaxMapping = 256 << 20;
 constexpr uint32_t kReadWriteExecute = WA_PROT_READ | WA_PROT_WRITE | WA_PROT_EXEC;
+constexpr uint64_t kFixed = 0x10, kFixedNoReplace = 0x100000, kAnonymous = 0x20;
+
+void SparseResult(wa_host_call_ctx_t& ctx, int32_t status) {
+    switch (status) {
+    case WA_OK: return;
+    case WA_ERR_NOMEM: return Fail(ctx, ENOMEM);
+    case WA_ERR_EXIST: return Fail(ctx, EEXIST);
+    default: return Fail(ctx, EINVAL);
+    }
+}
 
 bool Mapped(const wa_dbt& dbt, uint64_t address, uint64_t size) {
     if ((address & (WA_PAGE_SIZE - 1)) || address >= kHeapLimit || size > kHeapLimit - address)
@@ -136,13 +146,26 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
     const auto descriptor = args.Next();
     const auto offset =
         Wide ? static_cast<int64_t>(args.Next(ArgKind::Long)) : SignedWord(raw, args.Next());
-    constexpr uint64_t fixed = 0x10, fixed_noreplace = 0x100000, anonymous = 0x20;
-    if (!length || length > kMaxMapping || (prot & ~kReadWriteExecute) ||
+    if (!length || (prot & ~kReadWriteExecute) ||
         ((flags & 3) != 1 && (flags & 3) != 2) || offset < 0 || (offset & (WA_PAGE_SIZE - 1)))
         return Fail(ctx, EINVAL);
-    const bool shared = (flags & 3) == 1 && !(flags & anonymous);
-    const auto fd = flags & anonymous ? -1 : HostFd(dbt, descriptor);
-    if (!(flags & anonymous) && fd < 0)
+    const bool fixed = flags & (kFixed | kFixedNoReplace);
+    if (ctx.arch == WA_ARCH_ARM64 && (flags & 3) == 2 && (flags & kAnonymous) &&
+        (hint >= softmmu::kAddressLimit || (!fixed && length > kMaxMapping))) {
+        if (length > softmmu::kArm64AddressLimit) return Fail(ctx, ENOMEM);
+        auto address = hint;
+        auto placement = softmmu::Placement::Hint;
+        if (flags & kFixed) placement = softmmu::Placement::Fixed;
+        if (flags & kFixedNoReplace) placement = softmmu::Placement::FixedNoReplace;
+        const auto status = softmmu::MapSparse(ctx.mmu, address, AlignUp(length, WA_PAGE_SIZE), prot, placement);
+        if (status != WA_OK) return SparseResult(ctx, status);
+        ctx.ret0 = address;
+        return;
+    }
+    if (length > kMaxMapping) return Fail(ctx, EINVAL);
+    const bool shared = (flags & 3) == 1 && !(flags & kAnonymous);
+    const auto fd = flags & kAnonymous ? -1 : HostFd(dbt, descriptor);
+    if (!(flags & kAnonymous) && fd < 0)
         return PosixResult(ctx, -1);
     const auto size = AlignUp(length, WA_PAGE_SIZE);
     if (static_cast<uint64_t>(offset) > std::numeric_limits<off_t>::max() - size)
@@ -158,11 +181,11 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
         if (prot & WA_PROT_EXEC) return Fail(ctx, ENOTSUP);
     }
     uint64_t address;
-    if (flags & (fixed | fixed_noreplace)) {
+    if (fixed) {
         if (!hint || (hint & (WA_PAGE_SIZE - 1)) || hint < kHeapBase || hint >= kHeapLimit ||
             size > kHeapLimit - hint)
             return Fail(ctx, EINVAL);
-        if (flags & fixed && Mapped(dbt, hint, size)) {
+        if ((flags & kFixed) && !(flags & kFixedNoReplace) && Mapped(dbt, hint, size)) {
             if (shared) return Fail(ctx, ENOTSUP);
             for (uint64_t i = 0; i < size; i += WA_PAGE_SIZE)
                 if (dbt.bionic->map_pages.at(hint + i).shared) return Fail(ctx, ENOTSUP);
@@ -181,7 +204,7 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
                 return Fail(ctx, EEXIST);
             try {
                 dbt.allocations.emplace_hint(next, hint,
-                                             GuestAllocation{size_t(size), size_t(length)});
+                                             GuestAllocation{size_t(size), size_t(length), false});
             } catch (...) {
                 softmmu::Unmap(dbt.mmu, hint, size);
                 throw;
@@ -190,6 +213,7 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
         }
     } else {
         address = AllocateGuest(dbt, size, WA_PAGE_SIZE, kReadWriteExecute);
+        if (address) dbt.allocations.at(address).heap = false;
     }
     if (!address)
         return Fail(ctx, ENOMEM);
@@ -208,7 +232,7 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
             for (uint64_t i = 0; i < size; i += WA_PAGE_SIZE)
                 state.map_pages.insert_or_assign(address + i, GuestMappingPage{static_cast<uint8_t>(prot)});
         }
-        if (!shared && !(flags & anonymous)) {
+        if (!shared && !(flags & kAnonymous)) {
             std::array<uint8_t, WA_PAGE_SIZE> buffer;
             for (uint64_t i = 0; i < length;) {
                 const auto size = std::min<uint64_t>(buffer.size(), length - i);
@@ -236,6 +260,9 @@ template <bool Wide> void Map(wa_host_call_ctx_t& ctx) {
 
 void UnmapCall(wa_host_call_ctx_t& ctx) {
     const auto address = ctx.args[0], length = ctx.args[1];
+    if (ctx.arch == WA_ARCH_ARM64 && address >= softmmu::kAddressLimit &&
+        length <= softmmu::kArm64AddressLimit)
+        return SparseResult(ctx, softmmu::UnmapSparse(ctx.mmu, address, AlignUp(length, WA_PAGE_SIZE)));
     if (!length || (address & (WA_PAGE_SIZE - 1)) || address >= kHeapLimit ||
         length > kHeapLimit - address)
         return Fail(ctx, EINVAL);
@@ -282,11 +309,20 @@ void Advise(wa_host_call_ctx_t& ctx) {
     const auto address = ctx.args[0], length = ctx.args[1];
     if (address & (WA_PAGE_SIZE - 1)) return Fail(ctx, EINVAL);
     const auto* dbt = ctx.dbt;
+    const bool sparse = ctx.arch == WA_ARCH_ARM64 && address >= softmmu::kAddressLimit;
     switch (ctx.args[2]) {
     case 0: case 1: case 2: case 3:  // Access pattern hints.
     case 14: case 15: case 16: case 17:  // Huge pages and core dump hints.
         break;
+    case 4: // MADV_DONTNEED for private anonymous mappings.
+        if (sparse) break;
+        [[fallthrough]];
     default: return Fail(ctx, EINVAL);
+    }
+    if (sparse) {
+        if (length > softmmu::kArm64AddressLimit) return Fail(ctx, ENOMEM);
+        return SparseResult(ctx, softmmu::AdviseSparse(ctx.mmu, address, AlignUp(length, WA_PAGE_SIZE),
+                                                       ctx.args[2] == 4));
     }
     // These hints do not change guest-visible bytes. SoftMMU controls residency.
     const auto allocation = dbt->allocations.upper_bound(address);
@@ -303,8 +339,21 @@ void Protect(wa_host_call_ctx_t& ctx) {
     const auto address = ctx.args[0], length = ctx.args[1], prot = ctx.args[2];
     if ((address & (WA_PAGE_SIZE - 1)) || (prot & ~kReadWriteExecute))
         return Fail(ctx, EINVAL);
-    if (!Mapped(dbt, address, length))
+    if (!length) return;
+    const auto limit = softmmu::AddressLimit(ctx.arch);
+    if (address >= limit || length > limit - address)
         return Fail(ctx, ENOMEM);
+    if (address >= softmmu::kAddressLimit)
+        return SparseResult(ctx, softmmu::ProtectSparse(ctx.mmu, address, AlignUp(length, WA_PAGE_SIZE), prot));
+    if (length > softmmu::kAddressLimit - address) return Fail(ctx, ENOMEM);
+    if (!Mapped(dbt, address, length)) {
+        const auto page = dbt.bionic->map_pages.lower_bound(address);
+        if (page != dbt.bionic->map_pages.end() && page->first < address + length) return Fail(ctx, ENOMEM);
+        // ELF segments and runtime allocations are tracked directly by SoftMMU.
+        const auto status = softmmu::Protect(dbt.mmu, address, length, prot);
+        if (status != WA_OK) Fail(ctx, status == WA_ERR_NOTSUP ? EACCES : ENOMEM);
+        return;
+    }
     for (uint64_t done = 0; done < length; done += WA_PAGE_SIZE) {
         const auto& page = dbt.bionic->map_pages.at(address + done);
         if ((prot & WA_PROT_WRITE) && !page.can_write) return Fail(ctx, EACCES);
@@ -371,11 +420,32 @@ void Lock(wa_host_call_ctx_t& ctx) {
 
 } // namespace
 
-int32_t CheckMappedAccess(const wa_dbt* dbt, uint64_t address, size_t size, unsigned permission) {
+namespace {
+
+void Mincore(wa_host_call_ctx_t& ctx) {
+    const auto address = ctx.args[0], length = ctx.args[1];
+    if (address & (WA_PAGE_SIZE - 1)) return Fail(ctx, EINVAL);
+    const auto limit = softmmu::AddressLimit(ctx.arch);
+    if (address >= limit || length > limit - address || AlignUp(length, WA_PAGE_SIZE) / WA_PAGE_SIZE > SIZE_MAX)
+        return Fail(ctx, ENOMEM);
+    if (!length) return;
+    if (!ctx.args[2]) return Fail(ctx, EFAULT);
+    std::vector<uint8_t> pages((length + WA_PAGE_SIZE - 1) / WA_PAGE_SIZE);
+    if (!softmmu::PageResidency(ctx.mmu, address, pages)) return Fail(ctx, ENOMEM);
+    GuestMemory(ctx).Write(ctx.args[2], pages.data(), pages.size());
+}
+
+} // namespace
+
+int32_t CheckMappedAccess(const wa_dbt* dbt, uint64_t address, uint64_t size, unsigned permission) {
     if (!dbt || !size)
         return WA_OK;
-    if (address >= softmmu::kAddressLimit || size > softmmu::kAddressLimit - address)
+    const auto limit = softmmu::AddressLimit(dbt->arch);
+    if (address >= limit || size > limit - address)
         return WA_ERR_FAULT;
+    // Sparse anonymous ranges enforce protection directly in SoftMMU.
+    if (address >= softmmu::kAddressLimit) return WA_OK;
+    if (size > softmmu::kAddressLimit - address) return WA_ERR_FAULT;
     const auto& pages = dbt->bionic->map_pages;
     const auto first = address & ~uint64_t(WA_PAGE_SIZE - 1);
     for (auto page = pages.lower_bound(first); page != pages.end() && page->first < address + size;
@@ -397,6 +467,7 @@ void RegisterMappings(wa_dbt& dbt) {
         {"msync", Dispatch<Sync>},       {"madvise", Dispatch<Advise>},
         {"mremap", Dispatch<Remap>},     {"mlock", Dispatch<Lock>},
         {"munlock", Dispatch<Lock>},
+        {"mincore", Dispatch<Mincore>},
     };
     Register(dbt, "libc.so", c);
 }

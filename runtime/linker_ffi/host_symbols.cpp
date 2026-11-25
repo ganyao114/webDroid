@@ -16,16 +16,11 @@ namespace {
 
 using Buffer = std::array<uint8_t, WA_PAGE_SIZE>;
 
-bool ValidRange(uint64_t address, uint64_t bytes) {
-    return address <= softmmu::kAddressLimit && bytes <= softmmu::kAddressLimit - address;
-}
-
 int32_t Copy(wa_host_call_ctx_t* ctx, void*) {
     const auto dst = ctx->args[0];
     const auto src = ctx->args[1];
     const auto bytes = ctx->args[2];
-    if (!ValidRange(src, bytes) || !ValidRange(dst, bytes) ||
-        CheckMappedAccess(ctx->dbt, src, bytes, WA_PROT_READ) != WA_OK ||
+    if (CheckMappedAccess(ctx->dbt, src, bytes, WA_PROT_READ) != WA_OK ||
         CheckMappedAccess(ctx->dbt, dst, bytes, WA_PROT_WRITE) != WA_OK)
         return WA_ERR_FAULT;
     ctx->ret0 = dst;
@@ -48,8 +43,6 @@ int32_t Copy(wa_host_call_ctx_t* ctx, void*) {
 }
 
 int32_t Fill(wa_softmmu_t* mmu, uint64_t dst, uint64_t bytes, uint8_t value) {
-    if (!ValidRange(dst, bytes))
-        return WA_ERR_FAULT;
     Buffer buffer;
     buffer.fill(value);
     for (uint64_t done = 0; done < bytes;) {
@@ -97,7 +90,7 @@ size_t PageRemaining(uint64_t address) {
 int32_t StringLength(wa_host_call_ctx_t* ctx, void*) {
     Buffer bytes;
     auto address = ctx->args[0];
-    while (address < softmmu::kAddressLimit) {
+    while (address < softmmu::AddressLimit(ctx->arch)) {
         const auto count = PageRemaining(address);
         if (CheckMappedAccess(ctx->dbt, address, count, WA_PROT_READ) != WA_OK) return WA_ERR_FAULT;
         const auto status = wa_softmmu_read(ctx->mmu, address, bytes.data(), count);
@@ -117,8 +110,9 @@ int32_t StringCompare(wa_host_call_ctx_t* ctx, void* bounded) {
     Buffer left, right;
     auto a = ctx->args[0];
     auto b = ctx->args[1];
-    auto remaining = bounded ? ctx->args[2] : softmmu::kAddressLimit;
-    while (remaining && a < softmmu::kAddressLimit && b < softmmu::kAddressLimit) {
+    const auto limit = softmmu::AddressLimit(ctx->arch);
+    auto remaining = bounded ? ctx->args[2] : limit;
+    while (remaining && a < limit && b < limit) {
         const auto count = std::min<uint64_t>({PageRemaining(a), PageRemaining(b), remaining});
         if (CheckMappedAccess(ctx->dbt, a, count, WA_PROT_READ) != WA_OK ||
             CheckMappedAccess(ctx->dbt, b, count, WA_PROT_READ) != WA_OK) return WA_ERR_FAULT;
@@ -151,6 +145,12 @@ int32_t Free(wa_host_call_ctx_t* ctx, void*) {
     if (ctx->args[0] && (!ctx->dbt->allocations.contains(ctx->args[0]) ||
         ctx->dbt->bionic->map_allocations.contains(ctx->args[0]))) return WA_ERR_FAULT;
     FreeGuest(*ctx->dbt, ctx->args[0]);
+    return WA_OK;
+}
+
+int32_t UsableSize(wa_host_call_ctx_t* ctx, void*) {
+    const auto allocation = ctx->dbt->allocations.find(ctx->args[0]);
+    if (allocation != ctx->dbt->allocations.end()) ctx->ret0 = allocation->second.size;
     return WA_OK;
 }
 
@@ -272,7 +272,8 @@ int32_t Sort(wa_host_call_ctx_t* ctx, void*) {
     const auto width = ctx->args[2];
     if (count < 2 || width == 0)
         return WA_OK;
-    if (count > softmmu::kAddressLimit / width || !ValidRange(ctx->args[0], count * width))
+    if (count > UINT64_MAX / width || CheckMappedAccess(ctx->dbt, ctx->args[0], count * width,
+                                                       WA_PROT_READ | WA_PROT_WRITE) != WA_OK)
         return WA_ERR_FAULT;
     return GuestSort(*ctx, width).Sort(count);
 }
@@ -353,6 +354,12 @@ void FreeGuest(wa_dbt& dbt, uint64_t address) {
 }
 
 void RunExitHandlers(wa_dbt& dbt) {
+    auto& finalizing = dbt.bionic->finalizing_process;
+    struct Restore {
+        bool& finalizing;
+        bool previous;
+        ~Restore() { finalizing = previous; }
+    } restore{finalizing, std::exchange(finalizing, true)};
     RunThreadDestructors(dbt);
     auto handlers = std::exchange(dbt.exit_handlers, {});
     for (auto it = handlers.rbegin(); it != handlers.rend(); ++it) {
@@ -468,6 +475,7 @@ void RegisterBuiltins(wa_dbt& dbt) {
         {"libc.so", "strlen", StringLength},
         {"libc.so", "strcmp", StringCompare},
         {"libc.so", "malloc", Allocate},
+        {"libc.so", "malloc_usable_size", UsableSize},
         {"libc.so", "calloc", Calloc},
         {"libc.so", "realloc", Reallocate},
         {"libc.so", "free", Free},

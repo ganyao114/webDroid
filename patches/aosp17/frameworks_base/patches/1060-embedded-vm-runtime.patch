@@ -1,0 +1,121 @@
+--- a/libcore/libart/src/main/java/dalvik/system/VMRuntime.java
++++ b/libcore/libart/src/main/java/dalvik/system/VMRuntime.java
+@@ -19,7 +19,6 @@
+ import static android.annotation.SystemApi.Client.MODULE_LIBRARIES;
+ 
+ import android.annotation.SystemApi;
+-import android.annotation.FlaggedApi;
+ import android.compat.Compatibility;
+ import android.compat.annotation.ChangeId;
+ import android.compat.annotation.EnabledSince;
+@@ -27,13 +26,10 @@
+ import android.compat.annotation.Overridable;
+ import android.compat.annotation.UnsupportedAppUsage;
+ 
+-import com.android.libcore.Flags;
+-
+ import dalvik.annotation.compat.VersionCodes;
+ import dalvik.annotation.optimization.CriticalNative;
+ import dalvik.annotation.optimization.FastNative;
+ 
+-import java.lang.ref.FinalizerReference;
+ import java.util.ArrayList;
+ import java.util.HashMap;
+ import java.util.List;
+@@ -222,8 +218,6 @@
+ 
+     private static Consumer<String> nonSdkApiUsageConsumer = null;
+ 
+-    private int targetSdkVersion = SDK_VERSION_CUR_DEVELOPMENT;
+-
+     // notifyNativeAllocationsInternal (below) should be called every notifyNativeInterval
+     // allocations. Initialized on demand to allow completely static class initialization.
+     private int notifyNativeInterval;
+@@ -395,8 +389,7 @@
+         +" attribute in the {@code uses-sdk} manifest tag instead.")
+     @SystemApi(client = MODULE_LIBRARIES)
+     public synchronized void setTargetSdkVersion(int targetSdkVersion) {
+-        this.targetSdkVersion = targetSdkVersion;
+-        setTargetSdkVersionNative(this.targetSdkVersion);
++        setTargetSdkVersionNative(targetSdkVersion);
+     }
+ 
+ 
+@@ -474,9 +467,7 @@
+      * @hide
+      */
+     @SystemApi(client = MODULE_LIBRARIES)
+-    public synchronized int getTargetSdkVersion() {
+-        return targetSdkVersion;
+-    }
++    public synchronized native int getTargetSdkVersion();
+ 
+     private native void setTargetSdkVersionNative(int targetSdkVersion);
+ 
+@@ -797,15 +788,7 @@
+      * @hide
+      */
+     @UnsupportedAppUsage
+-    public static void runFinalization(long timeout) {
+-        try {
+-            FinalizerReference.finalizeAllEnqueued(timeout);
+-        } catch (InterruptedException e) {
+-            // Interrupt the current thread without actually throwing the InterruptionException
+-            // for the caller.
+-            Thread.currentThread().interrupt();
+-        }
+-    }
++    public static native void runFinalization(long timeout);
+ 
+     /**
+      * Returns t's Posix niceness, as cached by {@code Thread}. Only reflects values
+@@ -817,11 +800,8 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(com.android.libcore.Flags.FLAG_OPENJDK_25_V1_APIS)
+-    @SystemApi(client = MODULE_LIBRARIES)
+-    public int getThreadNiceness(@NonNull Thread t) {
+-      return t.getPosixNicenessInternal();
+-    }
++    @SystemApi(client = MODULE_LIBRARIES)
++    public native int getThreadNiceness(@NonNull Thread t);
+ 
+     /**
+      * Sets t's Posix niceness, updating {@code Thread}'s cache. Subsequently t's
+@@ -834,14 +814,15 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(com.android.libcore.Flags.FLAG_OPENJDK_25_V1_APIS)
+     @SystemApi(client = MODULE_LIBRARIES)
+     public boolean setThreadNiceness(@NonNull Thread t, int newNiceness) {
+       if (newNiceness < -20 || newNiceness > 19) {
+         return false;
+       }
+-      return t.setPosixNicenessInternal(newNiceness) == 0;
+-    }
++      return setThreadNicenessNative(t, newNiceness);
++    }
++
++    private native boolean setThreadNicenessNative(Thread t, int newNiceness);
+ 
+ 
+     /**
+@@ -1179,14 +1160,14 @@
+      * @hide for internal testing.
+      */
+     public static boolean isVTrunkStableFlagEnabled() {
+-        return Flags.vApis();
++        return getSdkVersion() >= VersionCodes.VANILLA_ICE_CREAM;
+     }
+ 
+     /**
+      * @hide for internal testing.
+      */
+     public static boolean isArtTestFlagEnabled() {
+-        return com.android.art.flags.Flags.test();
++        return false;
+     }
+     /**
+      * @hide for internal testing.

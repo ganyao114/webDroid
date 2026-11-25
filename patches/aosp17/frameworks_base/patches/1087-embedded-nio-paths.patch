@@ -1,0 +1,598 @@
+--- a/libcore/ojluni/src/main/java/java/nio/file/FileSystems.java
++++ b/libcore/ojluni/src/main/java/java/nio/file/FileSystems.java
+@@ -37,7 +37,7 @@
+ import java.util.ServiceLoader;
+ 
+ import jdk.internal.misc.VM;
+-import sun.nio.fs.DefaultFileSystemProvider;
++import sun.nio.fs.UnixFileSystem;
+ 
+ /**
+  * Factory methods for file systems. This class defines the {@link #getDefault
+@@ -190,7 +190,7 @@
+             return DefaultFileSystemProvider.theFileSystem();
+         }
+         */
+-        return DefaultFileSystemProvider.theFileSystem();
++        return UnixFileSystem.getDefault();
+     }
+ 
+     /**
+--- a/libcore/ojluni/src/main/java/java/nio/file/Files.java
++++ b/libcore/ojluni/src/main/java/java/nio/file/Files.java
+@@ -738,6 +738,15 @@
+     public static Path createDirectories(Path dir, FileAttribute<?>... attrs)
+         throws IOException
+     {
++        if (dir.getFileSystem() == FileSystems.getDefault()) {
++            if (attrs.length != 0) {
++                throw new UnsupportedOperationException(Objects.requireNonNull(attrs[0]).name());
++            }
++            File file = dir.toFile();
++            if (file.isDirectory() || file.mkdirs() || file.isDirectory()) return dir;
++            if (file.exists()) throw new FileAlreadyExistsException(dir.toString());
++            throw new IOException("Could not create directory " + dir);
++        }
+         // attempt to create the directory
+         try {
+             createAndCheckIsDirectory(dir, attrs);
+@@ -2225,6 +2234,10 @@
+      *          method denies read access to the file.
+      */
+     public static boolean isDirectory(Path path, LinkOption... options) {
++        if (path.getFileSystem() == FileSystems.getDefault()) {
++            for (LinkOption option : options) Objects.requireNonNull(option);
++            return path.toFile().isDirectory();
++        }
+         if (options.length == 0) {
+             FileSystemProvider provider = provider(path);
+             if (provider instanceof AbstractFileSystemProvider)
+@@ -3138,8 +3151,6 @@
+      */
+     private static final int MAX_BUFFER_SIZE = Integer.MAX_VALUE - 8;
+ 
+-    private static final JavaLangAccess JLA = SharedSecrets.getJavaLangAccess();
+-
+     /**
+      * Reads all the bytes from an input stream. Uses {@code initialSize} as a hint
+      * about how many bytes the stream will have.
+@@ -3295,7 +3306,7 @@
+         // Android-changed: Android's JLA.newStringNoRepl doesn't take ownership of the byte[].
+         // if (path.getClass().getModule() != Object.class.getModule())
+         //     ba = ba.clone();
+-        return JLA.newStringNoRepl(ba, cs);
++        return SharedSecrets.getJavaLangAccess().newStringNoRepl(ba, cs);
+     }
+ 
+     /**
+@@ -3652,7 +3663,7 @@
+         Objects.requireNonNull(csq);
+         Objects.requireNonNull(cs);
+ 
+-        byte[] bytes = JLA.getBytesNoRepl(String.valueOf(csq), cs);
++        byte[] bytes = SharedSecrets.getJavaLangAccess().getBytesNoRepl(String.valueOf(csq), cs);
+ 
+         // Android-changed: Android's JLA.getBytesNoRepl returns a copy.
+         // if (path.getClass().getModule() != Object.class.getModule())
+--- a/libcore/ojluni/src/main/java/sun/nio/fs/UnixFileSystem.java
++++ b/libcore/ojluni/src/main/java/sun/nio/fs/UnixFileSystem.java
+@@ -31,51 +31,30 @@
+ import java.io.IOException;
+ import java.util.*;
+ import java.util.regex.Pattern;
+-import sun.security.action.GetPropertyAction;
+ 
+ /**
+  * Base implementation of FileSystem for Unix-like implementations.
+  */
+ 
+-abstract class UnixFileSystem
++public final class UnixFileSystem
+     extends FileSystem
+ {
+-    private final UnixFileSystemProvider provider;
+     private final byte[] defaultDirectory;
+-    private final boolean needToResolveAgainstDefaultDirectory;
+     private final UnixPath rootDirectory;
+ 
+-    // package-private
+-    UnixFileSystem(UnixFileSystemProvider provider, String dir) {
+-        this.provider = provider;
++    private static final class Default {
++        static final UnixFileSystem INSTANCE = new UnixFileSystem(System.getProperty("user.dir", "/"));
++    }
++
++    public static FileSystem getDefault() {
++        return Default.INSTANCE;
++    }
++
++    private UnixFileSystem(String dir) {
+         this.defaultDirectory = Util.toBytes(UnixPath.normalizeAndCheck(dir));
+-        if (this.defaultDirectory[0] != '/') {
+-            throw new RuntimeException("default directory must be absolute");
++        if (defaultDirectory.length == 0 || defaultDirectory[0] != '/') {
++            throw new IllegalArgumentException("Default directory must be absolute");
+         }
+-
+-        // if process-wide chdir is allowed or default directory is not the
+-        // process working directory then paths must be resolved against the
+-        // default directory.
+-        String propValue = GetPropertyAction
+-                .privilegedGetProperty("sun.nio.fs.chdirAllowed", "false");
+-        boolean chdirAllowed = propValue.isEmpty() ? true : Boolean.parseBoolean(propValue);
+-        if (chdirAllowed) {
+-            this.needToResolveAgainstDefaultDirectory = true;
+-        } else {
+-            byte[] cwd = UnixNativeDispatcher.getcwd();
+-            boolean defaultIsCwd = (cwd.length == defaultDirectory.length);
+-            if (defaultIsCwd) {
+-                for (int i=0; i<cwd.length; i++) {
+-                    if (cwd[i] != defaultDirectory[i]) {
+-                        defaultIsCwd = false;
+-                        break;
+-                    }
+-                }
+-            }
+-            this.needToResolveAgainstDefaultDirectory = !defaultIsCwd;
+-        }
+-
+-        // the root directory
+         this.rootDirectory = new UnixPath(this, "/");
+     }
+ 
+@@ -84,25 +63,23 @@
+         return defaultDirectory;
+     }
+ 
+-    boolean needToResolveAgainstDefaultDirectory() {
+-        return needToResolveAgainstDefaultDirectory;
+-    }
+-
+     UnixPath rootDirectory() {
+         return rootDirectory;
+     }
+ 
+-    boolean isSolaris() {
+-        return false;
+-    }
+-
+-    static List<String> standardFileAttributeViews() {
+-        return Arrays.asList("basic", "posix", "unix", "owner");
+-    }
+-
+     @Override
+     public final FileSystemProvider provider() {
+-        return provider;
++        throw new UnsupportedOperationException("The embedded file system uses java.io.File");
++    }
++
++    @Override
++    public Set<String> supportedFileAttributeViews() {
++        return Collections.emptySet();
++    }
++
++    @Override
++    public WatchService newWatchService() {
++        throw new UnsupportedOperationException("File watchers are unavailable");
+     }
+ 
+     @Override
+@@ -125,138 +102,14 @@
+         throw new UnsupportedOperationException();
+     }
+ 
+-    /**
+-     * Copies non-POSIX attributes from the source to target file.
+-     *
+-     * Copying a file preserving attributes, or moving a file, will preserve
+-     * the file owner/group/permissions/timestamps but it does not preserve
+-     * other non-POSIX attributes. This method is invoked by the
+-     * copy or move operation to preserve these attributes. It should copy
+-     * extended attributes, ACLs, or other attributes.
+-     *
+-     * @param   sfd
+-     *          Open file descriptor to source file
+-     * @param   tfd
+-     *          Open file descriptor to target file
+-     */
+-    void copyNonPosixAttributes(int sfd, int tfd) {
+-        // no-op by default
+-    }
+-
+-    /**
+-     * Unix systems only have a single root directory (/)
+-     */
+     @Override
+     public final Iterable<Path> getRootDirectories() {
+-        final List<Path> allowedList =
+-           Collections.unmodifiableList(Arrays.asList((Path)rootDirectory));
+-        return new Iterable<>() {
+-            public Iterator<Path> iterator() {
+-                try {
+-                    SecurityManager sm = System.getSecurityManager();
+-                    if (sm != null)
+-                        sm.checkRead(rootDirectory.toString());
+-                    return allowedList.iterator();
+-                } catch (SecurityException x) {
+-                    List<Path> disallowed = Collections.emptyList();
+-                    return disallowed.iterator();
+-                }
+-            }
+-        };
+-    }
+-
+-    /**
+-     * Returns object to iterate over entries in mounttab or equivalent
+-     */
+-    abstract Iterable<UnixMountEntry> getMountEntries();
+-
+-    /**
+-     * Returns a FileStore to represent the file system for the given mount
+-     * mount.
+-     */
+-    abstract FileStore getFileStore(UnixMountEntry entry) throws IOException;
+-
+-    /**
+-     * Iterator returned by getFileStores method.
+-     */
+-    private class FileStoreIterator implements Iterator<FileStore> {
+-        private final Iterator<UnixMountEntry> entries;
+-        private FileStore next;
+-
+-        FileStoreIterator() {
+-            this.entries = getMountEntries().iterator();
+-        }
+-
+-        private FileStore readNext() {
+-            assert Thread.holdsLock(this);
+-            for (;;) {
+-                if (!entries.hasNext())
+-                    return null;
+-                UnixMountEntry entry = entries.next();
+-
+-                // skip entries with the "ignore" option
+-                if (entry.isIgnored())
+-                    continue;
+-
+-                // check permission to read mount point
+-                SecurityManager sm = System.getSecurityManager();
+-                if (sm != null) {
+-                    try {
+-                        sm.checkRead(Util.toString(entry.dir()));
+-                    } catch (SecurityException x) {
+-                        continue;
+-                    }
+-                }
+-                try {
+-                    return getFileStore(entry);
+-                } catch (IOException ignore) {
+-                    // ignore as per spec
+-                }
+-            }
+-        }
+-
+-        @Override
+-        public synchronized boolean hasNext() {
+-            if (next != null)
+-                return true;
+-            next = readNext();
+-            return next != null;
+-        }
+-
+-        @Override
+-        public synchronized FileStore next() {
+-            if (next == null)
+-                next = readNext();
+-            if (next == null) {
+-                throw new NoSuchElementException();
+-            } else {
+-                FileStore result = next;
+-                next = null;
+-                return result;
+-            }
+-        }
+-
+-        @Override
+-        public void remove() {
+-            throw new UnsupportedOperationException();
+-        }
++        return Collections.singletonList(rootDirectory);
+     }
+ 
+     @Override
+     public final Iterable<FileStore> getFileStores() {
+-        SecurityManager sm = System.getSecurityManager();
+-        if (sm != null) {
+-            try {
+-                sm.checkPermission(new RuntimePermission("getFileStoreAttributes"));
+-            } catch (SecurityException se) {
+-                return Collections.emptyList();
+-            }
+-        }
+-        return new Iterable<>() {
+-            public Iterator<FileStore> iterator() {
+-                return new FileStoreIterator();
+-            }
+-        };
++        return Collections.emptyList();
+     }
+ 
+     @Override
+--- a/libcore/ojluni/src/main/java/sun/nio/fs/UnixPath.java
++++ b/libcore/ojluni/src/main/java/sun/nio/fs/UnixPath.java
+@@ -31,20 +31,13 @@
+ import java.io.*;
+ import java.net.URI;
+ import java.util.*;
+-import java.lang.ref.SoftReference;
+-
+-import static sun.nio.fs.UnixNativeDispatcher.*;
+-import static sun.nio.fs.UnixConstants.*;
++
+ 
+ /**
+  * Solaris/Linux implementation of java.nio.file.Path
+  */
+ 
+ class UnixPath implements Path {
+-    private static ThreadLocal<SoftReference<CharsetEncoder>> encoder =
+-        new ThreadLocal<SoftReference<CharsetEncoder>>();
+-
+-    // FIXME - eliminate this reference to reduce space
+     private final UnixFileSystem fs;
+ 
+     // internal representation
+@@ -66,7 +59,7 @@
+ 
+     UnixPath(UnixFileSystem fs, String input) {
+         // removes redundant slashes and checks for invalid characters
+-        this(fs, encode(fs, normalizeAndCheck(input)));
++        this(fs, encode(normalizeAndCheck(input)));
+     }
+ 
+     // package-private
+@@ -114,83 +107,24 @@
+     }
+ 
+     // encodes the given path-string into a sequence of bytes
+-    private static byte[] encode(UnixFileSystem fs, String input) {
+-        SoftReference<CharsetEncoder> ref = encoder.get();
+-        CharsetEncoder ce = (ref != null) ? ref.get() : null;
+-        if (ce == null) {
+-            ce = Util.jnuEncoding().newEncoder()
+-                .onMalformedInput(CodingErrorAction.REPORT)
+-                .onUnmappableCharacter(CodingErrorAction.REPORT);
+-            encoder.set(new SoftReference<>(ce));
+-        }
+-
+-        char[] ca = fs.normalizeNativePath(input.toCharArray());
+-
+-        // size output buffer for worse-case size
+-        byte[] ba = new byte[(int)(ca.length * (double)ce.maxBytesPerChar())];
+-
+-        // encode
+-        ByteBuffer bb = ByteBuffer.wrap(ba);
+-        CharBuffer cb = CharBuffer.wrap(ca);
+-        ce.reset();
+-        CoderResult cr = ce.encode(cb, bb, true);
+-        boolean error;
+-        if (!cr.isUnderflow()) {
+-            error = true;
+-        } else {
+-            cr = ce.flush(bb);
+-            error = !cr.isUnderflow();
+-        }
+-        if (error) {
+-            throw new InvalidPathException(input,
+-                "Malformed input or input contains unmappable characters");
+-        }
+-
+-        // trim result to actual length if required
+-        int len = bb.position();
+-        if (len != ba.length)
+-            ba = Arrays.copyOf(ba, len);
+-
+-        return ba;
+-    }
+-
+-    // package-private
++    private static byte[] encode(String input) {
++        for (int i = 0; i < input.length(); i++) {
++            char c = input.charAt(i);
++            if (Character.isHighSurrogate(c)) {
++                if (++i == input.length() || !Character.isLowSurrogate(input.charAt(i))) {
++                    throw new InvalidPathException(input, "Malformed UTF-16");
++                }
++            } else if (Character.isLowSurrogate(c)) {
++                throw new InvalidPathException(input, "Malformed UTF-16");
++            }
++        }
++        return Util.toBytes(input);
++    }
++
+     byte[] asByteArray() {
+         return path;
+     }
+ 
+-    // use this path when making system/library calls
+-    byte[] getByteArrayForSysCalls() {
+-        // resolve against default directory if required (chdir allowed or
+-        // file system default directory is not working directory)
+-        if (getFileSystem().needToResolveAgainstDefaultDirectory()) {
+-            return resolve(getFileSystem().defaultDirectory(), path);
+-        } else {
+-            if (!isEmpty()) {
+-                return path;
+-            } else {
+-                // empty path case will access current directory
+-                byte[] here = { '.' };
+-                return here;
+-            }
+-        }
+-    }
+-
+-    // use this message when throwing exceptions
+-    String getPathForExceptionMessage() {
+-        return toString();
+-    }
+-
+-    // use this path for permission checks
+-    String getPathForPermissionCheck() {
+-        if (getFileSystem().needToResolveAgainstDefaultDirectory()) {
+-            return Util.toString(getByteArrayForSysCalls());
+-        } else {
+-            return toString();
+-        }
+-    }
+-
+-    // Checks that the given file is a UnixPath
+     static UnixPath toUnixPath(Path obj) {
+         if (obj == null)
+             throw new NullPointerException();
+@@ -764,117 +698,33 @@
+ 
+     // -- file operations --
+ 
+-    // package-private
+-    int openForAttributeAccess(boolean followLinks) throws UnixException {
+-        int flags = O_RDONLY;
+-        if (!followLinks) {
+-            if (O_NOFOLLOW == 0)
+-                throw new UnixException("NOFOLLOW_LINKS is not supported on this platform");
+-            flags |= O_NOFOLLOW;
+-        }
+-        try {
+-            return open(this, flags, 0);
+-        } catch (UnixException x) {
+-            // HACK: EINVAL instead of ELOOP on Solaris 10 prior to u4 (see 6460380)
+-            if (getFileSystem().isSolaris() && x.errno() == EINVAL)
+-                x.setError(ELOOP);
+-
+-            throw x;
+-        }
+-    }
+-
+-    void checkRead() {
+-        SecurityManager sm = System.getSecurityManager();
+-        if (sm != null)
+-            sm.checkRead(getPathForPermissionCheck());
+-    }
+-
+-    void checkWrite() {
+-        SecurityManager sm = System.getSecurityManager();
+-        if (sm != null)
+-            sm.checkWrite(getPathForPermissionCheck());
+-    }
+-
+-    void checkDelete() {
+-        SecurityManager sm = System.getSecurityManager();
+-        if (sm != null)
+-            sm.checkDelete(getPathForPermissionCheck());
+-    }
+-
+     @Override
+     public UnixPath toAbsolutePath() {
+         if (isAbsolute()) {
+             return this;
+         }
+-        // The path is relative so need to resolve against default directory,
+-        // taking care not to reveal the user.dir
+-        SecurityManager sm = System.getSecurityManager();
+-        if (sm != null) {
+-            sm.checkPropertyAccess("user.dir");
+-        }
+         return new UnixPath(getFileSystem(),
+             resolve(getFileSystem().defaultDirectory(), path));
+     }
+ 
+     @Override
+     public Path toRealPath(LinkOption... options) throws IOException {
+-        checkRead();
+-
+-        UnixPath absolute = toAbsolutePath();
+-
+-        // if resolving links then use realpath
+-        if (Util.followLinks(options)) {
+-            try {
+-                byte[] rp = realpath(absolute);
+-                return new UnixPath(getFileSystem(), rp);
+-            } catch (UnixException x) {
+-                x.rethrowAsIOException(this);
+-            }
+-        }
+-
+-        // if not resolving links then eliminate "." and also ".."
+-        // where the previous element is not a link.
+-        UnixPath result = fs.rootDirectory();
+-        for (int i=0; i<absolute.getNameCount(); i++) {
+-            UnixPath element = absolute.getName(i);
+-
+-            // eliminate "."
+-            if ((element.asByteArray().length == 1) && (element.asByteArray()[0] == '.'))
+-                continue;
+-
+-            // cannot eliminate ".." if previous element is a link
+-            if ((element.asByteArray().length == 2) && (element.asByteArray()[0] == '.') &&
+-                (element.asByteArray()[1] == '.'))
+-            {
+-                UnixFileAttributes attrs = null;
+-                try {
+-                    attrs = UnixFileAttributes.get(result, false);
+-                } catch (UnixException x) {
+-                    x.rethrowAsIOException(result);
+-                }
+-                if (!attrs.isSymbolicLink()) {
+-                    result = result.getParent();
+-                    if (result == null) {
+-                        result = fs.rootDirectory();
+-                    }
+-                    continue;
+-                }
+-            }
+-            result = result.resolve(element);
+-        }
+-
+-        // check file exists (without following links)
++        Util.followLinks(options);
++        Path absolute = toAbsolutePath().normalize();
++        if (!absolute.toFile().exists()) throw new NoSuchFileException(toString());
++        return absolute;
++    }
++
++    @Override
++    public URI toUri() {
++        Path absolute = toAbsolutePath();
++        String value = absolute.toString();
++        if (!value.endsWith("/") && absolute.toFile().isDirectory()) value += "/";
+         try {
+-            UnixFileAttributes.get(result, false);
+-        } catch (UnixException x) {
+-            x.rethrowAsIOException(result);
+-        }
+-        return result;
+-    }
+-
+-    @Override
+-    public URI toUri() {
+-        return UnixUriUtils.toUri(this);
++            return new URI("file", "", value, null);
++        } catch (java.net.URISyntaxException e) {
++            throw new IllegalArgumentException(e);
++        }
+     }
+ 
+     @Override
+@@ -883,11 +733,7 @@
+                              WatchEvent.Modifier... modifiers)
+         throws IOException
+     {
+-        if (watcher == null)
+-            throw new NullPointerException();
+-        if (!(watcher instanceof AbstractWatchService))
+-            throw new ProviderMismatchException();
+-        checkRead();
+-        return ((AbstractWatchService)watcher).register(this, events, modifiers);
++        Objects.requireNonNull(watcher);
++        throw new UnsupportedOperationException("File watchers are unavailable");
+     }
+ }

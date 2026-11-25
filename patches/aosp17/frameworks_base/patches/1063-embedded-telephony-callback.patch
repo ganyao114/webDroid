@@ -1,0 +1,1202 @@
+--- a/frameworks/base/core/java/android/telephony/TelephonyCallback.java
++++ b/frameworks/base/core/java/android/telephony/TelephonyCallback.java
+@@ -17,42 +17,22 @@
+ package android.telephony;
+ 
+ import android.Manifest;
+-import android.annotation.CallbackExecutor;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.RequiresPermission;
+ import android.annotation.SystemApi;
+-import android.app.compat.CompatChanges;
+ import android.compat.annotation.ChangeId;
+-import android.os.Binder;
+-import android.os.Build;
+ import android.telephony.emergency.EmergencyNumber;
+ import android.telephony.ims.ImsReasonInfo;
+-import android.telephony.ims.MediaQualityStatus;
+-import android.telephony.ims.MediaThreshold;
+-import android.telephony.satellite.NtnSignalStrength;
+-import android.util.ArraySet;
+-import android.util.Log;
+-
+-import com.android.internal.annotations.VisibleForTesting;
++
+ import com.android.internal.annotations.WeaklyReferencedCallback;
+-import com.android.internal.telephony.IPhoneStateListener;
+-import com.android.internal.telephony.flags.Flags;
+-
+-import dalvik.system.VMRuntime;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+-import java.lang.ref.WeakReference;
+ import java.time.Duration;
+-import java.util.Arrays;
+ import java.util.List;
+ import java.util.Map;
+-import java.util.Objects;
+ import java.util.Set;
+-import java.util.concurrent.Executor;
+-import java.util.stream.Collectors;
+ 
+ /**
+  * A callback class for monitoring changes in specific telephony states
+@@ -77,7 +57,6 @@
+  */
+ @WeaklyReferencedCallback
+ public class TelephonyCallback {
+-    private static final String LOG_TAG = "TelephonyCallback";
+     /**
+      * Experiment flag to set the per-pid registration limit for TelephonyCallback
+      *
+@@ -677,7 +656,7 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(Flags.FLAG_SATELLITE_SYSTEM_APIS)
++
+     @RequiresPermission(Manifest.permission.READ_PHONE_STATE)
+     public static final int EVENT_CARRIER_ROAMING_NTN_MODE_CHANGED = 42;
+ 
+@@ -701,7 +680,7 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(Flags.FLAG_SATELLITE_SYSTEM_APIS)
++
+     @RequiresPermission(Manifest.permission.READ_PHONE_STATE)
+     public static final int EVENT_CARRIER_ROAMING_NTN_ELIGIBLE_STATE_CHANGED = 43;
+ 
+@@ -719,7 +698,7 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(Flags.FLAG_SATELLITE_SYSTEM_APIS)
++
+     @RequiresPermission(Manifest.permission.READ_PHONE_STATE)
+     public static final int EVENT_CARRIER_ROAMING_NTN_AVAILABLE_SERVICES_CHANGED = 44;
+ 
+@@ -732,7 +711,7 @@
+      * @hide
+      */
+     @SystemApi
+-    @FlaggedApi(Flags.FLAG_SATELLITE_SYSTEM_APIS)
++
+     @RequiresPermission(Manifest.permission.READ_PHONE_STATE)
+     public static final int EVENT_CARRIER_ROAMING_NTN_SIGNAL_STRENGTH_CHANGED = 45;
+ 
+@@ -762,7 +741,7 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_NETWORK_SECURITY_EVENT_INDICATIONS)
++
+     @RequiresPermission(android.Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+     @SystemApi
+     public static final int EVENT_NETWORK_SECURITY_EVENTS = 48;
+@@ -777,7 +756,7 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_DOMAIN_SELECTION_EMERGENCY_MODE_NOTIFICATION)
++
+     @RequiresPermission(Manifest.permission.READ_BASIC_PHONE_STATE)
+     public static final int EVENT_DOMAIN_SELECTION_EMERGENCY_MODE_CHANGED = 49;
+ 
+@@ -788,7 +767,7 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_SATELLITE_UPSELL_26Q4)
++
+     public static final int EVENT_SATELLITE_PURCHASE_MODE_CHANGED = 50;
+ 
+     /**
+@@ -851,43 +830,6 @@
+     }
+ 
+     /**
+-     * @hide
+-     */
+-    //TODO: The maxTargetSdk should be S if the build time tool updates it.
+-    @VisibleForTesting(visibility = VisibleForTesting.Visibility.PACKAGE)
+-    public IPhoneStateListener callback;
+-
+-    // Lock to prevent race conditions during registration/unregistration.
+-    private final Object mLock = new Object();
+-
+-    /**
+-     * @hide
+-     */
+-    @VisibleForTesting(visibility = VisibleForTesting.Visibility.PACKAGE)
+-    public void init(@NonNull @CallbackExecutor Executor executor) {
+-        Objects.requireNonNull(executor, "TelephonyCallback Executor must be non-null");
+-
+-        synchronized (mLock) {
+-            if (CompatChanges.isChangeEnabled(PREVENT_CALLBACK_REREGISTRATION)
+-                    && callback != null) {
+-                throw new IllegalStateException(
+-                        "TelephonyCallback: re-registering an already registered callback!");
+-            }
+-            callback = new IPhoneStateListenerStub(this, executor);
+-        }
+-    }
+-
+-    /**
+-     * @hide
+-     */
+-    @VisibleForTesting(visibility = VisibleForTesting.Visibility.PACKAGE)
+-    public void close() {
+-        synchronized (mLock) {
+-            if (callback != null) callback = null;
+-        }
+-    }
+-
+-    /**
+      * Interface for service state listener.
+      */
+     public interface ServiceStateListener {
+@@ -1009,7 +951,7 @@
+          * @param state the current call state
+          */
+         @RequiresPermission(android.Manifest.permission.READ_PHONE_STATE)
+-        void onCallStateChanged(@Annotation.CallState int state);
++        void onCallStateChanged(int state);
+     }
+ 
+     /**
+@@ -1034,8 +976,8 @@
+          * @see TelephonyManager#DATA_SUSPENDED
+          * @see TelephonyManager#DATA_HANDOVER_IN_PROGRESS
+          */
+-        void onDataConnectionStateChanged(@TelephonyManager.DataState int state,
+-                @Annotation.NetworkType int networkType);
++        void onDataConnectionStateChanged(int state,
++                int networkType);
+     }
+ 
+     /**
+@@ -1058,7 +1000,7 @@
+          * @see TelephonyManager#DATA_ACTIVITY_INOUT
+          * @see TelephonyManager#DATA_ACTIVITY_DORMANT
+          */
+-        void onDataActivity(@Annotation.DataActivityType int direction);
++        void onDataActivity(int direction);
+     }
+ 
+     /**
+@@ -1103,33 +1045,6 @@
+     }
+ 
+     /**
+-     * Interface for precise device call state listener.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    public interface PreciseCallStateListener {
+-        /**
+-         * Callback invoked when precise device call state changes on the registered subscription.
+-         * Note, the registration subscription ID comes from {@link TelephonyManager} object
+-         * which registers TelephonyCallback by
+-         * {@link TelephonyManager#registerTelephonyCallback(Executor, TelephonyCallback)}.
+-         * If this TelephonyManager object was created with
+-         * {@link TelephonyManager#createForSubscriptionId(int)}, then the callback applies to the
+-         * subscription ID. Otherwise, this callback applies to
+-         * {@link SubscriptionManager#getDefaultSubscriptionId()}.
+-         *
+-         * The calling app should have carrier privileges
+-         * (see {@link TelephonyManager#hasCarrierPrivileges}) if it does not have the
+-         * {@link android.Manifest.permission#READ_PRECISE_PHONE_STATE}.
+-         *
+-         * @param callState {@link PreciseCallState}
+-         */
+-        @RequiresPermission(android.Manifest.permission.READ_PRECISE_PHONE_STATE)
+-        void onPreciseCallStateChanged(@NonNull PreciseCallState callState);
+-    }
+-
+-    /**
+      * Interface for call disconnect cause listener.
+      */
+     public interface CallDisconnectCauseListener {
+@@ -1147,8 +1062,8 @@
+          * @param preciseDisconnectCause the precise disconnect cause
+          */
+         @RequiresPermission(android.Manifest.permission.READ_PRECISE_PHONE_STATE)
+-        void onCallDisconnectCauseChanged(@Annotation.DisconnectCauses int disconnectCause,
+-                @Annotation.PreciseDisconnectCauses int preciseDisconnectCause);
++        void onCallDisconnectCauseChanged(int disconnectCause,
++                int preciseDisconnectCause);
+     }
+ 
+     /**
+@@ -1222,7 +1137,7 @@
+          * {@link SubscriptionManager#getDefaultSubscriptionId()}.
+          */
+         @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+-        void onSrvccStateChanged(@Annotation.SrvccState int srvccState);
++        void onSrvccStateChanged(int srvccState);
+     }
+ 
+     /**
+@@ -1246,7 +1161,7 @@
+          * @param state is the current SIM voice activation state
+          */
+         @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+-        void onVoiceActivationStateChanged(@Annotation.SimActivationState int state);
++        void onVoiceActivationStateChanged(int state);
+ 
+     }
+ 
+@@ -1267,7 +1182,7 @@
+          *
+          * @param state is the current SIM data activation state
+          */
+-        void onDataActivationStateChanged(@Annotation.SimActivationState int state);
++        void onDataActivationStateChanged(int state);
+     }
+ 
+     /**
+@@ -1392,22 +1307,6 @@
+     }
+ 
+     /**
+-     * Interface for phone capability listener.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    public interface PhoneCapabilityListener {
+-        /**
+-         * Callback invoked when phone capability changes.
+-         * Note, this callback triggers regardless of registered subscription.
+-         *
+-         * @param capability the new phone capability
+-         */
+-        void onPhoneCapabilityChanged(@NonNull PhoneCapability capability);
+-    }
+-
+-    /**
+      * Interface for active data subscription ID listener.
+      */
+     public interface ActiveDataSubscriptionIdListener {
+@@ -1450,7 +1349,7 @@
+          * @param state the modem radio power state
+          */
+         @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+-        void onRadioPowerStateChanged(@Annotation.RadioPowerState int state);
++        void onRadioPowerStateChanged(int state);
+     }
+ 
+     /**
+@@ -1525,7 +1424,7 @@
+                 Manifest.permission.ACCESS_FINE_LOCATION
+         })
+         void onRegistrationFailed(@NonNull CellIdentity cellIdentity, @NonNull String chosenPlmn,
+-                @NetworkRegistrationInfo.Domain int domain, int causeCode, int additionalCauseCode);
++                int domain, int causeCode, int additionalCauseCode);
+     }
+ 
+     /**
+@@ -1563,8 +1462,8 @@
+          * long type value}.
+          */
+         @RequiresPermission(android.Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+-        void onAllowedNetworkTypesChanged(@TelephonyManager.AllowedNetworkTypesReason int reason,
+-                @TelephonyManager.NetworkTypeBitMask long allowedNetworkType);
++        void onAllowedNetworkTypesChanged(int reason,
++                long allowedNetworkType);
+     }
+ 
+     /**
+@@ -1605,103 +1504,6 @@
+     }
+ 
+     /**
+-     * Interface for call attributes listener.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    public interface CallAttributesListener {
+-        /**
+-         * Callback invoked when the call attributes changes on the active call on the registered
+-         * subscription. If the user swaps between a foreground and background call the call
+-         * attributes will be reported for the active call only.
+-         * Note, the registration subscription ID comes from {@link TelephonyManager} object
+-         * which registers TelephonyCallback by
+-         * {@link TelephonyManager#registerTelephonyCallback(Executor, TelephonyCallback)}.
+-         * If this TelephonyManager object was created with
+-         * {@link TelephonyManager#createForSubscriptionId(int)}, then the callback applies to the
+-         * subscription ID. Otherwise, this callback applies to
+-         * {@link SubscriptionManager#getDefaultSubscriptionId()}.
+-         *
+-         * The calling app should have carrier privileges
+-         * (see {@link TelephonyManager#hasCarrierPrivileges}) if it does not have the
+-         * {@link android.Manifest.permission#READ_PRECISE_PHONE_STATE}.
+-         *
+-         * @param callAttributes the call attributes
+-         * @deprecated Use onCallStatesChanged({@link List List<CallState>}) to get each
+-         *          of call state for all ongoing calls on the subscription.
+-         */
+-        @RequiresPermission(Manifest.permission.READ_PRECISE_PHONE_STATE)
+-        @Deprecated
+-        default void onCallAttributesChanged(@NonNull CallAttributes callAttributes) {
+-            Log.w(LOG_TAG, "onCallAttributesChanged(List<CallState>) should be "
+-                    + "overridden.");
+-        }
+-
+-        /**
+-         * Callback invoked when the call attributes changes on the ongoing calls on the registered
+-         * subscription. If there are 1 foreground and 1 background call, Two {@link CallState}
+-         * will be passed.
+-         * Note, the registration subscription ID comes from {@link TelephonyManager} object
+-         * which registers TelephonyCallback by
+-         * {@link TelephonyManager#registerTelephonyCallback(Executor, TelephonyCallback)}.
+-         * If this TelephonyManager object was created with
+-         * {@link TelephonyManager#createForSubscriptionId(int)}, then the callback applies to the
+-         * subscription ID. Otherwise, this callback applies to
+-         * {@link SubscriptionManager#getDefaultSubscriptionId()}.
+-         * In the event that there are no active(state is not
+-         * {@link PreciseCallState#PRECISE_CALL_STATE_IDLE}) calls, this API will report empty list.
+-         *
+-         * The calling app should have carrier privileges
+-         * (see {@link TelephonyManager#hasCarrierPrivileges}) if it does not have the
+-         * {@link android.Manifest.permission#READ_PRECISE_PHONE_STATE}.
+-         *
+-         * @param callStateList the list of call states for each ongoing call. If there are
+-         *                           a active call and a holding call, 1 call attributes for
+-         *                           {@link PreciseCallState#PRECISE_CALL_STATE_ACTIVE}  and another
+-         *                           for {@link PreciseCallState#PRECISE_CALL_STATE_HOLDING}
+-         *                           will be in this list.
+-         */
+-        // Added as default for backward compatibility
+-        @RequiresPermission(Manifest.permission.READ_PRECISE_PHONE_STATE)
+-        default void onCallStatesChanged(@NonNull List<CallState> callStateList) {
+-            if (callStateList.size() > 0) {
+-                int foregroundCallState = PreciseCallState.PRECISE_CALL_STATE_IDLE;
+-                int backgroundCallState = PreciseCallState.PRECISE_CALL_STATE_IDLE;
+-                int ringingCallState = PreciseCallState.PRECISE_CALL_STATE_IDLE;
+-                for (CallState cs : callStateList) {
+-                    switch (cs.getCallClassification()) {
+-                        case CallState.CALL_CLASSIFICATION_FOREGROUND:
+-                            foregroundCallState = cs.getCallState();
+-                            break;
+-                        case CallState.CALL_CLASSIFICATION_BACKGROUND:
+-                            backgroundCallState = cs.getCallState();
+-                            break;
+-                        case CallState.CALL_CLASSIFICATION_RINGING:
+-                            ringingCallState = cs.getCallState();
+-                            break;
+-                        default:
+-                            break;
+-                    }
+-                }
+-                onCallAttributesChanged(new CallAttributes(
+-                        new PreciseCallState(
+-                                ringingCallState, foregroundCallState, backgroundCallState,
+-                                DisconnectCause.NOT_VALID, PreciseDisconnectCause.NOT_VALID),
+-                        callStateList.get(0).getNetworkType(),
+-                        callStateList.get(0).getCallQuality()));
+-            } else {
+-                onCallAttributesChanged(new CallAttributes(
+-                        new PreciseCallState(PreciseCallState.PRECISE_CALL_STATE_IDLE,
+-                                PreciseCallState.PRECISE_CALL_STATE_IDLE,
+-                                PreciseCallState.PRECISE_CALL_STATE_IDLE,
+-                                DisconnectCause.NOT_VALID, PreciseDisconnectCause.NOT_VALID),
+-                        TelephonyManager.NETWORK_TYPE_UNKNOWN, new CallQuality()));
+-            }
+-        }
+-    }
+-
+-    /**
+      * Interface for barring information listener.
+      */
+     public interface BarringInfoListener {
+@@ -1767,51 +1569,7 @@
+          */
+         @RequiresPermission(Manifest.permission.READ_PRECISE_PHONE_STATE)
+         void onDataEnabledChanged(boolean enabled,
+-                @TelephonyManager.DataEnabledChangedReason int reason);
+-    }
+-
+-    /**
+-     * Interface for link capacity estimate changed listener.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    public interface LinkCapacityEstimateChangedListener {
+-        /**
+-         * Callback invoked when the link capacity estimate (LCE) changes
+-         *
+-         * @param linkCapacityEstimateList a list of {@link LinkCapacityEstimate}
+-         * The list size is at least 1.
+-         * In case of a dual connected network, the list size could be 2.
+-         * Use {@link LinkCapacityEstimate#getType()} to get the type of each element.
+-         */
+-        @RequiresPermission(Manifest.permission.READ_PRECISE_PHONE_STATE)
+-        void onLinkCapacityEstimateChanged(
+-                @NonNull List<LinkCapacityEstimate> linkCapacityEstimateList);
+-    }
+-
+-    /**
+-     * Interface for media quality status changed listener.
+-     *
+-     * @hide
+-     */
+-    @SystemApi
+-    public interface MediaQualityStatusChangedListener {
+-        /**
+-         * Callback invoked when the media quality status of IMS call changes. This call back
+-         * means current media quality status crosses at least one of threshold values in {@link
+-         * MediaThreshold}. Listener needs to get quality information & check whether it crossed
+-         * listener's threshold.
+-         *
+-         * <p/> Currently thresholds for this indication can be configurable by CARRIER_CONFIG
+-         * {@link CarrierConfigManager#KEY_VOICE_RTP_THRESHOLDS_PACKET_LOSS_RATE_INT}
+-         * {@link CarrierConfigManager#KEY_VOICE_RTP_THRESHOLDS_INACTIVITY_TIME_IN_MILLIS_INT}
+-         * {@link CarrierConfigManager#KEY_VOICE_RTP_THRESHOLDS_JITTER_INT}
+-         *
+-         * @param mediaQualityStatus The media quality status currently measured.
+-         */
+-        @RequiresPermission(Manifest.permission.READ_PRECISE_PHONE_STATE)
+-        void onMediaQualityStatusChanged(@NonNull MediaQualityStatus mediaQualityStatus);
++                int reason);
+     }
+ 
+     /**
+@@ -1838,7 +1596,7 @@
+          * @param timerDuration is the time remaining in the emergency callback mode.
+          * @param subscriptionId The subscription ID used to start the emergency callback mode.
+          */
+-        void onCallbackModeStarted(@TelephonyManager.EmergencyCallbackModeType int type,
++        void onCallbackModeStarted(int type,
+                 @NonNull Duration timerDuration, int subscriptionId);
+ 
+         /**
+@@ -1856,7 +1614,7 @@
+          * @param timerDuration is the time remaining in the emergency callback mode.
+          * @param subscriptionId The subscription ID used to restart the emergency callback mode.
+          */
+-        void onCallbackModeRestarted(@TelephonyManager.EmergencyCallbackModeType int type,
++        void onCallbackModeRestarted(int type,
+                 @NonNull Duration timerDuration, int subscriptionId);
+ 
+         /**
+@@ -1880,111 +1638,10 @@
+          *
+          * @param subscriptionId is the current subscription used the emergency callback mode.
+          */
+-        void onCallbackModeStopped(@TelephonyManager.EmergencyCallbackModeType int type,
+-                @TelephonyManager.EmergencyCallbackModeStopReason int reason, int subscriptionId);
+-    }
+-
+-    /**
+-     * Interface for carrier roaming non-terrestrial network listener.
+-     */
+-
+-    @FlaggedApi(Flags.FLAG_TELEPHONY_SATELLITE_APIS)
+-    public interface CarrierRoamingNtnListener {
+-        /**
+-         * Callback invoked when carrier roaming non-terrestrial network mode changes.
+-         *
+-         * @param active {@code true} If the device is connected to carrier roaming
+-         *                           non-terrestrial network or was connected within the
+-         *                           {CarrierConfigManager
+-         *                           #KEY_SATELLITE_CONNECTION_HYSTERESIS_SEC_INT} duration,
+-         *                           {code false} otherwise.
+-         */
+-        void onCarrierRoamingNtnModeChanged(boolean active);
+-
+-        /**
+-         * Callback invoked when carrier roaming non-terrestrial network eligibility changes.
+-         *
+-         * @param eligible {@code true} when the device is eligible for satellite
+-         * communication if all the following conditions are met:
+-         * <ul>
+-         * <li>Any subscription on the device supports P2P satellite messaging which is defined by
+-         * {@link CarrierConfigManager#KEY_SATELLITE_ATTACH_SUPPORTED_BOOL} </li>
+-         * <li>{@link CarrierConfigManager#KEY_CARRIER_ROAMING_NTN_CONNECT_TYPE_INT} set to
+-         * {@link CarrierConfigManager#CARRIER_ROAMING_NTN_CONNECT_MANUAL} </li>
+-         * <li>The device is in {@link ServiceState#STATE_OUT_OF_SERVICE}, not connected to Wi-Fi,
+-         * and the hysteresis timer defined by {@link CarrierConfigManager
+-         * #KEY_CARRIER_SUPPORTED_SATELLITE_NOTIFICATION_HYSTERESIS_SEC_INT} is expired. </li>
+-         * </ul>
+-         */
+-        default void onCarrierRoamingNtnEligibleStateChanged(boolean eligible) {}
+-
+-        /**
+-         * Callback invoked when carrier roaming non-terrestrial network available
+-         * service changes.
+-         *
+-         * @param availableServices array of supported services.
+-         */
+-        default void onCarrierRoamingNtnAvailableServicesChanged(
+-                @NonNull @NetworkRegistrationInfo.ServiceType int[] availableServices) {}
+-
+-        /**
+-         * Callback invoked when carrier roaming non-terrestrial network signal strength changes.
+-         *
+-         * @param ntnSignalStrength non-terrestrial network signal strength.
+-         */
+-        default void onCarrierRoamingNtnSignalStrengthChanged(
+-                @NonNull NtnSignalStrength ntnSignalStrength) {}
+-    }
+-
+-    /**
+-     * Interface for CellularIdentifierDisclosedListener
+-     * @hide
+-     */
+-    @SystemApi
+-    public interface CellularIdentifierDisclosedListener {
+-        /**
+-         * Callback invoked when a device identifier (IMSI, IMEI, or unciphered SUCI)
+-         * is disclosed over the network before a security context is established
+-         * ("pre-authentication").
+-         *
+-         * @param disclosure details of the identifier disclosure
+-         * See {@link CellularIdentifierDisclosure} for more details
+-         */
+-        void onCellularIdentifierDisclosedChanged(@NonNull CellularIdentifierDisclosure disclosure);
+-    }
+-
+-    /**
+-     * Interface for SecurityAlgorithmsListener
+-     * @hide
+-     */
+-    @SystemApi
+-    public interface SecurityAlgorithmsListener {
+-        /**
+-         * Callback invoked when the most recently reported security algorithms has changed,
+-         * per a specified connection event.
+-         *
+-         * @param securityAlgorithmUpdate details of the security algorithm update
+-         * See {@link SecurityAlgorithmUpdate} for more details
+-         */
+-        void onSecurityAlgorithmsChanged(@NonNull SecurityAlgorithmUpdate securityAlgorithmUpdate);
+-    }
+-
+-
+-    /**
+-     * Interface for NetworkSecurityEventsListener
+-     * @hide
+-     */
+-    @SystemApi
+-    @FlaggedApi(Flags.FLAG_NETWORK_SECURITY_EVENT_INDICATIONS)
+-    public interface NetworkSecurityEventsListener {
+-        /**
+-         * Callback invoked when network security events are received.
+-         *
+-         * @param events details of the network security events
+-         * See {@link NetworkSecurityEvent} for more details
+-         */
+-        void onNetworkSecurityEvents(@NonNull Set<NetworkSecurityEvent>  events);
+-    }
++        void onCallbackModeStopped(int type,
++                int reason, int subscriptionId);
++    }
++
+ 
+     /**
+      * Interface for the emergency mode listener.
+@@ -1995,7 +1652,7 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_DOMAIN_SELECTION_EMERGENCY_MODE_NOTIFICATION)
++
+     public interface DomainSelectionEmergencyModeListener {
+         /**
+          * Callback invoked when the device enters the emergency mode.
+@@ -2023,7 +1680,7 @@
+          */
+         @RequiresPermission(Manifest.permission.READ_BASIC_PHONE_STATE)
+         void onDomainSelectionEmergencyModeEntered(
+-                @TelephonyManager.DomainSelectionEmergencyType int type,
++                int type,
+                 int slotIndex, int subscriptionId);
+ 
+         /**
+@@ -2051,7 +1708,7 @@
+          */
+         @RequiresPermission(Manifest.permission.READ_BASIC_PHONE_STATE)
+         void onDomainSelectionEmergencyModeExited(
+-                @TelephonyManager.DomainSelectionEmergencyType int type,
++                int type,
+                 int slotIndex, int subscriptionId);
+     }
+ 
+@@ -2060,7 +1717,7 @@
+      *
+      * @hide
+      */
+-    @FlaggedApi(Flags.FLAG_SATELLITE_UPSELL_26Q4)
++
+     public interface SatellitePurchaseModeListener {
+         /**
+          * Callback invoked when satellite purchase mode changed.
+@@ -2072,537 +1729,7 @@
+          *                          Mode active or inactive. Inactive by default.
+          */
+         void onSatellitePurchaseModeChanged(int subId, boolean isEnabled,
+-                @TelephonyManager.SatellitePurchaseModeState int purchaseModeState);
+-    }
+-
+-    /**
+-     * The callback methods need to be called on the handler thread where
+-     * this object was created.  If the binder did that for us it'd be nice.
+-     * <p>
+-     * Using a static class and weak reference here to avoid memory leak caused by the
+-     * IPhoneState.Stub callback retaining references to the outside TelephonyCallback:
+-     * even caller has been destroyed and "un-registered" the TelephonyCallback, it is still not
+-     * eligible for GC given the references coming from:
+-     * Native Stack --> TelephonyCallback --> Context (Activity).
+-     * memory of caller's context will be collected after GC from service side get triggered
+-     */
+-    private static class IPhoneStateListenerStub extends IPhoneStateListener.Stub {
+-        private WeakReference<TelephonyCallback> mTelephonyCallbackWeakRef;
+-        private Executor mExecutor;
+-
+-        IPhoneStateListenerStub(TelephonyCallback telephonyCallback, Executor executor) {
+-            mTelephonyCallbackWeakRef = new WeakReference<TelephonyCallback>(telephonyCallback);
+-            mExecutor = executor;
+-        }
+-
+-        public void onServiceStateChanged(ServiceState serviceState) {
+-            ServiceStateListener listener = (ServiceStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onServiceStateChanged(serviceState)));
+-        }
+-
+-        public void onSignalStrengthChanged(int asu) {
+-            // default implementation empty
+-        }
+-
+-        public void onMessageWaitingIndicatorChanged(boolean mwi) {
+-            MessageWaitingIndicatorListener listener =
+-                    (MessageWaitingIndicatorListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onMessageWaitingIndicatorChanged(mwi)));
+-        }
+-
+-        public void onCallForwardingIndicatorChanged(boolean cfi) {
+-            CallForwardingIndicatorListener listener =
+-                    (CallForwardingIndicatorListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCallForwardingIndicatorChanged(cfi)));
+-        }
+-
+-        public void onCellLocationChanged(CellIdentity cellIdentity) {
+-            // There is no system/public API to create an CellIdentity in system server,
+-            // so the server pass a null to indicate an empty initial location.
+-            CellLocation location =
+-                    cellIdentity == null ? CellLocation.getEmpty() : cellIdentity.asCellLocation();
+-            CellLocationListener listener = (CellLocationListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCellLocationChanged(location)));
+-        }
+-
+-        public void onLegacyCallStateChanged(int state, String incomingNumber) {
+-            // Not used for TelephonyCallback; part of the AIDL which is used by both the legacy
+-            // PhoneStateListener and TelephonyCallback.
+-        }
+-
+-        public void onCallStateChanged(int state) {
+-            CallStateListener listener = (CallStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCallStateChanged(state)));
+-        }
+-
+-        public void onDataConnectionStateChanged(int state, int networkType) {
+-            DataConnectionStateListener listener =
+-                    (DataConnectionStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            if (state == TelephonyManager.DATA_DISCONNECTING
+-                    && VMRuntime.getRuntime().getTargetSdkVersion() < Build.VERSION_CODES.R) {
+-                Binder.withCleanCallingIdentity(
+-                        () -> mExecutor.execute(() ->
+-                                listener.onDataConnectionStateChanged(
+-                                        TelephonyManager.DATA_CONNECTED, networkType)));
+-            } else {
+-                Binder.withCleanCallingIdentity(
+-                        () -> mExecutor.execute(() ->
+-                                listener.onDataConnectionStateChanged(state, networkType)));
+-            }
+-        }
+-
+-        public void onDataActivity(int direction) {
+-            DataActivityListener listener = (DataActivityListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onDataActivity(direction)));
+-        }
+-
+-        public void onSignalStrengthsChanged(SignalStrength signalStrength) {
+-            SignalStrengthsListener listener =
+-                    (SignalStrengthsListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onSignalStrengthsChanged(
+-                            signalStrength)));
+-        }
+-
+-        public void onCellInfoChanged(List<CellInfo> cellInfo) {
+-            CellInfoListener listener = (CellInfoListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCellInfoChanged(cellInfo)));
+-        }
+-
+-        public void onPreciseCallStateChanged(PreciseCallState callState) {
+-            PreciseCallStateListener listener =
+-                    (PreciseCallStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onPreciseCallStateChanged(callState)));
+-        }
+-
+-        public void onCallDisconnectCauseChanged(int disconnectCause, int preciseDisconnectCause) {
+-            CallDisconnectCauseListener listener =
+-                    (CallDisconnectCauseListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCallDisconnectCauseChanged(
+-                            disconnectCause, preciseDisconnectCause)));
+-        }
+-
+-        public void onPreciseDataConnectionStateChanged(
+-                PreciseDataConnectionState dataConnectionState) {
+-            PreciseDataConnectionStateListener listener =
+-                    (PreciseDataConnectionStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onPreciseDataConnectionStateChanged(
+-                                    dataConnectionState)));
+-        }
+-
+-        public void onDataConnectionRealTimeInfoChanged(DataConnectionRealTimeInfo dcRtInfo) {
+-            // default implementation empty
+-        }
+-
+-        public void onSrvccStateChanged(int state) {
+-            SrvccStateListener listener = (SrvccStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onSrvccStateChanged(state)));
+-        }
+-
+-        public void onVoiceActivationStateChanged(int activationState) {
+-            VoiceActivationStateListener listener =
+-                    (VoiceActivationStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onVoiceActivationStateChanged(activationState)));
+-        }
+-
+-        public void onDataActivationStateChanged(int activationState) {
+-            DataActivationStateListener listener =
+-                    (DataActivationStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onDataActivationStateChanged(activationState)));
+-        }
+-
+-        public void onUserMobileDataStateChanged(boolean enabled) {
+-            UserMobileDataStateListener listener =
+-                    (UserMobileDataStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onUserMobileDataStateChanged(enabled)));
+-        }
+-
+-        public void onDisplayInfoChanged(TelephonyDisplayInfo telephonyDisplayInfo) {
+-            DisplayInfoListener listener = (DisplayInfoListener)mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onDisplayInfoChanged(telephonyDisplayInfo)));
+-        }
+-
+-        public void onOemHookRawEvent(byte[] rawData) {
+-            // default implementation empty
+-        }
+-
+-        public void onCarrierNetworkChange(boolean active) {
+-            CarrierNetworkListener listener =
+-                    (CarrierNetworkListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCarrierNetworkChange(active)));
+-        }
+-
+-        public void onEmergencyNumberListChanged(Map emergencyNumberList) {
+-            EmergencyNumberListListener listener =
+-                    (EmergencyNumberListListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onEmergencyNumberListChanged(emergencyNumberList)));
+-        }
+-
+-        public void onOutgoingEmergencyCall(@NonNull EmergencyNumber placedEmergencyNumber,
+-            int subscriptionId) {
+-            OutgoingEmergencyCallListener listener =
+-                    (OutgoingEmergencyCallListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onOutgoingEmergencyCall(placedEmergencyNumber,
+-                                    subscriptionId)));
+-        }
+-
+-        public void onOutgoingEmergencySms(@NonNull EmergencyNumber sentEmergencyNumber,
+-            int subscriptionId) {
+-            OutgoingEmergencySmsListener listener =
+-                    (OutgoingEmergencySmsListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onOutgoingEmergencySms(sentEmergencyNumber,
+-                                    subscriptionId)));
+-        }
+-
+-        public void onPhoneCapabilityChanged(PhoneCapability capability) {
+-            PhoneCapabilityListener listener =
+-                    (PhoneCapabilityListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onPhoneCapabilityChanged(capability)));
+-        }
+-
+-        public void onRadioPowerStateChanged(@Annotation.RadioPowerState int state) {
+-            RadioPowerStateListener listener =
+-                    (RadioPowerStateListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onRadioPowerStateChanged(state)));
+-        }
+-
+-        public void onCallStatesChanged(List<CallState> callStateList) {
+-            CallAttributesListener listener =
+-                    (CallAttributesListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCallStatesChanged(callStateList)));
+-        }
+-
+-        public void onActiveDataSubIdChanged(int subId) {
+-            ActiveDataSubscriptionIdListener listener =
+-                    (ActiveDataSubscriptionIdListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onActiveDataSubscriptionIdChanged(
+-                            subId)));
+-        }
+-
+-        public void onImsCallDisconnectCauseChanged(ImsReasonInfo disconnectCause) {
+-            ImsCallDisconnectCauseListener listener =
+-                    (ImsCallDisconnectCauseListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onImsCallDisconnectCauseChanged(disconnectCause)));
+-        }
+-
+-        public void onRegistrationFailed(@NonNull CellIdentity cellIdentity,
+-            @NonNull String chosenPlmn, int domain, int causeCode, int additionalCauseCode) {
+-            RegistrationFailedListener listener =
+-                    (RegistrationFailedListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onRegistrationFailed(
+-                            cellIdentity, chosenPlmn, domain, causeCode, additionalCauseCode)));
+-            // default implementation empty
+-        }
+-
+-        public void onBarringInfoChanged(BarringInfo barringInfo) {
+-            BarringInfoListener listener = (BarringInfoListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onBarringInfoChanged(barringInfo)));
+-        }
+-
+-        public void onPhysicalChannelConfigChanged(List<PhysicalChannelConfig> configs) {
+-            PhysicalChannelConfigListener listener =
+-                    (PhysicalChannelConfigListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onPhysicalChannelConfigChanged(
+-                            configs)));
+-        }
+-
+-        public void onDataEnabledChanged(boolean enabled,
+-            @TelephonyManager.DataEnabledReason int reason) {
+-            DataEnabledListener listener =
+-                    (DataEnabledListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onDataEnabledChanged(
+-                            enabled, reason)));
+-        }
+-
+-        public void onAllowedNetworkTypesChanged(int reason, long allowedNetworkType) {
+-            AllowedNetworkTypesListener listener =
+-                    (AllowedNetworkTypesListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onAllowedNetworkTypesChanged(reason,
+-                                    allowedNetworkType)));
+-        }
+-
+-        public void onSimultaneousCallingStateChanged(int[] subIds) {
+-            SimultaneousCellularCallingSupportListener listener =
+-                    (SimultaneousCellularCallingSupportListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(
+-                            () -> listener.onSimultaneousCellularCallingSubscriptionsChanged(
+-                                    Arrays.stream(subIds).boxed().collect(Collectors.toSet()))));
+-        }
+-
+-        public void onLinkCapacityEstimateChanged(
+-                List<LinkCapacityEstimate> linkCapacityEstimateList) {
+-            LinkCapacityEstimateChangedListener listener =
+-                    (LinkCapacityEstimateChangedListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onLinkCapacityEstimateChanged(
+-                            linkCapacityEstimateList)));
+-        }
+-
+-        public void onMediaQualityStatusChanged(
+-                MediaQualityStatus mediaQualityStatus) {
+-            MediaQualityStatusChangedListener listener =
+-                    (MediaQualityStatusChangedListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onMediaQualityStatusChanged(
+-                            mediaQualityStatus)));
+-        }
+-
+-        @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+-        public void onCallbackModeStarted(@TelephonyManager.EmergencyCallbackModeType int type,
+-                long durationMillis, int subscriptionId) {
+-            EmergencyCallbackModeListener listener =
+-                    (EmergencyCallbackModeListener) mTelephonyCallbackWeakRef.get();
+-            Log.d(LOG_TAG, "onCallBackModeStarted:type=" + type + ", listener=" + listener);
+-            if (listener == null) return;
+-
+-            final Duration timerDuration = Duration.ofMillis(durationMillis);
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCallbackModeStarted(type,
+-                            timerDuration, subscriptionId)));
+-        }
+-
+-        @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+-        public void onCallbackModeRestarted(@TelephonyManager.EmergencyCallbackModeType int type,
+-                long durationMillis, int subscriptionId) {
+-            EmergencyCallbackModeListener listener =
+-                    (EmergencyCallbackModeListener) mTelephonyCallbackWeakRef.get();
+-            Log.d(LOG_TAG, "onCallbackModeRestarted:type=" + type + ", listener=" + listener);
+-            if (listener == null) return;
+-
+-            final Duration timerDuration = Duration.ofMillis(durationMillis);
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCallbackModeRestarted(type,
+-                            timerDuration, subscriptionId)));
+-        }
+-
+-        @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
+-        public void onCallbackModeStopped(@TelephonyManager.EmergencyCallbackModeType int type,
+-                @TelephonyManager.EmergencyCallbackModeStopReason int reason, int subscriptionId) {
+-            EmergencyCallbackModeListener listener =
+-                    (EmergencyCallbackModeListener) mTelephonyCallbackWeakRef.get();
+-            Log.d(LOG_TAG, "onCallBackModeStopped:type=" + type
+-                    + ", reason=" + reason + ", listener=" + listener);
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCallbackModeStopped(type, reason,
+-                            subscriptionId)));
+-        }
+-
+-        public void onCarrierRoamingNtnModeChanged(boolean active) {
+-            CarrierRoamingNtnListener listener =
+-                    (CarrierRoamingNtnListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(
+-                    () -> mExecutor.execute(() -> listener.onCarrierRoamingNtnModeChanged(active)));
+-        }
+-
+-        public void onCarrierRoamingNtnEligibleStateChanged(boolean eligible) {
+-            CarrierRoamingNtnListener listener =
+-                    (CarrierRoamingNtnListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(() -> mExecutor.execute(
+-                    () -> listener.onCarrierRoamingNtnEligibleStateChanged(eligible)));
+-        }
+-
+-        public void onCarrierRoamingNtnAvailableServicesChanged(
+-                @NetworkRegistrationInfo.ServiceType int[] availableServices) {
+-            CarrierRoamingNtnListener listener =
+-                    (CarrierRoamingNtnListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(() -> mExecutor.execute(
+-                    () -> listener.onCarrierRoamingNtnAvailableServicesChanged(availableServices)));
+-        }
+-
+-        public void onCarrierRoamingNtnSignalStrengthChanged(
+-                @NonNull NtnSignalStrength ntnSignalStrength) {
+-            CarrierRoamingNtnListener listener =
+-                    (CarrierRoamingNtnListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(() -> mExecutor.execute(
+-                    () -> listener.onCarrierRoamingNtnSignalStrengthChanged(ntnSignalStrength)));
+-
+-        }
+-
+-        public void onSecurityAlgorithmsChanged(SecurityAlgorithmUpdate update) {
+-            SecurityAlgorithmsListener listener =
+-                    (SecurityAlgorithmsListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(() -> mExecutor.execute(
+-                    () -> listener.onSecurityAlgorithmsChanged(update)));
+-        }
+-
+-        public void onCellularIdentifierDisclosedChanged(CellularIdentifierDisclosure disclosure) {
+-            CellularIdentifierDisclosedListener listener =
+-                    (CellularIdentifierDisclosedListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(() -> mExecutor.execute(
+-                    () -> listener.onCellularIdentifierDisclosedChanged(disclosure)));
+-        }
+-
+-        public void onNetworkSecurityEvents(List<NetworkSecurityEvent> events) {
+-            if (!Flags.networkSecurityEventIndications()) return;
+-            NetworkSecurityEventsListener listener =
+-                    (NetworkSecurityEventsListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(() -> mExecutor.execute(
+-                    () -> listener.onNetworkSecurityEvents(new ArraySet<>(events))));
+-        }
+-
+-        public void onDomainSelectionEmergencyModeEntered(
+-                @TelephonyManager.DomainSelectionEmergencyType int type,
+-                int slotIndex, int subscriptionId) {
+-            if (!Flags.domainSelectionEmergencyModeNotification()) return;
+-
+-            DomainSelectionEmergencyModeListener listener =
+-                    (DomainSelectionEmergencyModeListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(() -> mExecutor.execute(
+-                    () -> listener.onDomainSelectionEmergencyModeEntered(
+-                            type, slotIndex, subscriptionId)));
+-        }
+-
+-        public void onDomainSelectionEmergencyModeExited(
+-                @TelephonyManager.DomainSelectionEmergencyType int type,
+-                int slotIndex, int subscriptionId) {
+-            if (!Flags.domainSelectionEmergencyModeNotification()) return;
+-
+-            DomainSelectionEmergencyModeListener listener =
+-                    (DomainSelectionEmergencyModeListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(() -> mExecutor.execute(
+-                    () -> listener.onDomainSelectionEmergencyModeExited(
+-                            type, slotIndex, subscriptionId)));
+-        }
+-
+-        public void onSatellitePurchaseModeChanged(int subId, boolean isEnabled,
+-                @TelephonyManager.SatellitePurchaseModeState int purchaseModeState) {
+-            if (!Flags.satelliteUpsell26q4()) return;
+-
+-            SatellitePurchaseModeListener listener =
+-                    (SatellitePurchaseModeListener) mTelephonyCallbackWeakRef.get();
+-            if (listener == null) return;
+-
+-            Binder.withCleanCallingIdentity(() -> mExecutor.execute(
+-                    () -> listener.onSatellitePurchaseModeChanged(
+-                            subId, isEnabled, purchaseModeState)));
+-        }
+-    }
++                int purchaseModeState);
++    }
++
+ }
+--- a/frameworks/base/telephony/java/android/telephony/TelephonyManager.java
++++ b/frameworks/base/telephony/java/android/telephony/TelephonyManager.java
+@@ -53,6 +53,17 @@
+     /** @hide */
+     public TelephonyManager(Context context) {}
+ 
++    public void registerTelephonyCallback(java.util.concurrent.Executor executor,
++            TelephonyCallback callback) {
++        java.util.Objects.requireNonNull(executor, "TelephonyCallback Executor must be non-null");
++        java.util.Objects.requireNonNull(callback, "TelephonyCallback must be non-null");
++        // This guest has no modem or telephony registry to deliver radio events.
++    }
++
++    public void unregisterTelephonyCallback(TelephonyCallback callback) {
++        java.util.Objects.requireNonNull(callback, "TelephonyCallback must be non-null");
++    }
++
+     @Deprecated
+     public void listen(PhoneStateListener listener, int events) {
+         // There is no telephony registry or modem to register with in this process.

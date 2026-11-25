@@ -2,7 +2,9 @@ package com.wasmandroid.hybrid;
 
 import android.app.Activity;
 import android.graphics.Bitmap;
+import android.graphics.SurfaceTexture;
 import android.os.Bundle;
+import android.view.Surface;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
@@ -83,6 +85,26 @@ public final class HybridActivity extends Activity {
         check(HybridBridge.wide(1, 2, 3, 4, 5, 6, 7, 8, 9, 0x700000002L,
                 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 0.25f) == 484.75, "JNI incoming stack arguments");
         check(HybridBridge.verifyAbi(), "JNI callback ABI");
+        check(HybridBridge.pollTimer(), "NDK looper wakes for a timer descriptor");
+        check(HybridBridge.protectImageData(), "mprotect changes the permissions of ELF data pages");
+        Bitmap bitmap = Bitmap.createBitmap(2, 1, Bitmap.Config.ARGB_8888);
+        bitmap.setPixel(1, 0, 0xff112233);
+        check(HybridBridge.editBitmap(bitmap) && bitmap.getPixel(1, 0) == 0xff665544,
+                "NDK bitmap pixel writeback");
+        check(HybridBridge.readAsset(getAssets()), "NDK reads an APK asset");
+        SurfaceTexture texture = new SurfaceTexture(0);
+        texture.setDefaultBufferSize(3, 2);
+        Surface surface = new Surface(texture);
+        try {
+            check(HybridBridge.postSurface(surface), "NDK window buffer post");
+            Bitmap posted = (Bitmap) Surface.class.getMethod("getEmbeddedBitmap").invoke(surface);
+            check(posted.getPixel(1, 0) == 0xff556677, "NDK window writes the presented bitmap");
+        } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+        } finally {
+            surface.release();
+            texture.release();
+        }
         check(HybridBridge.decorated_name(new int[]{4, 7}) == 11, "Array overload");
         check(HybridBridge.decorated_name("J\u0000\u00e9") == 3, "String overload");
         check(HybridBridge.métier() == 17, "Unicode JNI name");

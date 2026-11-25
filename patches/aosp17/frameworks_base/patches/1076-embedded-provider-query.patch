@@ -1,0 +1,57 @@
+--- a/frameworks/base/core/java/android/content/ContentResolver.java
++++ b/frameworks/base/core/java/android/content/ContentResolver.java
+@@ -997,13 +997,22 @@
+     public final @Nullable Cursor query(final @RequiresPermission.Read @NonNull Uri uri,
+             @Nullable String[] projection, @Nullable Bundle queryArgs,
+             @Nullable CancellationSignal cancellationSignal) {
+-        if (mWrapped == null) {
+-            throw new UnsupportedOperationException("No content provider for this resolver");
++        Objects.requireNonNull(uri, "uri");
++        ContentInterface provider = mWrapped;
++        Uri providerUri = uri;
++        if (provider == null) {
++            if (mContext == null || !SCHEME_CONTENT.equals(uri.getScheme())) return null;
++            final int userId = mContext.getUserId();
++            if (ContentProvider.getUserIdFromUri(uri, userId) != userId) return null;
++            provider = mContext.getPackageManager().acquireEmbeddedProvider(
++                    ContentProvider.getAuthorityWithoutUserId(uri.getAuthority()));
++            if (provider == null) return null;
++            providerUri = ContentProvider.getUriWithoutUserId(uri);
+         }
+         try {
+-            return mWrapped.query(uri, projection, queryArgs, cancellationSignal);
++            return provider.query(providerUri, projection, queryArgs, cancellationSignal);
+         } catch (RemoteException e) {
+-            throw new RuntimeException(e);
++            return null;
+         }
+     }
+ 
+--- a/frameworks/base/core/java/android/content/ContentProvider.java
++++ b/frameworks/base/core/java/android/content/ContentProvider.java
+@@ -390,7 +390,7 @@
+     }
+ 
+     /** @hide */
+-    protected final boolean matchesOurAuthorities(String authority) {
++    public final boolean matchesOurAuthorities(String authority) {
+         if (mAuthority != null) {
+             return mAuthority.equals(authority);
+         }
+--- a/frameworks/base/core/java/android/content/pm/PackageManager.java
++++ b/frameworks/base/core/java/android/content/pm/PackageManager.java
+@@ -12075,6 +12075,14 @@
+     private final java.util.ArrayList<ContentProvider> installedProviders = new java.util.ArrayList<>();
+ 
+     /** @hide */
++    public ContentProvider acquireEmbeddedProvider(String authority) {
++        for (ContentProvider provider : installedProviders) {
++            if (provider.matchesOurAuthorities(authority)) return provider;
++        }
++        return null;
++    }
++
++    /** @hide */
+     public void installEmbeddedProviders(Context application) {
+         final ApplicationInfo info = application.getApplicationInfo();
+         for (android.content.res.ApkAssets apk : application.getAssets().getApkAssets()) {

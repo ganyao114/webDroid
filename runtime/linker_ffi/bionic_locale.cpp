@@ -150,9 +150,15 @@ void MbCurMax(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = Utf8(*ctx.dbt) ? 4 : 1;
 }
 
-template <int (*Function)(int)> void Character(wa_host_call_ctx_t& ctx) {
+template <int (*Function)(int), bool Explicit = false> void Character(wa_host_call_ctx_t& ctx) {
     const auto c = static_cast<int32_t>(ctx.args[0]);
-    ctx.ret0 = c >= -1 && c <= UCHAR_MAX ? Function(c) : 0;
+    if (c < -1 || c > UCHAR_MAX) return;
+    if constexpr (Explicit) {
+        HostLocale scope(Utf8(*ctx.dbt, ctx.args[1]));
+        ctx.ret0 = Function(c);
+    } else {
+        ctx.ret0 = Function(c);
+    }
 }
 
 template <auto Function, bool Explicit = false> void WideCharacter(wa_host_call_ctx_t& ctx) {
@@ -509,6 +515,22 @@ void Strftime(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = count;
 }
 
+void Strptime(wa_host_call_ctx_t& ctx) {
+    const GuestMemory mem(ctx);
+    const auto input = mem.String(ctx.args[0]);
+    const auto format = mem.String(ctx.args[1]);
+    const auto address = ctx.args[2];
+    auto tm = ReadGuestTm(mem, address);
+    const auto zone_address = mem.ReadWord(address + AlignUp(9 * sizeof(int32_t), mem.width()) + mem.width());
+    auto zone = zone_address ? mem.String(zone_address, 64, true) : std::string{};
+    tm.tm_zone = zone.empty() ? nullptr : zone.data();
+    HostLocale locale(false);
+    const auto* end = ::strptime(input.c_str(), format.c_str(), &tm);
+    if (!end) return;
+    WriteGuestTm(*ctx.dbt, address, tm);
+    ctx.ret0 = ctx.args[0] + (end - input.data());
+}
+
 } // namespace
 
 void RegisterLocale(wa_dbt& dbt) {
@@ -533,7 +555,8 @@ void RegisterLocale(wa_dbt& dbt) {
     mem.WriteWord(ctype, ctype + mem.width());
     CheckGuest(RegisterData(dbt, "libc.so", "_ctype_", ctype, true));
 
-#define CHAR(name) {#name, Dispatch<Character<::name>>}
+#define CHAR(name) \
+    {#name, Dispatch<Character<::name>>}, {#name "_l", Dispatch<Character<::name, true>>}
 #define WIDE(name)                                                                                 \
     {#name, Dispatch<WideCharacter<::name>>}, {#name "_l", Dispatch<WideCharacter<::name, true>>}
 #define NUM(name, format) {#name, Dispatch<Number<false, Numeric::format>>}
@@ -631,6 +654,7 @@ void RegisterLocale(wa_dbt& dbt) {
         {"atof", Dispatch<Number<false, Numeric::Double, true>>},
         {"strftime", Dispatch<Strftime>},
         {"strftime_l", Dispatch<Strftime>},
+        {"strptime", Dispatch<Strptime>},
     };
 #undef WNUM
 #undef NUM

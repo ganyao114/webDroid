@@ -556,7 +556,7 @@ Value Runtime::Interpret(Method& method, Object* receiver, std::span<const Value
     ActiveTraceFrame* caller;
     ~RestoreTrace() { active = caller; }
   } restore_trace{active_trace, active_trace};
-  if (options.capture_exception_stack || loop_dispatch || worker_dispatch) active_trace = &trace;
+  active_trace = &trace;
   const auto member = [&]() -> MemberCache* {
     if (!indices) return nullptr;
     if (indices[pc] == UINT32_MAX) Fail("Ljava/lang/VerifyError;", "Invalid member instruction");

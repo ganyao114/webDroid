@@ -9,6 +9,10 @@
 namespace wa::softmmu {
 
 inline constexpr uint64_t kAddressLimit = uint64_t{1} << 32;
+inline constexpr uint64_t kArm64AddressLimit = uint64_t{1} << 48;
+inline constexpr uint64_t AddressLimit(wa_guest_arch_t arch) {
+    return arch == WA_ARCH_ARM64 ? kArm64AddressLimit : kAddressLimit;
+}
 using PageBytes = std::array<uint8_t, WA_PAGE_SIZE>;
 
 struct Access {
@@ -20,6 +24,17 @@ struct Access {
 Access Read(wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> bytes,
             uint32_t permission = WA_PROT_READ) noexcept;
 Access Write(wa_softmmu_t* mmu, uint64_t address, std::span<const uint8_t> bytes) noexcept;
+bool PageResidency(const wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> pages);
+int32_t Protect(wa_softmmu_t* mmu, uint64_t address, size_t bytes, uint32_t prot);
+
+// ARM64 anonymous mappings above the 32-bit address space reserve intervals.
+// Only written pages allocate backing storage.
+enum class Placement { Hint, Fixed, FixedNoReplace };
+int32_t MapSparse(wa_softmmu_t* mmu, uint64_t& address, uint64_t bytes, uint32_t prot,
+                  Placement placement);
+int32_t ProtectSparse(wa_softmmu_t* mmu, uint64_t address, uint64_t bytes, uint32_t prot);
+int32_t UnmapSparse(wa_softmmu_t* mmu, uint64_t address, uint64_t bytes);
+int32_t AdviseSparse(wa_softmmu_t* mmu, uint64_t address, uint64_t bytes, bool discard);
 
 struct PageWindow {
     std::shared_ptr<const void> backing;

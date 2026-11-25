@@ -1,0 +1,82 @@
+--- a/libcore/ojluni/src/main/java/javax/net/ssl/TrustManagerFactory.java
++++ b/libcore/ojluni/src/main/java/javax/net/ssl/TrustManagerFactory.java
+@@ -25,10 +25,8 @@
+ 
+ package javax.net.ssl;
+ 
+-import java.security.Security;
+ import java.security.*;
+-
+-import sun.security.jca.GetInstance;
++import java.util.Objects;
+ 
+ /**
+  * This class acts as a factory for trust managers based on a
+@@ -78,18 +76,8 @@
+      * implementation-specific default if no such property exists.
+      */
+     public final static String getDefaultAlgorithm() {
+-        String type;
+-        type = AccessController.doPrivileged(new PrivilegedAction<String>() {
+-            @Override
+-            public String run() {
+-                return Security.getProperty(
+-                    "ssl.TrustManagerFactory.algorithm");
+-            }
+-        });
+-        if (type == null) {
+-            type = "SunX509";
+-        }
+-        return type;
++        // Android's default in java.security.
++        return "PKIX";
+     }
+ 
+     /**
+@@ -151,11 +139,11 @@
+      */
+     public static final TrustManagerFactory getInstance(String algorithm)
+             throws NoSuchAlgorithmException {
+-        GetInstance.Instance instance = GetInstance.getInstance
+-                ("TrustManagerFactory", TrustManagerFactorySpi.class,
+-                algorithm);
+-        return new TrustManagerFactory((TrustManagerFactorySpi)instance.impl,
+-                instance.provider, algorithm);
++        Objects.requireNonNull(algorithm);
++        if (!getDefaultAlgorithm().equalsIgnoreCase(algorithm)) {
++            throw new NoSuchAlgorithmException(algorithm);
++        }
++        throw new ProviderException("The embedded runtime has no Java TLS trust provider");
+     }
+ 
+     /**
+@@ -195,11 +183,9 @@
+     public static final TrustManagerFactory getInstance(String algorithm,
+             String provider) throws NoSuchAlgorithmException,
+             NoSuchProviderException {
+-        GetInstance.Instance instance = GetInstance.getInstance
+-                ("TrustManagerFactory", TrustManagerFactorySpi.class,
+-                algorithm, provider);
+-        return new TrustManagerFactory((TrustManagerFactorySpi)instance.impl,
+-                instance.provider, algorithm);
++        Objects.requireNonNull(algorithm);
++        if (provider == null || provider.isEmpty()) throw new IllegalArgumentException("Missing provider");
++        throw new NoSuchProviderException(provider);
+     }
+ 
+     /**
+@@ -232,11 +218,9 @@
+      */
+     public static final TrustManagerFactory getInstance(String algorithm,
+             Provider provider) throws NoSuchAlgorithmException {
+-        GetInstance.Instance instance = GetInstance.getInstance
+-                ("TrustManagerFactory", TrustManagerFactorySpi.class,
+-                algorithm, provider);
+-        return new TrustManagerFactory((TrustManagerFactorySpi)instance.impl,
+-                instance.provider, algorithm);
++        Objects.requireNonNull(algorithm);
++        if (provider == null) throw new IllegalArgumentException("Missing provider");
++        throw new ProviderException("External Java TLS providers are unavailable in the embedded runtime");
+     }
+ 
+     /**

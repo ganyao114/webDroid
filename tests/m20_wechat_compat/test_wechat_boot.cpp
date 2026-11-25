@@ -1,9 +1,10 @@
 #include "foreground_test.h"
 #include "foreground_test_access.h"
 #include "hybrid_native_runtime.h"
-#include "jni_bridge.h"
+#include "runtime_internal.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
@@ -11,6 +12,7 @@
 #include <memory>
 #include <set>
 #include <sstream>
+#include <utility>
 
 namespace {
 
@@ -19,16 +21,25 @@ constexpr auto kAppLike = "Lcom/tencent/mm/app/MMApplicationLike;";
 constexpr auto kFence = "(Landroid/app/Application;ILjava/lang/String;ZJJLandroid/content/Intent;)Landroid/os/Handler;";
 constexpr auto kAppLikeConstructor = "(Landroid/app/Application;IZJJLandroid/content/Intent;)V";
 constexpr auto kLauncher = "Lcom/tencent/mm/ui/LauncherUI;";
+constexpr auto kWelcome = "Lcom/tencent/mm/plugin/account/ui/WelcomeActivity;";
+constexpr auto kMatrix = "Lcom/tencent/matrix/hook/jnihook/JniHookJni;";
+constexpr auto kPackageManager = "Landroid/content/pm/PackageManager;";
+constexpr auto kFirebaseProvider = "Lcom/google/firebase/provider/FirebaseInitProvider;";
+constexpr auto kRemoteProviders = std::array{
+    "Landroidx/core/content/FileProvider;",
+    "Lcom/tencent/xweb/XWebCoreContentProvider;",
+    "Lcom/tencent/shadow/core/runtime/container/PluginContainerContentProvider;",
+};
 constexpr std::string_view kMatrixLibrary = "libmatrix-jnihook.so";
-constexpr std::string_view kMatrixOnLoadError =
-    "JNI_OnLoad: Ljava/lang/NoClassDefFoundError;: Ldalvik/system/VMRuntime;";
-constexpr std::string_view kMatrixBootError =
-    "Lcom/tencent/matrix/hook/jnihook/JniHookJni;->jniPlaceHolder()V";
+constexpr auto kV8Library = "libmmj2v8.so";
+constexpr auto kPayMarsContext = "Lcom/tencent/paymars/app/Context;";
+constexpr auto kWallet = "Lcom/tenpay/ndk/FitScUtil;";
+constexpr auto kWalletInit = "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z";
 constexpr auto kPool = "Ljava/util/concurrent/ForkJoinPool;";
 constexpr auto kPoolConstructor =
     "(ILjava/util/concurrent/ForkJoinPool$ForkJoinWorkerThreadFactory;Ljava/lang/Thread$UncaughtExceptionHandler;"
     "ZIIILjava/util/function/Predicate;JLjava/util/concurrent/TimeUnit;)V";
-constexpr int kWidth = 480, kHeight = 800;
+constexpr int kWelcomeFrames = 3;
 
 using hybrid_test::Check;
 using hybrid_test::Require;
@@ -83,10 +94,19 @@ void PrintStartupMethods(Vm& vm) {
     method(kAppLike, "<init>", kAppLikeConstructor);
     method(kAppLike, "onBaseContextAttached", "(Landroid/content/Context;)V");
     method(kAppLike, "onCreate", "()V");
+    method(kTinker, "onCreate", "()V");
     method(kPool, "<init>", kPoolConstructor);
+    method(kMatrix, "jniPlaceHolder", "()V");
+    method(kMatrix, "initJniHookByPlaceHolderMethod", "(Ljava/lang/reflect/Method;)I");
+    method(kPackageManager, "installEmbeddedProviders", "(Landroid/content/Context;)V");
+    method(kPayMarsContext, "OnJniCreateContext", "(Ljava/lang/String;)V");
+    method(kWallet, "init", kWalletInit);
+    method(kFirebaseProvider, "onCreate", "()Z");
     method(kLauncher, "onCreate", "(Landroid/os/Bundle;)V");
     method(kLauncher, "onStart", "()V");
     method(kLauncher, "onResume", "()V");
+    method(kWelcome, "onCreate", "(Landroid/os/Bundle;)V");
+    method(kWelcome, "onResume", "()V");
 }
 
 void ProbePackageMetadata(Vm& vm) {
@@ -160,14 +180,74 @@ void ProbePackageMetadata(Vm& vm) {
     std::cout << "{\"event\":\"apk_signing\",\"scheme\":2,\"sha256\":" << JsonString(expected) << "}\n";
 }
 
-bool PrintFrame() {
+void ProbeInstalledProviders(Vm& vm) {
+    ScopedHandleScope roots(vm);
+    auto* application = roots.Hold(vm.CallStatic("Landroid/app/ActivityThread;", "currentApplication",
+        "()Landroid/app/Application;").ref());
+    auto* manager = roots.Hold(vm.CallVirtual(application, "getPackageManager",
+        "()Landroid/content/pm/PackageManager;").ref());
+    auto* installed = roots.Hold(vm.ReadField(manager, "installedProviders", "Ljava/util/ArrayList;").ref());
+    const int32_t count = vm.CallVirtual(installed, "size", "()I").i();
+    Require(count == 27, "WeChat must install its 27 main-process manifest providers");
+    for (int32_t index = 0; index < count; ++index) {
+        const auto* instance = vm.CallVirtual(installed, "get", "(I)Ljava/lang/Object;",
+            std::array{Value::Int(index)}).ref();
+        Require(instance && std::ranges::find(kRemoteProviders, instance->type->descriptor) == kRemoteProviders.end(),
+                "WeChat installed a provider assigned to a named process");
+    }
+    std::cout << "{\"event\":\"manifest_providers\",\"main_process_installed\":" << count << "}\n";
+}
+
+size_t CountBitmapPixels(wa_bitmap_store_t* store, const wa_canvas_bitmap_t& draw) {
+    if (!(draw.alpha > 0 && draw.dst.l < draw.dst.r && draw.dst.t < draw.dst.b)) return 0;
+    const auto release = [store](const wa_bitmap_view_t* bitmap) { wa_bitmap_release(store, bitmap); };
+    const std::unique_ptr<const wa_bitmap_view_t, decltype(release)> bitmap(
+        wa_bitmap_acquire(store, draw.bitmap_id), release);
+    Require(bitmap && bitmap->stride >= uint64_t(bitmap->width) * 4 &&
+            uint64_t(bitmap->stride) * bitmap->height == bitmap->byte_size,
+            "Invalid drawable bitmap in the SurfaceFlinger frame");
+    const auto clamp = [](float position, uint32_t limit) {
+        Require(std::isfinite(position), "Invalid drawable bitmap bounds");
+        return static_cast<uint32_t>(std::clamp(position, 0.f, static_cast<float>(limit)));
+    };
+    const auto first_x = clamp(std::floor(draw.src.l), bitmap->width);
+    const auto first_y = clamp(std::floor(draw.src.t), bitmap->height);
+    const auto end_x = clamp(std::ceil(draw.src.r), bitmap->width);
+    const auto end_y = clamp(std::ceil(draw.src.b), bitmap->height);
+    if (first_x >= end_x || first_y >= end_y) return 0;
+    const auto* pixels = wa_bitmap_pixels(bitmap.get());
+    const auto* first = pixels + size_t(first_y) * bitmap->stride + size_t(first_x) * 4;
+    size_t count = 0;
+    for (auto y = first_y; y < end_y; ++y) {
+        const auto* row = pixels + size_t(y) * bitmap->stride;
+        for (auto x = first_x; x < end_x; ++x) {
+            const auto* pixel = row + size_t(x) * 4;
+            if (pixel[3] && std::memcmp(pixel, first, 4) != 0) ++count;
+        }
+    }
+    return count;
+}
+
+struct FrameEvidence {
+    uint32_t sequence = 0;
+    size_t draws = 0;
+    size_t bitmap_pixels = 0;
+    std::set<std::string> labels;
+
+    bool ShowsWelcome() const {
+        return draws && bitmap_pixels && labels.contains("Log In") && labels.contains("Sign Up") &&
+               labels.contains("语言");
+    }
+};
+
+FrameEvidence ReadFrame() {
     auto* scene = wa_system_app_sf_ctx();
     const auto release = [scene](const wa_sf_frame_packet_t* frame) { wa_sf_frame_release(scene, frame); };
     const std::unique_ptr<const wa_sf_frame_packet_t, decltype(release)> frame(
         wa_sf_frame_acquire(scene), release);
-    Require(frame != nullptr, "Missing SurfaceFlinger frame");
-    size_t draws = 0;
-    std::set<std::string> labels;
+    if (!frame) return {};
+    FrameEvidence evidence{.sequence = frame->sequence};
+    auto* bitmaps = wa_sf_bitmaps(scene);
     const auto* layers = wa_sf_frame_layers(frame.get());
     for (uint32_t i = 0; i < frame->layer_count; ++i) {
         const auto& layer = layers[i];
@@ -182,7 +262,13 @@ bool PrintFrame() {
             std::memcpy(&record, list + offset, sizeof(record));
             Require(record.byte_size >= sizeof(record) && record.byte_size <= remaining,
                     "Invalid display list record size");
-            if (record.opcode >= WA_CANVAS_DRAW_COLOR && record.opcode <= WA_CANVAS_DRAW_TEXT) ++draws;
+            if (record.opcode >= WA_CANVAS_DRAW_COLOR && record.opcode <= WA_CANVAS_DRAW_TEXT) ++evidence.draws;
+            if (record.opcode == WA_CANVAS_DRAW_BITMAP) {
+                wa_canvas_bitmap_t draw{};
+                Require(record.byte_size >= sizeof(record) + sizeof(draw), "Truncated drawable bitmap");
+                std::memcpy(&draw, list + offset + sizeof(record), sizeof(draw));
+                evidence.bitmap_pixels += CountBitmapPixels(bitmaps, draw);
+            }
             if (record.opcode == WA_CANVAS_DRAW_TEXT) {
                 wa_canvas_text_t text{};
                 Require(record.byte_size >= sizeof(record) + sizeof(text), "Truncated draw text");
@@ -192,51 +278,24 @@ bool PrintFrame() {
                         text.utf8_len <= record.byte_size - text.utf8_offset,
                         "Invalid display list text bounds");
                 if (text.utf8_len && (text.argb >> 24))
-                    labels.emplace(reinterpret_cast<const char*>(list + offset + text.utf8_offset),
-                                   text.utf8_len);
+                    evidence.labels.emplace(reinterpret_cast<const char*>(list + offset + text.utf8_offset),
+                                            text.utf8_len);
             }
             offset += record.byte_size;
         }
     }
-    std::cout << "{\"event\":\"surface_frame\",\"sequence\":" << frame->sequence
-              << ",\"draw_commands\":" << draws << ",\"drawn_text\":[";
-    for (auto label = labels.begin(); label != labels.end(); ++label) {
-        if (label != labels.begin()) std::cout << ',';
+    return evidence;
+}
+
+void PrintFrame(const FrameEvidence& evidence, int welcome_frames) {
+    std::cout << "{\"event\":\"surface_frame\",\"sequence\":" << evidence.sequence
+              << ",\"welcome_frames\":" << welcome_frames << ",\"draw_commands\":" << evidence.draws
+              << ",\"non_blank_bitmap_pixels\":" << evidence.bitmap_pixels << ",\"drawn_text\":[";
+    for (auto label = evidence.labels.begin(); label != evidence.labels.end(); ++label) {
+        if (label != evidence.labels.begin()) std::cout << ',';
         std::cout << JsonString(*label);
     }
     std::cout << "]}\n";
-    return draws && !labels.empty();
-}
-
-std::string RasterizeDecor(Vm& vm, Object* activity) {
-    ScopedHandleScope roots(vm);
-    auto* window = roots.Hold(vm.CallVirtual(activity, "getWindow", "()Landroid/view/Window;").ref());
-    auto* decor = roots.Hold(vm.CallVirtual(window, "getDecorView", "()Landroid/view/View;").ref());
-    const auto width = vm.CallVirtual(decor, "getWidth", "()I").i();
-    const auto height = vm.CallVirtual(decor, "getHeight", "()I").i();
-    Require(width > 0 && width <= kWidth && height > 0 && height <= kHeight, "Invalid decor bitmap size");
-    constexpr auto config = "Landroid/graphics/Bitmap$Config;";
-    const std::array create{Value::Int(width), Value::Int(height),
-                            roots.Hold(vm.ReadStaticField(config, "ARGB_8888", config))};
-    auto* bitmap = roots.Hold(vm.CallStatic("Landroid/graphics/Bitmap;", "createBitmap",
-        "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;", create).ref());
-    const std::array bitmap_arg{Value::Ref(bitmap)};
-    auto* canvas = roots.Hold(vm.NewObject("Landroid/graphics/Canvas;", "(Landroid/graphics/Bitmap;)V", bitmap_arg));
-    const std::array canvas_arg{Value::Ref(canvas)};
-    vm.CallVirtual(decor, "draw", "(Landroid/graphics/Canvas;)V", canvas_arg);
-
-    auto* env = vm.JniEnv();
-    auto pixels = env->NewIntArray(width * height);
-    const std::array read{Value::Ref(wa::interp::JniBridge::Read(pixels)), Value::Int(0),
-                          Value::Int(width), Value::Int(0), Value::Int(0), Value::Int(width), Value::Int(height)};
-    vm.CallVirtual(bitmap, "getPixels", "([IIIIIII)V", read);
-    std::vector<jint> colors(width * height);
-    env->GetIntArrayRegion(pixels, 0, static_cast<jsize>(colors.size()), colors.data());
-    env->DeleteLocalRef(pixels);
-    const bool non_blank = std::ranges::any_of(colors, [&](jint color) {
-        return (static_cast<uint32_t>(color) >> 24) && color != colors.front();
-    });
-    return non_blank ? "true" : "false";
 }
 
 std::string_view Phase(const std::string& state) {
@@ -321,6 +380,7 @@ int main(int argc, char** argv) try {
     Require(argc == 5 || require_ui || probe_mmkv || probe_core,
             "Expected framework DEX, fallback DEX, framework resources, WeChat APK and optional mode");
     if (!std::filesystem::exists(argv[4])) {
+        Require(!require_ui, "The WeChat APK is required for a UI verification run");
         std::cout << "{\"event\":\"skip\",\"reason\":\"WeChat APK is absent\"}\n";
         return 0;
     }
@@ -335,13 +395,25 @@ int main(int argc, char** argv) try {
 
     auto status = foreground.Boot(argv[4]);
     std::string error = status < 0 ? hybrid_test::LastError() : "";
-    if (status == 0) {
-        for (int i = 1; i <= 12; ++i) {
-            status = wa_system_app_tick(i * 16'666'667LL);
-            if (status >= 0) continue;
-            error = hybrid_test::LastError();
-            break;
+    FrameEvidence frame;
+    int welcome_frames = 0;
+    // Allow a delayed redirect and finish once the welcome scene is stable.
+    for (int i = 0; status >= 0 && i <= 180; ++i) {
+        const auto state = hybrid_test::State();
+        if (state.contains("\"activity\":\"com.tencent.mm.plugin.account.ui.WelcomeActivity\"") &&
+            Metric(state, "frames")) {
+            auto next_frame = ReadFrame();
+            if (next_frame.sequence != frame.sequence) {
+                welcome_frames = next_frame.ShowsWelcome() ? welcome_frames + 1 : 0;
+                frame = std::move(next_frame);
+            }
+            if (welcome_frames == kWelcomeFrames) break;
+        } else {
+            welcome_frames = 0;
         }
+        if (i == 180) break;
+        status = wa_system_app_tick((i + 1) * 16'666'667LL);
+        if (status < 0) error = hybrid_test::LastError();
     }
     const auto state = hybrid_test::State();
     std::cout << "{\"event\":\"boot\",\"phase\":" << JsonString(Phase(state))
@@ -352,22 +424,41 @@ int main(int argc, char** argv) try {
         PrintNativeImages(vm);
     }), "Describe startup methods and native images");
     const bool published = Metric(state, "frames") != 0;
-    if (!published)
-        std::cout << "{\"event\":\"surface_frame\",\"draw_commands\":0,\"drawn_text\":[],\"non_blank_pixels\":null}\n";
-    const bool has_drawn_text = published && PrintFrame();
+    if (published) frame = ReadFrame();
+    PrintFrame(frame, welcome_frames);
 
     Require(state.contains("\"package\":\"com.tencent.mm\"") &&
             state.contains("\"launchActivity\":\"com.tencent.mm.ui.LauncherUI\"") &&
             Metric(state, "dexFiles") == 18 && Metric(state, "dexClasses") == 255001,
             "WeChat manifest or DEX set did not match 8.0.80");
-    Require(Metric(state, "attachBaseContextCalls") > 0, "WeChat did not enter Application.attachBaseContext");
-    Require(Metric(state, "nativeLoadReturns") >= 6 && Metric(state, "nativeHostCalls") > 0 &&
+    Require(Metric(state, "attachBaseContextCalls") == 1 && Metric(state, "attachBaseContextReturns") == 1,
+            "WeChat did not finish Application.attachBaseContext");
+    Require(Metric(state, "providersCreated") == 28 && Metric(state, "applicationCreateCalls") == 1 &&
+            Metric(state, "applicationCreateReturns") == 1,
+            "WeChat did not initialize its main-process providers and finish Application.onCreate");
+    Require(Metric(state, "nativeLoadReturns") >= 8 && Metric(state, "nativeLibraries") >= 95 &&
+            Metric(state, "nativeHostCalls") > 0 &&
             Metric(state, "nativeFileFaults") > 0 && state.contains("\"nativeAbi\":\"arm64-v8a\""),
             "WeChat did not execute its ARM64 startup libraries in process");
+    if (status >= 0 || published)
+        Check(wa::system::RunForegroundVmProbe(ProbeInstalledProviders), "Check installed manifest providers");
     Check(wa::system::RunForegroundVmProbe([](Vm& vm) {
         Require(vm.GetLinkedDeclaredMethodStats(kAppLike, "<init>", kAppLikeConstructor).returned > 0 &&
                 vm.GetLinkedDeclaredMethodStats(kTinker, "createInlineFence", kFence).returned > 0,
                 "WeChat did not finish the ApplicationLike constructor and createInlineFence");
+        Require(vm.GetLinkedDeclaredMethodStats(kAppLike, "onBaseContextAttached", "(Landroid/content/Context;)V")
+                    .returned == 1, "WeChat did not finish MMApplicationLike.onBaseContextAttached");
+        Require(vm.GetLinkedDeclaredMethodStats(kFirebaseProvider, "onCreate", "()Z").returned == 1,
+                "FirebaseInitProvider did not finish onCreate");
+        Require(vm.GetLinkedDeclaredMethodStats(kPackageManager, "installEmbeddedProviders",
+                    "(Landroid/content/Context;)V").returned == 1,
+                "PackageManager did not finish manifest provider installation");
+        for (const auto provider : {kRemoteProviders[1], kRemoteProviders[2]})
+            Require(vm.GetLinkedDeclaredMethodStats(provider, "<init>", "()V").invocations == 0,
+                    "WeChat constructed a provider assigned to a named process");
+        Require(vm.GetLinkedDeclaredMethodStats(kAppLike, "onCreate", "()V").returned == 1 &&
+                vm.GetLinkedDeclaredMethodStats(kTinker, "onCreate", "()V").returned == 1,
+                "WeChat did not finish both Application and ApplicationLike onCreate methods");
         Require(vm.GetLinkedDeclaredMethodStats(kPool, "<init>", kPoolConstructor).returned > 0,
                 "WeChat did not finish constructing its ForkJoinPool");
         const auto pid = vm.CallStatic("Landroid/os/Process;", "myPid", "()I").i();
@@ -402,38 +493,67 @@ int main(int argc, char** argv) try {
         loaded("libwechatbacktrace.so", {});
         loaded("libtrace-canary.so", "returned");
         loaded("libcso.log.so", "returned");
+        loaded(kMatrixLibrary, "returned");
+        loaded("libcso.so", "returned");
+        loaded("libWCDB.so", "returned");
+        loaded("libwechatcommon.so", "returned");
+        loaded("libmarscomm.so", "returned");
+        loaded("libmarsquic.so", "absent");
+        loaded("libcronet.119.0.6045.214.so", "returned");
+        loaded("libwechatmm.so", "returned");
+        loaded("libwechatnetwork.so", "returned");
+        loaded("libwechatnormsg.so", "returned");
+        loaded("libzidl2.so", "returned");
+        loaded("libilink2.so", "returned");
+        loaded("libilink_network.so", "returned");
+        loaded("libunit_rc.so", "returned");
+        loaded("libmmskia.so", "absent");
+        loaded("libflutter.so", "returned");
+        loaded("libmm_foundation_lib.so", "returned");
+        loaded("libvoipComm.so", "absent");
+        loaded("libvoipCodec.so", "absent");
+        loaded("libxffmpeg.so", "absent");
+        loaded("libopencv_world.so", "absent");
+        loaded("libWeVision.so", "absent");
+        loaded("libWeEffect.so", "absent");
+        loaded("libmmv8.so", "absent");
+        loaded("libmmnode.so", "absent");
+        loaded(kV8Library, "returned");
+        loaded("libmagicbrush-nano.so", "returned");
+        loaded("libwxaudio.so", "returned");
+        loaded("libwechatxlog.so", "returned");
+        loaded("libaff_biz.so", "returned");
+        loaded("libMMProtocalJni.so", "returned");
+        loaded("libwechatpaybase.so", "returned");
+        loaded("libwechatpaymm.so", "returned");
+        loaded("libtsmsc.so", "returned");
+        Require(vm.GetLinkedDeclaredMethodStats(kPayMarsContext, "OnJniCreateContext", "(Ljava/lang/String;)V")
+                    .returned > 0 && vm.GetLinkedDeclaredMethodStats(kWallet, "init", kWalletInit).returned > 0,
+                "PayMars context creation and wallet native initialization both returned");
+        Require(vm.GetLinkedDeclaredMethodStats(kMatrix, "jniPlaceHolder", "()V").returned > 0 &&
+                vm.GetLinkedDeclaredMethodStats(kMatrix, "initJniHookByPlaceHolderMethod",
+                    "(Ljava/lang/reflect/Method;)I").returned > 0 &&
+                vm.CallStatic(kMatrix, "f", "(ZILjava/lang/Object;)Z", std::array{Value{}, Value{}, Value{}}).i(),
+                "Matrix resolved the placeholder's ART native entry point");
         ProbePackageMetadata(vm);
-    }), "Check the Tinker startup checkpoint");
-    if (status < 0) {
-        Require(error.contains("Ljava/lang/UnsatisfiedLinkError;") && error.contains(kMatrixBootError) &&
-                error.contains("Lcom/tencent/matrix/hook/jnihook/JniHookJni;->b()V @ dex pc 0"),
-                "WeChat stopped before or beyond the recorded Matrix JNI hook checkpoint: " + error);
-        Require(Metric(state, "attachBaseContextReturns") == 0 && Metric(state, "providersCreated") == 0 &&
-                Metric(state, "applicationCreateCalls") == 0 && Metric(state, "onCreateCalls") == 0 && !published,
-                "The Matrix hook failed before Application attachment completed");
-        Check(wa::system::RunForegroundVmProbe([](Vm& vm) {
-            const auto images = vm.GetGuestNativeImages();
-            const auto matrix = std::ranges::find(images, kMatrixLibrary, &wa::interp::GuestNativeImage::name);
-            Require(matrix != images.end() && matrix->mapped_base && matrix->jni_on_load == "failed" &&
-                    matrix->error == kMatrixOnLoadError, "The Matrix native image failed at its VMRuntime lookup");
-        }), "Check Matrix JNI_OnLoad failure");
-        Require(!require_ui, error);
-        return 0;
-    }
-    Require(Metric(state, "attachBaseContextReturns") == 1 && Metric(state, "providersCreated") >= 27 &&
-            Metric(state, "applicationCreateReturns") == 1 && Metric(state, "onCreateCalls") > 0 &&
-            Metric(state, "onStartCalls") > 0 && Metric(state, "onResumeCalls") > 0,
-            "WeChat did not finish application attachment, main-process providers, and activity resume");
-    Check(wa::system::RunForegroundVmProbe([](Vm& vm) {
-        Require(vm.GetLinkedDeclaredMethodStats(kAppLike, "onCreate", "()V").returned > 0,
-                "WeChat did not finish MMApplicationLike.onCreate");
-    }), "Check ApplicationLike onCreate");
-    std::array<char, 16> pixels{};
-    Check(wa::system::RunForegroundProbe(RasterizeDecor, pixels.data(), pixels.size()),
-          "Rasterize foreground decor to an Android bitmap");
-    std::cout << "{\"event\":\"decor_bitmap\",\"non_blank_pixels\":" << pixels.data() << "}\n";
-    Require(has_drawn_text && std::string_view(pixels.data()) == "true",
-            "WeChat did not draw visible text and non-blank pixels");
+    }), "Check the WeChat startup checkpoint");
+    Require(status >= 0, error);
+    Require(Metric(state, "onCreateCalls") == 1 && Metric(state, "onStartCalls") == 1 &&
+            Metric(state, "onResumeCalls") == 1, "WeChat did not finish the LauncherUI lifecycle");
+    std::array<char, 16> observed{};
+    Check(wa::system::RunForegroundProbe([](Vm& vm, Object* activity) {
+        const auto& descriptor = activity->type->descriptor;
+        Require(descriptor == kWelcome, "WeChat did not reach the WelcomeActivity redirect");
+        Require(vm.GetLinkedVirtualMethodStats(descriptor, "onCreate", "(Landroid/os/Bundle;)V").returned > 0 &&
+                vm.GetLinkedVirtualMethodStats(descriptor, "onStart", "()V").returned > 0 &&
+                vm.GetLinkedVirtualMethodStats(descriptor, "onResume", "()V").returned > 0 &&
+                vm.CallVirtual(activity, "isResumed", "()Z").i(),
+                "The visible WeChat activity did not complete its lifecycle");
+        std::cout << "{\"event\":\"resumed_activity\",\"class\":" << JsonString(descriptor) << "}\n";
+        return std::string("resumed");
+    }, observed.data(), observed.size()), "Check the resumed welcome activity");
+    Require(welcome_frames == kWelcomeFrames && frame.ShowsWelcome(),
+            "WeChat did not publish three welcome frames with labels and non-blank bitmap pixels");
     return 0;
 } catch (const std::exception& error) {
     std::cerr << "{\"event\":\"probe_error\",\"error\":" << JsonString(error.what()) << "}\n";

@@ -1,0 +1,197 @@
+--- a/frameworks/base/core/java/android/os/HandlerThread.java
++++ b/frameworks/base/core/java/android/os/HandlerThread.java
+@@ -127,17 +127,36 @@
+     }
+ 
+     @Override
++    public synchronized void start() {
++        super.start();
++        // Publish the queue before the cooperative scheduler runs this thread.
++        mTid = (int) getId();
++        mLooper = Looper.createWorker(this);
++    }
++
++    @Override
+     public void run() {
+-        mTid = Process.myTid();
+-        Looper.prepare();
+-        synchronized (this) {
++        Looper looper = mLooper;
++        if (looper == null) {
++            Looper.prepare();
+             mLooper = Looper.myLooper();
+-            notifyAll();
+-        }
+-        Process.setThreadPriority(mPriority);
+-        onLooperPrepared();
+-        Looper.loop();
+-        mTid = -1;
++            mTid = Process.myTid();
++            try {
++                Process.setThreadPriority(mPriority);
++                onLooperPrepared();
++                Looper.loop();
++            } finally {
++                mTid = -1;
++            }
++            return;
++        }
++        try {
++            Process.setThreadPriority(mPriority);
++            looper.runWorker(this::onLooperPrepared);
++        } finally {
++            mTid = -1;
++            looper.quit();
++        }
+     }
+ 
+     /**
+--- a/frameworks/base/core/java/android/os/Looper.java
++++ b/frameworks/base/core/java/android/os/Looper.java
+@@ -320,20 +320,28 @@
+         return looper;
+     }
+ 
+-    void prepareWorker(Runnable onPrepared) {
+-        Looper previousLooper = sDispatchingLooper;
+-        Thread previous = ThreadContext.swap(mThread);
+-        sDispatchingLooper = this;
++    void runWorker(Runnable onPrepared) {
++        sThreadLocal.set(this);
++        mInLoop = true;
+         try {
+             onPrepared.run();
++            int dispatched = 0;
++            while (!mQueue.isFinished()) {
++                long now = SystemClock.uptimeMillis();
++                if (!loopOnce(this, now, -1)) {
++                    dispatched = 0;
++                    mQueue.waitForWork(now);
++                } else if (++dispatched == 1000) {
++                    // A callback can repost itself while the frame clock is fixed.
++                    dispatched = 0;
++                    ThreadContext.yieldWorker();
++                }
++            }
+         } finally {
+-            sDispatchingLooper = previousLooper;
+-            ThreadContext.swap(previous);
+-        }
+-    }
+-
+-    boolean isFinished() {
+-        return mQueue.isFinished();
++            mInLoop = false;
++            sThreadLocal.remove();
++            sWorkers.remove(this);
++        }
+     }
+ 
+     /** Dispatch the messages due in the host clock domain without blocking the frame pump. */
+@@ -364,14 +372,11 @@
+ 
+     /** Drive existing cooperative worker queues, then the main queue, once per frame. */
+     public static void dispatchAllDueMessages(long now) {
+-        int count = sWorkers.size();
+-        for (int i = 0; i < count; i++) {
+-            Looper worker = sWorkers.get(i);
+-            worker.dispatchDueMessages(now);
+-            if (worker.isFinished()) {
+-                sWorkers.remove(i--);
+-                count--;
+-            }
++        if (!sWorkers.isEmpty()) {
++            for (int i = 0; i < sWorkers.size(); i++) {
++                sWorkers.get(i).mQueue.wakeIfReady(now);
++            }
++            ThreadContext.runReadyThreads();
+         }
+         Looper main = getMainLooper();
+         if (main != null) {
+--- a/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
++++ b/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
+@@ -91,6 +91,34 @@
+         return mQuitting && (mFinished || mMessages == null);
+     }
+ 
++    private boolean hasWorkLocked(long now) {
++        Message message = mMessages;
++        if (message != null && message.target == null) {
++            do {
++                message = message.next;
++            } while (message != null && !message.isAsynchronous());
++        }
++        return mQuitting || (message != null && message.when <= now);
++    }
++
++    void waitForWork(long now) {
++        synchronized (this) {
++            if (!hasWorkLocked(now)) {
++                try {
++                    wait();
++                } catch (InterruptedException ignored) {
++                    // Interrupting a HandlerThread does not quit its Looper.
++                }
++            }
++        }
++    }
++
++    void wakeIfReady(long now) {
++        synchronized (this) {
++            if (hasWorkLocked(now)) notifyAll();
++        }
++    }
++
+     static boolean getUseConcurrent() {
+         return false;
+     }
+@@ -383,7 +411,7 @@
+             } else {
+                 removeAllMessagesLocked();
+             }
+-
++            notifyAll();
+         }
+     }
+ 
+@@ -505,7 +533,7 @@
+             }
+             p.recycleUnchecked();
+ 
+-            // If the loop is quitting then it is already awake.
++            if (needWake && mQuitAllowed) notifyAll();
+         }
+         onSyncBarrierRemoved(token);
+     }
+@@ -568,7 +596,7 @@
+             if (msg.isAsynchronous()) {
+                 mAsyncMessageCount++;
+             }
+-
++            if (mQuitAllowed) notifyAll();
+         }
+         return true;
+     }
+--- a/frameworks/base/core/java/android/os/ConditionVariable.java
++++ b/frameworks/base/core/java/android/os/ConditionVariable.java
+@@ -122,15 +122,15 @@
+         // this code for the common case.
+         if (timeoutMs != 0) {
+             synchronized (this) {
+-                long now = SystemClock.elapsedRealtime();
+-                long end = now + timeoutMs;
+-                while (!mCondition && now < end) {
++                final long start = System.nanoTime();
++                long remaining = timeoutMs;
++                while (!mCondition && remaining > 0) {
+                     try {
+-                        this.wait(end-now);
++                        this.wait(remaining);
+                     }
+                     catch (InterruptedException e) {
+                     }
+-                    now = SystemClock.elapsedRealtime();
++                    remaining = timeoutMs - (System.nanoTime() - start) / 1_000_000;
+                 }
+                 return mCondition;
+             }

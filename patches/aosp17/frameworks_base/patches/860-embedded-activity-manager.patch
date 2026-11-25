@@ -1266,7 +1266,7 @@
 -        } catch (RemoteException e) {
 -            throw e.rethrowFromSystemServer();
 -        }
-+        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        return Collections.emptyList();
      }
  
 @@ -4632,17 +3951,9 @@

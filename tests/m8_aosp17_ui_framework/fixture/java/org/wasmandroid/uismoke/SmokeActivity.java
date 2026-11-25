@@ -33,19 +33,23 @@ import android.content.res.Resources;
 import android.content.res.TypedArray;
 import android.content.res.XmlResourceParser;
 import android.database.Cursor;
+import android.graphics.BitmapFactory;
 import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.VectorDrawable;
 import android.os.Bundle;
+import android.os.ConditionVariable;
 import android.net.LocalServerSocket;
 import android.net.LocalSocket;
 import android.net.LocalSocketAddress;
 import android.net.Uri;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.util.AtomicFile;
 import android.os.Parcel;
+import android.os.ResultReceiver;
 import android.os.UserHandle;
 import android.text.Editable;
 import android.text.Layout;
@@ -67,8 +71,12 @@ import android.widget.TextView;
 import android.window.BackEvent;
 import android.window.BackMotionEvent;
 import com.android.launcher3.fixture.TileView;
+import java.lang.ref.Reference;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
 import java.net.URL;
 import java.net.URISyntaxException;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
@@ -92,6 +100,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.zip.CRC32;
+import java.util.zip.Deflater;
 import java.util.stream.IntStream;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -104,7 +113,7 @@ public final class SmokeActivity extends Activity {
     private static boolean shutdownHookRan;
     private static final int REFLECTED_VALUE = 17;
     private static final Object LEGACY_FIELD = new Object();
-    private static int providerOrder;
+    private static int providerOrder, providerQueries;
 
     public static final class SmokeApplication extends Application {
         @Override protected void attachBaseContext(Context base) {
@@ -129,6 +138,15 @@ public final class SmokeActivity extends Activity {
     }
 
     public static final class DefaultProvider extends TestProvider {
+        @Override public Cursor query(Uri uri, String[] projection, String selection,
+                String[] selectionArgs, String sortOrder) {
+            if (!"org.wasmandroid.uismoke.default".equals(uri.getAuthority())) {
+                throw new IllegalArgumentException(uri.toString());
+            }
+            ++providerQueries;
+            return null;
+        }
+
         @Override public boolean onCreate() {
             if (providerOrder != 1 || !(getContext().getApplicationContext() instanceof SmokeApplication)) {
                 throw new IllegalStateException("Default provider requires an attached application");
@@ -171,6 +189,7 @@ public final class SmokeActivity extends Activity {
             startActivity(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
                     .setClassName(app.activityInfo.packageName, app.activityInfo.name)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
             animator = ValueAnimator.ofFloat(0f, 1f);
             animator.setDuration(160);
             animator.addUpdateListener(animation -> {
@@ -492,14 +511,42 @@ public final class SmokeActivity extends Activity {
     }
     public static int verifyScheduledExecutor() throws Exception {
         var executor = Executors.newScheduledThreadPool(1);
+        AtomicInteger rejected = new AtomicInteger();
+        ((ThreadPoolExecutor) executor).setRejectedExecutionHandler((task, pool) -> rejected.incrementAndGet());
         var value = executor.schedule(() -> 42, 0, TimeUnit.MILLISECONDS);
         var cancelled = executor.schedule(() -> { throw new AssertionError("Cancelled task ran"); },
                 1, TimeUnit.SECONDS);
         if (value.isDone() || !cancelled.cancel(false)) return 0;
         executor.shutdown();
+        executor.execute(() -> { throw new AssertionError("Rejected task ran"); });
         if (executor.isTerminated()) return 0;
         Looper.getMainLooper().dispatchDueMessages(SystemClock.uptimeMillis() + 2000);
-        return value.isDone() && value.get() == 42 && cancelled.isCancelled() && executor.isTerminated() ? 1 : 0;
+        return value.isDone() && value.get() == 42 && cancelled.isCancelled()
+                && executor.isTerminated() && rejected.get() == 1 ? 1 : 0;
+    }
+
+    public static int verifyScheduledWorkerWait() throws Exception {
+        var executor = Executors.newScheduledThreadPool(1);
+        var handler = new Handler(Looper.getMainLooper());
+        var lock = new Object();
+        var notified = new boolean[1];
+        var result = executor.schedule(() -> {
+            synchronized (lock) {
+                handler.post(() -> {
+                    synchronized (lock) {
+                        notified[0] = true;
+                        lock.notifyAll();
+                    }
+                });
+                lock.wait(500);
+                return notified[0];
+            }
+        }, 0, TimeUnit.MILLISECONDS);
+        executor.shutdown();
+        long now = SystemClock.uptimeMillis() + 1000;
+        Looper.dispatchAllDueMessages(now);
+        Looper.dispatchAllDueMessages(now);
+        return result.isDone() && result.get() && executor.isTerminated() ? 1 : 0;
     }
 
     public static int verifyForkJoin() throws Exception {
@@ -603,6 +650,29 @@ public final class SmokeActivity extends Activity {
         return checksum.getValue() == 0 ? 1 : 0;
     }
 
+    public static int verifyDeflater() {
+        byte[] expected = {(byte) 0x78, (byte) 0x9c, (byte) 0xcb, (byte) 0x48,
+                (byte) 0xcd, (byte) 0xc9, (byte) 0xc9, (byte) 0x07, (byte) 0x00,
+                (byte) 0x06, (byte) 0x2c, (byte) 0x02, (byte) 0x15};
+        Deflater deflater = new Deflater();
+        try {
+            ByteBuffer source = ByteBuffer.wrap("hello".getBytes()).asReadOnlyBuffer();
+            deflater.reset();
+            deflater.setInput(source);
+            deflater.finish();
+            byte[] result = new byte[expected.length + 2];
+            int written = 0;
+            for (int i = 0; i < 16 && !deflater.finished(); i++) {
+                written += deflater.deflate(result, written, Math.min(2, result.length - written));
+            }
+            return deflater.finished() && !source.hasRemaining() && deflater.getBytesRead() == 5
+                    && deflater.getBytesWritten() == expected.length && deflater.getAdler() == 0x062c0215
+                    && java.util.Arrays.equals(expected, java.util.Arrays.copyOf(result, written)) ? 1 : 0;
+        } finally {
+            deflater.end();
+        }
+    }
+
     public static int verifyNestedLooper() {
         Looper main = Looper.getMainLooper();
         Handler handler = new Handler(main);
@@ -629,6 +699,33 @@ public final class SmokeActivity extends Activity {
         main.dispatchDueMessages(now);
         return caught[0] == 4 ? 1 : 0;
     }
+    public static int verifyThreadStack() {
+        StackTraceElement[] trace = Thread.currentThread().getStackTrace();
+        return trace.length > 0 && "verifyThreadStack".equals(trace[0].getMethodName())
+                && new Thread().getStackTrace().length == 0 ? 1 : 0;
+    }
+
+    public static int verifyHandlerThread() {
+        HandlerThread worker = new HandlerThread("startup-worker");
+        ConditionVariable entered = new ConditionVariable();
+        ConditionVariable release = new ConditionVariable();
+        ConditionVariable finished = new ConditionVariable();
+        worker.start();
+        Looper looper = worker.getLooper();
+        new Handler(looper).post(() -> {
+            if (Thread.currentThread() != worker || Looper.myLooper() != looper) return;
+            entered.open();
+            release.block();
+            finished.open();
+        });
+        entered.block();
+        if (finished.block(1)) return 0;
+        release.open();
+        finished.block();
+        worker.quitSafely();
+        return 1;
+    }
+
     public static int verifyReadWriteLock() {
         var lock = new ReentrantReadWriteLock();
         lock.writeLock().lock();
@@ -642,6 +739,259 @@ public final class SmokeActivity extends Activity {
         LockSupport.park(lock);
         return !lock.isWriteLocked() && lock.getReadLockCount() == 0 && LockSupport.getBlocker(thread) == null ? 1 : 0;
     }
+
+    public static int verifyReferenceQueue() throws InterruptedException {
+        var queue = new ReferenceQueue<Object>();
+        var reference = new WeakReference<Object>(null, queue);
+        var received = new AtomicReference<Reference<?>>();
+        var waiting = new ConditionVariable();
+        var finished = new ConditionVariable();
+        new Thread(() -> {
+            waiting.open();
+            try {
+                received.set(queue.remove());
+            } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+            } finally {
+                finished.open();
+            }
+        }).start();
+        waiting.block();
+        if (finished.block(1) || !reference.enqueue() || !reference.isEnqueued()) return 0;
+        if (reference.enqueue() || !finished.block(1000) || received.get() != reference
+                || reference.isEnqueued() || queue.poll() != null) return 0;
+        var first = new WeakReference<Object>(null, queue);
+        var second = new WeakReference<Object>(null, queue);
+        return first.enqueue() && second.enqueue() && queue.poll() == first && queue.remove() == second
+                && queue.remove(1) == null ? 1 : 0;
+    }
+
+    public static int verifyResultReceiver() {
+        var result = new AtomicInteger();
+        var main = Looper.getMainLooper();
+        var receiver = new ResultReceiver(new Handler(main)) {
+            @Override protected void onReceiveResult(int code, Bundle data) {
+                if ("from parcel".equals(data.getString("source"))) result.set(code);
+            }
+        };
+        Parcel parcel = Parcel.obtain();
+        try {
+            receiver.writeToParcel(parcel, 0);
+            parcel.setDataPosition(0);
+            var copy = ResultReceiver.CREATOR.createFromParcel(parcel);
+            var data = new Bundle();
+            data.putString("source", "from parcel");
+            copy.send(42, data);
+            if (result.get() != 0) return 0;
+            main.dispatchDueMessages(SystemClock.uptimeMillis());
+            return result.get() == 42 ? 1 : 0;
+        } finally {
+            parcel.recycle();
+        }
+    }
+
+    public static int verifyRunningTask() {
+        var manager = (android.app.ActivityManager) active.getSystemService(Context.ACTIVITY_SERVICE);
+        var tasks = manager.getRunningTasks(10);
+        if (tasks.size() != 1 || !manager.getRunningTasks(0).isEmpty()) return 0;
+        var task = tasks.get(0);
+        return active.isTaskRoot() && active.getTaskId() > 0 && active.getTaskId() == task.taskId
+                && task.id == task.taskId && task.numActivities == 1 && task.isRunning
+                && active.getComponentName().equals(task.topActivity)
+                && task.topActivity.equals(task.baseActivity) ? 1 : 0;
+    }
+
+    public static int verifyProviderQuery() {
+        var resolver = active.getContentResolver();
+        resolver.query(Uri.parse("content://0@org.wasmandroid.uismoke.default/test"), null, null, null, null);
+        return providerQueries == 1
+                && resolver.query(Uri.parse("content://10@org.wasmandroid.uismoke.default"), null, null, null, null) == null
+                && resolver.query(Uri.parse("content://org.wasmandroid.uismoke.remote"), null, null, null, null) == null
+                && providerQueries == 1 ? 1 : 0;
+    }
+
+    public static class MainService extends android.app.Service {
+        static int created;
+
+        @Override public void onCreate() {
+            super.onCreate();
+            created++;
+        }
+
+        @Override public android.os.IBinder onBind(Intent intent) {
+            return null;
+        }
+    }
+
+    public static final class RemoteService extends MainService {}
+
+    public static int verifyManifestServiceProcess() {
+        var remote = new Intent(active, RemoteService.class);
+        var connection = new android.content.ServiceConnection() {
+            @Override public void onServiceConnected(android.content.ComponentName name, android.os.IBinder service) {}
+            @Override public void onServiceDisconnected(android.content.ComponentName name) {}
+        };
+        if (active.startService(remote) != null || active.bindService(remote, connection, Context.BIND_AUTO_CREATE)
+                || MainService.created != 0) {
+            return 0;
+        }
+        var local = new Intent(active, MainService.class);
+        return active.startService(local) != null && MainService.created == 1 && active.stopService(local) ? 1 : 0;
+    }
+
+    public static int verifyConcurrentKeySet() {
+        var map = new java.util.concurrent.ConcurrentHashMap<String, Integer>();
+        map.put("existing", 3);
+        var view = map.keySet(7);
+        if (view.add("existing") || !view.add("new") || map.get("new") != 7) return 0;
+        var keys = java.util.concurrent.ConcurrentHashMap.<String>newKeySet(2);
+        keys.add("one");
+        var iterator = keys.iterator();
+        keys.add("two");
+        if (!iterator.next().equals("one")) return 0;
+        iterator.remove();
+        return keys.size() == 1 && keys.contains("two") ? 1 : 0;
+    }
+    public static int verifyCopiesList() {
+        var copies = Collections.nCopies(Integer.MAX_VALUE, "same");
+        if (copies.size() != Integer.MAX_VALUE || !copies.get(Integer.MAX_VALUE - 1).equals("same")) return 0;
+        var tail = copies.subList(Integer.MAX_VALUE - 2, Integer.MAX_VALUE);
+        var iterator = tail.iterator();
+        if (!iterator.next().equals("same") || !iterator.next().equals("same") || iterator.hasNext()) return 0;
+        try {
+            tail.set(0, "different");
+            return 0;
+        } catch (UnsupportedOperationException expected) {
+            return 1;
+        }
+    }
+    public static int verifyPriorityQueue() {
+        var queue = new java.util.PriorityQueue<Integer>(1, (left, right) -> Integer.compare(right, left));
+        for (int i = 1; i <= 100; i++) queue.offer(i);
+        if (queue.peek() != 100 || !queue.remove(95)) return 0;
+        for (int i = 100; i > 0; i--) {
+            if (i != 95 && queue.remove() != i) return 0;
+        }
+        return queue.poll() == null ? 1 : 0;
+    }
+    public static int verifyUtf32() {
+        var little = java.nio.charset.Charset.forName("UTF-32LE");
+        var big = java.nio.charset.Charset.forName("UTF-32BE");
+        var scalar = "\ud83d\ude42";
+        byte[] littleBytes = {0x42, (byte) 0xf6, 0x01, 0};
+        byte[] bigBytes = {0, 0x01, (byte) 0xf6, 0x42};
+        return java.util.Arrays.equals(scalar.getBytes(little), littleBytes)
+                && java.util.Arrays.equals(scalar.getBytes(big), bigBytes)
+                && scalar.equals(new String(littleBytes, little))
+                && scalar.equals(new String(bigBytes, big)) ? 1 : 0;
+    }
+    public static int verifyTlsProviderUnavailable() throws java.security.NoSuchAlgorithmException {
+        try {
+            javax.net.ssl.TrustManagerFactory.getInstance(javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm());
+            return 0;
+        } catch (java.security.ProviderException expected) {
+            return 1;
+        }
+    }
+    public static int verifyWebp() {
+        // Lossless 2-by-1 image with one translucent and one opaque pixel.
+        byte[] webp = {
+            82, 73, 70, 70, 32, 0, 0, 0, 87, 69, 66, 80,
+            86, 80, 56, 76, 19, 0, 0, 0, 47, 1, 0, 0,
+            16, 15, 48, -128, -5, 63, -1, 15, -4, 15, 45, 100,
+            68, -1, 3, 0
+        };
+        var options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        if (BitmapFactory.decodeByteArray(webp, 0, webp.length, options) != null
+                || options.outWidth != 2 || options.outHeight != 1 || !"image/webp".equals(options.outMimeType)) {
+            return 0;
+        }
+        options.inJustDecodeBounds = false;
+        var bitmap = BitmapFactory.decodeByteArray(webp, 0, webp.length, options);
+        if (bitmap == null || (bitmap.getPixel(0, 0) >>> 24) != 128 || bitmap.getPixel(1, 0) != 0xffff0000) {
+            return 0;
+        }
+        bitmap.recycle();
+        return 1;
+    }
+    public static int verifyNioPaths() throws java.io.IOException {
+        var dir = java.nio.file.Paths.get("/data", "nio-probe", "nested");
+        if (!"nested".equals(dir.getFileName().toString()) || !dir.getParent().resolve("nested").equals(dir)) {
+            return 0;
+        }
+        var created = java.nio.file.Files.createDirectories(dir);
+        if (created != dir || !java.nio.file.Files.isDirectory(dir, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+                || !dir.toFile().isDirectory() || !java.nio.file.Files.createDirectories(dir).equals(dir)) {
+            return 0;
+        }
+        return dir.toFile().delete() && dir.getParent().toFile().delete() ? 1 : 0;
+    }
+    public static int verifyOsStat() throws java.io.IOException, android.system.ErrnoException {
+        var dir = new java.io.File("/data/stat-probe");
+        if (!dir.mkdir()) return 0;
+        var file = new java.io.File(dir, "file");
+        try (var stream = new java.io.FileOutputStream(file)) {
+            stream.write(new byte[]{1, 2, 3});
+        }
+        var bytes = (byte[]) dalvik.system.VMRuntime.getRuntime().newNonMovableArray(byte.class, 2);
+        try (var stream = new java.io.FileInputStream(file)) {
+            if (android.system.Os.pread(stream.getFD(), bytes, 0, 2, 1L) != 2
+                    || bytes[0] != 2 || bytes[1] != 3 || stream.read() != 1) {
+                return 0;
+            }
+        }
+        var directory = android.system.Os.stat(dir.getPath());
+        var regular = android.system.Os.lstat(file.getPath());
+        if (!android.system.OsConstants.S_ISDIR(directory.st_mode)
+                || !android.system.OsConstants.S_ISREG(regular.st_mode)
+                || android.system.OsConstants.S_ISLNK(regular.st_mode)
+                || regular.st_size != 3 || regular.st_blocks != 1
+                || regular.st_mtime <= 0 || regular.st_mtim.tv_sec != regular.st_mtime) {
+            return 0;
+        }
+        boolean missing = false;
+        boolean notDirectory = false;
+        try {
+            android.system.Os.stat(dir.getPath() + "/missing");
+        } catch (android.system.ErrnoException e) {
+            missing = e.errno == android.system.OsConstants.ENOENT && e.getMessage().contains("ENOENT");
+        }
+        try {
+            android.system.Os.lstat(file.getPath() + "/child");
+        } catch (android.system.ErrnoException e) {
+            notDirectory = e.errno == android.system.OsConstants.ENOTDIR;
+        }
+        return missing && notDirectory && file.delete() && dir.delete() ? 1 : 0;
+    }
+    public static int verifyPicture() {
+        var picture = new android.graphics.Picture();
+        var recording = picture.beginRecording(4, 3);
+        var paint = new android.graphics.Paint();
+        paint.setColor(0xffff0000);
+        recording.drawRect(0, 0, 4, 3, paint);
+        var copy = new android.graphics.Picture(picture);
+        picture.endRecording();
+        picture.beginRecording(3, 2).drawColor(0xff00ff00);
+        var bitmap = android.graphics.Bitmap.createBitmap(12, 9, android.graphics.Bitmap.Config.ARGB_8888);
+        var canvas = new android.graphics.Canvas(bitmap);
+        canvas.drawPicture(copy, new android.graphics.Rect(2, 1, 10, 7));
+        picture.draw(canvas);
+        return copy.getWidth() == 4 && copy.getHeight() == 3
+                && bitmap.getPixel(1, 1) == 0xff00ff00
+                && bitmap.getPixel(8, 5) == 0xffff0000 && bitmap.getPixel(11, 8) == 0 ? 1 : 0;
+    }
+    public static int verifyVirtualKeyboard() {
+        var map = android.view.KeyCharacterMap.load(android.view.KeyCharacterMap.VIRTUAL_KEYBOARD);
+        int key = android.view.KeyEvent.KEYCODE_A;
+        if (map.getKeyboardType() != android.view.KeyCharacterMap.FULL || map.get(key, 0) != 'a'
+                || map.get(key, android.view.KeyEvent.META_SHIFT_ON) != 'A'
+                || map.getNumber(android.view.KeyEvent.KEYCODE_9) != '9'
+                || map.getDisplayLabel(key) != 'A') return 0;
+        var events = map.getEvents(new char[]{'A', '9'});
+        return events != null && events.length == 4
+                && events[0].getUnicodeChar() == 'A' && events[2].getUnicodeChar() == '9' ? 1 : 0;
+    }
     public static int verifyRegex() {
         var placeholders = Pattern.compile("\\$\\{(.*?)\\}").matcher("${first} and ${second}");
         if (!placeholders.find() || !placeholders.group(1).equals("first") || placeholders.start(1) != 2) return 0;
@@ -651,7 +1001,22 @@ public final class SmokeActivity extends Activity {
         Pattern absolute = Pattern.compile("\\A[a-z-]+\\z");
         if (!absolute.matcher("ab-c").find() || absolute.matcher("ab-c\n").find()) return 0;
         if (!Pattern.compile("[^\\p{Alnum}]").matcher("a1_b❤").replaceAll("").equals("a1b")) return 0;
+        Pattern intersection = Pattern.compile("[a-c[x-z]&&[^b]]+");
+        if (!intersection.matcher("acxyz").matches() || intersection.matcher("ab").matches()) return 0;
         return letters.equals("12[abc]34") && words.length == 2 && words[1].equals("words") ? 1 : 0;
+    }
+    public static int verifyLegacyTime() {
+        android.text.format.Time time = new android.text.format.Time("GMT+05:30");
+        time.set(0L);
+        return time.year == 1970 && time.month == 0 && time.monthDay == 1 && time.hour == 5
+                && time.minute == 30 && time.gmtoff == 19_800L && time.toMillis(false) == 0L ? 1 : 0;
+    }
+    private static final class StringList extends java.util.ArrayList<String> {}
+    public static int verifyGenericSuperclass() {
+        var type = StringList.class.getGenericSuperclass();
+        return type instanceof java.lang.reflect.ParameterizedType generic
+                && generic.getRawType() == java.util.ArrayList.class
+                && generic.getActualTypeArguments()[0] == String.class ? 1 : 0;
     }
     public static int verifyFieldReflection() throws ReflectiveOperationException {
         var field = SmokeActivity.class.getDeclaredField("REFLECTED_VALUE");
@@ -741,7 +1106,11 @@ public final class SmokeActivity extends Activity {
     public static int verifyExecutorAndRegisterShutdownHook() throws InterruptedException {
         var executor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.SECONDS, new LinkedBlockingQueue<>(),
                 Executors.defaultThreadFactory(), new ThreadPoolExecutor.DiscardPolicy());
+        executor.setMaximumPoolSize(2);
+        if (executor.getMaximumPoolSize() != 2) return 0;
         AtomicInteger ran = new AtomicInteger();
+        AtomicInteger rejected = new AtomicInteger();
+        executor.setRejectedExecutionHandler((task, pool) -> rejected.incrementAndGet());
         executor.execute(ran::incrementAndGet);
         executor.shutdown();
         executor.execute(ran::incrementAndGet);
@@ -751,7 +1120,7 @@ public final class SmokeActivity extends Activity {
         runtime.addShutdownHook(hook);
         if (!runtime.removeShutdownHook(hook) || runtime.removeShutdownHook(hook)) return 0;
         runtime.addShutdownHook(hook);
-        return ran.get() == 1 && executor.awaitTermination(0, TimeUnit.SECONDS) ? 1 : 0;
+        return ran.get() == 1 && rejected.get() == 1 && executor.awaitTermination(0, TimeUnit.SECONDS) ? 1 : 0;
     }
     public static boolean shutdownHookRan() { return shutdownHookRan; }
     public static int lifecycle() { return lifecycle; }

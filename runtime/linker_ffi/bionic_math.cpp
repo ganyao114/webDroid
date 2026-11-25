@@ -23,7 +23,8 @@ template <class T, class... Args, T (*F)(Args...)> struct Math<F> {
         const auto value = std::apply(F, arguments);
         if (errno)
             SetErrno(*ctx.dbt, GuestErrno(errno));
-        ReturnFloat(ctx, value);
+        if constexpr (std::is_floating_point_v<T>) ReturnFloat(ctx, value);
+        else ctx.ret0 = static_cast<uint32_t>(value);
     }
 };
 
@@ -51,6 +52,20 @@ template <class T> void SinCos(wa_host_call_ctx_t& ctx) {
     mem.Write<T>(cosine, std::cos(value));
 }
 
+void SinCosLong(wa_host_call_ctx_t& ctx) {
+    if (ctx.arch == WA_ARCH_ARM32) return SinCos<double>(ctx);
+    const auto angle = FromBinary128(ctx.fp_bits[0], ctx.fp_high[0]);
+    const GuestMemory mem(ctx);
+    const auto write = [&](uint64_t address, long double value) {
+        wa_host_call_ctx_t bits{.arch = WA_ARCH_ARM64};
+        ReturnLongDouble(bits, value);
+        mem.Write<uint64_t>(address, bits.fp_ret_bits);
+        mem.Write<uint64_t>(address + sizeof(uint64_t), bits.fp_ret_high);
+    };
+    write(ctx.args[0], std::sin(angle));
+    write(ctx.args[1], std::cos(angle));
+}
+
 void LdexpLong(wa_host_call_ctx_t& ctx) {
     CallReader args(ctx);
     const auto value = ctx.arch == WA_ARCH_ARM64 ? FromBinary128(ctx.fp_bits[0], ctx.fp_high[0])
@@ -58,9 +73,44 @@ void LdexpLong(wa_host_call_ctx_t& ctx) {
     ReturnLongDouble(ctx, std::ldexp(value, static_cast<int>(args.Next())));
 }
 
-void Nan(wa_host_call_ctx_t& ctx) {
+template <class T> void Nan(wa_host_call_ctx_t& ctx) {
     const auto tag = GuestMemory(ctx).String(ctx.args[0]);
-    ReturnFloat(ctx, std::nanf(tag.c_str()));
+    if constexpr (std::is_same_v<T, float>) ReturnFloat(ctx, std::nanf(tag.c_str()));
+    else ReturnFloat(ctx, std::nan(tag.c_str()));
+}
+
+constexpr uint32_t kRoundingShift = 22;
+constexpr uint32_t kExceptionShift = 8;
+constexpr uint32_t kExceptionMask = 0x9f; // Bionic FE_ALL_EXCEPT on ARM.
+
+void GetRounding(wa_host_call_ctx_t& ctx) {
+    ctx.ret0 = (ctx.fp_control >> kRoundingShift) & 3;
+}
+
+void SetRounding(wa_host_call_ctx_t& ctx) {
+    if (ctx.args[0] > 3) { ctx.ret0 = UINT32_MAX; return; }
+    ctx.fp_control = (ctx.fp_control & ~(3u << kRoundingShift)) | (uint32_t(ctx.args[0]) << kRoundingShift);
+}
+
+void NearbyInt(wa_host_call_ctx_t& ctx) {
+    CallReader args(ctx);
+    const auto value = ReadFloat<float>(args);
+    float rounded;
+    switch ((ctx.fp_control >> kRoundingShift) & 3) {
+    case 1: rounded = std::ceil(value); break;
+    case 2: rounded = std::floor(value); break;
+    case 3: rounded = std::trunc(value); break;
+    default: rounded = std::nearbyint(value); break;
+    }
+    ReturnFloat(ctx, rounded);
+}
+
+enum class Exceptions { Get, Enable, Disable };
+template<Exceptions op> void FloatingExceptions(wa_host_call_ctx_t& ctx) {
+    ctx.ret0 = (ctx.fp_control >> kExceptionShift) & kExceptionMask;
+    const auto mask = (uint32_t(ctx.args[0]) & kExceptionMask) << kExceptionShift;
+    if constexpr (op == Exceptions::Enable) ctx.fp_control |= mask;
+    if constexpr (op == Exceptions::Disable) ctx.fp_control &= ~mask;
 }
 
 template <bool Wide> void Divide(wa_host_call_ctx_t& ctx) {
@@ -153,9 +203,11 @@ void RegisterMath(wa_dbt& dbt) {
         DOUBLE(exp),
         DOUBLE(exp2),
         DOUBLE(expm1),
+        DOUBLE(erf),
         DOUBLE(log),
         DOUBLE(log2),
         DOUBLE(log10),
+        DOUBLE(logb),
         DOUBLE(log1p),
         DOUBLE(sqrt),
         DOUBLE(cbrt),
@@ -165,6 +217,7 @@ void RegisterMath(wa_dbt& dbt) {
         DOUBLE(ceil),
         DOUBLE(round),
         DOUBLE2(fmod),
+        DOUBLE2(remainder),
         DOUBLE2(pow),
         DOUBLE2(atan2),
         DOUBLE2(hypot),
@@ -172,14 +225,22 @@ void RegisterMath(wa_dbt& dbt) {
         FLOAT(cosf),
         FLOAT(coshf),
         FLOAT(tanf),
+        FLOAT(tanhf),
         FLOAT(sinhf),
         FLOAT(acosf),
+        FLOAT(acoshf),
+        FLOAT(asinf),
+        FLOAT(asinhf),
         FLOAT(atanf),
+        FLOAT(atanhf),
         FLOAT(expf),
         FLOAT(exp2f),
+        FLOAT(expm1f),
+        FLOAT(erff),
         FLOAT(logf),
         FLOAT(log2f),
         FLOAT(log10f),
+        FLOAT(log1pf),
         FLOAT(sqrtf),
         FLOAT(cbrtf),
         FLOAT(ceilf),
@@ -189,17 +250,30 @@ void RegisterMath(wa_dbt& dbt) {
         FLOAT(truncf),
         FLOAT2(atan2f),
         FLOAT2(fmodf),
+        FLOAT2(hypotf),
+        FLOAT2(nextafterf),
         FLOAT2(powf),
+        MATH(ilogbf, int (*)(float)),
         MATH(ldexp, double (*)(double, int)),
         MATH(ldexpf, float (*)(float, int)),
         MATH(scalbn, double (*)(double, int)),
+        MATH(nextafter, double (*)(double, double)),
+        {"nearbyintf", Dispatch<NearbyInt>},
         {"sincos", Dispatch<SinCos<double>>},
         {"sincosf", Dispatch<SinCos<float>>},
+        {"sincosl", Dispatch<SinCosLong>},
         {"modf", Dispatch<Split<double>>},
         {"modff", Dispatch<Split<float>>},
         {"frexp", Dispatch<Split<double, true>>},
+        {"frexpf", Dispatch<Split<float, true>>},
         {"ldexpl", Dispatch<LdexpLong>},
-        {"nanf", Dispatch<Nan>},
+        {"nan", Dispatch<Nan<double>>},
+        {"nanf", Dispatch<Nan<float>>},
+        {"fegetround", Dispatch<GetRounding>},
+        {"fesetround", Dispatch<SetRounding>},
+        {"fegetexcept", Dispatch<FloatingExceptions<Exceptions::Get>>},
+        {"feenableexcept", Dispatch<FloatingExceptions<Exceptions::Enable>>},
+        {"fedisableexcept", Dispatch<FloatingExceptions<Exceptions::Disable>>},
     };
 #undef FLOAT2
 #undef DOUBLE2

@@ -96,7 +96,7 @@ Interfaces DeclareInterfaces(ClassLinker& cl) {
       {"add", "(ILjava/lang/Object;)V"}, {"remove", "(I)Ljava/lang/Object;"},
       {"indexOf", "(Ljava/lang/Object;)I"}, {"lastIndexOf", "(Ljava/lang/Object;)I"},
       {"listIterator", "()Ljava/util/ListIterator;"}, {"listIterator", "(I)Ljava/util/ListIterator;"},
-      {"addAll", "(ILjava/util/Collection;)Z"}});
+      {"addAll", "(ILjava/util/Collection;)Z"}, {"subList", "(II)Ljava/util/List;"}});
   cl.Define(kSet, kObject, kInterface, {kCollection});
   auto& map = cl.Define(kMap, kObject, kInterface);
   Abstract(cl, map, {
@@ -595,8 +595,8 @@ Value MapSize(Runtime&, Object* self, Values) {
 
 Value ClearMap(Runtime& vm, Object* self, Values) {
   Object& map = self->payload.ref() ? *self->payload.ref() : *self;
-  CheckMutable(vm, map);
   if (map.table) {
+    CheckMutable(vm, map);
     map.table->buckets.clear();
     map.table->order.clear();
     ++map.modifications;
@@ -748,14 +748,14 @@ void InstallMaps(ClassLinker& cl) {
   InstallMapViews(cl);
   auto& map = cl.Define(kHashMap, "Ljava/util/AbstractMap;", 0, {kMap, "Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
   // The standalone VM profiles can run with only the boot collections installed.
-  map.optional_boot_superclass = true;
+  map.fallback_boot_superclass = kObject;
   cl.AddMethod(map, "tableSizeFor", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
     const auto capacity = static_cast<uint32_t>(std::clamp(a[0].i(), 1, 1 << 30));
     return Value::Int(std::bit_ceil(capacity));
   });
   auto& ordered = cl.Define("Ljava/util/LinkedHashMap;", map.descriptor);
   auto& set = cl.Define(kHashSet, "Ljava/util/AbstractSet;", 0, {kSet, "Ljava/lang/Cloneable;", "Ljava/io/Serializable;"});
-  set.optional_boot_superclass = true;
+  set.fallback_boot_superclass = kObject;
   auto& ordered_set = cl.Define("Ljava/util/LinkedHashSet;", set.descriptor);
   for (Class* type : {&map, &ordered, &set, &ordered_set}) {
     cl.AddMethod(*type, "<init>", "()V", 0, NoOp);
@@ -874,7 +874,7 @@ void InstallMaps(ClassLinker& cl) {
 
 std::pair<size_t, size_t> ArrayRange(Runtime& vm, const Object& array, int32_t from, int32_t to) {
   if (from > to) vm.Fail("Ljava/lang/IllegalArgumentException;");
-  if (from < 0 || static_cast<size_t>(to) > array.elements.size()) {
+  if (from < 0 || static_cast<size_t>(to) > vm.ArrayLength(array)) {
     vm.Fail("Ljava/lang/ArrayIndexOutOfBoundsException;");
   }
   return {from, to};
@@ -907,7 +907,8 @@ Builtin CopyArray(bool range) {
     const int32_t start = range ? a[1].i() : 0;
     const int32_t end = a[range ? 2 : 1].i();
     if (range && start > end) vm.Fail("Ljava/lang/IllegalArgumentException;");
-    if (start < 0 || static_cast<size_t>(start) > array.elements.size()) {
+    const auto length = vm.ArrayLength(array);
+    if (start < 0 || static_cast<size_t>(start) > length) {
       vm.Fail("Ljava/lang/ArrayIndexOutOfBoundsException;");
     }
     Class* type = array.type;
@@ -916,11 +917,11 @@ Builtin CopyArray(bool range) {
       if (!type->IsArray() || type->component->IsPrimitive()) vm.Fail("Ljava/lang/ClassCastException;");
     }
     auto* copy = vm.NewArray(*type, end - start);
-    const size_t count = std::min(array.elements.size() - start, copy->elements.size());
-    if (type == array.type) {
+    const size_t count = std::min(length - start, copy->elements.size());
+    if (type == array.type && !vm.DirectArray(array)) {
       std::copy_n(array.elements.begin() + start, count, copy->elements.begin());
     } else {
-      for (size_t i = 0; i < count; ++i) vm.StoreArrayElement(*copy, i, array.elements[start + i]);
+      for (size_t i = 0; i < count; ++i) vm.StoreArrayElement(*copy, i, vm.ArrayElement(array, start + i));
     }
     return Value::Ref(copy);
   };
@@ -934,9 +935,9 @@ void AppendArray(Runtime& vm, Object* array, std::u16string& text, std::vector<O
   parents.push_back(array);
   text += u'[';
   const auto& component = *array->type->component;
-  for (size_t i = 0; i < array->elements.size(); ++i) {
+  for (size_t i = 0, length = vm.ArrayLength(*array); i < length; ++i) {
     if (i) text += u", ";
-    const auto item = array->elements[i];
+    const auto item = vm.ArrayElement(*array, i);
     if (component.IsPrimitive()) {
       char type = component.descriptor.front();
       std::string signature = "(I)Ljava/lang/String;";
@@ -996,9 +997,11 @@ void InstallArrays(ClassLinker& cl) {
     add("copyOfRange", "(" + array + "II)" + array, CopyArray(true));
     const Builtin fill = [](Runtime& vm, Object*, Values a) {
       auto& array = vm.NonNull(a[0].ref());
-      const auto [first, last] = a.size() == 2 ? std::pair<size_t, size_t>{0, array.elements.size()}
+      const auto [first, last] = a.size() == 2 ? std::pair<size_t, size_t>{0, vm.ArrayLength(array)}
           : ArrayRange(vm, array, a[1].i(), a[2].i());
-      if (first != last) {
+      if (vm.DirectArray(array)) {
+        for (size_t i = first; i < last; ++i) vm.StoreArrayElement(array, i, a.back());
+      } else if (first != last) {
         vm.StoreArrayElement(array, first, a.back());
         std::fill(array.elements.begin() + first + 1, array.elements.begin() + last, array.elements[first]);
       }
@@ -1010,9 +1013,11 @@ void InstallArrays(ClassLinker& cl) {
       const auto* left = a[0].ref();
       const auto* right = a[1].ref();
       if (left == right) return Value::Int(1);
-      if (!left || !right || left->elements.size() != right->elements.size()) return Value::Int(0);
-      for (size_t i = 0; i < left->elements.size(); ++i) {
-        const auto l = left->elements[i], r = right->elements[i];
+      if (!left || !right) return Value::Int(0);
+      const auto length = vm.ArrayLength(*left);
+      if (length != vm.ArrayLength(*right)) return Value::Int(0);
+      for (size_t i = 0; i < length; ++i) {
+        const auto l = vm.ArrayElement(*left, i), r = vm.ArrayElement(*right, i);
         if (kind == 'L' ? !JavaEquals(vm, l.ref(), r.ref()) : PrimitiveCompare(kind, l, r) != 0) {
           return Value::Int(0);
         }
@@ -1023,8 +1028,8 @@ void InstallArrays(ClassLinker& cl) {
       const auto* array = a[0].ref();
       if (!array) return Value::Int(0);
       uint32_t hash = 1;
-      for (size_t i = 0; i < array->elements.size(); ++i) {
-        const auto item = array->elements[i];
+      for (size_t i = 0, length = vm.ArrayLength(*array); i < length; ++i) {
+        const auto item = vm.ArrayElement(*array, i);
         hash = hash * 31 + (kind == 'L' ? JavaHash(vm, item.ref()) : PrimitiveHash(kind, item));
       }
       return Value::Int(hash);
@@ -1035,8 +1040,17 @@ void InstallArrays(ClassLinker& cl) {
       const Builtin sort = [kind, range](Runtime& vm, Object*, Values a) {
         auto& array = vm.NonNull(a[0].ref());
         const auto [first, last] = range ? ArrayRange(vm, array, a[1].i(), a[2].i())
-            : std::pair<size_t, size_t>{0, array.elements.size()};
+            : std::pair<size_t, size_t>{0, vm.ArrayLength(array)};
         if (first == last) return Value{};
+        const auto compare = [kind](Value a, Value b) { return PrimitiveCompare(kind, a, b) < 0; };
+        if (vm.DirectArray(array)) {
+          std::vector<Value> values;
+          values.reserve(last - first);
+          for (size_t i = first; i < last; ++i) values.push_back(vm.ArrayElement(array, i));
+          std::ranges::sort(values, compare);
+          for (size_t i = first; i < last; ++i) vm.StoreArrayElement(array, i, values[i - first]);
+          return Value{};
+        }
         auto begin = array.elements.begin() + first;
         auto end = array.elements.begin() + last;
         if (kind == 'L') {
@@ -1044,19 +1058,19 @@ void InstallArrays(ClassLinker& cl) {
           SortObjects(vm, values, a.size() > (range ? 3 : 1) ? a.back().ref() : nullptr);
           std::copy(values.begin(), values.end(), array.elements.begin() + first);
         } else {
-          std::sort(begin, end, [kind](Value a, Value b) { return PrimitiveCompare(kind, a, b) < 0; });
+          std::sort(begin, end, compare);
         }
         return Value{};
       };
       const Builtin search = [kind, range](Runtime& vm, Object*, Values a) {
         auto& array = vm.NonNull(a[0].ref());
         auto [first, last] = range ? ArrayRange(vm, array, a[1].i(), a[2].i())
-            : std::pair<size_t, size_t>{0, array.elements.size()};
+            : std::pair<size_t, size_t>{0, vm.ArrayLength(array)};
         const size_t key = range ? 3 : 1;
         const Ordering order(vm, a.size() > key + 1 ? a.back().ref() : nullptr);
         while (first < last) {
           const size_t mid = first + (last - first - 1) / 2;
-          const Value item = array.elements[mid];
+          const Value item = vm.ArrayElement(array, mid);
           const int cmp = kind == 'L' ? order.Compare(item, a[key]) : PrimitiveCompare(kind, item, a[key]);
           if (cmp == 0) return Value::Int(mid);
           if (cmp < 0) first = mid + 1;
@@ -1300,105 +1314,17 @@ void InstallConcurrentQueueAndExecutor(ClassLinker& cl) {
   cl.AddMethod(executor, "<init>", "()V", 0, NoOp);
   auto& factory = cl.Define("Ljava/util/concurrent/ThreadFactory;", kObject, kInterface);
   Abstract(cl, factory, {{"newThread", "(Ljava/lang/Runnable;)Ljava/lang/Thread;"}});
-  auto& pool = cl.Define("Ljava/util/concurrent/ThreadPoolExecutor;", kAbstract);
-  auto& work_queue = cl.AddField(pool, "workQueue", kBlockingQueue, false);
-  auto& core_size = cl.AddField(pool, "corePoolSize", "I", false);
-  auto& max_size = cl.AddField(pool, "maximumPoolSize", "I", false);
-  auto& keep_alive = cl.AddField(pool, "keepAliveTime", "J", false);
-  auto& core_timeout = cl.AddField(pool, "allowCoreThreadTimeOut", "Z", false);
-  auto& thread_factory = cl.AddField(pool, "threadFactory", factory.descriptor, false);
-  auto& handler = cl.AddField(pool, "handler", "Ljava/util/concurrent/RejectedExecutionHandler;", false);
-  auto& running = cl.AddField(pool, "running", "Z", false);
-  auto& shutdown = cl.AddField(pool, "shutdown", "Z", false);
-  // Executors create workers on demand. Initialization only needs the queue and configuration.
-  const Builtin init_pool =
-      [&work_queue, &core_size, &max_size, &keep_alive, &thread_factory, &handler](
-          Runtime& vm, Object* self, Values a) {
-        if (a[0].i() < 0 || a[1].i() <= 0 || a[1].i() < a[0].i() || a[2].j() < 0) {
-          vm.Fail("Ljava/lang/IllegalArgumentException;", "Invalid executor size or keep-alive time");
-        }
-        vm.NonNull(a[4].ref());
-        self->fields[keep_alive.slot] = CallVirtual(vm, a[3].ref(), "toNanos", "(J)J", a.subspan(2, 1));
-        self->fields[core_size.slot] = a[0];
-        self->fields[max_size.slot] = a[1];
-        self->fields[work_queue.slot] = a[4];
-        if (a.size() >= 6) self->fields[thread_factory.slot] = Value::Ref(&vm.NonNull(a[5].ref()));
-        if (a.size() == 7) self->fields[handler.slot] = Value::Ref(&vm.NonNull(a[6].ref()));
-        return Value{};
-      };
-  cl.AddMethod(pool, "<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;)V",
-               0, init_pool);
-  cl.AddMethod(pool, "<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;"
-               "Ljava/util/concurrent/ThreadFactory;)V", 0, init_pool);
-  cl.AddMethod(pool, "<init>", "(IIJLjava/util/concurrent/TimeUnit;Ljava/util/concurrent/BlockingQueue;"
-               "Ljava/util/concurrent/ThreadFactory;Ljava/util/concurrent/RejectedExecutionHandler;)V", 0, init_pool);
-  cl.AddMethod(pool, "execute", "(Ljava/lang/Runnable;)V", 0,
-      [&work_queue, &running, &handler, &shutdown](Runtime& vm, Object* self, Values a) {
-        vm.NonNull(a[0].ref());
-        auto* queue = self->fields[work_queue.slot].ref();
-        const bool stopped = self->fields[shutdown.slot].i();
-        if (stopped || !CallVirtual(vm, queue, "offer", "(Ljava/lang/Object;)Z", a).i()) {
-          if (auto* reject = self->fields[handler.slot].ref()) {
-            return CallVirtual(vm, reject, "rejectedExecution",
-                               "(Ljava/lang/Runnable;Ljava/util/concurrent/ThreadPoolExecutor;)V",
-                               std::array{a[0], Value::Ref(self)});
-          }
-          vm.Fail("Ljava/util/concurrent/RejectedExecutionException;",
-                  stopped ? "Executor is shut down" : "Executor queue is full");
-        }
-        if (self->fields[running.slot].i()) return Value{};
-        self->fields[running.slot] = Value::Int(1);
-        try {
-          while (auto* task = CallVirtual(vm, queue, "poll", "()Ljava/lang/Object;", {}).ref()) {
-            CallVirtual(vm, task, "run", "()V", {});
-          }
-        } catch (...) {
-          self->fields[running.slot] = {};
-          throw;
-        }
-        self->fields[running.slot] = {};
-        return Value{};
-      });
-  cl.AddMethod(pool, "shutdown", "()V", 0, [&shutdown](Runtime&, Object* self, Values) {
-    self->fields[shutdown.slot] = Value::Int(1);
-    return Value{};
-  });
-  cl.AddMethod(pool, "isShutdown", "()Z", 0,
-      [&shutdown](Runtime&, Object* self, Values) { return self->fields[shutdown.slot]; });
-  const Builtin terminated = [&shutdown, &running](Runtime&, Object* self, Values) {
-    return Value::Int(self->fields[shutdown.slot].i() && !self->fields[running.slot].i());
-  };
-  cl.AddMethod(pool, "isTerminated", "()Z", 0, terminated);
-  cl.AddMethod(pool, "awaitTermination", "(JLjava/util/concurrent/TimeUnit;)Z", 0, terminated);
-  cl.AddMethod(pool, "getQueue", "()Ljava/util/concurrent/BlockingQueue;", 0,
-      [&work_queue](Runtime&, Object* self, Values) { return self->fields[work_queue.slot]; });
-  cl.AddMethod(pool, "getCorePoolSize", "()I", 0,
-      [&core_size](Runtime&, Object* self, Values) { return self->fields[core_size.slot]; });
-  cl.AddMethod(pool, "getMaximumPoolSize", "()I", 0,
-      [&max_size](Runtime&, Object* self, Values) { return self->fields[max_size.slot]; });
-  cl.AddMethod(pool, "allowsCoreThreadTimeOut", "()Z", 0,
-      [&core_timeout](Runtime&, Object* self, Values) { return self->fields[core_timeout.slot]; });
-  cl.AddMethod(pool, "allowCoreThreadTimeOut", "(Z)V", 0,
-      [&core_timeout, &keep_alive](Runtime& vm, Object* self, Values args) {
-        if (args[0].i() && self->fields[keep_alive.slot].j() <= 0) {
-          vm.Fail("Ljava/lang/IllegalArgumentException;", "Core threads must have nonzero keep alive times");
-        }
-        self->fields[core_timeout.slot] = args[0];
-        return Value{};
-      });
-  cl.AddMethod(pool, "getKeepAliveTime", "(Ljava/util/concurrent/TimeUnit;)J", 0,
-      [&keep_alive](Runtime& vm, Object* self, Values a) {
-        auto& unit = vm.linker.Resolve("Ljava/util/concurrent/TimeUnit;");
-        vm.linker.Initialize(unit);
-        const auto nanos = vm.linker.FindField(unit, "NANOSECONDS", unit.descriptor, true).value;
-        return CallVirtual(vm, a[0].ref(), "convert", "(JLjava/util/concurrent/TimeUnit;)J",
-                           std::array{self->fields[keep_alive.slot], nanos});
-      });
-
 }
 
 void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
   auto& objects = cl.Define("Ljava/util/Objects;", kObject, art::kAccFinal);
+  cl.AddMethod(objects, "checkIndex", "(II)I", art::kAccStatic,
+      [](Runtime& vm, Object*, Values args) {
+        if (args[0].i() < 0 || args[0].i() >= args[1].i()) {
+          vm.Fail("Ljava/lang/IndexOutOfBoundsException;", std::to_string(args[0].i()));
+        }
+        return args[0];
+      });
   cl.AddMethod(objects, "checkFromIndexSize", "(III)I", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) {
         const int from = a[0].i(), size = a[1].i(), length = a[2].i();
@@ -1433,6 +1359,24 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
   InstallArrays(cl);
   InstallUnmodifiableList(cl);
   auto& collections = cl.Define("Ljava/util/Collections;", kObject, art::kAccFinal);
+  const Builtin binary_search = [](Runtime& vm, Object*, Values args) {
+    auto* list = &vm.NonNull(args[0].ref());
+    const Ordering order(vm, args.size() == 3 ? args[2].ref() : nullptr);
+    int32_t low = 0;
+    int32_t high = CallVirtual(vm, list, "size", "()I").i();
+    while (low < high) {
+      const auto mid = low + (high - low - 1) / 2;
+      const auto value = ListGet(vm, list, mid);
+      const auto result = order.Compare(value, args[1]);
+      if (result == 0) return Value::Int(mid);
+      if (result < 0) low = mid + 1;
+      else high = mid;
+    }
+    return Value::Int(-low - 1);
+  };
+  cl.AddMethod(collections, "binarySearch", "(Ljava/util/List;Ljava/lang/Object;)I", art::kAccStatic, binary_search);
+  cl.AddMethod(collections, "binarySearch", "(Ljava/util/List;Ljava/lang/Object;Ljava/util/Comparator;)I",
+               art::kAccStatic, binary_search);
   InstallUnmodifiableMap(cl, collections);
   for (const auto& [name, type] : {std::pair{"synchronizedCollection", kCollection},
                                   {"synchronizedList", kList}, {"synchronizedSet", kSet}}) {
@@ -1491,6 +1435,12 @@ void InstallUtilities(ClassLinker& cl, const Interfaces& interfaces) {
   });
   cl.AddMethod(collections, "singletonList", "(Ljava/lang/Object;)Ljava/util/List;", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) { return MakeList(vm, a, true); });
+  cl.AddMethod(collections, "nCopies", "(ILjava/lang/Object;)Ljava/util/List;", art::kAccStatic,
+      [](Runtime& vm, Object*, Values args) {
+        auto& views = vm.linker.Resolve("Ljava/util/EmbeddedSynchronizedCollections;");
+        auto& method = vm.linker.FindMethod(views, "nCopies", "(ILjava/lang/Object;)Ljava/util/List;", true);
+        return vm.Invoke(method, nullptr, args);
+      });
   cl.AddMethod(collections, "singleton", "(Ljava/lang/Object;)Ljava/util/Set;", art::kAccStatic,
       [](Runtime& vm, Object*, Values a) {
         RootScope roots(vm);

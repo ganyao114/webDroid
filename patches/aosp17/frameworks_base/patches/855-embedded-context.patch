@@ -1348,7 +1348,7 @@
 -            comment = "Returns PERMISSION_DENIED by default on Ravenwood")
 -    public abstract int checkCallingOrSelfPermission(@NonNull @PermissionName String permission);
 +    public int checkCallingOrSelfPermission(@NonNull String permission) {
-+        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        return checkSelfPermission(permission);
 +    }
  
      /**
@@ -1779,7 +1779,7 @@
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
 -    public abstract boolean isDeviceProtectedStorage();
 +    public boolean isDeviceProtectedStorage() {
-+        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        return false;
 +    }
  
      /**
@@ -1789,7 +1789,7 @@
 -    @RavenwoodSupported(type = SupportType.SUBCLASS, subclass = "ContextImpl")
 -    public abstract boolean isCredentialProtectedStorage();
 +    public boolean isCredentialProtectedStorage() {
-+        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        return true;
 +    }
  
      /**

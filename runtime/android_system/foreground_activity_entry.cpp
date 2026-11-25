@@ -237,6 +237,11 @@ struct Session {
     void SetActive(Object* activity, Object* root, std::string name) {
         RuntimeField("current", kActivity) = Value::Ref(activity);
         RuntimeField("root", kViewRoot) = Value::Ref(root);
+        auto* base = activity_stack.empty() ? activity : Jni().Read(activity_stack.front().activity.get());
+        vm.CallStatic("Landroid/app/ActivityThread;", "updateEmbeddedTask",
+            "(Landroid/app/Activity;Landroid/app/Activity;I)V",
+            std::array{Value::Ref(base), Value::Ref(activity),
+                       Value::Int(static_cast<int32_t>(activity_stack.size() + 1))});
         activity_class = std::move(name);
         activity_descriptor = Descriptor(activity_class);
         finishing = false;

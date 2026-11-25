@@ -5,7 +5,7 @@ Browser-native **Android 17 (`android-17.0.0_r1`)** runtime running inside stand
 ## Architecture
 
 - **Upstream-First AOSP 17 Runtime**:
-  - Builds core Android C++ libraries (`libandroidfw`, `libbinder`, `servicemanager`, `libdexfile`, `libartbase`), `framework` / `libcore` / `Connectivity` / `Telephony` (minimal auditable patches in `patches/aosp17/`, 649/649 JNI declarations bound), and genuine upstream **Launcher3**, **SystemUI**, and **Settings** APKs directly against read-only `android-17.0.0_r1` checkouts.
+  - Builds core Android C++ libraries (`libandroidfw`, `libbinder`, `servicemanager`, `libdexfile`, `libartbase`), `framework` / `libcore` / `Connectivity` / `Telephony` (patches in `patches/aosp17/`, 728 JNI declarations bound), and genuine upstream **Launcher3**, **SystemUI**, and **Settings** APKs directly against read-only `android-17.0.0_r1` checkouts.
   - Zero-copy SurfaceFlinger display-list compositor (`web/surfaceflinger/`) rendering on **WebGPU** (with WebGL2 fallback), real AOSP 17 Roboto font rendering, pointer/touch/IME input, manifest `ContentProvider` startup, and multi-level Fragment navigation.
 - **Unified ART Java ↔ SwiftVM ARM64/ARMv7 `.so` Hybrid Process Engine**:
   - Single ThinLTO system runtime (`android_system.wasm`) linking both the AOSP 17 ART interpreter/JNI runtime and SwiftVM + SoftMMU + ELF32/ELF64 linker (`runtime/linker_ffi/`).
@@ -58,29 +58,61 @@ With the local `third_party/commercial_apks/weixin8080_arm64.apk` in place, run
 trace. The test verifies all 18 DEX files, the Tinker constructor and inline
 fence, ForkJoinPool construction, the running app identity, and the v2 signing
 certificate returned by both PackageManager signing flags. It records the
-loaded ARM64 images, the exception stack, and the lifecycle counters. CTest
-marks the test skipped when the APK is absent.
+loaded ARM64 images, the lifecycle counters, the display list, and any startup
+exception. CTest marks the test skipped when the APK is absent.
 
-Pass `--require-ui` to the test command printed by CTest to require a completed
-boot with draw text and non-blank decor pixels. Pass `--probe-mmkv` for an
-isolated run of the APK's ARM64 MMKV library that writes, syncs, closes, and
-reopens a temporary store. `--probe-core` also loads STLport, CSO, and xlog in
-that process. Each mode reports its library mappings and JNI counters.
+The cold-boot test requires three consecutive welcome frames with the expected
+drawn labels and non-blank bitmap pixels in the published display lists. Pass
+`--require-ui` to the test command printed by CTest to require the local APK
+as well. Pass `--probe-mmkv` for an isolated run of the APK's ARM64 MMKV library
+that writes, syncs, closes, and reopens a temporary store. `--probe-core` also
+loads STLport, CSO, and xlog in that process. Each mode reports its library
+mappings and JNI counters.
 
 The cold boot constructs its ForkJoinPool and passes the coroutine dispatcher
-setup. `libmmkv.so`, `libwechatcrash.so`, `libtrace-canary.so`, and `libcso.log.so`
-finish `JNI_OnLoad` in the WeChat process. The Tencent Matrix
-`libmatrix-jnihook.so` then fails its `dalvik.system.VMRuntime` lookup during
-`JNI_OnLoad`. The library's hook expects ART's `setHiddenApiExemptions` method
-and native method metadata. The resulting `JniHookJni.jniPlaceHolder()`
-`UnsatisfiedLinkError` surfaces in `JniHookJni.b` at DEX PC 0. Attachment has
-yet to return, so provider startup, `Application.onCreate`, and activity
-rendering remain pending. The APK declares 27 main-process providers and three
-assigned to other processes. The framework smoke fixture verifies that main
-providers run after attachment and before `Application.onCreate`, and that
-providers assigned to another process are skipped.
+setup. `libmmkv.so`, `libwechatcrash.so`, `libtrace-canary.so`, `libcso.log.so`,
+and Matrix's `libmatrix-jnihook.so` finish `JNI_OnLoad`. Matrix finds the
+placeholder's JNI entry point through `Executable.artMethod` and
+`MMApplicationLike.onBaseContextAttached` returns. The JNI bridge keeps native
+entry points in guest memory and dispatches through the current slot. Process
+exit handlers can continue to use static mutexes until teardown finishes.
+The upstream `VMRuntime` reports the APK's target SDK and guest instruction set.
+Non-movable primitive arrays share their backing memory with guest JNI.
 
-### WeChat 8.0.80 memory budget for Phase 10B
+The application installs the 27 manifest providers for its main process. The
+lifecycle counters record 28 successful calls to `ContentProvider.attachInfo`
+before `Application.onCreate` starts. The probe checks Firebase provider
+startup and verifies that provider initialization stays in the main process.
+
+During `MMApplicationLike.onCreate`, CSO, WCDB, Cronet, WeChat networking,
+`libwechatnormsg.so`, the V8 bridge, `libaff_biz.so`, and the PayMars libraries
+finish `JNI_OnLoad`. PayMars creates its native context and the wallet
+initializer returns. Both application `onCreate` methods return before
+`LauncherUI.onCreate` starts. `LauncherUI` returns from `onCreate`, `onStart`,
+and `onResume`. Its request to open `WelcomeActivity` uses the host's immediate
+surface transition. The welcome screen draws “Log In”, “Sign Up”, and “语言”.
+The probe verifies those labels in SurfaceFlinger's display list and reads
+the pixels from a bitmap drawn by the welcome window. It also checks that
+the visible activity completed its lifecycle.
+
+The embedded Java TLS boundary reports an unavailable trust provider, which
+WeChat handles through its lifecycle callback. Services assigned to other
+manifest processes require a separate guest. The main guest reports those
+services unavailable when the application requests them.
+Extended ticks after the welcome screen reach a WeChat reporting task that
+uses `org.apache.http.impl.client.DefaultHttpClient`. The APK declares
+`org.apache.http.legacy` as an optional shared library. That library is absent
+from the pinned upstream source profile.
+
+JNI lifecycle hooks use the ELF dependency search order.
+The guest VFS exposes APK-backed library files and ELF metadata for system
+libraries. SoftMMU reserves ARM64 anonymous address ranges above 4 GiB for
+V8 and allocates backing as guest code writes pages.
+Owl starts its looper on a caller-supplied 130 MiB virtual stack. An attached
+native thread retains its JNI local references across calls until it pops
+their local frame, detaches, or exits.
+
+### WeChat 8.0.80 Wasm memory budget
 
 `android_system` uses 4,096 Wasm pages, or 268,435,456 bytes of fixed shared linear memory.
 The local APK is 286,319,384 bytes. It exceeds the entire linear address budget by

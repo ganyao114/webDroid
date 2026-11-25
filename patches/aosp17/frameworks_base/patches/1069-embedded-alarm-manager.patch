@@ -1,0 +1,385 @@
+--- a/frameworks/base/apex/jobscheduler/framework/java/android/app/AlarmManager.java
++++ b/frameworks/base/apex/jobscheduler/framework/java/android/app/AlarmManager.java
+@@ -17,7 +17,6 @@
+ package android.app;
+ 
+ import android.Manifest;
+-import android.annotation.FlaggedApi;
+ import android.annotation.IntDef;
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+@@ -40,14 +39,12 @@
+ import android.os.Parcel;
+ import android.os.Parcelable;
+ import android.os.Process;
+-import android.os.RemoteException;
++import android.os.SystemClock;
+ import android.os.UserHandle;
+ import android.os.WorkSource;
+-import android.text.TextUtils;
++import android.content.pm.PackageManager;
++import android.util.ArrayMap;
+ import android.util.Log;
+-import android.util.proto.ProtoOutputStream;
+-
+-import com.android.i18n.timezone.ZoneInfoDb;
+ 
+ import java.lang.annotation.Retention;
+ import java.lang.annotation.RetentionPolicy;
+@@ -323,13 +320,11 @@
+     @ChangeId
+     public static final long EXACT_LISTENER_ALARMS_DROPPED_ON_CACHED = 265195908L;
+ 
+-    @UnsupportedAppUsage
+-    private final IAlarmManager mService;
+     private final Context mContext;
+-    private final String mPackageName;
+     private final boolean mAlwaysExact;
+     private final int mTargetSdkVersion;
+     private final Handler mMainThreadHandler;
++    private final ArrayMap<Object, Alarm> mAlarms = new ArrayMap<>();
+ 
+     /**
+      * Direct-notification alarms: the requester must be running continuously from the
+@@ -343,10 +338,9 @@
+         void onAlarm();
+     }
+ 
+-    final class ListenerWrapper extends IAlarmListener.Stub implements Runnable {
++    final class ListenerWrapper implements Runnable {
+         final OnAlarmListener mListener;
+         Executor mExecutor;
+-        IAlarmCompleteListener mCompletion;
+ 
+         public ListenerWrapper(OnAlarmListener listener) {
+             mListener = listener;
+@@ -357,42 +351,70 @@
+         }
+ 
+         public void cancel() {
+-            try {
+-                mService.remove(null, this);
+-            } catch (RemoteException ex) {
+-                throw ex.rethrowFromSystemServer();
+-            }
+-        }
+-
+-        @Override
+-        public void doAlarm(IAlarmCompleteListener alarmManager) {
+-            mCompletion = alarmManager;
+-
+-            mExecutor.execute(this);
++            removeAlarm(this);
+         }
+ 
+         @Override
+         public void run() {
+-            // Now deliver it to the app
+-            try {
+-                mListener.onAlarm();
+-            } finally {
+-                // No catch -- make sure to report completion to the system process,
+-                // but continue to allow the exception to crash the app.
+-
++            mListener.onAlarm();
++        }
++    }
++
++    private final class Alarm implements Runnable {
++        final Object key;
++        final PendingIntent operation;
++        final ListenerWrapper listener;
++        final AlarmClockInfo clock;
++        final long interval;
++
++        Alarm(PendingIntent operation, ListenerWrapper listener, AlarmClockInfo clock,
++                long interval) {
++            this.key = operation != null ? operation : Objects.requireNonNull(listener);
++            this.operation = operation;
++            this.listener = listener;
++            this.clock = clock;
++            this.interval = interval;
++        }
++
++        void post(long delay) {
++            final long now = SystemClock.uptimeMillis();
++            if (!mMainThreadHandler.postAtTime(this, now + Math.min(delay, Long.MAX_VALUE - now))) {
++                mAlarms.remove(key);
++            }
++        }
++
++        @Override
++        public void run() {
++            synchronized (mAlarms) {
++                if (mAlarms.get(key) != this) return;
++                if (interval > 0) post(interval);
++                else mAlarms.remove(key);
++            }
++            if (listener != null) {
++                listener.mExecutor.execute(listener);
++            } else {
+                 try {
+-                    mCompletion.alarmComplete(this);
+-                } catch (Exception e) {
+-                    Log.e(TAG, "Unable to report completion to Alarm Manager!", e);
++                    operation.send();
++                } catch (PendingIntent.CanceledException canceled) {
++                    synchronized (mAlarms) {
++                        if (mAlarms.get(key) == this) removeAlarm(key);
++                    }
+                 }
+             }
+         }
+     }
+ 
++    private void removeAlarm(Object key) {
++        synchronized (mAlarms) {
++            final Alarm prior = mAlarms.remove(key);
++            if (prior != null) mMainThreadHandler.removeCallbacks(prior);
++        }
++    }
++
+     /**
+      * Tracking of the OnAlarmListener -> ListenerWrapper mapping, for cancel() support.
+      * An entry is guaranteed to stay in this map as long as its ListenerWrapper is held by the
+-     * server.
++     * embedded alarm queue.
+      *
+      * <p>Access is synchronized on the AlarmManager class object.
+      */
+@@ -401,11 +423,8 @@
+     /**
+      * package private on purpose
+      */
+-    AlarmManager(IAlarmManager service, Context ctx) {
+-        mService = service;
+-
++    AlarmManager(Context ctx) {
+         mContext = ctx;
+-        mPackageName = ctx.getPackageName();
+         mTargetSdkVersion = ctx.getApplicationInfo().targetSdkVersion;
+         mAlwaysExact = (mTargetSdkVersion < Build.VERSION_CODES.KITKAT);
+         mMainThreadHandler = new Handler(ctx.getMainLooper());
+@@ -797,7 +816,7 @@
+      * @hide
+      */
+     @SystemApi
+-    @RequiresPermission(Manifest.permission.SCHEDULE_PRIORITIZED_ALARM)
++    @RequiresPermission("android.permission.SCHEDULE_PRIORITIZED_ALARM")
+     public void setPrioritized(@AlarmType int type, long windowStartMillis, long windowLengthMillis,
+             @Nullable String tag, @NonNull Executor executor, @NonNull OnAlarmListener listener) {
+         Objects.requireNonNull(executor);
+@@ -1022,8 +1041,7 @@
+         final StringBuilder tagBuilder = new StringBuilder(GENERATED_TAG_PREFIX);
+ 
+         tagBuilder.append(":");
+-        final int attributionUid =
+-                (ws == null || ws.isEmpty()) ? Process.myUid() : ws.getAttributionUid();
++        final int attributionUid = Process.myUid();
+         tagBuilder.append(UserHandle.formatUid(attributionUid));
+         tagBuilder.append(":");
+         tagBuilder.append(triggerMillis);
+@@ -1160,11 +1178,19 @@
+             recipientWrapper.setExecutor(targetExecutor);
+         }
+ 
+-        try {
+-            mService.set(mPackageName, type, triggerAtMillis, windowMillis, intervalMillis, flags,
+-                    operation, recipientWrapper, listenerTag, workSource, alarmClock);
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
++        if (type < RTC_WAKEUP || type > ELAPSED_REALTIME) {
++            throw new IllegalArgumentException("Unknown alarm type " + type);
++        }
++        if (operation != null && windowMillis == WINDOW_EXACT && !canScheduleExactAlarms()) {
++            throw new SecurityException("Exact alarms require SCHEDULE_EXACT_ALARM");
++        }
++        final boolean realtime = type == RTC_WAKEUP || type == RTC;
++        final long now = realtime ? System.currentTimeMillis() : SystemClock.elapsedRealtime();
++        final Alarm alarm = new Alarm(operation, recipientWrapper, alarmClock, intervalMillis);
++        synchronized (mAlarms) {
++            removeAlarm(alarm.key);
++            mAlarms.put(alarm.key, alarm);
++            alarm.post(Math.max(0, triggerAtMillis - now));
+         }
+     }
+ 
+@@ -1461,7 +1487,6 @@
+      *                        {@link OnAlarmListener#onAlarm() onAlarm()} method will be called when
+      *                        the alarm time is reached.
+      */
+-    @FlaggedApi(Flags.FLAG_ALLOW_LISTENERS_WHILE_IDLE)
+     public void setExactAndAllowWhileIdle(@AlarmType int type, long triggerAtMillis,
+             @NonNull String tag, @NonNull Executor executor, @NonNull OnAlarmListener listener) {
+         Objects.requireNonNull(tag);
+@@ -1492,11 +1517,7 @@
+             }
+         }
+ 
+-        try {
+-            mService.remove(operation, null);
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
+-        }
++        removeAlarm(operation);
+     }
+ 
+     /**
+@@ -1531,10 +1552,11 @@
+      * Remove all alarms previously set by the caller, if any.
+      */
+     public void cancelAll() {
+-        try {
+-            mService.removeAll(mContext.getOpPackageName());
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
++        synchronized (mAlarms) {
++            for (int i = 0; i < mAlarms.size(); i++) {
++                mMainThreadHandler.removeCallbacks(mAlarms.valueAt(i));
++            }
++            mAlarms.clear();
+         }
+     }
+ 
+@@ -1546,11 +1568,7 @@
+      */
+     @RequiresPermission(android.Manifest.permission.SET_TIME)
+     public void setTime(long millis) {
+-        try {
+-            mService.setTime(millis);
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
+-        }
++        throw new SecurityException("The embedded clock is managed by the host");
+     }
+ 
+     /**
+@@ -1570,32 +1588,14 @@
+      */
+     @RequiresPermission(android.Manifest.permission.SET_TIME_ZONE)
+     public void setTimeZone(String timeZone) {
+-        if (TextUtils.isEmpty(timeZone)) {
+-            return;
+-        }
+-
+-        // Reject this timezone if it isn't an Olson zone we recognize.
+-        if (mTargetSdkVersion >= Build.VERSION_CODES.M) {
+-            boolean hasTimeZone = ZoneInfoDb.getInstance().hasTimeZone(timeZone);
+-            if (!hasTimeZone) {
+-                throw new IllegalArgumentException("Timezone: " + timeZone + " is not an Olson ID");
+-            }
+-        }
+-
+-        try {
+-            mService.setTimeZone(timeZone);
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
+-        }
++        if (timeZone == null || timeZone.isEmpty()) return;
++        throw new SecurityException("The embedded time zone is managed by the host");
+     }
+ 
+     /** @hide */
+     public long getNextWakeFromIdleTime() {
+-        try {
+-            return mService.getNextWakeFromIdleTime();
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
+-        }
++        // The foreground runtime has no system idle state.
++        return Long.MAX_VALUE;
+     }
+ 
+     /**
+@@ -1620,11 +1620,11 @@
+      * @see android.os.PowerManager#isIgnoringBatteryOptimizations(String)
+      */
+     public boolean canScheduleExactAlarms() {
+-        try {
+-            return mService.canScheduleExactAlarms(mContext.getOpPackageName());
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        return mTargetSdkVersion < Build.VERSION_CODES.S
++                || mContext.checkSelfPermission(Manifest.permission.SCHEDULE_EXACT_ALARM)
++                        == PackageManager.PERMISSION_GRANTED
++                || mContext.checkSelfPermission(Manifest.permission.USE_EXACT_ALARM)
++                        == PackageManager.PERMISSION_GRANTED;
+     }
+ 
+     /**
+@@ -1637,11 +1637,8 @@
+      */
+     @TestApi
+     public boolean hasScheduleExactAlarm(@NonNull String packageName, int userId) {
+-        try {
+-            return mService.hasScheduleExactAlarm(packageName, userId);
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        return mContext.getUserId() == userId && mContext.getPackageName().equals(packageName)
++                && canScheduleExactAlarms();
+     }
+ 
+     /**
+@@ -1653,11 +1650,7 @@
+     @SuppressLint("UnflaggedApi") // @TestApi without associated feature.
+     @TestApi
+     public long getPrioritizedAlarmDelay() {
+-        try {
+-            return mService.getPrioritizedAlarmDelay();
+-        } catch (RemoteException re) {
+-            throw re.rethrowFromSystemServer();
+-        }
++        return 0;
+     }
+ 
+     /**
+@@ -1695,11 +1688,17 @@
+      * @hide
+      */
+     public AlarmClockInfo getNextAlarmClock(int userId) {
+-        try {
+-            return mService.getNextAlarmClock(userId);
+-        } catch (RemoteException ex) {
+-            throw ex.rethrowFromSystemServer();
+-        }
++        if (mContext.getUserId() != userId) return null;
++        AlarmClockInfo next = null;
++        synchronized (mAlarms) {
++            for (int i = 0; i < mAlarms.size(); i++) {
++                final AlarmClockInfo clock = mAlarms.valueAt(i).clock;
++                if (clock != null && (next == null || clock.getTriggerTime() < next.getTriggerTime())) {
++                    next = clock;
++                }
++            }
++        }
++        return next;
+     }
+ 
+     /**
+@@ -1783,14 +1782,5 @@
+             }
+         };
+ 
+-        /** @hide */
+-        public void dumpDebug(ProtoOutputStream proto, long fieldId) {
+-            final long token = proto.start(fieldId);
+-            proto.write(AlarmClockInfoProto.TRIGGER_TIME_MS, mTriggerTime);
+-            if (mShowIntent != null) {
+-                mShowIntent.dumpDebug(proto, AlarmClockInfoProto.SHOW_INTENT);
+-            }
+-            proto.end(token);
+-        }
+     }
+ }
+--- a/frameworks/base/core/java/android/content/Context.java
++++ b/frameworks/base/core/java/android/content/Context.java
+@@ -5063,6 +5063,7 @@
+             case "android.app.NotificationManager": return NOTIFICATION_SERVICE;
+             case "android.os.storage.StorageManager": return STORAGE_SERVICE;
+             case "android.net.ConnectivityManager": return CONNECTIVITY_SERVICE;
++            case "android.app.AlarmManager": return ALARM_SERVICE;
+         }
+         return null;
+     }

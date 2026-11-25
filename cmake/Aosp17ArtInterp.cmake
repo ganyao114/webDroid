@@ -37,11 +37,11 @@ target_include_directories(aosp17_core_jni PRIVATE "${_interp}")
 
 _wa_art_static(aosp17_art_interp "${_interp}"
     class_linker.cpp gc_heap.cpp interpreter.cpp runtime.cpp boot.cpp boot_collections.cpp
-    boot_platform.cpp boot_files.cpp jni.cpp tier1.cpp)
+    boot_platform.cpp boot_files.cpp deflater.cpp jni.cpp tier1.cpp vm_runtime.cpp)
 target_include_directories(aosp17_art_interp PUBLIC "${_interp}"
     PRIVATE "${AOSP17_SOURCE_DIR}/art/runtime")
 target_link_libraries(aosp17_art_interp PUBLIC aosp17_libdexfile aosp17_libartbase
-    PRIVATE aosp17_core_jni)
+    PRIVATE aosp17_core_jni aosp17_zlib)
 if(AOSP17_ART_INTERP_HGRAPH)
     get_target_property(_hgraph_includes aosp17_art_hgraph INTERFACE_SYSTEM_INCLUDE_DIRECTORIES)
     target_include_directories(aosp17_art_interp SYSTEM BEFORE PRIVATE ${_hgraph_includes})

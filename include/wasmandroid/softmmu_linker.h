@@ -69,6 +69,7 @@ typedef struct wa_host_call_ctx {
     int32_t has_fp_ret_bits;
     uint64_t fp_high[8]; // High 64 bits of V0..V7 (ARM64).
     uint64_t fp_ret_high; // High 64 bits of an AAPCS64 binary128 return.
+    uint32_t fp_control;  // Guest FPSCR (ARM32) or FPCR (ARM64), in/out.
 } wa_host_call_ctx_t;
 
 typedef int32_t (*wa_host_symbol_fn)(wa_host_call_ctx_t* ctx, void* user);

@@ -45,6 +45,7 @@ struct LoadedImage {
 struct GuestAllocation {
     size_t mapped_size;
     size_t size;
+    bool heap = true;
 };
 
 struct ExitHandler {
@@ -81,11 +82,18 @@ struct wa_dbt {
     uint64_t image_loads = 0, image_unloads = 0;
     uint64_t last_pc = 0;
     uint64_t last_fault_address = 0;
+    void (*on_thread_exit)(void*, uint64_t) = nullptr;
+    void* thread_exit_context = nullptr;
 };
 
 namespace wa::dbt {
 
 void RegisterBuiltins(wa_dbt& dbt);
+int32_t CallInitializer(wa_dbt& dbt, uint64_t entry);
+int32_t CallInitializer(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& frame,
+                        wa_guest_call_result_t& result);
+int32_t CallJniMethod(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& frame,
+                      wa_guest_call_result_t& result);
 int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name,
                      wa_host_symbol_fn function, void* user, bool builtin = false,
                      uint64_t* address = nullptr);

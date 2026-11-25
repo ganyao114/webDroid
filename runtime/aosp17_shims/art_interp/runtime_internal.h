@@ -25,6 +25,14 @@ using Builtin = std::function<Value(Runtime&, Object*, std::span<const Value>)>;
 
 inline bool IsReference(char shorty) { return shorty == 'L' || shorty == '['; }
 inline bool IsWide(char shorty) { return shorty == 'J' || shorty == 'D'; }
+inline size_t PrimitiveWidth(char type) {
+  switch (type) {
+    case 'Z': case 'B': return 1;
+    case 'C': case 'S': return 2;
+    case 'J': case 'D': return 8;
+    default: return 4;
+  }
+}
 
 std::string MemberKey(std::string_view name, std::string_view signature);
 std::string Shorty(std::string_view signature);
@@ -125,7 +133,8 @@ enum class InitState { Uninitialized, Initializing, Initialized, Failed };
 struct Class {
   std::string descriptor;
   char kind = 'L';
-  bool optional_boot_superclass = false;
+  std::string_view fallback_boot_superclass;
+  std::span<const std::string_view> optional_boot_interfaces;
   const art::DexFile* dex = nullptr;
   uint16_t definition = 0;
   uint32_t flags = 0;
@@ -170,6 +179,7 @@ struct Object {
   Object* weak_queue = nullptr;
   Object* next_free = nullptr;
   bool marked = false;
+  bool weak_enqueued = false;
   bool dex_literal = false;
   bool read_only = false;
   bool stack_at_construction = false;
@@ -194,10 +204,12 @@ class DirectBufferMemory {
   virtual bool Read(size_t offset, std::span<uint8_t> bytes) const = 0;
   virtual bool Write(size_t offset, std::span<const uint8_t> bytes) = 0;
   virtual uint64_t GuestAddress() const { return 0; }
+  virtual uint64_t Address() const { return GuestAddress(); }
   const size_t size;
 };
 
 using DirectArrays = std::unordered_map<const Object*, std::unique_ptr<DirectBufferMemory>>;
+struct DeflaterStream;
 
 struct DirectBufferView {
   std::unique_ptr<DirectBufferMemory>* backing;
@@ -285,6 +297,7 @@ class GcHeap {
   bool ShouldCollect(size_t interval) const;
   GcStats Collect(Runtime& runtime);
   GcStats Stats() const { return stats_; }
+  size_t ObjectCapacity() const { return slabs_.size() * kSlabSize; }
 
  private:
   static constexpr size_t kSlabSize = 256;
@@ -339,7 +352,9 @@ struct Runtime {
   void StartThread(Object* thread);
   bool HasThread(const Object* thread) const;
   bool WakeThread(Object* thread, bool interrupt);
+  bool EnqueueReference(Object& reference);
   void NotifyWaiters(Object& monitor, bool all);
+  void WaitOnMonitor(Object& monitor, std::optional<int64_t> timeout);
   void RunReadyThreads();
   std::optional<std::chrono::steady_clock::time_point> NextThreadWakeup() const;
   [[noreturn]] void SuspendWorker(std::optional<int64_t> delay_ns, bool interruptible,
@@ -347,6 +362,7 @@ struct Runtime {
   void Promote(Method& method);
   Object* NewObject(Class& cls, Method& constructor, std::span<const Value> args);
   Object* NewArray(Class& cls, int32_t length);
+  Object* NewNonMovableArray(Class& cls, int32_t length);
   Object* NewString(std::u16string text);
   Object* Intern(Object* string);
   Object* InternLiteral(std::u16string text);
@@ -359,6 +375,7 @@ struct Runtime {
   Value ArrayElement(const Object& array, int32_t index);
   void StoreArrayElement(Object& array, int32_t index, Value value);
   DirectBufferMemory* DirectArray(const Object& array) const;
+  Object* NewReflectedMethod(Method& method, uint64_t guest_address = 0);
   Object* NewDirectBuffer(int32_t capacity, std::unique_ptr<DirectBufferMemory> memory = {});
   std::optional<DirectBufferView> DirectBuffer(Object* buffer);
   GuestNativeLibraries* NativeLibraries();
@@ -373,7 +390,11 @@ struct Runtime {
 
   decltype(Options::system_properties) system_properties;
   const Options options;
-  uint32_t target_sdk_version = 0;
+  uint32_t target_sdk_version = 10'000;
+  float target_heap_utilization = 0.75f;
+  uint64_t native_allocated_bytes = 0;
+  std::vector<std::u16string> hidden_api_exemptions;
+  std::vector<int64_t> disabled_compat_changes;
   ClassLinker linker;
   GcHeap heap;
   std::unique_ptr<JniBridge> jni;
@@ -403,6 +424,7 @@ struct Runtime {
   std::set<std::string, std::less<>> read_only_paths;
   std::optional<std::span<const uint8_t>> ReadGuestFile(std::string_view path) const;
   std::unordered_map<const Object*, FileHandle> file_handles;
+  std::unordered_map<const Object*, std::shared_ptr<DeflaterStream>> deflater_streams;
   std::unordered_map<const Object*, std::shared_ptr<const void>> regex_programs;
   int32_t next_file_descriptor = 3;
   RootScope* roots = nullptr;
@@ -428,14 +450,24 @@ struct Runtime {
   };
   const LoopDispatch* loop_dispatch = nullptr;
   std::vector<std::vector<SuspendedFrame>> suspended_loops;
-  std::vector<SuspendedFrame> CaptureSuspendedFrames(const LoopDispatch& dispatch,
-                                                      const Object* released_monitor = nullptr);
+  std::optional<std::vector<SuspendedFrame>> CaptureSuspendedFrames(const LoopDispatch& dispatch,
+                                                                   const Object* released_monitor = nullptr);
+  void TrySuspendWorker(std::optional<int64_t> delay_ns, bool interruptible, Object* monitor);
+  struct MonitorWait {
+    Object& monitor;
+    Object* thread;
+    MonitorWait* previous;
+    bool ready = false;
+  };
+  MonitorWait* monitor_wait = nullptr;
   struct Worker {
     Object* thread;
     std::vector<SuspendedFrame> frames;
     std::optional<std::chrono::steady_clock::time_point> due = std::chrono::steady_clock::time_point::min();
     bool interruptible = false;
     bool interrupted = false;
+    bool running = false;
+    bool finished = false;
     Object* monitor = nullptr;
   };
   std::list<Worker> workers;

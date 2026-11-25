@@ -32,6 +32,7 @@ enum class WaitKind {
     Guard,
     Sem,
     Sleep,
+    Barrier,
     File,
     Futex,
     Signal,
@@ -61,11 +62,13 @@ struct GuestSignalStack {
 struct GuestThread {
     uint64_t id = 1;
     uint64_t stack_base = 0, stack_size = 1 << 20, active_sp = 0, steps_left = 0;
+    bool owns_stack = true;
     uint64_t errno_address = 0, thread_pointer = 0, result = 0, joiner = 0;
-    uint64_t host_entry = 0;
+    uint64_t host_entry = 0, host_errno_address = 0;
+    uint64_t native_looper = 0;
     uint64_t locale = 0, signal_mask = 0, pending_signals = 0;
     GuestSignalStack signal_stack;
-    int policy = 0, priority = 0, nice = 0, egl_error = 0x3000;
+    int policy = 0, priority = 0, nice = 0, egl_error = 0x3000, gl_error = 0;
     bool dumpable = true;
     std::string name = "guest";
     uint32_t mbstate = 0;
@@ -97,16 +100,34 @@ struct GuestRwlock {
 struct GuestSemaphore {
     unsigned count = 0;
 };
+struct GuestBarrier {
+    uint32_t count;
+    uint32_t arrived = 0;
+};
 struct GuestEvent {
     int notification = -1;
     uint64_t id = 0, count = 0;
     bool semaphore = false, nonblocking = false;
+    int timer_clock = -1;
+    std::chrono::nanoseconds timer_due{}, timer_interval{};
     ~GuestEvent();
+};
+struct GuestEpoll {
+    struct Interest {
+        uint32_t events;
+        uint64_t data;
+        uint64_t revision;
+        bool enabled = true;
+    };
+    std::map<int, Interest> interests;
+    uint64_t revision = 0;
+    int last_ready = -1;
 };
 struct GuestDescriptor {
     int host;
     bool owned;
     std::shared_ptr<GuestEvent> event;
+    std::shared_ptr<GuestEpoll> epoll{};
 };
 struct GuestFile {
     FILE* host;
@@ -120,8 +141,15 @@ struct GuestDirectory {
     int descriptor;
     uint64_t entry = 0;
 };
+struct GuestMountedFile {
+    uint64_t size = 0;
+    bool directory = false;
+    std::function<int64_t(void*, size_t, uint64_t)> read;
+};
 
 struct SharedFilePage;
+struct GuestFileTree;
+struct NativeLooper;
 struct PosixRegex;
 struct GuestMappingPage {
     uint8_t prot;
@@ -130,6 +158,7 @@ struct GuestMappingPage {
 };
 
 struct BionicState {
+    Deadline started = Clock::now();
     GuestThread main;
     std::map<uint64_t, GuestThread> threads;
     uint64_t next_thread = 2, last_scheduled = 1, next_event = 1;
@@ -137,6 +166,7 @@ struct BionicState {
     std::map<uint64_t, GuestMutex> mutexes;
     std::map<uint64_t, GuestRwlock> rwlocks;
     std::map<uint64_t, GuestSemaphore> semaphores;
+    std::map<uint64_t, GuestBarrier> barriers;
     std::map<uint64_t, uint64_t> once_owners;
     std::map<int, GuestDescriptor> descriptors{
         {0, {0, false, {}}}, {1, {1, false, {}}}, {2, {2, false, {}}}};
@@ -145,18 +175,22 @@ struct BionicState {
     std::map<uint64_t, GuestMappingPage> map_pages;
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, std::weak_ptr<SharedFilePage>> map_file_pages;
     std::map<uint64_t, GuestDirectory> directories;
+    std::map<uint64_t, std::shared_ptr<GuestFileTree>> file_trees;
+    std::map<uint64_t, std::shared_ptr<NativeLooper>> loopers;
     std::map<uint64_t, std::shared_ptr<PosixRegex>> regexes;
     std::map<std::string, uint64_t, std::less<>> strings;
     std::map<std::string, uint64_t, std::less<>> environment;
-    std::function<std::optional<std::span<const uint8_t>>(std::string_view)> read_guest_file;
+    std::function<std::optional<GuestMountedFile>(std::string_view)> find_guest_file;
+    std::function<std::optional<std::string_view>(std::string_view)> read_system_property;
     std::map<int, std::array<uint64_t, 3>> signals;
     std::set<uint64_t> locales;
     uint64_t stdio = 0, environ = 0, environ_array = 0, localeconv = 0, setlocale = 0;
     uint64_t timezone = 0, daylight = 0, tzname = 0;
-    uint64_t strtok_save = 0, tm = 0, ctime = 0, passwd = 0, servent = 0;
+    uint64_t strtok_save = 0, tm = 0, ctime = 0, passwd = 0, servent = 0, tmpnam = 0;
     std::string abort_message;
     std::string log_tag;
     std::string cwd;
+    bool finalizing_process = false;
     int log_mask = 0xff;
     uint32_t random = 1;
     ~BionicState();
@@ -201,6 +235,10 @@ void RegisterStrings(wa_dbt& dbt);
 void RegisterMath(wa_dbt& dbt);
 void RegisterDynamicLinker(wa_dbt& dbt);
 void RegisterGraphics(wa_dbt& dbt);
+void RegisterNativeLooper(wa_dbt& dbt);
+void DropThreadLooper(wa_dbt& dbt);
+void DropDescriptorFromLoopers(wa_dbt& dbt, int descriptor);
+void RefreshTimers(wa_dbt& dbt);
 void RegisterGuestJumps(wa_dbt& dbt);
 
 int GuestErrno(int host_error);
@@ -209,11 +247,14 @@ uint64_t ErrnoAddress(wa_dbt& dbt);
 void SetErrno(wa_dbt& dbt, int guest_error);
 void PosixResult(wa_host_call_ctx_t& ctx, int64_t result);
 int HostFd(const wa_dbt& dbt, uint64_t descriptor);
-int OpenMountedFile(std::span<const uint8_t> bytes, int flags);
+std::optional<GuestMountedFile> FindMountedFile(const wa_dbt& dbt, std::string_view path);
+int OpenMountedFile(const GuestMountedFile& file, int flags);
 int AdoptFd(wa_dbt& dbt, int host, bool owned = true, int minimum = 0);
 int CloseFd(wa_dbt& dbt, int descriptor);
 void StorePipe(wa_host_call_ctx_t& ctx, int read_end, int write_end, uint64_t destination);
 std::shared_ptr<GuestEvent> EventFor(const wa_dbt& dbt, int descriptor);
+std::shared_ptr<GuestEpoll> EpollFor(const wa_dbt& dbt, int descriptor);
+void RemoveEpollInterests(wa_dbt& dbt, int descriptor);
 void Fail(wa_host_call_ctx_t& ctx, int host_error);
 std::string GuestPath(const wa_host_call_ctx_t& ctx, uint64_t address);
 uint64_t CopyString(wa_dbt& dbt, std::string_view text);

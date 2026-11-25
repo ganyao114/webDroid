@@ -10,6 +10,8 @@
             android:exported="false" android:initOrder="5"/>
         <provider android:name=".SmokeActivity$ExplicitProvider" android:authorities="org.wasmandroid.uismoke.explicit"
             android:process="org.wasmandroid.uismoke" android:exported="false"/>
+        <service android:name=".SmokeActivity$MainService" android:exported="false"/>
+        <service android:name=".SmokeActivity$RemoteService" android:process=":remote" android:exported="false"/>
         <activity android:name=".SmokeActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>

@@ -2,6 +2,7 @@
 #include "bionic_math.h"
 #include "guest_format.h"
 
+#include <bit>
 #include <cerrno>
 #include <climits>
 #include <ctime>
@@ -10,6 +11,7 @@
 #include <regex.h>
 #include <sys/resource.h>
 #include <sys/time.h>
+#include <sys/times.h>
 #include <unistd.h>
 #include <utility>
 
@@ -32,12 +34,13 @@ void Errno(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = ErrnoAddress(*ctx.dbt);
 }
 
-template <bool Reentrant> void ErrorString(wa_host_call_ctx_t& ctx) {
+enum class ErrorText { Static, Posix, Gnu };
+template <ErrorText mode> void ErrorString(wa_host_call_ctx_t& ctx) {
     const auto code = static_cast<int32_t>(ctx.args[0]);
     const auto mapped = HostErrno(code);
     const auto text = GuestErrno(mapped) == code ? std::string(std::strerror(mapped))
                                                  : "Unknown error " + std::to_string(code);
-    if constexpr (Reentrant) {
+    if constexpr (mode == ErrorText::Posix) {
         const auto capacity = ctx.args[2];
         if (capacity) {
             const auto count = std::min<uint64_t>(capacity - 1, text.size());
@@ -47,6 +50,13 @@ template <bool Reentrant> void ErrorString(wa_host_call_ctx_t& ctx) {
         }
         if (capacity <= text.size())
             ctx.ret0 = GuestErrno(ERANGE);
+    } else if constexpr (mode == ErrorText::Gnu) {
+        if (ctx.args[2] > text.size() && ctx.args[1]) {
+            GuestMemory(ctx).Write(ctx.args[1], text.c_str(), text.size() + 1);
+            ctx.ret0 = ctx.args[1];
+        } else {
+            ctx.ret0 = InternString(*ctx.dbt, text);
+        }
     } else {
         ctx.ret0 = InternString(*ctx.dbt, text);
     }
@@ -229,9 +239,47 @@ void ClockTime(wa_host_call_ctx_t& ctx) {
     mem.WriteWord(ctx.args[1] + mem.width(), (time - sec).count());
 }
 
+void ClockResolution(wa_host_call_ctx_t& ctx) {
+    clockid_t clock;
+    switch (ctx.args[0]) {
+    case 0: case 5: clock = CLOCK_REALTIME; break;
+    case 1: case 4: case 6: case 7: clock = CLOCK_MONOTONIC; break;
+    case 2: clock = CLOCK_PROCESS_CPUTIME_ID; break;
+    case 3: clock = CLOCK_THREAD_CPUTIME_ID; break;
+    default: return Fail(ctx, EINVAL);
+    }
+    struct timespec resolution{};
+    if (clock_getres(clock, &resolution) < 0) return PosixResult(ctx, -1);
+    if (ctx.args[1]) {
+        const GuestMemory mem(ctx);
+        mem.WriteWord(ctx.args[1], resolution.tv_sec);
+        mem.WriteWord(ctx.args[1] + mem.width(), resolution.tv_nsec);
+    }
+}
+
 void ClockTicks(wa_host_call_ctx_t& ctx) {
     const auto value = std::clock();
     ctx.ret0 = value < 0 ? UINT64_MAX : static_cast<uint64_t>(value) * 1000000 / CLOCKS_PER_SEC;
+}
+
+void ProcessTimes(wa_host_call_ctx_t& ctx) {
+    tms usage{};
+    const auto elapsed = times(&usage);
+    if (elapsed == clock_t(-1)) return PosixResult(ctx, -1);
+    const auto host_ticks = sysconf(_SC_CLK_TCK);
+    if (host_ticks <= 0) return Fail(ctx, EINVAL);
+    const auto guest_ticks = [host_ticks](clock_t value) {
+        // Match the guest _SC_CLK_TCK value.
+        return (value / host_ticks) * 100 + (value % host_ticks) * 100 / host_ticks;
+    };
+    if (ctx.args[0]) {
+        const GuestMemory memory(ctx);
+        const clock_t fields[]{usage.tms_utime, usage.tms_stime, usage.tms_cutime, usage.tms_cstime};
+        for (size_t i = 0; i < std::size(fields); ++i) {
+            memory.WriteWord(ctx.args[0] + i * memory.width(), guest_ticks(fields[i]));
+        }
+    }
+    ctx.ret0 = guest_ticks(elapsed);
 }
 
 template <bool Local, bool Reentrant> void CalendarTime(wa_host_call_ctx_t& ctx) {
@@ -269,12 +317,25 @@ template <bool Local> void MakeTime(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = result;
 }
 
-void Ctime(wa_host_call_ctx_t& ctx) {
+template <bool Calendar> void CalendarText(wa_host_call_ctx_t& ctx) {
     auto& dbt = *ctx.dbt;
     const GuestMemory mem(ctx);
-    const auto time = static_cast<time_t>(SignedWord(mem, mem.ReadWord(ctx.args[0])));
     std::array<char, 32> text;
-    if (!ctime_r(&time, text.data())) {
+    const char* converted;
+    if constexpr (Calendar) {
+        const auto tm = ReadGuestTm(mem, ctx.args[0]);
+        if (tm.tm_year < -1900 || tm.tm_year > 8099 || tm.tm_mday < 1 || tm.tm_mday > 31 ||
+            tm.tm_hour < 0 || tm.tm_hour > 23 || tm.tm_min < 0 || tm.tm_min > 59 ||
+            tm.tm_sec < 0 || tm.tm_sec > 60) {
+            SetErrno(dbt, GuestErrno(EOVERFLOW));
+            return;
+        }
+        converted = asctime_r(&tm, text.data());
+    } else {
+        const auto time = static_cast<time_t>(SignedWord(mem, mem.ReadWord(ctx.args[0])));
+        converted = ctime_r(&time, text.data());
+    }
+    if (!converted) {
         SetErrno(dbt, GuestErrno(errno));
         return;
     }
@@ -309,6 +370,8 @@ void SetTimezone(wa_host_call_ctx_t& ctx) {
 void Pid(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = 1;
 }
+void ParentPid(wa_host_call_ctx_t&) {} // This is the root of the guest process namespace.
+
 void Tid(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = ctx.dbt->running->id;
 }
@@ -336,6 +399,70 @@ void GetHostname(wa_host_call_ctx_t& ctx) {
 void SetUid(wa_host_call_ctx_t& ctx) {
     if (ctx.args[0] != 10000)
         Fail(ctx, EPERM);
+}
+
+void SetGroups(wa_host_call_ctx_t& ctx) {
+    Fail(ctx, EPERM);
+}
+
+void GetGroup(wa_host_call_ctx_t& ctx) {
+    CallReader args(ctx);
+    const auto gid = args.Next(), record = args.Next(), storage = args.Next();
+    const auto capacity = args.Next(), result = args.Next();
+    const GuestMemory mem(ctx);
+    mem.WriteWord(result, 0);
+    if (gid != 10000) return;
+    const auto members = AlignUp(storage, mem.width());
+    const auto name = members + mem.width();
+    constexpr char group[] = "u0_a0\0x";
+    if (name - storage + sizeof(group) > capacity) {
+        ctx.ret0 = GuestErrno(ERANGE);
+        return;
+    }
+    mem.WriteWord(members, 0);
+    mem.Write(name, group, sizeof(group));
+    mem.WriteWord(record, name);
+    mem.WriteWord(record + mem.width(), name + sizeof("u0_a0"));
+    mem.Write<uint32_t>(record + 2 * mem.width(), gid);
+    mem.WriteWord(record + 3 * mem.width(), members);
+    mem.WriteWord(result, record);
+}
+
+void ResourceLimits(wa_host_call_ctx_t& ctx) {
+    constexpr int resources[]{RLIMIT_CPU, RLIMIT_FSIZE, RLIMIT_DATA, RLIMIT_STACK, RLIMIT_CORE,
+                             RLIMIT_RSS, RLIMIT_NPROC, RLIMIT_NOFILE, RLIMIT_MEMLOCK, RLIMIT_AS};
+    if (ctx.args[0] >= std::size(resources)) return Fail(ctx, EINVAL);
+    struct rlimit limit{};
+    if (ctx.args[0] == 3) {
+        limit = {ctx.dbt->running->stack_size, 32 * 1024 * 1024};
+    } else if (ctx.args[0] == 9) {
+        limit = {UINT32_MAX, UINT32_MAX};
+    } else if (getrlimit(resources[ctx.args[0]], &limit) < 0) {
+        return PosixResult(ctx, -1);
+    }
+    const GuestMemory mem(ctx);
+    const uint64_t maximum = mem.width() == 8 ? UINT64_MAX : UINT32_MAX;
+    const auto translate = [maximum](rlim_t value) {
+        return value == RLIM_INFINITY ? maximum : std::min<uint64_t>(value, maximum);
+    };
+    mem.WriteWord(ctx.args[1], translate(limit.rlim_cur));
+    mem.WriteWord(ctx.args[1] + mem.width(), translate(limit.rlim_max));
+}
+
+void SystemInfo(wa_host_call_ctx_t& ctx) {
+    const GuestMemory mem(ctx);
+    const auto address = ctx.args[0];
+    const auto word = mem.width();
+    uint64_t used = 0;
+    for (const auto& [base, allocation] : ctx.dbt->allocations) used += allocation.mapped_size;
+    constexpr uint64_t total = UINT64_C(65536) * WA_PAGE_SIZE;
+    const std::array<uint8_t, 112> empty{};
+    mem.Write(address, empty.data(), word == 8 ? 112 : 64);
+    mem.WriteWord(address, duration_cast<seconds>(Clock::now() - ctx.dbt->bionic->started).count());
+    mem.WriteWord(address + 4 * word, total);
+    mem.WriteWord(address + 5 * word, total - std::min(used, total));
+    mem.Write<uint16_t>(address + 10 * word, 1);
+    mem.Write<uint32_t>(address + AlignUp(10 * word + 4, word) + 2 * word, 1);
 }
 
 void Nice(wa_host_call_ctx_t& ctx) {
@@ -416,27 +543,40 @@ void FreePosixRegex(wa_host_call_ctx_t& ctx) {
     ctx.dbt->bionic->regexes.erase(ctx.args[0]);
 }
 
-void GetPriority(wa_host_call_ctx_t& ctx) {
+template <bool Set> void ProcessPriority(wa_host_call_ctx_t& ctx) {
     const auto which = static_cast<int32_t>(ctx.args[0]);
     const auto who = static_cast<uint32_t>(ctx.args[1]);
     auto& dbt = *ctx.dbt;
+    const auto requested = std::clamp(static_cast<int32_t>(ctx.args[2]), -20, 19);
     if (which == 0) { // PRIO_PROCESS, which addresses Linux threads individually.
-        const auto* thread = who ? FindThread(dbt, who) : dbt.running;
+        auto* thread = who ? FindThread(dbt, who) : dbt.running;
         if (!thread || thread->exited)
             return Fail(ctx, ESRCH);
-        ctx.ret0 = thread->nice;
+        if constexpr (Set) {
+            if (requested < thread->nice) return Fail(ctx, EACCES);
+            thread->nice = requested;
+        } else {
+            ctx.ret0 = thread->nice;
+        }
         return;
     }
     if (which != 1 && which != 2)
         return Fail(ctx, EINVAL);
     if (who && who != (which == 1 ? 1 : 10000))
         return Fail(ctx, ESRCH);
-    auto best = dbt.bionic->main.nice;
-    for (const auto& [id, thread] : dbt.bionic->threads) {
-        if (!thread.exited)
-            best = std::min(best, thread.nice);
+    if constexpr (Set) {
+        if (requested < dbt.bionic->main.nice || std::ranges::any_of(dbt.bionic->threads,
+                [requested](const auto& entry) { return !entry.second.exited && requested < entry.second.nice; }))
+            return Fail(ctx, EACCES);
+        dbt.bionic->main.nice = requested;
+        for (auto& [id, thread] : dbt.bionic->threads)
+            if (!thread.exited) thread.nice = requested;
+    } else {
+        auto best = dbt.bionic->main.nice;
+        for (const auto& [id, thread] : dbt.bionic->threads)
+            if (!thread.exited) best = std::min(best, thread.nice);
+        ctx.ret0 = best;
     }
-    ctx.ret0 = best;
 }
 
 template <bool Max> void Priority(wa_host_call_ctx_t& ctx) {
@@ -463,6 +603,28 @@ template <bool Set> void Scheduling(wa_host_call_ctx_t& ctx) {
         mem.Write<int32_t>(ctx.args[1], thread->priority);
     }
 }
+
+void GetAffinity(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    const auto* thread = ctx.args[0] ? FindThread(dbt, ctx.args[0]) : dbt.running;
+    if (!thread || thread->exited) return Fail(ctx, ESRCH);
+    const GuestMemory mem(ctx);
+    const auto size = ctx.args[1];
+    if (size < mem.width() || size > 1024 * 1024) return Fail(ctx, EINVAL);
+    std::vector<uint8_t> bits(size);
+    bits.front() = 1;
+    mem.Write(ctx.args[2], bits.data(), bits.size());
+}
+
+void CpuCount(wa_host_call_ctx_t& ctx) {
+    const auto size = ctx.args[0];
+    if (size > 1024 * 1024) return Fail(ctx, EINVAL);
+    std::vector<uint8_t> bits(size);
+    GuestMemory(ctx).Read(ctx.args[1], bits.data(), bits.size());
+    for (const auto byte : bits) ctx.ret0 += std::popcount(byte);
+}
+
+void CurrentCpu(wa_host_call_ctx_t&) {} // The single cooperative guest CPU has index zero.
 
 void Prctl(wa_host_call_ctx_t& ctx) {
     auto& thread = *ctx.dbt->running;
@@ -495,6 +657,11 @@ void UnsupportedProcess(wa_host_call_ctx_t& ctx) {
     Fail(ctx, ENOSYS);
 }
 
+void CreateSession(wa_host_call_ctx_t& ctx) {
+    // The only guest process is already its own process-group leader.
+    Fail(ctx, EPERM);
+}
+
 void BaseName(wa_host_call_ctx_t& ctx) {
     const auto path = ctx.args[0] ? GuestMemory(ctx).String(ctx.args[0]) : std::string{};
     if (path.empty()) {
@@ -524,13 +691,15 @@ void DirName(wa_host_call_ctx_t& ctx) {
 }
 
 void GetProgramName(wa_host_call_ctx_t& ctx) {
-    const auto& read = ctx.dbt->bionic->read_guest_file;
-    if (const auto cmdline = read ? read("/proc/self/cmdline") : std::nullopt;
-        cmdline && !cmdline->empty()) {
-        std::string_view name(reinterpret_cast<const char*>(cmdline->data()), cmdline->size());
-        name = name.substr(0, name.find('\0'));
-        ctx.ret0 = InternString(*ctx.dbt, name.substr(name.rfind('/') + 1));
-        return;
+    if (const auto file = FindMountedFile(*ctx.dbt, "/proc/self/cmdline"); file && file->size) {
+        std::array<char, 4096> cmdline;
+        const auto size = file->read(cmdline.data(), std::min<uint64_t>(file->size, cmdline.size()), 0);
+        if (size > 0) {
+            std::string_view name(cmdline.data(), size);
+            name = name.substr(0, name.find('\0'));
+            ctx.ret0 = InternString(*ctx.dbt, name.substr(name.rfind('/') + 1));
+            return;
+        }
     }
     ctx.ret0 = InternString(*ctx.dbt, ctx.dbt->bionic->main.name);
 }
@@ -825,6 +994,55 @@ void Sigwait(wa_host_call_ctx_t& ctx) {
     mem.Write<int32_t>(ctx.args[1], signal + 1);
 }
 
+void Sigsuspend(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    auto& thread = *dbt.running;
+    const auto mask = GuestMemory(ctx).ReadWord(ctx.args[0]) & ~UINT64_C(0x40100); // SIGKILL/SIGSTOP.
+    struct RestoreMask {
+        GuestThread& thread;
+        uint64_t previous;
+        ~RestoreMask() { thread.signal_mask = previous; }
+    } restore{thread, std::exchange(thread.signal_mask, mask)};
+    while (true) {
+        const auto pending = thread.pending_signals & ~mask;
+        if (!pending) {
+            if (const auto error = Park(dbt, WaitKind::Signal, thread.id)) {
+                SetErrno(dbt, error);
+                ctx.ret0 = UINT64_MAX;
+                return;
+            }
+            continue;
+        }
+        const auto index = std::countr_zero(pending);
+        const uint64_t bit = uint64_t{1} << index;
+        thread.pending_signals &= ~bit;
+        const auto [handler, blocked, flags] = dbt.bionic->signals[index + 1];
+        if (handler <= 1) continue;
+        thread.wait = {};
+        thread.signal_mask |= blocked | (flags & 0x40000000 ? 0 : bit); // SA_NODEFER.
+        const uint64_t args[]{static_cast<uint64_t>(index + 1), 0, 0};
+        uint64_t unused;
+        CheckGuest(wa_dbt_call(&dbt, handler, args, std::size(args), &unused));
+        return Fail(ctx, EINTR);
+    }
+}
+
+void QueueSignal(wa_dbt& dbt, GuestThread& thread, unsigned signo) {
+    thread.pending_signals |= uint64_t{1} << (signo - 1);
+    Wake(dbt, WaitKind::Signal, thread.id);
+}
+
+void Tgkill(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    const auto pid = static_cast<int32_t>(ctx.args[0]);
+    const auto tid = static_cast<int32_t>(ctx.args[1]);
+    const auto signo = static_cast<uint32_t>(ctx.args[2]);
+    if (pid <= 0 || tid <= 0 || signo > 64) return Fail(ctx, EINVAL);
+    auto* thread = pid == 1 ? FindThread(dbt, tid) : nullptr;
+    if (!thread || thread->exited) return Fail(ctx, ESRCH);
+    if (signo) QueueSignal(dbt, *thread, signo);
+}
+
 void PthreadKill(wa_host_call_ctx_t& ctx) {
     auto& dbt = *ctx.dbt;
     auto* thread = FindThread(dbt, ctx.args[0]);
@@ -839,8 +1057,7 @@ void PthreadKill(wa_host_call_ctx_t& ctx) {
         ctx.ret0 = GuestErrno(EINVAL);
         return;
     }
-    thread->pending_signals |= uint64_t{1} << (signo - 1);
-    Wake(dbt, WaitKind::Signal, thread->id);
+    QueueSignal(dbt, *thread, signo);
 }
 
 void Syscall(wa_host_call_ctx_t& ctx) {
@@ -972,8 +1189,9 @@ void RegisterPosix(wa_dbt& dbt) {
 
     const Builtin c[] = {
         {"__errno", Dispatch<Errno>},
-        {"strerror", Dispatch<ErrorString<false>>},
-        {"strerror_r", Dispatch<ErrorString<true>>},
+        {"strerror", Dispatch<ErrorString<ErrorText::Static>>},
+        {"strerror_r", Dispatch<ErrorString<ErrorText::Posix>>},
+        {"__gnu_strerror_r", Dispatch<ErrorString<ErrorText::Gnu>>},
         {"getenv", Dispatch<Env<Environment::Get>>},
         {"setenv", Dispatch<Env<Environment::Set>>},
         {"unsetenv", Dispatch<Env<Environment::Unset>>},
@@ -985,6 +1203,8 @@ void RegisterPosix(wa_dbt& dbt) {
         {"time", Dispatch<GetTime>},
         {"gettimeofday", Dispatch<TimeOfDay>},
         {"clock_gettime", Dispatch<ClockTime>},
+        {"clock_getres", Dispatch<ClockResolution>},
+        {"times", Dispatch<ProcessTimes>},
         {"clock", Dispatch<ClockTicks>},
         {"gmtime", Dispatch<CalendarTime<false, false>>},
         {"localtime", Dispatch<CalendarTime<true, false>>},
@@ -992,10 +1212,12 @@ void RegisterPosix(wa_dbt& dbt) {
         {"localtime_r", Dispatch<CalendarTime<true, true>>},
         {"mktime", Dispatch<MakeTime<true>>},
         {"timegm", Dispatch<MakeTime<false>>},
-        {"ctime", Dispatch<Ctime>},
+        {"ctime", Dispatch<CalendarText<false>>},
+        {"asctime", Dispatch<CalendarText<true>>},
         {"difftime", Dispatch<DiffTime>},
         {"tzset", Dispatch<SetTimezone>},
         {"getpid", Dispatch<Pid>},
+        {"getppid", Dispatch<ParentPid>},
         {"gettid", Dispatch<Tid>},
         {"getuid", Dispatch<Uid>},
         {"geteuid", Dispatch<Uid>},
@@ -1004,8 +1226,14 @@ void RegisterPosix(wa_dbt& dbt) {
         {"uname", Dispatch<Uname>},
         {"gethostname", Dispatch<GetHostname>},
         {"setuid", Dispatch<SetUid>},
+        {"setgid", Dispatch<SetUid>},
+        {"setgroups", Dispatch<SetGroups>},
+        {"getgrgid_r", Dispatch<GetGroup>},
+        {"getrlimit", Dispatch<ResourceLimits>},
+        {"sysinfo", Dispatch<SystemInfo>},
         {"nice", Dispatch<Nice>},
-        {"getpriority", Dispatch<GetPriority>},
+        {"getpriority", Dispatch<ProcessPriority<false>>},
+        {"setpriority", Dispatch<ProcessPriority<true>>},
         {"regcomp", Dispatch<CompilePosixRegex>},
         {"regexec", Dispatch<ExecutePosixRegex>},
         {"regfree", Dispatch<FreePosixRegex>},
@@ -1014,6 +1242,9 @@ void RegisterPosix(wa_dbt& dbt) {
         {"sched_get_priority_min", Dispatch<Priority<false>>},
         {"sched_get_priority_max", Dispatch<Priority<true>>},
         {"sched_getparam", Dispatch<Scheduling<false>>},
+        {"sched_getaffinity", Dispatch<GetAffinity>},
+        {"sched_getcpu", Dispatch<CurrentCpu>},
+        {"__sched_cpucount", Dispatch<CpuCount>},
         {"sched_setscheduler", Dispatch<Scheduling<true>>},
         {"openlog", Dispatch<OpenLog>},
         {"closelog", Dispatch<CloseLog>},
@@ -1021,6 +1252,7 @@ void RegisterPosix(wa_dbt& dbt) {
         {"syslog", Dispatch<Syslog>},
         {"exit", Dispatch<ExitProcess>},
         {"_exit", Dispatch<ExitProcess>},
+        {"_Exit", Dispatch<ExitProcess>},
         {"fork", Dispatch<UnsupportedProcess>},
         {"ptrace", Dispatch<UnsupportedProcess>},
         {"basename", Dispatch<BaseName>},
@@ -1030,7 +1262,10 @@ void RegisterPosix(wa_dbt& dbt) {
         {"execvp", Dispatch<UnsupportedProcess>},
         {"execlp", Dispatch<UnsupportedProcess>},
         {"system", Dispatch<UnsupportedProcess>},
+        {"sched_setaffinity", Dispatch<UnsupportedProcess>},
         {"daemon", Dispatch<UnsupportedProcess>},
+        {"setsid", Dispatch<CreateSession>},
+        {"wait", Dispatch<WaitPid>},
         {"waitpid", Dispatch<WaitPid>},
         {"vmsplice", Dispatch<UnsupportedProcess>},
         {"srand", Dispatch<Seed>},
@@ -1057,8 +1292,10 @@ void RegisterPosix(wa_dbt& dbt) {
         {"sigprocmask", Dispatch<Sigmask<false>>},
         {"sigpending", Dispatch<Pending>},
         {"sigwait", Dispatch<Sigwait>},
+        {"sigsuspend", Dispatch<Sigsuspend>},
         {"raise", Dispatch<Raise>},
         {"kill", Dispatch<Kill>},
+        {"tgkill", Dispatch<Tgkill>},
         {"pthread_kill", Dispatch<PthreadKill>},
     };
     Register(dbt, "libc.so", c);

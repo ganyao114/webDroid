@@ -4,6 +4,7 @@
 #include "bionic_internal.h"
 #include "dbt_internal.h"
 #include "elf_image.h"
+#include "guest_media.h"
 #include "guest_zlib.h"
 #include "hybrid_jni_bridge.h"
 #include "gles_host_bridge.h"
@@ -25,6 +26,11 @@ using dbt::GuestFault;
 using dbt::GuestMemory;
 
 constexpr std::array kArchitectures{WA_ARCH_ARM64, WA_ARCH_ARM32};
+constexpr std::string_view kPlatformLibraries[]{
+    "libc.so", "libdl.so", "libm.so", "liblog.so", "libz.so", "libandroid.so",
+    "libjnigraphics.so", "libEGL.so", "libGLESv2.so", "libGLESv3.so", "libOpenSLES.so", "libmediandk.so",
+    "libOpenMAXAL.so",
+};
 constexpr uint64_t kFirstImage = 0x10000000;
 constexpr uint64_t kProcessHandle = 1;
 constexpr size_t kDlErrorCapacity = 4096;
@@ -35,6 +41,10 @@ std::string_view Abi(wa_guest_arch_t arch) {
 
 std::string_view ExtractedAbi(wa_guest_arch_t arch) {
     return arch == WA_ARCH_ARM64 ? "arm64" : "arm";
+}
+
+std::string_view SystemLibraryDirectory(wa_guest_arch_t arch) {
+    return arch == WA_ARCH_ARM64 ? "/system/lib64" : "/system/lib";
 }
 
 std::string EntryName(wa_guest_arch_t arch, std::string_view name) {
@@ -128,14 +138,32 @@ class HybridNativeRuntime {
         if (!dbt_) throw std::bad_alloc();
         CheckGuest(wa_hal_register_graphics_symbols(dbt_.get()));
         zlib_.Register(dbt_.get());
+        media_.Register(dbt_.get());
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlopen", DlDispatch<&HybridNativeRuntime::DlOpen>, this));
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlsym", DlDispatch<&HybridNativeRuntime::DlSym>, this));
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlclose", DlDispatch<&HybridNativeRuntime::DlClose>, this));
         CheckGuest(wa_dbt_register_symbol(dbt_.get(), "libdl.so", "dlerror", DlDispatch<&HybridNativeRuntime::DlError>, this));
         if (jni) {
-            dbt_->bionic->read_guest_file = [&vm = jni->Vm()](std::string_view path)
-                -> std::optional<std::span<const uint8_t>> {
-                return vm.ReadGuestFile(path);
+            dbt_->bionic->find_guest_file = [&vm = jni->Vm()](std::string_view path)
+                -> std::optional<dbt::GuestMountedFile> {
+                const auto entry = vm.guest_files.find(path);
+                if (entry == vm.guest_files.end()) return std::nullopt;
+                const auto& file = entry->second;
+                if (!file) return dbt::GuestMountedFile{.directory = true};
+                if (file->reader) return dbt::GuestMountedFile{.size = file->Size(), .read = file->reader};
+                const auto bytes = vm.ReadGuestFile(path).value();
+                return dbt::GuestMountedFile{.size = bytes.size(), .read = [file](void* output, size_t count, uint64_t offset) {
+                    if (offset >= file->bytes.size()) return int64_t{0};
+                    const auto copied = std::min<uint64_t>(count, file->bytes.size() - offset);
+                    std::memcpy(output, file->bytes.data() + offset, copied);
+                    return static_cast<int64_t>(copied);
+                }};
+            };
+            dbt_->bionic->read_system_property = [&vm = jni->Vm()](std::string_view key)
+                -> std::optional<std::string_view> {
+                const auto found = vm.system_properties.find(std::string(key));
+                return found == vm.system_properties.end() ? std::nullopt
+                                                           : std::optional<std::string_view>(found->second);
             };
             jni_ = std::make_unique<HybridJniBridge>(*jni, *dbt_, mmu_.get(), arch);
         }
@@ -150,6 +178,17 @@ class HybridNativeRuntime {
         wa_dbt_get_stats(dbt_.get(), &stats);
         wa_softmmu_get_stats(mmu_.get(), &pages);
         return {Abi(arch_), load_order_.size(), stats.host_calls, stats.reverse_callbacks, pages.demand_file_faults};
+    }
+
+    interp::GuestNativeHeapStats HeapStats() const {
+        std::lock_guard lock(dbt_->mutex);
+        interp::GuestNativeHeapStats stats;
+        for (const auto& [base, allocation] : dbt_->allocations) {
+            if (!allocation.heap) continue;
+            stats.reserved += allocation.mapped_size;
+            stats.allocated += allocation.size;
+        }
+        return stats;
     }
 
     std::vector<interp::GuestNativeImage> Images() const {
@@ -204,7 +243,7 @@ class HybridNativeRuntime {
         library.java_state = Library::JavaState::Initializing;
         const LoadCounters counters(dbt_.get(), library);
         try {
-            if (const auto on_load = dbt::FindElfSymbol(*dbt_, library.base, "JNI_OnLoad")) {
+            if (const auto on_load = dbt::FindElfSymbolInScope(*dbt_, library.base, "JNI_OnLoad")) {
                 library.has_on_load = true;
                 library.java_error = jni_->OnLoad(on_load);
             }
@@ -224,6 +263,8 @@ class HybridNativeRuntime {
         return {};
     }
 
+    bool HasPlatformLibrary(std::string_view name) const { return Virtual(name); }
+
     void Shutdown() noexcept {
         // OnUnload may run JNI, so keep the bridge, mappings, and APK alive.
         if (jni_) {
@@ -232,7 +273,7 @@ class HybridNativeRuntime {
                 const auto& library = *load_order_[i];
                 if (library.java_state != Library::JavaState::Ready) continue;
                 try {
-                    if (const auto on_unload = dbt::FindElfSymbol(*dbt_, library.base, "JNI_OnUnload"))
+                    if (const auto on_unload = dbt::FindElfSymbolInScope(*dbt_, library.base, "JNI_OnUnload"))
                         jni_->OnUnload(on_unload);
                 } catch (...) {
                     // A failure in one finalizer cannot prevent teardown.
@@ -290,7 +331,9 @@ class HybridNativeRuntime {
                 probe.diagnostic = entry->load_error;
                 continue;
             }
-            probe.address = dbt::FindElfSymbol(*dbt_, entry->mapped_base, request.symbol);
+            probe.address = request.action == NativeProbeAction::CallJniOnLoad
+                ? dbt::FindElfSymbolInScope(*dbt_, entry->mapped_base, request.symbol)
+                : dbt::FindElfSymbol(*dbt_, entry->mapped_base, request.symbol);
             if (!probe.address) {
                 probe.diagnostic = "Guest export is missing";
             } else if (request.action == NativeProbeAction::CallString) {
@@ -485,16 +528,8 @@ class HybridNativeRuntime {
             address = dbt::FindElfSymbol(*dbt_, 0, name);
             if (!address) address = dbt::FindVirtualSymbol(*dbt_, {}, name);
         } else if (open) {
-            if (entry->second.base) {
-                address = dbt::FindElfSymbol(*dbt_, entry->second.base, name);
-                if (!address) {
-                    const auto& needed = libraries_.at(entry->second.name).info.needed;
-                    const std::vector<std::string_view> scope(needed.begin(), needed.end());
-                    dbt::ResolveImport(*dbt_, scope, name, address);
-                }
-            } else {
-                address = dbt::FindVirtualSymbol(*dbt_, entry->second.name, name);
-            }
+            address = entry->second.base ? dbt::FindElfSymbolInScope(*dbt_, entry->second.base, name)
+                                         : dbt::FindVirtualSymbol(*dbt_, entry->second.name, name);
         } else {
             return DlFailure("dlsym: invalid library handle");
         }
@@ -535,6 +570,7 @@ class HybridNativeRuntime {
     std::unique_ptr<wa_dbt_t, decltype(&wa_dbt_destroy)> dbt_;
     GuestMemory memory_;
     GuestZlib zlib_;
+    GuestMedia media_;
     std::unique_ptr<HybridJniBridge> jni_;
 };
 
@@ -548,10 +584,26 @@ class ApkNativeLibraries final : public interp::GuestNativeLibraries {
             return {};
         const auto filename = "lib" + std::string(name) + ".so";
         if (const auto arch = Select(filename, {})) return apk_->path + "!/" + EntryName(*arch, filename);
+        if (std::ranges::find(kPlatformLibraries, filename) != std::end(kPlatformLibraries)) {
+            return std::string(SystemLibraryDirectory(PreferredArch())) + '/' + filename;
+        }
         return {};
     }
 
     std::string Load(std::string_view path) override {
+        const auto system = SystemLibraryDirectory(PreferredArch());
+        if (path.starts_with(system) && path.substr(system.size()).starts_with('/')) {
+            const auto name = path.substr(system.size() + 1);
+            if (std::ranges::find(kPlatformLibraries, name) != std::end(kPlatformLibraries)) {
+                try {
+                    if (!runtime_) runtime_ = std::make_unique<HybridNativeRuntime>(*apk_, PreferredArch(), &jni_);
+                    if (runtime_->HasPlatformLibrary(name)) return {};
+                } catch (const GuestFault& fault) {
+                    return Error("Initialize platform native runtime", fault.status);
+                }
+            }
+            return "Unavailable platform library: " + std::string(path);
+        }
         const auto request = ParseLibraryPath(*apk_, path);
         if (!request) return "Unsupported APK library path: " + std::string(path);
         const auto arch = Select(request->name, request->abi);
@@ -571,8 +623,23 @@ class ApkNativeLibraries final : public interp::GuestNativeLibraries {
         return runtime_ ? runtime_->Jni().Invoke(method, receiver, args) : std::nullopt;
     }
 
+    std::unique_ptr<interp::DirectBufferMemory> AllocateMemory(size_t size) override {
+        try {
+            if (!runtime_) {
+                runtime_ = std::make_unique<HybridNativeRuntime>(*apk_, PreferredArch(), &jni_);
+            }
+            return runtime_->Jni().AllocateMemory(size);
+        } catch (const GuestFault&) {
+            return {};
+        }
+    }
+
     interp::GuestNativeStats Stats() const override {
         return runtime_ ? runtime_->Stats() : interp::GuestNativeStats{};
+    }
+
+    interp::GuestNativeHeapStats HeapStats() const override {
+        return runtime_ ? runtime_->HeapStats() : interp::GuestNativeHeapStats{};
     }
 
     std::vector<interp::GuestNativeImage> Images() const override {
@@ -588,6 +655,11 @@ class ApkNativeLibraries final : public interp::GuestNativeLibraries {
     }
 
   private:
+    wa_guest_arch_t PreferredArch() const {
+        if (runtime_) return runtime_->Arch();
+        return !apk_->Libraries(WA_ARCH_ARM64).empty() ? WA_ARCH_ARM64 : WA_ARCH_ARM32;
+    }
+
     std::optional<wa_guest_arch_t> Select(std::string_view name, std::optional<wa_guest_arch_t> requested) const {
         for (auto arch : kArchitectures) {
             if ((!requested || arch == *requested) && (!runtime_ || arch == runtime_->Arch()) &&
@@ -617,6 +689,12 @@ std::string MountGuestApkLibraries(interp::Vm& vm, const std::string& apk_path, 
                     return file.Read(output, count, offset);
                 });
         }
+        const std::string system(SystemLibraryDirectory(arch));
+        // Publish ELF dependency metadata for the same platform libraries the guest linker serves.
+        for (const auto name : kPlatformLibraries) {
+            vm.MountReadOnlyFile(system + '/' + std::string(name), dbt::VirtualLibraryElf(arch, name));
+        }
+        vm.SetSystemProperty("java.library.path", system);
         vm.SetGuestNativeSource([](JNIEnv* env, const std::shared_ptr<const void>& source)
             -> std::unique_ptr<interp::GuestNativeLibraries> {
             return std::make_unique<ApkNativeLibraries>(env, std::static_pointer_cast<const ApkArchive>(source));

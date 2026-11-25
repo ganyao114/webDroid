@@ -1,8 +1,12 @@
 #include "hybrid_jni_bridge.h"
 
 #include "abi_layouts.h"
+#include "bionic_internal.h"
+#include "bitmap_access.h"
 #include "dbt_internal.h"
 #include "elf_image.h"
+
+#include <android_runtime/android_util_AssetManager.h>
 
 #include <cstdio>
 #include <tuple>
@@ -43,14 +47,16 @@ ArgKind Kind(char type) {
     }
 }
 
-size_t ComponentWidth(char type) {
-    switch (type) {
-    case 'Z': case 'B': return 1;
-    case 'C': case 'S': return 2;
-    case 'J': case 'D': return 8;
-    default: return 4;
-    }
-}
+// Fixed prefix of AOSP ArtMethod. Its two following fields have guest pointer width.
+struct ArtMethodHeader {
+    uint32_t declaring_class;
+    uint32_t flags;
+    uint32_t dex_method_index;
+    uint16_t method_index;
+    uint16_t hotness_count;
+};
+static_assert(sizeof(ArtMethodHeader) == 16);
+constexpr auto kNativeEntry = sizeof(ArtMethodHeader);
 
 struct NullableString {
     std::optional<std::string> value;
@@ -83,6 +89,10 @@ std::string CallFailure(const wa_dbt& dbt, std::string_view name, int32_t status
     char location[24];
     std::snprintf(location, sizeof(location), "0x%llx", static_cast<unsigned long long>(dbt.last_pc));
     auto message = std::string(name) + ": guest status " + std::to_string(status) + " at PC " + location;
+    if (dbt.last_pc >= WA_HOST_STUB_BASE && dbt.last_pc < WA_HOST_STUB_LIMIT) {
+        const auto index = (dbt.last_pc - WA_HOST_STUB_BASE) / WA_HOST_STUB_STRIDE;
+        if (index < dbt.hosts.size()) message += " in " + dbt.hosts[index].name;
+    }
     if (status == WA_ERR_FAULT && dbt.last_fault_address) {
         std::snprintf(location, sizeof(location), "0x%llx",
                       static_cast<unsigned long long>(dbt.last_fault_address));
@@ -128,22 +138,23 @@ class GuestBufferMemory final : public DirectBufferMemory {
 class HybridJniBridge::Frame {
   public:
     explicit Frame(HybridJniBridge& owner)
-        : owner_(owner), depth_(owner.frames_.size()), old_floor_(owner.frame_floor_),
+        : owner_(owner), locals_(owner.CurrentFrames()), depth_(locals_.frames.size()), old_floor_(locals_.floor),
           host_depth_(owner.jni_.FrameDepth()) {
         owner_.PushFrame(16);
-        owner_.frame_floor_ = owner_.frames_.size();
+        locals_.floor = locals_.frames.size();
         host_floor_ = owner_.jni_.SetFrameFloor(owner_.jni_.FrameDepth());
     }
 
     ~Frame() {
         owner_.jni_.RestoreFrameDepth(host_depth_);
         owner_.jni_.SetFrameFloor(host_floor_);
-        owner_.ForgetFrames(depth_);
-        owner_.frame_floor_ = old_floor_;
+        owner_.ForgetFrames(locals_, depth_);
+        locals_.floor = old_floor_;
     }
 
   private:
     HybridJniBridge& owner_;
+    LocalFrames& locals_;
     size_t depth_, old_floor_, host_depth_, host_floor_;
 };
 
@@ -177,11 +188,47 @@ HybridJniBridge::HybridJniBridge(JniBridge& jni, wa_dbt& dbt, wa_softmmu_t* mmu,
     populate(vm_thunks_, vm_names, vm_table, 3, true);
     memory_.WriteWord(jni_env_, env_table);
     memory_.WriteWord(java_vm_, vm_table);
+    CheckGuest(wa_dbt_register_symbol(&dbt_, "libjnigraphics.so", "AndroidBitmap_getInfo",
+                                      BitmapCall<BitmapOp::Info>, this));
+    CheckGuest(wa_dbt_register_symbol(&dbt_, "libjnigraphics.so", "AndroidBitmap_lockPixels",
+                                      BitmapCall<BitmapOp::Lock>, this));
+    CheckGuest(wa_dbt_register_symbol(&dbt_, "libjnigraphics.so", "AndroidBitmap_unlockPixels",
+                                      BitmapCall<BitmapOp::Unlock>, this));
+    const dbt::Builtin asset_functions[] = {
+        {"AAssetManager_fromJava", AssetCall<AssetOp::Manager>},
+        {"AAssetManager_open", AssetCall<AssetOp::Open>},
+        {"AAsset_close", AssetCall<AssetOp::Close>},
+        {"AAsset_getLength", AssetCall<AssetOp::Length>},
+        {"AAsset_getLength64", AssetCall<AssetOp::Length64>},
+        {"AAsset_getBuffer", AssetCall<AssetOp::Buffer>},
+        {"AAsset_read", AssetCall<AssetOp::Read>},
+        {"AAsset_isAllocated", AssetCall<AssetOp::Allocated>},
+        {"AConfiguration_new", ConfigurationCall<ConfigurationOp::New>},
+        {"AConfiguration_delete", ConfigurationCall<ConfigurationOp::Delete>},
+        {"AConfiguration_fromAssetManager", ConfigurationCall<ConfigurationOp::FromAssetManager>},
+        {"AConfiguration_getDensity", ConfigurationCall<ConfigurationOp::Density>},
+        {"AConfiguration_getScreenWidthDp", ConfigurationCall<ConfigurationOp::WidthDp>},
+        {"AConfiguration_getScreenHeightDp", ConfigurationCall<ConfigurationOp::HeightDp>},
+    };
+    for (const auto& function : asset_functions)
+        CheckGuest(wa_dbt_register_symbol(&dbt_, "libandroid.so", function.name, function.function, this));
+    RegisterNativeWindow();
+    dbt_.on_thread_exit = [](void* context, uint64_t thread) {
+        static_cast<HybridJniBridge*>(context)->DetachThread(thread);
+    };
+    dbt_.thread_exit_context = this;
 }
 
 HybridJniBridge::~HybridJniBridge() {
+    dbt_.on_thread_exit = nullptr;
+    dbt_.thread_exit_context = nullptr;
+    for (const auto& [id, manager] : asset_managers_) jni_.DeleteWeak(manager);
+    for (auto& [id, window] : windows_) {
+        ClearWindowLock(window);
+        jni_.DeleteGlobal(window.surface);
+    }
     for (const auto& [id, ref] : refs_) {
-        if (ref.type == JNIGlobalRefType) jni_.DeleteGlobal(ref.ref);
+        if (ref.type == JNIGlobalRefType || ref.retained) jni_.DeleteGlobal(ref.ref);
         if (ref.type == JNIWeakGlobalRefType) jni_.DeleteWeak(static_cast<jweak>(ref.ref));
     }
     for (const auto& [address, copy] : array_copies_) jni_.DeleteGlobal(copy.array);
@@ -191,13 +238,152 @@ HybridJniBridge::~HybridJniBridge() {
     }
 }
 
+template<HybridJniBridge::AssetOp operation>
+int32_t HybridJniBridge::AssetCall(wa_host_call_ctx_t* ctx, void* user) {
+    try {
+        static_cast<HybridJniBridge*>(user)->DispatchAsset(operation, *ctx);
+    } catch (const ManagedException&) {
+        return WA_OK;
+    } catch (const GuestFault& fault) {
+        return fault.status;
+    } catch (const std::bad_alloc&) {
+        return WA_ERR_NOMEM;
+    }
+    return WA_OK;
+}
+
+template<HybridJniBridge::ConfigurationOp operation>
+int32_t HybridJniBridge::ConfigurationCall(wa_host_call_ctx_t* ctx, void* user) {
+    try {
+        static_cast<HybridJniBridge*>(user)->DispatchConfiguration(operation, *ctx);
+    } catch (const ManagedException&) {
+        return WA_OK;
+    } catch (const std::bad_alloc&) {
+        return WA_ERR_NOMEM;
+    }
+    return WA_OK;
+}
+
+void HybridJniBridge::DispatchConfiguration(ConfigurationOp operation, wa_host_call_ctx_t& ctx) {
+    if (operation == ConfigurationOp::New) {
+        const auto id = NextHandle();
+        configurations_.emplace(id, android::ResTable_config{});
+        ctx.ret0 = id;
+        return;
+    }
+    const auto found = configurations_.find(ctx.args[0]);
+    if (found == configurations_.end()) return;
+    auto& config = found->second;
+    switch (operation) {
+    case ConfigurationOp::Delete: configurations_.erase(found); break;
+    case ConfigurationOp::FromAssetManager: {
+        const auto manager = asset_managers_.find(ctx.args[1]);
+        if (manager == asset_managers_.end() || !JniBridge::Read(manager->second)) return;
+        if (auto* guarded = android::AssetManagerForJavaObject(Env(), manager->second)) {
+            android::ScopedLock lock(*guarded);
+            if (!lock->GetConfigurations().empty()) config = lock->GetConfigurations().front();
+        }
+        break;
+    }
+    case ConfigurationOp::Density: ctx.ret0 = config.density; break;
+    case ConfigurationOp::WidthDp: ctx.ret0 = config.screenWidthDp; break;
+    case ConfigurationOp::HeightDp: ctx.ret0 = config.screenHeightDp; break;
+    case ConfigurationOp::New: break;
+    }
+}
+
+void HybridJniBridge::DispatchAsset(AssetOp operation, wa_host_call_ctx_t& ctx) {
+    const auto handle = ctx.args[0];
+    if (operation == AssetOp::Manager) {
+        if (handle != jni_env_ || !HasLocalFrame()) return;
+        auto* object = JniBridge::Read(Ref(ctx.args[1]));
+        if (!object || object->type->descriptor != "Landroid/content/res/AssetManager;") return;
+        for (const auto& [id, manager] : asset_managers_) {
+            if (JniBridge::Read(manager) == object) {
+                ctx.ret0 = id;
+                return;
+            }
+        }
+        const auto id = NextHandle();
+        auto* weak = jni_.Weak(object);
+        try {
+            asset_managers_.emplace(id, weak);
+        } catch (...) {
+            jni_.DeleteWeak(weak);
+            throw;
+        }
+        ctx.ret0 = id;
+        return;
+    }
+    if (operation == AssetOp::Open) {
+        const auto manager = asset_managers_.find(handle);
+        if (manager == asset_managers_.end() || !JniBridge::Read(manager->second) || !ctx.args[1] ||
+            ctx.args[2] > android::Asset::ACCESS_BUFFER) return;
+        auto* guarded = android::AssetManagerForJavaObject(Env(), manager->second);
+        if (!guarded) return;
+        const auto filename = memory_.String(ctx.args[1]);
+        android::ScopedLock lock(*guarded);
+        auto active = lock->StartOperation();
+        auto asset = lock->Open(filename, static_cast<android::Asset::AccessMode>(ctx.args[2]));
+        if (!asset) return;
+        const auto id = NextHandle();
+        assets_.emplace(id, GuestAsset{.asset = std::move(asset)});
+        ctx.ret0 = id;
+        return;
+    }
+    const auto found = assets_.find(handle);
+    if (found == assets_.end()) {
+        if (operation == AssetOp::Read) ctx.ret0 = UINT64_MAX;
+        return;
+    }
+    auto& [asset, buffer] = found->second;
+    switch (operation) {
+    case AssetOp::Close: assets_.erase(found); break;
+    case AssetOp::Length: ctx.ret0 = asset->getLength(); break;
+    case AssetOp::Length64: dbt::SetScalarResult(ctx, ArgKind::Long, asset->getLength()); break;
+    case AssetOp::Allocated: ctx.ret0 = buffer || asset->isAllocated(); break;
+    case AssetOp::Read: {
+        const auto limit = std::min<uint64_t>({ctx.args[2], uint64_t(INT32_MAX),
+                                              uint64_t(std::max<off64_t>(0, asset->getRemainingLength()))});
+        std::array<uint8_t, 16 * 1024> bytes;
+        uint64_t copied = 0;
+        while (copied < limit) {
+            const auto read = asset->read(bytes.data(), std::min<uint64_t>(bytes.size(), limit - copied));
+            if (read <= 0) {
+                if (read < 0 && !copied) copied = UINT64_MAX;
+                break;
+            }
+            memory_.Write(ctx.args[1] + copied, bytes.data(), read);
+            copied += read;
+        }
+        ctx.ret0 = copied;
+        break;
+    }
+    case AssetOp::Buffer: {
+        if (!buffer) {
+            const auto length = asset->getLength();
+            if (length < 0 || static_cast<uint64_t>(length) > SIZE_MAX) return;
+            const auto* bytes = static_cast<const uint8_t*>(asset->getBuffer(false));
+            if (!bytes && length) return;
+            auto copy = AllocateMemory(static_cast<size_t>(length));
+            if (!copy->Write(0, {bytes, static_cast<size_t>(length)})) return;
+            buffer = std::move(copy);
+        }
+        ctx.ret0 = buffer->GuestAddress();
+        break;
+    }
+    case AssetOp::Manager: case AssetOp::Open: break;
+    }
+}
+
 int32_t HybridJniBridge::Trampoline(wa_host_call_ctx_t* ctx, void* user) {
     const auto& thunk = *static_cast<Thunk*>(user);
     auto& bridge = *thunk.bridge;
     if (ctx->args[0] != (thunk.invocation ? bridge.java_vm_ : bridge.jni_env_) ||
-        bridge.frames_.empty()) return WA_ERR_FAULT;
+        (!thunk.invocation && !bridge.HasLocalFrame())) return WA_ERR_FAULT;
     try {
-        if (thunk.invocation) bridge.DispatchVm(thunk.slot, *ctx);
+        if (thunk.method) bridge.DispatchPlatform(*thunk.method, *ctx);
+        else if (thunk.invocation) bridge.DispatchVm(thunk.slot, *ctx);
         else bridge.Dispatch(static_cast<Slot>(thunk.slot), *ctx);
         return WA_OK;
     } catch (const ManagedException&) {
@@ -210,6 +396,73 @@ int32_t HybridJniBridge::Trampoline(wa_host_call_ctx_t* ctx, void* user) {
     }
 }
 
+template<HybridJniBridge::BitmapOp operation>
+int32_t HybridJniBridge::BitmapCall(wa_host_call_ctx_t* ctx, void* user) {
+    auto& bridge = *static_cast<HybridJniBridge*>(user);
+    jint result = ANDROID_BITMAP_RESULT_BAD_PARAMETER;
+    try {
+        if (ctx->args[0] == bridge.jni_env_ && bridge.HasLocalFrame()) {
+            result = bridge.DispatchBitmap(operation, *ctx);
+        }
+    } catch (const ManagedException&) {
+        result = ANDROID_BITMAP_RESULT_JNI_EXCEPTION;
+    } catch (const GuestFault& fault) {
+        if (fault.status == WA_ERR_NOMEM) result = ANDROID_BITMAP_RESULT_ALLOCATION_FAILED;
+    } catch (const std::bad_alloc&) {
+        result = ANDROID_BITMAP_RESULT_ALLOCATION_FAILED;
+    }
+    bridge.Return(*ctx, result);
+    return WA_OK;
+}
+
+jint HybridJniBridge::DispatchBitmap(BitmapOp operation, wa_host_call_ctx_t& ctx) {
+    const auto bitmap = ui_jni::AccessNativeBitmap(Env(), Ref(ctx.args[1]));
+    if (Env()->ExceptionCheck()) return ANDROID_BITMAP_RESULT_JNI_EXCEPTION;
+    if (!bitmap.data) return ANDROID_BITMAP_RESULT_BAD_PARAMETER;
+    const dbt::GuestMemory memory(ctx);
+    if (operation == BitmapOp::Info) {
+        if (ctx.args[2]) memory.Write(ctx.args[2], bitmap.info);
+        return ANDROID_BITMAP_RESULT_SUCCESS;
+    }
+    const auto found = bitmap_locks_.find(bitmap.data);
+    if (operation == BitmapOp::Unlock) {
+        if (found == bitmap_locks_.end()) return ANDROID_BITMAP_RESULT_BAD_PARAMETER;
+        if (found->second.depth > 1) {
+            --found->second.depth;
+        } else {
+            auto pixels = std::move(found->second.pixels);
+            bitmap_locks_.erase(found);
+            if (bitmap.writable) {
+                if (pixels->size != size_t(bitmap.info.stride) * bitmap.info.height) {
+                    return ANDROID_BITMAP_RESULT_BAD_PARAMETER;
+                }
+                std::vector<uint8_t> bytes(pixels->size);
+                if (!pixels->Read(0, bytes)) return ANDROID_BITMAP_RESULT_BAD_PARAMETER;
+                ui_jni::CopyNativeBitmapPixels(bitmap, bytes, true);
+            }
+        }
+        return ANDROID_BITMAP_RESULT_SUCCESS;
+    }
+    if (found != bitmap_locks_.end()) {
+        if (ctx.args[2]) memory.WriteWord(ctx.args[2], found->second.pixels->GuestAddress());
+        ++found->second.depth;
+        return ANDROID_BITMAP_RESULT_SUCCESS;
+    }
+    std::vector<uint8_t> bytes(size_t(bitmap.info.stride) * bitmap.info.height);
+    ui_jni::CopyNativeBitmapPixels(bitmap, bytes, false);
+    auto pixels = AllocateMemory(bytes.size());
+    if (!pixels->Write(0, bytes)) return ANDROID_BITMAP_RESULT_ALLOCATION_FAILED;
+    const auto address = pixels->GuestAddress();
+    bitmap_locks_.emplace(bitmap.data, BitmapLock{std::move(pixels)});
+    try {
+        if (ctx.args[2]) memory.WriteWord(ctx.args[2], address);
+    } catch (const GuestFault&) {
+        bitmap_locks_.erase(bitmap.data);
+        throw;
+    }
+    return ANDROID_BITMAP_RESULT_SUCCESS;
+}
+
 void HybridJniBridge::DispatchVm(uint16_t slot, wa_host_call_ctx_t& ctx) {
     auto* vm = jni_.JavaVm();
     switch (slot) {
@@ -218,14 +471,37 @@ void HybridJniBridge::DispatchVm(uint16_t slot, wa_host_call_ctx_t& ctx) {
         JNIEnv* env = nullptr;
         const jint status = slot == 4 ? vm->AttachCurrentThread(&env, nullptr)
                                      : vm->AttachCurrentThreadAsDaemon(&env, nullptr);
+        if (env && !IsMainThread()) {
+            auto [it, inserted] = attached_threads_.try_emplace(dbt_.running->id);
+            if (inserted) {
+                try {
+                    it->second.frames.emplace_back();
+                    it->second.floor = 1;
+                } catch (...) {
+                    attached_threads_.erase(it);
+                    throw;
+                }
+            }
+        }
         memory_.WriteWord(ctx.args[1], env ? jni_env_ : 0);
         Return(ctx, status);
         break;
     }
-    case 5: Return(ctx, vm->DetachCurrentThread()); break;
+    case 5: {
+        if (IsMainThread()) return Return(ctx, vm->DetachCurrentThread());
+        const auto thread = attached_threads_.find(dbt_.running->id);
+        if (thread != attached_threads_.end() && thread->second.floor > 1) return Return(ctx, JNI_ERR);
+        DetachThread(dbt_.running->id);
+        Return(ctx, JNI_OK);
+        break;
+    }
     case 6: {
         void* env = nullptr;
-        const auto status = vm->GetEnv(&env, static_cast<jint>(ctx.args[2]));
+        auto status = vm->GetEnv(&env, static_cast<jint>(ctx.args[2]));
+        if (status == JNI_OK && !IsMainThread() && !attached_threads_.contains(dbt_.running->id)) {
+            env = nullptr;
+            status = JNI_EDETACHED;
+        }
         memory_.WriteWord(ctx.args[1], env ? jni_env_ : 0);
         Return(ctx, status);
         break;
@@ -234,21 +510,50 @@ void HybridJniBridge::DispatchVm(uint16_t slot, wa_host_call_ctx_t& ctx) {
     }
 }
 
+bool HybridJniBridge::IsMainThread() const {
+    return dbt_.running == &dbt_.bionic->main;
+}
+
+bool HybridJniBridge::HasLocalFrame() const {
+    return IsMainThread() ? !main_locals_.frames.empty() : attached_threads_.contains(dbt_.running->id);
+}
+
+HybridJniBridge::LocalFrames& HybridJniBridge::CurrentFrames() {
+    if (IsMainThread()) return main_locals_;
+    const auto found = attached_threads_.find(dbt_.running->id);
+    if (found == attached_threads_.end()) throw GuestFault{WA_ERR_INVALID};
+    return found->second;
+}
+
 void HybridJniBridge::PushFrame(size_t capacity) {
-    frames_.emplace_back();
+    auto& frames = CurrentFrames().frames;
+    frames.emplace_back();
     try {
-        jni_.PushFrame(capacity);
+        if (IsMainThread()) jni_.PushFrame(capacity);
+        else frames.back().reserve(capacity);
     } catch (...) {
-        frames_.pop_back();
+        frames.pop_back();
         throw;
     }
 }
 
-void HybridJniBridge::ForgetFrames(size_t depth) {
-    while (frames_.size() > depth) {
-        for (const auto id : frames_.back()) refs_.erase(id);
-        frames_.pop_back();
+void HybridJniBridge::ForgetFrames(LocalFrames& locals, size_t depth) {
+    while (locals.frames.size() > depth) {
+        for (const auto id : locals.frames.back()) {
+            const auto found = refs_.find(id);
+            if (found == refs_.end()) continue;
+            if (found->second.retained) jni_.DeleteGlobal(found->second.ref);
+            refs_.erase(found);
+        }
+        locals.frames.pop_back();
     }
+}
+
+void HybridJniBridge::DetachThread(uint64_t thread) {
+    const auto found = attached_threads_.find(thread);
+    if (found == attached_threads_.end()) return;
+    ForgetFrames(found->second, 0);
+    attached_threads_.erase(found);
 }
 
 uint32_t HybridJniBridge::NextHandle() {
@@ -264,8 +569,8 @@ jobject HybridJniBridge::Ref(uint64_t id) const {
 }
 
 Method* HybridJniBridge::Method(uint64_t id) const {
-    const auto found = methods_.find(static_cast<uint32_t>(id));
-    if (id > UINT32_MAX || found == methods_.end()) throw GuestFault{WA_ERR_INVALID};
+    const auto found = methods_.find(id);
+    if (found == methods_.end()) throw GuestFault{WA_ERR_INVALID};
     return found->second;
 }
 
@@ -277,24 +582,68 @@ Field* HybridJniBridge::Field(uint64_t id) const {
 
 uint32_t HybridJniBridge::Track(jobject ref, jobjectRefType type) {
     if (!ref) return 0;
+    if (auto* object = JniBridge::Read(ref); object && object->type->super &&
+        object->type->super->descriptor == "Ljava/lang/reflect/Executable;" && object->reflected_method) {
+        const auto& field = object->type->super->fields.at(MemberKey("artMethod", "J"));
+        if (!object->fields[field.slot].j()) {
+            object->fields[field.slot] = Value::Long(Track(reinterpret_cast<jmethodID>(object->reflected_method)));
+        }
+    }
     const auto id = NextHandle();
-    if (type == JNILocalRefType) frames_.back().push_back(id);
+    const bool retained = type == JNILocalRefType && !IsMainThread();
+    if (retained) {
+        // The caller's host JNI frame can unwind while an attached guest thread is parked.
+        auto* local = ref;
+        ref = jni_.Global(JniBridge::Read(local));
+        jni_.DeleteLocal(local);
+    }
     try {
-        refs_.emplace(id, Reference{ref, type, transaction_ ? transaction_->number : 0});
+        if (type == JNILocalRefType) CurrentFrames().frames.back().push_back(id);
+        refs_.emplace(id, Reference{ref, type, transaction_ ? transaction_->number : 0, retained});
     } catch (...) {
-        if (type == JNIGlobalRefType) jni_.DeleteGlobal(ref);
+        if (type == JNIGlobalRefType || retained) jni_.DeleteGlobal(ref);
         if (type == JNIWeakGlobalRefType) jni_.DeleteWeak(static_cast<jweak>(ref));
         throw;
     }
     return id;
 }
 
-uint32_t HybridJniBridge::Track(jmethodID method) {
-    if (!method) return 0;
-    if (const auto found = method_ids_.find(method); found != method_ids_.end()) return found->second;
-    const auto id = NextHandle();
-    methods_.emplace(id, reinterpret_cast<interp::Method*>(method));
-    method_ids_.emplace(method, id);
+uint64_t HybridJniBridge::Track(jmethodID handle) {
+    if (!handle) return 0;
+    auto& method = *reinterpret_cast<interp::Method*>(handle);
+    if (const auto found = method_ids_.find(&method); found != method_ids_.end()) {
+        if (method.IsNative() && !found->second.default_entry) RefreshEntry(method, found->second, false);
+        return found->second.id;
+    }
+    const auto size = sizeof(ArtMethodHeader) + 2 * memory_.width();
+    if (next_method_ + size > method_page_end_) {
+        const auto page = dbt::AllocateGuest(dbt_, WA_PAGE_SIZE);
+        if (!page) throw GuestFault{WA_ERR_NOMEM};
+        next_method_ = page;
+        method_page_end_ = next_method_ + WA_PAGE_SIZE;
+    }
+    const auto id = std::exchange(next_method_, next_method_ + size);
+    memory_.Write(id, ArtMethodHeader{0, method.flags, method.index, 0, 0});
+    const auto record = method_ids_.try_emplace(&method, GuestMethod{.id = id}).first;
+    try {
+        methods_.emplace(id, &method);
+        if (method.IsNative()) {
+            RefreshEntry(method, record->second, true);
+            if (method.builtin || method.native) {
+                record->second.platform = {.bridge = this, .method = &method};
+                CheckGuest(dbt::RegisterHost(dbt_, "ART JNI", method.QualifiedName(), Trampoline,
+                    &record->second.platform, false, &record->second.platform_entry));
+                if (!record->second.default_entry) {
+                    record->second.default_entry = record->second.platform_entry;
+                    memory_.WriteWord(id + kNativeEntry, record->second.default_entry);
+                }
+            }
+        }
+    } catch (...) {
+        methods_.erase(id);
+        method_ids_.erase(record);
+        throw;
+    }
     return id;
 }
 
@@ -313,8 +662,8 @@ void HybridJniBridge::DeleteReference(uint64_t id, jobjectRefType type) {
     if (id > UINT32_MAX || found == refs_.end() || found->second.type != type)
         throw GuestFault{WA_ERR_INVALID};
     const auto ref = found->second.ref;
-    if (type == JNILocalRefType) jni_.DeleteLocal(ref);
-    if (type == JNIGlobalRefType) jni_.DeleteGlobal(ref);
+    if (type == JNILocalRefType && !found->second.retained) jni_.DeleteLocal(ref);
+    if (type == JNIGlobalRefType || found->second.retained) jni_.DeleteGlobal(ref);
     if (type == JNIWeakGlobalRefType) jni_.DeleteWeak(static_cast<jweak>(ref));
     refs_.erase(found);
 }
@@ -367,26 +716,46 @@ void HybridJniBridge::Forward(wa_host_call_ctx_t& ctx, R (*function)(JNIEnv*, Ar
 }
 
 void HybridJniBridge::SetRegistration(interp::Method* method, uint64_t address) {
+    const auto record = method_ids_.find(method);
     if (!transaction_) {
         if (address) registrations_.insert_or_assign(method, Registration{address});
         else registrations_.erase(method);
-        return;
+    } else {
+        const auto found = registrations_.find(method);
+        if (!transaction_->previous.contains(method)) {
+            const auto entry = record == method_ids_.end() ? std::nullopt :
+                std::optional(memory_.ReadWord(record->second.id + kNativeEntry));
+            transaction_->previous.emplace(method, PreviousRegistration{
+                found == registrations_.end() ? Registration{} : found->second, entry});
+        }
+        registrations_.insert_or_assign(method, Registration{address, transaction_->number});
     }
-    const auto found = registrations_.find(method);
-    transaction_->previous.try_emplace(method, found == registrations_.end() ? Registration{} : found->second);
-    registrations_.insert_or_assign(method, Registration{address, transaction_->number});
+    if (record != method_ids_.end()) RefreshEntry(*method, record->second, true);
+}
+
+void HybridJniBridge::RefreshEntry(interp::Method& method, GuestMethod& record, bool replace) {
+    const auto native = FindNative(method);
+    const auto entry = native ? native : record.platform_entry;
+    if (replace || memory_.ReadWord(record.id + kNativeEntry) == record.default_entry)
+        memory_.WriteWord(record.id + kNativeEntry, entry);
+    record.default_entry = entry;
 }
 
 void HybridJniBridge::Rollback(Transaction& transaction) {
     for (const auto& [method, before] : transaction.previous) {
         const auto current = registrations_.find(method);
         if (current == registrations_.end() || current->second.transaction != transaction.number) continue;
-        if (before.transaction || before.address) current->second = before;
+        if (before.registration.transaction || before.registration.address) current->second = before.registration;
         else registrations_.erase(current);
+        if (const auto record = method_ids_.find(method); record != method_ids_.end()) {
+            RefreshEntry(*method, record->second, true);
+            if (before.entry) memory_.WriteWord(record->second.id + kNativeEntry, *before.entry);
+        }
     }
     for (auto it = refs_.begin(); it != refs_.end();) {
         const auto [id, reference] = *it++;
-        if (reference.transaction == transaction.number && reference.type != JNILocalRefType)
+        if (reference.transaction == transaction.number &&
+            (reference.type != JNILocalRefType || reference.retained))
             DeleteReference(id, reference.type);
     }
 }
@@ -415,7 +784,13 @@ jint HybridJniBridge::RegisterNatives(jclass cls, uint64_t methods, jint count) 
 
 void HybridJniBridge::AddImage(uint64_t base) { images_.push_back(base); }
 
-void HybridJniBridge::RemoveImage(uint64_t base) { std::erase(images_, base); }
+void HybridJniBridge::RemoveImage(uint64_t base) {
+    std::erase(images_, base);
+    for (auto& [method, record] : method_ids_) {
+        if (method->IsNative() && record.default_entry && record.default_entry != record.platform_entry)
+            RefreshEntry(*method, record, false);
+    }
+}
 
 std::string HybridJniBridge::OnLoad(uint64_t address) {
     Frame frame(*this);
@@ -426,9 +801,9 @@ std::string HybridJniBridge::OnLoad(uint64_t address) {
         ~Restore() { slot = previous; }
     } restore{transaction_, std::exchange(transaction_, &transaction)};
     try {
-        const uint64_t args[]{java_vm_, 0};
-        uint64_t result = 0;
-        const auto status = wa_dbt_call(&dbt_, address, args, 2, &result);
+        const wa_guest_call_frame_t args{.gpr = {java_vm_, 0}};
+        wa_guest_call_result_t result{};
+        const auto status = dbt::CallInitializer(dbt_, address, args, result);
         std::string failure;
         if (Vm().exception) {
             failure = "JNI_OnLoad: " + Vm().ExceptionSummary();
@@ -437,8 +812,9 @@ std::string HybridJniBridge::OnLoad(uint64_t address) {
             failure = CallFailure(dbt_, "JNI_OnLoad", status);
         } else {
             void* env = nullptr;
-            if (jni_.JavaVm()->GetEnv(&env, static_cast<jint>(result)) != JNI_OK)
-                failure = "JNI_OnLoad returned invalid version " + std::to_string(static_cast<jint>(result));
+            const auto version = static_cast<jint>(result.gpr[0]);
+            if (jni_.JavaVm()->GetEnv(&env, version) != JNI_OK)
+                failure = "JNI_OnLoad returned invalid version " + std::to_string(version);
         }
         if (!failure.empty()) Rollback(transaction);
         return failure;
@@ -456,7 +832,7 @@ void HybridJniBridge::OnUnload(uint64_t address) {
     Vm().exception = nullptr;
 }
 
-uint64_t HybridJniBridge::Lookup(interp::Method& method) const {
+uint64_t HybridJniBridge::FindNative(interp::Method& method) const {
     if (const auto entry = registrations_.find(&method); entry != registrations_.end() && entry->second.address)
         return entry->second.address;
     const std::string_view owner = method.owner->descriptor;
@@ -470,11 +846,43 @@ uint64_t HybridJniBridge::Lookup(interp::Method& method) const {
     return 0;
 }
 
+uint64_t HybridJniBridge::Lookup(interp::Method& method) {
+    if (const auto found = method_ids_.find(&method); found != method_ids_.end()) {
+        auto& record = found->second;
+        if (!record.default_entry) RefreshEntry(method, record, false);
+        const auto entry = memory_.ReadWord(record.id + kNativeEntry);
+        // The original platform entry can run directly unless native code has replaced it.
+        return entry == record.platform_entry ? 0 : entry;
+    }
+    if ((method.builtin || method.native) && !registrations_.contains(&method)) return 0;
+    return FindNative(method);
+}
+
+std::unique_ptr<DirectBufferMemory> HybridJniBridge::AllocateMemory(size_t size) {
+    return std::make_unique<GuestBufferMemory>(dbt_, size, 0);
+}
+
+void HybridJniBridge::DispatchPlatform(interp::Method& method, wa_host_call_ctx_t& ctx) {
+    dbt::CallReader reader(ctx);
+    reader.Next(); // JNIEnv*
+    auto* receiver = JniBridge::Read(Ref(reader.Next()));
+    std::vector<Value> args;
+    args.reserve(method.shorty.size() - 1);
+    for (const auto type : std::string_view(method.shorty).substr(1)) {
+        const auto bits = reader.Next(Kind(type));
+        args.push_back(IsReference(type) ? Value::Ref(JniBridge::Read(Ref(bits))) : Normalize(Value::Bits(bits), type));
+    }
+    const auto value = jni_.InvokePlatform(method, method.IsStatic() ? nullptr : receiver, args);
+    const auto type = method.shorty.front();
+    if (IsReference(type)) Return(ctx, jni_.Local(value.ref()));
+    else if (type != 'V') dbt::SetScalarResult(ctx, Kind(type), value.bits());
+}
+
 std::optional<Value> HybridJniBridge::Invoke(interp::Method& method, Object* receiver,
                                             std::span<const Value> args) {
-    const uint64_t address = Lookup(method);
-    if (!address) return std::nullopt;
     try {
+        const auto address = Lookup(method);
+        if (!address) return std::nullopt;
         Frame frame(*this);
         dbt::CallArguments arguments(arch_);
         arguments.Add(ArgKind::Word, jni_env_);
@@ -485,7 +893,7 @@ std::optional<Value> HybridJniBridge::Invoke(interp::Method& method, Object* rec
         }
         const auto registers = arguments.Frame();
         wa_guest_call_result_t result{};
-        const auto status = wa_dbt_call_abi(&dbt_, address, &registers, &result);
+        const auto status = dbt::CallJniMethod(dbt_, address, registers, result);
         if (Vm().exception) throw ManagedException{};
         if (status != WA_OK) Vm().Fail("Ljava/lang/UnsatisfiedLinkError;", CallFailure(dbt_, method.QualifiedName(), status));
         const char type = method.shorty.front();
@@ -534,7 +942,7 @@ void HybridJniBridge::ReadArguments(const interp::Method& method, wa_host_call_c
             const auto address = values + 8 * i;
             if (IsReference(type)) return memory_.ReadWord(address);
             uint64_t value = 0;
-            memory_.Read(address, &value, ComponentWidth(type));
+            memory_.Read(address, &value, PrimitiveWidth(type));
             return value;
         });
     } else if (variant == 1 && !out.empty()) {
@@ -665,7 +1073,7 @@ void HybridJniBridge::DispatchArrays(Slot slot, wa_host_call_ctx_t& ctx) {
         vm.Fail("Ljava/lang/IllegalArgumentException;", "Expected a primitive array");
     const char type = array.type->component->kind;
     const auto size = vm.ArrayLength(array);
-    const size_t width = ComponentWidth(type);
+    const size_t width = PrimitiveWidth(type);
 
     const auto check_type = [&](char expected) {
         if (type != expected) vm.Fail("Ljava/lang/IllegalArgumentException;", "Incorrect primitive array type");
@@ -852,11 +1260,12 @@ void HybridJniBridge::Dispatch(Slot slot, wa_host_call_ctx_t& ctx) {
     }
     case Slot::PopLocalFrame: {
         const auto keep = Ref(ctx.args[1]);
-        if (frames_.size() <= frame_floor_) {
+        auto& locals = CurrentFrames();
+        if (locals.frames.size() <= locals.floor) {
             ctx.ret0 = ctx.args[1];
         } else {
-            const auto result = jni_.PopFrame(keep);
-            ForgetFrames(frames_.size() - 1);
+            const auto result = IsMainThread() ? jni_.PopFrame(keep) : jni_.Local(JniBridge::Read(keep));
+            ForgetFrames(locals, locals.frames.size() - 1);
             Return(ctx, result);
         }
         return;
@@ -922,11 +1331,7 @@ void HybridJniBridge::Dispatch(Slot slot, wa_host_call_ctx_t& ctx) {
     }
     case Slot::ToReflectedMethod: {
         const auto method = Method(ctx.args[2]);
-        auto& type = Vm().linker.Resolve(method->name == "<init>" ? "Ljava/lang/reflect/Constructor;"
-                                                                 : "Ljava/lang/reflect/Method;");
-        auto* mirror = Vm().heap.Allocate(Vm(), type);
-        mirror->reflected_method = method;
-        Return(ctx, jni_.Local(mirror));
+        Return(ctx, jni_.Local(Vm().NewReflectedMethod(*method, ctx.args[2])));
         return;
     }
     case Slot::ToReflectedField: {

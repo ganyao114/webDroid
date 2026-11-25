@@ -1,0 +1,48 @@
+--- a/packages/modules/Connectivity/framework/src/android/net/ConnectivityManager.java
++++ b/packages/modules/Connectivity/framework/src/android/net/ConnectivityManager.java
+@@ -673,6 +673,45 @@
+         }
+     }
+ 
++    /**
++     * Callback for use with {@link ConnectivityManager#addDefaultNetworkActiveListener}
++     * to find out when the system default network has gone in to a high power state.
++     */
++    public interface OnNetworkActiveListener {
++        /**
++         * Called on the main thread of the process to report that the current data network
++         * has become active, and it is now a good time to perform any pending network
++         * operations.  Note that this listener only tells you when the network becomes
++         * active; if at any other time you want to know whether it is active (and thus okay
++         * to initiate network traffic), you can retrieve its instantaneous state with
++         * {@link ConnectivityManager#isDefaultNetworkActive}.
++         */
++        void onNetworkActive();
++    }
++
++    private final IdentityHashMap<OnNetworkActiveListener, Boolean> activityListeners =
++            new IdentityHashMap<>();
++
++    public void addDefaultNetworkActiveListener(OnNetworkActiveListener listener) {
++        synchronized (activityListeners) {
++            activityListeners.put(Objects.requireNonNull(listener), Boolean.TRUE);
++        }
++    }
++
++    public void removeDefaultNetworkActiveListener(@NonNull OnNetworkActiveListener listener) {
++        Objects.requireNonNull(listener);
++        synchronized (activityListeners) {
++            if (activityListeners.remove(listener) == null) {
++                throw new IllegalArgumentException("Listener was not registered.");
++            }
++        }
++    }
++
++    public boolean isDefaultNetworkActive() {
++        // The embedded framework has no default radio network.
++        return getActiveNetwork() != null;
++    }
++
+     private final Handler handler;
+     private final IdentityHashMap<NetworkCallback, Integer> callbacks = new IdentityHashMap<>();
+     private int callbackCount;

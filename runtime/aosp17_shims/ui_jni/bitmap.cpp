@@ -1,3 +1,4 @@
+#include "bitmap_access.h"
 #include "native_graphics.h"
 #include "region_data.h"
 #include "software_raster.h"
@@ -17,6 +18,7 @@
 #define STB_IMAGE_STATIC
 #include "stb_image.h"
 
+#include <webp/decode.h>
 #include <zlib.h>
 
 #include <algorithm>
@@ -427,3 +429,52 @@ void RegisterBitmaps(interp::Vm& vm) {
 }
 
 } // namespace wa::ui_jni::detail
+
+namespace wa::ui_jni {
+
+NativeBitmap AccessNativeBitmap(JNIEnv* env, jobject bitmap) {
+    if (!bitmap) return {};
+    const auto cls = env->GetObjectClass(bitmap);
+    const auto handle = env->GetFieldID(cls, "mNativePtr", "J");
+    env->DeleteLocalRef(cls);
+    if (!handle) return {};
+    const auto* peer = detail::Peer<std::shared_ptr<detail::BitmapData>, &detail::State::bitmaps>(
+        env, env->GetLongField(bitmap, handle));
+    if (!peer || !*peer || (*peer)->recycled) return {};
+    const auto& data = **peer;
+    const auto format = [&] {
+        switch (data.config) {
+        case 1: return ANDROID_BITMAP_FORMAT_A_8;
+        case 3: return ANDROID_BITMAP_FORMAT_RGB_565;
+        case 5: return ANDROID_BITMAP_FORMAT_RGBA_8888;
+        case 6: return ANDROID_BITMAP_FORMAT_RGBA_F16;
+        case 8: return ANDROID_BITMAP_FORMAT_RGBA_1010102;
+        default: return ANDROID_BITMAP_FORMAT_NONE;
+        }
+    }();
+    if (format == ANDROID_BITMAP_FORMAT_NONE) return {};
+    const uint32_t flags = !data.has_alpha ? ANDROID_BITMAP_FLAGS_ALPHA_OPAQUE :
+        data.premultiplied ? ANDROID_BITMAP_FLAGS_ALPHA_PREMUL : ANDROID_BITMAP_FLAGS_ALPHA_UNPREMUL;
+    return {*peer, {uint32_t(data.width), uint32_t(data.height),
+                    uint32_t(data.width * detail::BytesPerPixel(data.config)), format, flags},
+            !data.immutable};
+}
+
+void CopyNativeBitmapPixels(const NativeBitmap& bitmap, std::span<uint8_t> buffer, bool write) {
+    auto& data = *bitmap.data;
+    const size_t size = detail::BytesPerPixel(data.config);
+    for (auto& color : data.pixels) {
+        if (write) {
+            uint64_t pixel = 0;
+            std::memcpy(&pixel, buffer.data(), size);
+            color = detail::UnpackBitmapPixel(data, pixel);
+        } else {
+            const auto pixel = detail::PackBitmapPixel(data, color);
+            std::memcpy(buffer.data(), &pixel, size);
+        }
+        buffer = buffer.subspan(size);
+    }
+    if (write) data.Changed();
+}
+
+} // namespace wa::ui_jni

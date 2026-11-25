@@ -26,7 +26,7 @@ inline uint64_t AlignUp(uint64_t value, size_t alignment) {
     return (value + alignment - 1) & ~(uint64_t{alignment} - 1);
 }
 
-int32_t CheckMappedAccess(const wa_dbt* dbt, uint64_t address, size_t size, unsigned permission);
+int32_t CheckMappedAccess(const wa_dbt* dbt, uint64_t address, uint64_t size, unsigned permission);
 
 class GuestMemory {
   public:

@@ -1,0 +1,27 @@
+--- a/frameworks/base/core/java/android/os/Debug.java
++++ b/frameworks/base/core/java/android/os/Debug.java
+@@ -35,6 +35,24 @@
+ public final class Debug
+ {
+     private Debug() {}
++
++    /**
++     * Returns the size of the native heap.
++     * @return The size of the native heap in bytes.
++     */
++    public static native long getNativeHeapSize();
++
++    /**
++     * Returns the amount of allocated memory in the native heap.
++     * @return The allocated size in bytes.
++     */
++    public static native long getNativeHeapAllocatedSize();
++
++    /**
++     * Returns the amount of free memory in the native heap.
++     * @return The freed size in bytes.
++     */
++    public static native long getNativeHeapFreeSize();
+ 
+     /** Wait for the debugger when the runtime has an attached debug transport. */
+     public static void waitForDebugger() {}

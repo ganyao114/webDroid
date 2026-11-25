@@ -97,40 +97,6 @@
      public final boolean hasMessagesOrCallbacks() {
          return mQueue.hasMessages(this);
      }
-@@ -1059,24 +1050,6 @@
-         + "}";
-     }
- 
--    @UnsupportedAppUsage
--    final IMessenger getIMessenger() {
--        synchronized (mQueue) {
--            if (mMessenger != null) {
--                return mMessenger;
--            }
--            mMessenger = new MessengerImpl();
--            return mMessenger;
--        }
--    }
--
--    private final class MessengerImpl extends IMessenger.Stub {
--        public void send(Message msg) {
--            msg.sendingUid = Binder.getCallingUid();
--            Handler.this.sendMessage(msg);
--        }
--    }
--
-     private static Message getPostMessage(Runnable r) {
-         Message m = Message.obtain();
-         m.callback = r;
-@@ -1101,8 +1074,6 @@
-     @UnsupportedAppUsage
-     final Callback mCallback;
-     final boolean mAsynchronous;
--    @UnsupportedAppUsage
--    IMessenger mMessenger;
- 
-     /** If it's a shared handler, we disallow certain dangeraous operations. */
-     private final boolean mIsShared;
 --- a/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
 +++ b/frameworks/base/core/java/android/os/LegacyMessageQueue/MessageQueue.java
 @@ -21,22 +21,17 @@

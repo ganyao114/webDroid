@@ -9,7 +9,7 @@ namespace {
 
 using namespace std::chrono;
 constexpr uint64_t kDefaultStack = 1 << 20;
-constexpr uint64_t kMaxStack = 32 << 20;
+constexpr uint64_t kMaxOwnedStack = 32 << 20;
 constexpr uint32_t kDestroyed = UINT32_MAX;
 
 int Error(int error) {
@@ -38,6 +38,10 @@ size_t AttrStack(const GuestMemory& mem) {
     return 2 * mem.width();
 }
 
+bool ValidStackSize(const GuestMemory& mem, uint64_t size, bool owned) {
+    return size >= (mem.width() == 8 ? 16384 : 8192) && (!owned || size <= kMaxOwnedStack);
+}
+
 void GetAttributes(wa_host_call_ctx_t& ctx) {
     const auto* thread = FindThread(*ctx.dbt, ctx.args[0]);
     if (!thread || thread->exited)
@@ -46,9 +50,9 @@ void GetAttributes(wa_host_call_ctx_t& ctx) {
     const auto address = ctx.args[1];
     Reset(mem, address, mem.width() == 8 ? 56 : 24);
     mem.Write<uint32_t>(address, thread->detached ? 1 : 0);
-    mem.WriteWord(address + mem.width(), thread->stack_base + WA_PAGE_SIZE);
+    mem.WriteWord(address + mem.width(), thread->stack_base);
     mem.WriteWord(address + AttrStack(mem), thread->stack_size);
-    mem.WriteWord(address + 3 * mem.width(), WA_PAGE_SIZE);
+    mem.WriteWord(address + 3 * mem.width(), thread->owns_stack ? WA_PAGE_SIZE : 0);
     mem.Write<int32_t>(address + 4 * mem.width(), thread->policy);
     mem.Write<int32_t>(address + 4 * mem.width() + sizeof(int32_t), thread->priority);
 }
@@ -60,6 +64,16 @@ void GetStackBounds(wa_host_call_ctx_t& ctx) {
     mem.WriteWord(ctx.args[2], mem.ReadWord(attr + AttrStack(mem)));
 }
 
+void SetStackBounds(wa_host_call_ctx_t& ctx) {
+    const GuestMemory mem(ctx);
+    const auto attr = ctx.args[0], base = ctx.args[1], size = ctx.args[2];
+    if (!base || base % 16 || !ValidStackSize(mem, size, false) ||
+        CheckMappedAccess(ctx.dbt, base, size, WA_PROT_READ | WA_PROT_WRITE) != WA_OK)
+        return ErrorResult(ctx, EINVAL);
+    mem.WriteWord(attr + mem.width(), base);
+    mem.WriteWord(attr + AttrStack(mem), size);
+}
+
 void GetThreadId(wa_host_call_ctx_t& ctx) {
     const auto* thread = FindThread(*ctx.dbt, ctx.args[0]);
     if (!thread || thread->exited)
@@ -67,7 +81,15 @@ void GetThreadId(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = thread->id;
 }
 
-enum class Attr { Init, Destroy, SetDetach, GetDetach, SetStack, GetStack };
+void ThreadCpuClock(wa_host_call_ctx_t& ctx) {
+    const auto* thread = FindThread(*ctx.dbt, ctx.args[0]);
+    if (!thread || thread->exited) return ErrorResult(ctx, ESRCH);
+    // Guest pthreads share a host thread. Its CPU clock is available to the current caller.
+    if (thread != ctx.dbt->running) return ErrorResult(ctx, ENOTSUP);
+    GuestMemory(ctx).Write<int32_t>(ctx.args[1], 3); // Bionic CLOCK_THREAD_CPUTIME_ID.
+}
+
+enum class Attr { Init, Destroy, SetDetach, GetDetach, SetStack, GetStack, GetPolicy, GetPriority };
 template <Attr op> void Attributes(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     const auto address = ctx.args[0], value = ctx.args[1];
@@ -85,11 +107,15 @@ template <Attr op> void Attributes(wa_host_call_ctx_t& ctx) {
     } else if constexpr (op == Attr::GetDetach) {
         mem.Write<int32_t>(value, mem.Read<uint32_t>(address) & 1);
     } else if constexpr (op == Attr::SetStack) {
-        if (value < (mem.width() == 8 ? 16384 : 8192) || value > kMaxStack)
+        const bool owned = !mem.ReadWord(address + mem.width());
+        if (!ValidStackSize(mem, value, owned))
             return ErrorResult(ctx, EINVAL);
         mem.WriteWord(address + AttrStack(mem), value);
-    } else {
+    } else if constexpr (op == Attr::GetStack) {
         mem.WriteWord(value, mem.ReadWord(address + AttrStack(mem)));
+    } else {
+        const auto field = address + 4 * mem.width() + (op == Attr::GetPriority ? sizeof(int32_t) : 0);
+        mem.Write<int32_t>(value, mem.Read<int32_t>(field));
     }
 }
 
@@ -99,8 +125,11 @@ void Create(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     const auto attr = ctx.args[1];
     const auto stack = attr ? mem.ReadWord(attr + AttrStack(mem)) : kDefaultStack;
+    const auto stack_base = attr ? mem.ReadWord(attr + mem.width()) : 0;
     const bool detached = attr && (mem.Read<uint32_t>(attr) & 1);
-    if (!ctx.args[0] || stack < (mem.width() == 8 ? 16384 : 8192) || stack > kMaxStack ||
+    if (!ctx.args[0] || !ValidStackSize(mem, stack, !stack_base) ||
+        (stack_base && (stack_base % 16 ||
+            CheckMappedAccess(&dbt, stack_base, stack, WA_PROT_READ | WA_PROT_WRITE) != WA_OK)) ||
         !IsExecutable(dbt, ctx.args[2]))
         return ErrorResult(ctx, EINVAL);
     if (state.next_thread > UINT32_MAX)
@@ -110,7 +139,9 @@ void Create(wa_host_call_ctx_t& ctx) {
     auto it = state.threads.try_emplace(id).first;
     auto& worker = it->second;
     worker.id = id;
-    worker.stack_size = AlignUp(stack, WA_PAGE_SIZE);
+    worker.owns_stack = !stack_base;
+    worker.stack_base = stack_base;
+    worker.stack_size = stack_base ? stack : AlignUp(stack, WA_PAGE_SIZE);
     worker.detached = detached;
     worker.signal_mask = dbt.running->signal_mask;
     bool started = false;
@@ -249,7 +280,10 @@ template <Mutex op> void MutexCall(wa_host_call_ctx_t& ctx) {
         } else {
             if (mem.Read<uint32_t>(address) == kDestroyed)
                 return ErrorResult(ctx, EINVAL);
-            mem.Write<uint32_t>(address, kDestroyed);
+            // Finalizers in another DSO can still use an unlocked static mutex.
+            // The process releases its guest memory after all exit handlers return.
+            if (!dbt.bionic->finalizing_process)
+                mem.Write<uint32_t>(address, kDestroyed);
         }
         mutexes.erase(address);
     }
@@ -526,8 +560,78 @@ template <Sleep op> void SleepFor(wa_host_call_ctx_t& ctx) {
         Park(*ctx.dbt, WaitKind::Sleep, 0, Clock::now() + duration);
 }
 
+void ClockSleep(wa_host_call_ctx_t& ctx) {
+    const auto clock = ctx.args[0], flags = ctx.args[1];
+    if ((clock != 0 && clock != 1 && clock != 7) || flags > 1)
+        return ErrorResult(ctx, EINVAL);
+    if (!ctx.args[2]) return ErrorResult(ctx, EFAULT);
+    const GuestMemory mem(ctx);
+    const auto sec = SignedWord(mem, mem.ReadWord(ctx.args[2]));
+    const auto ns = SignedWord(mem, mem.ReadWord(ctx.args[2] + mem.width()));
+    if (sec < 0 || ns < 0 || ns >= 1'000'000'000) return ErrorResult(ctx, EINVAL);
+
+    const auto now = Clock::now();
+    auto& dbt = *ctx.dbt;
+    const auto& wait = dbt.running->wait;
+    const auto duration = seconds(std::min<int64_t>(sec, 8'000'000'000)) + nanoseconds(ns);
+    auto deadline = wait.deadline;
+    if (wait.kind == WaitKind::None) {
+        deadline = flags ? GuestDeadline(mem, ctx.args[2], clock != 0)
+                         : now + std::min(duration_cast<Clock::duration>(duration), kNoDeadline - now);
+    }
+    if (deadline <= now && wait.kind == WaitKind::None) return;
+    const auto error = Park(dbt, WaitKind::Sleep, 0, deadline);
+    if (error == GuestErrno(ETIMEDOUT)) return;
+    if (error == GuestErrno(EINTR) && !flags && ctx.args[3]) {
+        const auto remaining = std::max(Clock::duration::zero(), deadline - Clock::now());
+        const auto whole = duration_cast<seconds>(remaining);
+        mem.WriteWord(ctx.args[3], whole.count());
+        mem.WriteWord(ctx.args[3] + mem.width(), duration_cast<nanoseconds>(remaining - whole).count());
+    }
+    ctx.ret0 = error;
+}
+
 void SchedYield(wa_host_call_ctx_t& ctx) {
     Yield(*ctx.dbt);
+}
+
+enum class Barrier { Init, Destroy, Wait };
+template <Barrier op> void ThreadBarrier(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    const auto address = ctx.args[0];
+    auto& barriers = dbt.bionic->barriers;
+    const auto found = barriers.find(address);
+    if constexpr (op == Barrier::Init) {
+        const auto count = static_cast<uint32_t>(ctx.args[2]);
+        if (!address || !count || ctx.args[2] > UINT32_MAX) return ErrorResult(ctx, EINVAL);
+        if (found != barriers.end()) return ErrorResult(ctx, EBUSY);
+        if (ctx.args[1] && GuestMemory(ctx).Read<uint32_t>(ctx.args[1])) return ErrorResult(ctx, ENOTSUP);
+        barriers.try_emplace(address, GuestBarrier{count});
+    } else {
+        if (found == barriers.end()) return ErrorResult(ctx, EINVAL);
+        if constexpr (op == Barrier::Destroy) {
+            if (Occupied(dbt, WaitKind::Barrier, address)) return ErrorResult(ctx, EBUSY);
+            barriers.erase(found);
+        } else {
+            auto& barrier = found->second;
+            const bool fresh = dbt.running->wait.kind != WaitKind::Barrier;
+            if (fresh && ++barrier.arrived == barrier.count) {
+                barrier.arrived = 0;
+                Wake(dbt, WaitKind::Barrier, address);
+                ctx.ret0 = UINT64_MAX; // PTHREAD_BARRIER_SERIAL_THREAD.
+            } else {
+                ctx.ret0 = Park(dbt, WaitKind::Barrier, address);
+                if (ctx.ret0 && barrier.arrived) --barrier.arrived;
+            }
+        }
+    }
+}
+
+void GetScheduler(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    const auto* thread = ctx.args[0] ? FindThread(dbt, ctx.args[0]) : dbt.running;
+    if (!thread || thread->exited) return Fail(ctx, ESRCH);
+    ctx.ret0 = thread->policy;
 }
 
 template <bool Set> void Sched(wa_host_call_ctx_t& ctx) {
@@ -637,12 +741,16 @@ void RunThreadDestructors(wa_dbt& dbt) {
             break;
     }
     thread.tls_keys.clear();
+    DropThreadLooper(dbt);
 }
 
 void RegisterPthread(wa_dbt& dbt) {
     const Builtin shims[] = {
         {"pthread_create", Dispatch<Create>},
         {"pthread_join", Dispatch<Join>},
+        {"pthread_barrier_init", Dispatch<ThreadBarrier<Barrier::Init>>},
+        {"pthread_barrier_destroy", Dispatch<ThreadBarrier<Barrier::Destroy>>},
+        {"pthread_barrier_wait", Dispatch<ThreadBarrier<Barrier::Wait>>},
         {"pthread_detach", Dispatch<Detach>},
         {"pthread_self", Dispatch<Self>},
         {"pthread_equal", Dispatch<Equal>},
@@ -654,8 +762,12 @@ void RegisterPthread(wa_dbt& dbt) {
         {"pthread_attr_setstacksize", Dispatch<Attributes<Attr::SetStack>>},
         {"pthread_attr_getstacksize", Dispatch<Attributes<Attr::GetStack>>},
         {"pthread_attr_getstack", Dispatch<GetStackBounds>},
+        {"pthread_attr_setstack", Dispatch<SetStackBounds>},
+        {"pthread_attr_getschedpolicy", Dispatch<Attributes<Attr::GetPolicy>>},
+        {"pthread_attr_getschedparam", Dispatch<Attributes<Attr::GetPriority>>},
         {"pthread_getattr_np", Dispatch<GetAttributes>},
         {"pthread_gettid_np", Dispatch<GetThreadId>},
+        {"pthread_getcpuclockid", Dispatch<ThreadCpuClock>},
         {"pthread_mutex_init", Dispatch<MutexCall<Mutex::Init>>},
         {"pthread_mutex_destroy", Dispatch<MutexCall<Mutex::Destroy>>},
         {"pthread_mutex_lock", Dispatch<MutexCall<Mutex::Lock>>},
@@ -699,9 +811,11 @@ void RegisterPthread(wa_dbt& dbt) {
         {"sem_post", Dispatch<Semaphore<Sem::Post>>},
         {"sem_getvalue", Dispatch<Semaphore<Sem::Get>>},
         {"nanosleep", Dispatch<SleepFor<Sleep::Nano>>},
+        {"clock_nanosleep", Dispatch<ClockSleep>},
         {"usleep", Dispatch<SleepFor<Sleep::Micro>>},
         {"sleep", Dispatch<SleepFor<Sleep::Seconds>>},
         {"sched_yield", Dispatch<SchedYield>},
+        {"sched_getscheduler", Dispatch<GetScheduler>},
     };
     Register(dbt, "libc.so", shims);
 }

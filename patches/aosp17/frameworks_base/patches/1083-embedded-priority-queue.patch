@@ -1,0 +1,25 @@
+--- a/libcore/ojluni/src/main/java/java/util/PriorityQueue.java
++++ b/libcore/ojluni/src/main/java/java/util/PriorityQueue.java
+@@ -35,7 +35,6 @@
+ import java.util.function.Consumer;
+ import java.util.function.Predicate;
+ import jdk.internal.access.SharedSecrets;
+-import jdk.internal.util.ArraysSupport;
+ 
+ /**
+  * An unbounded priority {@linkplain Queue queue} based on a priority heap.
+@@ -298,10 +297,10 @@
+     private void grow(int minCapacity) {
+         int oldCapacity = queue.length;
+         // Double size if small; else grow by 50%
+-        int newCapacity = ArraysSupport.newLength(oldCapacity,
+-                minCapacity - oldCapacity, /* minimum growth */
+-                oldCapacity < 64 ? oldCapacity + 2 : oldCapacity >> 1
+-                                           /* preferred growth */);
++        if (minCapacity < 0)
++            throw new OutOfMemoryError("Required array length too large");
++        long preferredCapacity = (long) oldCapacity + (oldCapacity < 64 ? oldCapacity + 2 : oldCapacity >> 1);
++        int newCapacity = (int) Math.max(minCapacity, Math.min(preferredCapacity, Integer.MAX_VALUE - 8L));
+         queue = Arrays.copyOf(queue, newCapacity);
+     }
+ 

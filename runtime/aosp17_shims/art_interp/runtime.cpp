@@ -5,6 +5,7 @@
 #include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <thread>
 #include <unordered_set>
 
 #include "dex/utf-inl.h"
@@ -106,10 +107,10 @@ Value Runtime::InvokeSlow(Method& method, Object* receiver, std::span<const Valu
     return result;
   }
   Value result;
-  if (method.builtin) {
-    result = method.builtin(*this, receiver, args);
-  } else if (method.IsNative()) {
+  if (method.IsNative()) {
     result = jni->Invoke(method, receiver, args);
+  } else if (method.builtin) {
+    result = method.builtin(*this, receiver, args);
   } else {
     if (method.IsAbstract()) Fail("Ljava/lang/AbstractMethodError;", method.QualifiedName());
     if (!method.code) Fail("Ljava/lang/VerifyError;", "Missing code for " + method.QualifiedName());
@@ -120,8 +121,8 @@ Value Runtime::InvokeSlow(Method& method, Object* receiver, std::span<const Valu
   return result;
 }
 
-std::vector<Runtime::SuspendedFrame> Runtime::CaptureSuspendedFrames(const LoopDispatch& dispatch,
-                                                                    const Object* released_monitor) {
+std::optional<std::vector<Runtime::SuspendedFrame>> Runtime::CaptureSuspendedFrames(
+    const LoopDispatch& dispatch, const Object* released_monitor) {
   std::vector<SuspendedFrame> frames;
   size_t depth = call_depth;
   for (auto* frame = active_trace; frame != dispatch.boundary; frame = frame->caller) {
@@ -131,21 +132,21 @@ std::vector<Runtime::SuspendedFrame> Runtime::CaptureSuspendedFrames(const LoopD
         std::ranges::any_of(frame->frame_roots.values, [released_monitor](Value held) {
           return held.ref() != released_monitor;
         })) {
-      Fail("Ljava/lang/IllegalStateException;", "Cannot suspend across a native or locked frame");
+      return std::nullopt;
     }
     const auto slots = frame->frame_roots.borrowed;
     frames.push_back({frame->method, *frame->dex_pc, {slots.begin(), slots.end()}, frame->frame_roots.values});
   }
-  if (frames.empty() || depth != dispatch.depth + 1) {
-    Fail("Ljava/lang/IllegalStateException;", "Missing the caller to suspend");
-  }
+  if (frames.empty() || depth != dispatch.depth + 1) return std::nullopt;
   std::ranges::reverse(frames);
   return frames;
 }
 
 [[noreturn]] void Runtime::SuspendMainLooper() {
   if (!loop_dispatch) Fail("Ljava/lang/IllegalStateException;", "Main Looper dispatch is unavailable");
-  throw LoopSuspended{CaptureSuspendedFrames(*loop_dispatch)};
+  auto frames = CaptureSuspendedFrames(*loop_dispatch);
+  if (!frames) Fail("Ljava/lang/IllegalStateException;", "Cannot suspend across a native or locked frame");
+  throw LoopSuspended{std::move(*frames)};
 }
 
 Value Runtime::ResumeSuspendedLoop(std::span<const SuspendedFrame> frames) {
@@ -162,12 +163,21 @@ void Runtime::StartThread(Object* thread) {
 }
 
 bool Runtime::HasThread(const Object* thread) const {
-  return std::ranges::find(workers, thread, &Worker::thread) != workers.end();
+  return std::ranges::any_of(workers, [thread](const Worker& worker) {
+    return worker.thread == thread && !worker.finished;
+  });
 }
 
 bool Runtime::WakeThread(Object* thread, bool interrupt) {
+  if (interrupt) {
+    for (auto* wait = monitor_wait; wait; wait = wait->previous) {
+      if (wait->thread != thread) continue;
+      wait->ready = true;
+      return true;
+    }
+  }
   const auto worker = std::ranges::find(workers, thread, &Worker::thread);
-  if (worker == workers.end() || &*worker == active_worker || worker->frames.empty() ||
+  if (worker == workers.end() || worker->running || worker->finished || worker->frames.empty() ||
       (worker->interruptible && !interrupt)) return false;
   worker->due = std::chrono::steady_clock::time_point::min();
   worker->interrupted = worker->interruptible && interrupt;
@@ -175,8 +185,13 @@ bool Runtime::WakeThread(Object* thread, bool interrupt) {
 }
 
 void Runtime::NotifyWaiters(Object& monitor, bool all) {
+  for (auto* wait = monitor_wait; wait; wait = wait->previous) {
+    if (&wait->monitor != &monitor || wait->ready) continue;
+    wait->ready = true;
+    if (!all) return;
+  }
   for (auto& worker : workers) {
-    if (worker.monitor != &monitor || &worker == active_worker) continue;
+    if (worker.monitor != &monitor || worker.running || worker.finished) continue;
     worker.monitor = nullptr;
     worker.due = std::chrono::steady_clock::time_point::min();
     if (!all) break;
@@ -186,13 +201,15 @@ void Runtime::NotifyWaiters(Object& monitor, bool all) {
 std::optional<std::chrono::steady_clock::time_point> Runtime::NextThreadWakeup() const {
   std::optional<std::chrono::steady_clock::time_point> next;
   for (const auto& worker : workers) {
-    if (worker.due && (!next || *worker.due < *next)) next = worker.due;
+    if (!worker.running && !worker.finished && worker.due && (!next || *worker.due < *next)) next = worker.due;
   }
   return next;
 }
 
-[[noreturn]] void Runtime::SuspendWorker(std::optional<int64_t> delay_ns, bool interruptible,
-                                         Object* monitor) {
+void Runtime::TrySuspendWorker(std::optional<int64_t> delay_ns, bool interruptible, Object* monitor) {
+  if (!worker_dispatch) return;
+  auto frames = CaptureSuspendedFrames(*worker_dispatch, monitor);
+  if (!frames) return;
   using Clock = std::chrono::steady_clock;
   std::optional<Clock::time_point> due;
   if (delay_ns) {
@@ -200,7 +217,44 @@ std::optional<std::chrono::steady_clock::time_point> Runtime::NextThreadWakeup()
     const auto delay = std::chrono::duration_cast<Clock::duration>(std::chrono::nanoseconds(*delay_ns));
     due = now + std::min(delay, Clock::time_point::max() - now);
   }
-  throw WorkerSuspended{CaptureSuspendedFrames(*worker_dispatch, monitor), due, interruptible, monitor};
+  throw WorkerSuspended{std::move(*frames), due, interruptible, monitor};
+}
+
+[[noreturn]] void Runtime::SuspendWorker(std::optional<int64_t> delay_ns, bool interruptible, Object* monitor) {
+  TrySuspendWorker(delay_ns, interruptible, monitor);
+  Fail("Ljava/lang/IllegalStateException;", "Cannot suspend across a native or locked frame");
+}
+
+void Runtime::WaitOnMonitor(Object& monitor, std::optional<int64_t> timeout) {
+  TrySuspendWorker(timeout, true, &monitor);
+
+  // Keep native callers on the stack and run the other guest threads while
+  // this thread's monitor is released. A nested worker can suspend normally.
+  using Clock = std::chrono::steady_clock;
+  auto& thread_class = linker.Resolve("Ljava/lang/Thread;");
+  auto* thread = linker.FindField(thread_class, "currentThread", thread_class.descriptor, true).value.ref();
+  MonitorWait wait{monitor, thread, monitor_wait};
+  struct Restore {
+    Runtime& runtime;
+    MonitorWait& wait;
+    uint32_t depth;
+    ~Restore() {
+      wait.monitor.monitor_depth = depth;
+      runtime.monitor_wait = wait.previous;
+    }
+  } restore{*this, wait, std::exchange(monitor.monitor_depth, 0)};
+  monitor_wait = &wait;
+  const auto start = Clock::now();
+  const auto deadline = timeout ? start + std::min(Clock::time_point::max() - start,
+      std::chrono::duration_cast<Clock::duration>(std::chrono::nanoseconds(*timeout)))
+      : Clock::time_point::max();
+  while (!wait.ready && Clock::now() < deadline) {
+    const auto next = NextThreadWakeup();
+    if (!next && !timeout) Fail("Ljava/lang/IllegalStateException;", "No guest thread can notify this monitor");
+    const auto until = std::min(next.value_or(deadline), deadline);
+    if (until > Clock::now()) std::this_thread::sleep_until(until);
+    if (until < deadline) RunReadyThreads();
+  }
 }
 
 void Runtime::RunReadyThreads() {
@@ -211,24 +265,36 @@ void Runtime::RunReadyThreads() {
   using Clock = std::chrono::steady_clock;
   const auto now = Clock::now();
   const LoopDispatch dispatch{active_trace, call_depth};
-  for (auto it = workers.begin(); it != workers.end();) {
-    auto worker = it++;
-    if (!worker->due || *worker->due > now) continue;
+  struct SweepFinished {
+    Runtime& vm;
+    bool outermost;
+    ~SweepFinished() {
+      if (outermost) std::erase_if(vm.workers, [](const Worker& worker) { return worker.finished; });
+    }
+  } sweep{*this, !active_worker};
+  // Threads started by a callback become eligible on the next scheduler turn.
+  size_t remaining = workers.size();
+  for (auto worker = workers.begin(); remaining; ++worker, --remaining) {
+    if (monitor_wait && monitor_wait->ready) break;
+    if (worker->running || worker->finished || !worker->due || *worker->due > now) continue;
     RootScope roots(*this, {}, current.value.ref());
     const Value previous = std::exchange(current.value, Value::Ref(worker->thread));
-    active_worker = &*worker;
-    worker->monitor = nullptr;
-    worker_dispatch = &dispatch;
     struct Reset {
       Runtime& vm;
       Field& current;
       Value previous;
+      Worker* outer_worker;
+      const LoopDispatch* outer_dispatch;
       ~Reset() {
+        vm.active_worker->running = false;
         current.value = previous;
-        vm.active_worker = nullptr;
-        vm.worker_dispatch = nullptr;
+        vm.active_worker = outer_worker;
+        vm.worker_dispatch = outer_dispatch;
       }
-    } reset{*this, current, previous};
+    } reset{*this, current, previous, std::exchange(active_worker, &*worker),
+            std::exchange(worker_dispatch, &dispatch)};
+    worker->running = true;
+    worker->monitor = nullptr;
     try {
       if (!worker->frames.empty()) {
         if (std::exchange(worker->interrupted, false)) {
@@ -247,14 +313,14 @@ void Runtime::RunReadyThreads() {
           Invoke(run, runnable, {});
         }
       }
-      workers.erase(worker);
+      worker->finished = true;
     } catch (WorkerSuspended& suspended) {
       worker->frames = std::move(suspended.frames);
       worker->due = suspended.due;
       worker->interruptible = suspended.interruptible;
       worker->monitor = suspended.monitor;
     } catch (...) {
-      workers.erase(worker);
+      worker->finished = true;
       throw;
     }
   }
@@ -348,14 +414,34 @@ Object* Runtime::ClassObject(Class& cls) {
   return cls.mirror;
 }
 
+Object* Runtime::NewReflectedMethod(Method& method, uint64_t guest_address) {
+  auto& type = linker.Resolve(method.name == "<init>" ? "Ljava/lang/reflect/Constructor;"
+                                                      : "Ljava/lang/reflect/Method;");
+  RootScope roots(*this);
+  auto* mirror = roots.Hold(heap.Allocate(*this, type));
+  mirror->reflected_method = &method;
+  if (auto* executable = type.super; executable && executable->descriptor == "Ljava/lang/reflect/Executable;") {
+    const auto store = [&](std::string_view name, std::string_view signature, Value value) {
+      mirror->fields[executable->fields.at(MemberKey(name, signature)).slot] = value;
+    };
+    store("artMethod", "J", Value::Long(guest_address));
+    store("accessFlags", "I", Value::Int(method.flags));
+    store("dexMethodIndex", "I", Value::Int(method.index));
+    const auto declaring = Value::Ref(ClassObject(*method.owner));
+    store("declaringClass", "Ljava/lang/Class;", declaring);
+    store("declaringClassOfOverriddenMethod", "Ljava/lang/Class;", declaring);
+  }
+  return mirror;
+}
+
 DirectBufferMemory* Runtime::DirectArray(const Object& array) const {
-  if (!direct_arrays || array.type->descriptor != "[B") return nullptr;
+  if (!direct_arrays) return nullptr;
   const auto found = direct_arrays->find(&array);
   return found == direct_arrays->end() ? nullptr : found->second.get();
 }
 
 size_t Runtime::ArrayLength(const Object& array) const {
-  if (const auto* direct = DirectArray(array)) return direct->size;
+  if (const auto* direct = DirectArray(array)) return direct->size / PrimitiveWidth(array.type->component->kind);
   return array.elements.size();
 }
 
@@ -369,7 +455,7 @@ void CheckArrayIndex(Runtime& vm, const Object& array, int32_t index, size_t len
 
 class OwnedDirectMemory final : public DirectBufferMemory {
  public:
-  explicit OwnedDirectMemory(size_t size) : DirectBufferMemory(size), bytes_(size) {}
+  explicit OwnedDirectMemory(size_t size) : DirectBufferMemory(size), bytes_(std::max(size, size_t{1})) {}
 
   bool Read(size_t offset, std::span<uint8_t> bytes) const override {
     std::copy_n(bytes_.begin() + offset, bytes.size(), bytes.begin());
@@ -380,6 +466,7 @@ class OwnedDirectMemory final : public DirectBufferMemory {
     std::ranges::copy(bytes, bytes_.begin() + offset);
     return true;
   }
+  uint64_t Address() const override { return reinterpret_cast<uintptr_t>(bytes_.data()); }
 
  private:
   std::vector<uint8_t> bytes_;
@@ -387,12 +474,34 @@ class OwnedDirectMemory final : public DirectBufferMemory {
 
 }  // namespace
 
+Object* Runtime::NewNonMovableArray(Class& cls, int32_t length) {
+  if (length < 0) Fail("Ljava/lang/NegativeArraySizeException;", std::to_string(length));
+  if (!cls.component->IsPrimitive()) return NewArray(cls, length);
+  const auto width = PrimitiveWidth(cls.component->kind);
+  if (static_cast<size_t>(length) > SIZE_MAX / width) Fail("Ljava/lang/OutOfMemoryError;");
+  const size_t bytes = static_cast<size_t>(length) * width;
+  auto* array = heap.Allocate(*this, cls);
+  try {
+    auto* libraries = NativeLibraries();
+    auto memory = libraries ? libraries->AllocateMemory(bytes) : std::make_unique<OwnedDirectMemory>(bytes);
+    if (!memory) Fail("Ljava/lang/OutOfMemoryError;");
+    if (!direct_arrays) direct_arrays = std::make_unique<DirectArrays>();
+    direct_arrays->emplace(array, std::move(memory));
+  } catch (const std::bad_alloc&) {
+    Fail("Ljava/lang/OutOfMemoryError;");
+  }
+  return array;
+}
+
 Value Runtime::ArrayElement(const Object& array, int32_t index) {
   if (const auto* direct = DirectArray(array)) {
-    CheckArrayIndex(*this, array, index, direct->size);
-    uint8_t byte;
-    if (!direct->Read(index, {&byte, 1})) Fail("Ljava/lang/IllegalStateException;", "Direct buffer memory");
-    return Value::Int(static_cast<int8_t>(byte));
+    const auto type = array.type->component->kind;
+    const auto width = PrimitiveWidth(type);
+    CheckArrayIndex(*this, array, index, direct->size / width);
+    uint64_t bits = 0;
+    if (!direct->Read(static_cast<size_t>(index) * width, {reinterpret_cast<uint8_t*>(&bits), width}))
+      Fail("Ljava/lang/IllegalStateException;", "Array backing memory");
+    return Normalize(Value::Bits(bits), type);
   }
   CheckArrayIndex(*this, array, index, array.elements.size());
   return array.elements[index];
@@ -400,9 +509,12 @@ Value Runtime::ArrayElement(const Object& array, int32_t index) {
 
 void Runtime::StoreArrayElement(Object& array, int32_t index, Value value) {
   if (auto* direct = DirectArray(array)) {
-    CheckArrayIndex(*this, array, index, direct->size);
-    const auto byte = static_cast<uint8_t>(value.i());
-    if (!direct->Write(index, {&byte, 1})) Fail("Ljava/lang/IllegalStateException;", "Direct buffer memory");
+    const auto type = array.type->component->kind;
+    const auto width = PrimitiveWidth(type);
+    CheckArrayIndex(*this, array, index, direct->size / width);
+    const auto bits = Normalize(value, type).bits();
+    if (!direct->Write(static_cast<size_t>(index) * width, {reinterpret_cast<const uint8_t*>(&bits), width}))
+      Fail("Ljava/lang/IllegalStateException;", "Array backing memory");
     return;
   }
   CheckArrayIndex(*this, array, index, array.elements.size());

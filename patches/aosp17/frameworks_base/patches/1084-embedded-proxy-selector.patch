@@ -1,0 +1,32 @@
+--- a/libcore/ojluni/src/main/java/java/net/ProxySelector.java
++++ b/libcore/ojluni/src/main/java/java/net/ProxySelector.java
+@@ -27,7 +27,6 @@
+ 
+ import java.io.IOException;
+ import java.util.List;
+-import sun.security.util.SecurityConstants;
+ 
+ /**
+  * Selects the proxy server to use, if any, when connecting to the
+@@ -89,10 +88,6 @@
+      * @since 1.5
+      */
+     public static ProxySelector getDefault() {
+-        SecurityManager sm = System.getSecurityManager();
+-        if (sm != null) {
+-            sm.checkPermission(SecurityConstants.GET_PROXYSELECTOR_PERMISSION);
+-        }
+         return theProxySelector;
+     }
+ 
+@@ -112,10 +107,6 @@
+      * @since 1.5
+      */
+     public static void setDefault(ProxySelector ps) {
+-        SecurityManager sm = System.getSecurityManager();
+-        if (sm != null) {
+-            sm.checkPermission(SecurityConstants.SET_PROXYSELECTOR_PERMISSION);
+-        }
+         theProxySelector = ps;
+     }
+ 

@@ -1,0 +1,193 @@
+--- a/frameworks/base/graphics/java/android/graphics/Picture.java
++++ b/frameworks/base/graphics/java/android/graphics/Picture.java
+@@ -17,7 +17,6 @@
+ package android.graphics;
+ 
+ import android.annotation.NonNull;
+-import android.compat.annotation.UnsupportedAppUsage;
+ 
+ import java.io.InputStream;
+ import java.io.OutputStream;
+@@ -33,22 +32,19 @@
+  * <p class="note"><strong>Note:</strong> Prior to API level 23 a picture cannot
+  * be replayed on a hardware accelerated canvas.</p>
+  */
+-@android.ravenwood.annotation.RavenwoodKeepWholeClass
+ public class Picture {
+     private PictureCanvas mRecordingCanvas;
+-    // TODO: Figure out if this was a false-positive
+-    @UnsupportedAppUsage(maxTargetSdk = 28)
+-    private long mNativePicture;
++    // Record at the advertised size with the same software Canvas used for bitmaps.
++    private Bitmap mBitmap;
++    private int mWidth;
++    private int mHeight;
++    private boolean mClosed;
+     private boolean mRequiresHwAcceleration;
+ 
+-    private static final int WORKING_STREAM_STORAGE = 16 * 1024;
+-
+     /**
+      * Creates an empty picture that is ready to record.
+      */
+-    public Picture() {
+-        this(nativeConstructor(0));
+-    }
++    public Picture() {}
+ 
+     /**
+      * Create a picture by making a copy of what has already been recorded in
+@@ -56,15 +52,12 @@
+      * changes will not be reflected in this picture.
+      */
+     public Picture(Picture src) {
+-        this(nativeConstructor(src != null ? src.mNativePicture : 0));
+-    }
+-
+-    /** @hide */
+-    public Picture(long nativePicture) {
+-        if (nativePicture == 0) {
+-            throw new IllegalArgumentException();
+-        }
+-        mNativePicture = nativePicture;
++        if (src != null && !src.mClosed) {
++            mWidth = src.mWidth;
++            mHeight = src.mHeight;
++            mRequiresHwAcceleration = src.mRequiresHwAcceleration;
++            if (src.mBitmap != null) mBitmap = src.mBitmap.copy(Bitmap.Config.ARGB_8888, false);
++        }
+     }
+ 
+     /**
+@@ -75,10 +68,9 @@
+      * @hide
+      */
+     public void close() {
+-        if (mNativePicture != 0) {
+-            nativeDestructor(mNativePicture);
+-            mNativePicture = 0;
+-        }
++        if (mRecordingCanvas != null) endRecording();
++        mBitmap = null;
++        mClosed = true;
+     }
+ 
+     @Override
+@@ -91,7 +83,7 @@
+     }
+ 
+     private void verifyValid() {
+-        if (mNativePicture == 0) {
++        if (mClosed) {
+             throw new IllegalStateException("Picture is destroyed");
+         }
+     }
+@@ -110,8 +102,13 @@
+         if (mRecordingCanvas != null) {
+             throw new IllegalStateException("Picture already recording, must call #endRecording()");
+         }
+-        long ni = nativeBeginRecording(mNativePicture, width, height);
+-        mRecordingCanvas = new PictureCanvas(this, ni);
++        Bitmap bitmap = width > 0 && height > 0
++                ? Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888) : null;
++        if (bitmap != null) bitmap.setDensity(Bitmap.DENSITY_NONE);
++        mRecordingCanvas = new PictureCanvas(this, bitmap);
++        mBitmap = bitmap;
++        mWidth = Math.max(0, width);
++        mHeight = Math.max(0, height);
+         mRequiresHwAcceleration = false;
+         return mRecordingCanvas;
+     }
+@@ -126,8 +123,8 @@
+         verifyValid();
+         if (mRecordingCanvas != null) {
+             mRequiresHwAcceleration = mRecordingCanvas.mUsesHwFeature;
++            mRecordingCanvas.detach();
+             mRecordingCanvas = null;
+-            nativeEndRecording(mNativePicture);
+         }
+     }
+ 
+@@ -137,7 +134,7 @@
+      */
+     public int getWidth() {
+         verifyValid();
+-        return nativeGetWidth(mNativePicture);
++        return mWidth;
+     }
+ 
+     /**
+@@ -146,7 +143,7 @@
+      */
+     public int getHeight() {
+         verifyValid();
+-        return nativeGetHeight(mNativePicture);
++        return mHeight;
+     }
+ 
+     /**
+@@ -188,7 +185,8 @@
+             throw new IllegalArgumentException("Software rendering not supported for Pictures that"
+                     + " require hardware acceleration");
+         }
+-        nativeDraw(canvas.getNativeCanvasWrapper(), mNativePicture);
++        java.util.Objects.requireNonNull(canvas);
++        if (mBitmap != null) canvas.drawBitmap(mBitmap, 0.0f, 0.0f, null);
+     }
+ 
+     /**
+@@ -205,7 +203,7 @@
+      */
+     @Deprecated
+     public static Picture createFromStream(@NonNull InputStream stream) {
+-        return new Picture(nativeCreateFromStream(stream, new byte[WORKING_STREAM_STORAGE]));
++        throw new UnsupportedOperationException("Picture stream format is unavailable");
+     }
+ 
+     /**
+@@ -222,36 +220,26 @@
+     @Deprecated
+     public void writeToStream(@NonNull OutputStream stream) {
+         verifyValid();
+-        // do explicit check before calling the native method
+         if (stream == null) {
+             throw new IllegalArgumentException("stream cannot be null");
+         }
+-        if (!nativeWriteToStream(mNativePicture, stream, new byte[WORKING_STREAM_STORAGE])) {
+-            throw new RuntimeException();
+-        }
+-    }
+-
+-    // return empty picture if src is 0, or a copy of the native src
+-    private static native long nativeConstructor(long nativeSrcOr0);
+-    private static native long nativeCreateFromStream(InputStream stream, byte[] storage);
+-    private static native int nativeGetWidth(long nativePicture);
+-    private static native int nativeGetHeight(long nativePicture);
+-    private static native long nativeBeginRecording(long nativeCanvas, int w, int h);
+-    private static native void nativeEndRecording(long nativeCanvas);
+-    private static native void nativeDraw(long nativeCanvas, long nativePicture);
+-    private static native boolean nativeWriteToStream(long nativePicture,
+-                                           OutputStream stream, byte[] storage);
+-    private static native void nativeDestructor(long nativePicture);
++        throw new UnsupportedOperationException("Picture stream format is unavailable");
++    }
+ 
+     private static class PictureCanvas extends Canvas {
+         private final Picture mPicture;
+         boolean mUsesHwFeature;
+ 
+-        public PictureCanvas(Picture pict, long nativeCanvas) {
+-            super(nativeCanvas);
++        public PictureCanvas(Picture pict, Bitmap bitmap) {
++            super();
+             mPicture = pict;
++            if (bitmap != null) super.setBitmap(bitmap);
+             // Disable bitmap density scaling. This matches RecordingCanvas.
+             mDensity = 0;
++        }
++
++        void detach() {
++            super.setBitmap(null);
+         }
+ 
+         @Override

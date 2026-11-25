@@ -77,13 +77,28 @@ void RegisterAtFork(wa_host_call_ctx_t&) {
     // Guest processes have no fork entry point.
 }
 
+std::optional<std::string_view> Property(const wa_dbt& dbt, std::string_view name) {
+    if (const auto& read = dbt.bionic->read_system_property) {
+        if (auto property = read(name)) return property;
+    }
+    if (name == "ro.build.version.sdk") return "37";
+    return std::nullopt;
+}
+
 void PropertyGet(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     const auto name = mem.String(ctx.args[0]);
-    const char* value = name == "ro.build.version.sdk" ? "36" : "";
-    const auto length = std::strlen(value);
-    mem.Write(ctx.args[1], value, length + 1);
-    ctx.ret0 = length;
+    constexpr size_t kMaxValueLength = 91;
+    const auto value = Property(*ctx.dbt, name).value_or("").substr(0, kMaxValueLength);
+    mem.Write(ctx.args[1], value.data(), value.size());
+    mem.Write<uint8_t>(ctx.args[1] + value.size(), 0);
+    ctx.ret0 = value.size();
+}
+
+void PropertyFind(wa_host_call_ctx_t& ctx) {
+    const auto name = GuestMemory(ctx).String(ctx.args[0]);
+    // A prop_info is opaque to callers. The interned name gives it a stable guest identity.
+    if (Property(*ctx.dbt, name)) ctx.ret0 = InternString(*ctx.dbt, name);
 }
 
 } // namespace
@@ -138,6 +153,7 @@ void RegisterSupplementalBuiltins(wa_dbt& dbt) {
         {"abort", Dispatch<Abort>},
         {"android_set_abort_message", Dispatch<AbortMessage>},
         {"__system_property_get", Dispatch<PropertyGet>},
+        {"__system_property_find", Dispatch<PropertyFind>},
         {"__aeabi_atexit", Dispatch<EabiAtExit>},
         {"__register_atfork", Dispatch<RegisterAtFork>},
         {"__cxa_guard_acquire", Dispatch<Guard<0>>},
@@ -155,6 +171,7 @@ void RegisterSupplementalBuiltins(wa_dbt& dbt) {
     RegisterMath(dbt);
     RegisterDynamicLinker(dbt);
     RegisterGraphics(dbt);
+    RegisterNativeLooper(dbt);
 }
 
 } // namespace wa::dbt

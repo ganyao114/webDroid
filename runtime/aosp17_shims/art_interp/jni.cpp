@@ -263,9 +263,11 @@ template<class T, class Ref, char Component> Ref NewArray(JNIEnv* env, jsize len
 template<class T, class Ref, char Component>
 T* GetElements(JNIEnv* env, Ref reference, jboolean* copy) {
   return Guard(env, [&](JniBridge& bridge) {
-    const auto& values = Array(bridge, reference, Component).elements;
-    auto buffer = std::make_unique<T[]>(std::max(size_t{1}, values.size()));
-    for (size_t i = 0; i < values.size(); ++i) buffer[i] = ToNative<T>(bridge, values[i]);
+    auto& vm = bridge.Vm();
+    const auto& array = Array(bridge, reference, Component);
+    const auto size = vm.ArrayLength(array);
+    auto buffer = std::make_unique<T[]>(std::max(size_t{1}, size));
+    for (size_t i = 0; i < size; ++i) buffer[i] = ToNative<T>(bridge, vm.ArrayElement(array, i));
     if (copy) *copy = JNI_TRUE;
     return buffer.release();
   });
@@ -277,26 +279,30 @@ void ReleaseElements(JNIEnv* env, Ref reference, T* buffer, jint mode) {
   const std::unique_ptr<T[]> release(mode == JNI_COMMIT ? nullptr : buffer);
   if (mode == JNI_ABORT) return;
   Guard(env, [&](JniBridge& bridge) {
-    auto& values = Array(bridge, reference, Component).elements;
-    for (size_t i = 0; i < values.size(); ++i) values[i] = FromNative(buffer[i]);
+    auto& vm = bridge.Vm();
+    auto& array = Array(bridge, reference, Component);
+    for (size_t i = 0, size = vm.ArrayLength(array); i < size; ++i)
+      vm.StoreArrayElement(array, i, FromNative(buffer[i]));
   });
 }
 
 template<class T, class Ref, char Component>
 void GetRegion(JNIEnv* env, Ref reference, jsize start, jsize length, T* buffer) {
   Guard(env, [&](JniBridge& bridge) {
-    const auto& values = Array(bridge, reference, Component).elements;
-    CheckRegion(bridge.Vm(), values.size(), start, length);
-    for (jsize i = 0; i < length; ++i) buffer[i] = ToNative<T>(bridge, values[start + i]);
+    auto& vm = bridge.Vm();
+    const auto& array = Array(bridge, reference, Component);
+    CheckRegion(vm, vm.ArrayLength(array), start, length);
+    for (jsize i = 0; i < length; ++i) buffer[i] = ToNative<T>(bridge, vm.ArrayElement(array, start + i));
   });
 }
 
 template<class T, class Ref, char Component>
 void SetRegion(JNIEnv* env, Ref reference, jsize start, jsize length, const T* buffer) {
   Guard(env, [&](JniBridge& bridge) {
-    auto& values = Array(bridge, reference, Component).elements;
-    CheckRegion(bridge.Vm(), values.size(), start, length);
-    for (jsize i = 0; i < length; ++i) values[start + i] = FromNative(buffer[i]);
+    auto& vm = bridge.Vm();
+    auto& array = Array(bridge, reference, Component);
+    CheckRegion(vm, vm.ArrayLength(array), start, length);
+    for (jsize i = 0; i < length; ++i) vm.StoreArrayElement(array, start + i, FromNative(buffer[i]));
   });
 }
 
@@ -388,7 +394,10 @@ JNINativeInterface MakeTable() {
   table.ExceptionClear = [](JNIEnv* env) { JniBridge::From(env).Vm().exception = nullptr; };
   table.ExceptionDescribe = [](JNIEnv* env) {
     Runtime& vm = JniBridge::From(env).Vm();
-    if (vm.exception) std::fprintf(stderr, "%s\n", vm.ExceptionSummary().c_str());
+    if (vm.exception) {
+      std::fprintf(stderr, "%s\n", vm.ExceptionSummary().c_str());
+      for (const auto& frame : vm.ExceptionStackTrace()) std::fprintf(stderr, "  %s\n", frame.c_str());
+    }
     vm.exception = nullptr;
   };
   table.FatalError = [](JNIEnv*, const char* message) {
@@ -541,7 +550,7 @@ JNINativeInterface MakeTable() {
   };
 
   table.GetArrayLength = [](JNIEnv* env, jarray ref) {
-    return Guard(env, [&](JniBridge& bridge) -> jsize { return Array(bridge, ref).elements.size(); });
+    return Guard(env, [&](JniBridge& bridge) -> jsize { return bridge.Vm().ArrayLength(Array(bridge, ref)); });
   };
   table.NewObjectArray = [](JNIEnv* env, jsize length, jclass component, jobject initial) {
     return Guard(env, [&](JniBridge& bridge) -> jobjectArray {
@@ -799,17 +808,21 @@ void JniBridge::RegisterResources() {
 }
 
 Value JniBridge::Invoke(Method& method, Object* receiver, std::span<const Value> args) {
-  ActiveBridge active(*this);
-  if (!method.native) {
-    if (runtime_.guest_native) {
-      if (auto result = runtime_.guest_native->Invoke(method, receiver, args)) {
-        ++method.owner->native_calls;
-        if (runtime_.exception) throw ManagedException{};
-        return *result;
-      }
+  if (runtime_.guest_native) {
+    ActiveBridge active(*this);
+    if (auto result = runtime_.guest_native->Invoke(method, receiver, args)) {
+      ++method.owner->native_calls;
+      if (runtime_.exception) throw ManagedException{};
+      return *result;
     }
-    runtime_.Fail("Ljava/lang/UnsatisfiedLinkError;", method.QualifiedName());
   }
+  return InvokePlatform(method, receiver, args);
+}
+
+Value JniBridge::InvokePlatform(Method& method, Object* receiver, std::span<const Value> args) {
+  if (method.builtin) return method.builtin(runtime_, receiver, args);
+  if (!method.native) runtime_.Fail("Ljava/lang/UnsatisfiedLinkError;", method.QualifiedName());
+  ActiveBridge active(*this);
   LocalFrame locals(*this);
   jobject native_receiver = Local(method.IsStatic() ? runtime_.ClassObject(*method.owner) : receiver);
   std::array<jvalue, 16> local;

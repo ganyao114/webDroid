@@ -88,16 +88,14 @@ GcStats GcHeap::Collect(Runtime& runtime) {
   for (Object* object : worklist_) {
     if (object->weak_referent && !object->weak_referent->marked) {
       object->weak_referent = nullptr;
-      if (object->weak_queue) {
-        object->weak_queue->elements.push_back(Value::Ref(object));
-        object->weak_queue = nullptr;
-      }
+      runtime.EnqueueReference(*object);
     }
   }
   runtime.jni->SweepNativePeers();
   if (runtime.direct_arrays)
     std::erase_if(*runtime.direct_arrays, [](const auto& entry) { return !entry.first->marked; });
   std::erase_if(runtime.file_handles, [](const auto& entry) { return !entry.first->marked; });
+  std::erase_if(runtime.deflater_streams, [](const auto& entry) { return !entry.first->marked; });
   std::erase_if(runtime.regex_programs, [](const auto& entry) { return !entry.first->marked; });
   std::erase_if(runtime.interned, [](const auto& entry) { return !entry.second->marked; });
   for (const auto& slab : slabs_) {
@@ -121,6 +119,19 @@ GcStats GcHeap::Collect(Runtime& runtime) {
   // Growth of the tenured live set should not force a full scan for every nursery-sized batch.
   next_collection_ = stats_.live / 2;
   return stats_;
+}
+
+bool Runtime::EnqueueReference(Object& reference) {
+  auto* queue = reference.weak_queue;
+  if (!queue) return false;
+
+  auto& queue_class = linker.Resolve("Ljava/lang/ref/ReferenceQueue;");
+  const auto& lock = linker.FindField(queue_class, "lock", "Ljava/lang/Object;", false);
+  queue->elements.push_back(Value::Ref(&reference));
+  reference.weak_queue = nullptr;
+  reference.weak_enqueued = true;
+  if (auto* monitor = queue->fields[lock.slot].ref()) NotifyWaiters(*monitor, true);
+  return true;
 }
 
 }  // namespace wa::interp

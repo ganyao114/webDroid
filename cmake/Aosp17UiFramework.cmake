@@ -70,7 +70,30 @@ add_dependencies(aosp17_framework_core aosp17_upstream_framework)
 set_target_properties(aosp17_framework_core PROPERTIES
     WA_FRAMEWORK_DEX "${AOSP17_FRAMEWORK_DEX}" WA_FRAMEWORK_CLASSES "${AOSP17_FRAMEWORK_CLASSES}")
 
+include(FetchContent)
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+# Populate the release separately so only the decoder target participates in the build.
+FetchContent_Declare(wa_libwebp
+    URL https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.6.0.tar.gz
+    URL_HASH SHA512=5c159d9760efcb92749092536daada22c0a73c20926c76097a5f0448ddbf874cf761324ca97925ca5f578b30477564b2b072b47667e504673797128b31cafcbf
+    SOURCE_SUBDIR cmake)
+FetchContent_MakeAvailable(wa_libwebp)
+function(_wa_add_webp_decoder)
+    set(BUILD_SHARED_LIBS OFF)
+    set(WEBP_LINK_STATIC ON)
+    foreach(tool IN ITEMS ANIM_UTILS CWEBP DWEBP GIF2WEBP IMG2WEBP VWEBP WEBPINFO LIBWEBPMUX WEBPMUX EXTRAS)
+        set(WEBP_BUILD_${tool} OFF)
+    endforeach()
+    add_subdirectory("${wa_libwebp_SOURCE_DIR}" "${wa_libwebp_BINARY_DIR}" EXCLUDE_FROM_ALL)
+endfunction()
+_wa_add_webp_decoder()
+
 set(_wa_ui_native "${_wa_ui_root}/runtime/aosp17_shims/ui_jni")
 _wa_art_static(aosp17_ui_jni "${_wa_ui_native}" ui_bridge.cpp canvas.cpp path_data.cpp bitmap.cpp apk_signing.cpp)
 target_include_directories(aosp17_ui_jni PUBLIC "${_wa_ui_native}")
-target_link_libraries(aosp17_ui_jni PUBLIC aosp17_art_interp wa_hal_surfaceflinger PRIVATE aosp17_core_jni aosp17_zlib)
+target_include_directories(aosp17_ui_jni SYSTEM PRIVATE "${AOSP17_SOURCE_DIR}/frameworks/native/include"
+    "${wa_libwebp_SOURCE_DIR}/src")
+target_link_libraries(aosp17_ui_jni PUBLIC aosp17_art_interp wa_hal_surfaceflinger
+    PRIVATE aosp17_core_jni aosp17_zlib webpdecoder)

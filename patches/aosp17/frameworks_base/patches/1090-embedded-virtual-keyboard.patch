@@ -1,0 +1,760 @@
+--- a/frameworks/base/core/java/android/view/KeyCharacterMap.java
++++ b/frameworks/base/core/java/android/view/KeyCharacterMap.java
+@@ -16,29 +16,32 @@
+ 
+ package android.view;
+ 
+-
+-import static com.android.hardware.input.Flags.removeFallbackModifiers;
++import static android.view.KeyEvent.META_ALT_ON;
++import static android.view.KeyEvent.META_CAPS_LOCK_ON;
++import static android.view.KeyEvent.META_CTRL_ON;
++import static android.view.KeyEvent.META_META_ON;
++import static android.view.KeyEvent.META_NUM_LOCK_ON;
++import static android.view.KeyEvent.META_SHIFT_ON;
++
+ 
+ import android.annotation.NonNull;
+ import android.annotation.Nullable;
+ import android.compat.annotation.UnsupportedAppUsage;
+-import android.hardware.input.InputManagerGlobal;
+ import android.os.Build;
+ import android.os.Parcel;
+ import android.os.Parcelable;
+-import android.ravenwood.annotation.RavenwoodKeepWholeClass;
+-import android.text.method.MetaKeyKeyListener;
++import android.os.SystemClock;
+ import android.util.AndroidRuntimeException;
++import android.util.SparseArray;
+ import android.util.SparseIntArray;
+ 
+-import com.android.internal.annotations.VisibleForTesting;
+ 
+ import java.text.Normalizer;
++import java.util.ArrayList;
+ 
+ /**
+  * Describes the keys provided by a keyboard device and their associated labels.
+  */
+-@RavenwoodKeepWholeClass
+ public class KeyCharacterMap implements Parcelable {
+     /**
+      * The id of the device's primary built in keyboard is always 0.
+@@ -305,49 +308,421 @@
+         }
+     };
+ 
+-    private long mPtr;
+-
+-    private static native long nativeReadFromParcel(Parcel in);
+-    private static native void nativeWriteToParcel(long ptr, Parcel out);
+-    private static native void nativeDispose(long ptr);
+-
+-    private static native char nativeGetCharacter(long ptr, int keyCode, int metaState);
+-    private static native boolean nativeGetFallbackAction(long ptr, int keyCode, int metaState,
+-            FallbackAction outFallbackAction);
+-    private static native char nativeGetNumber(long ptr, int keyCode);
+-    private static native char nativeGetMatch(long ptr, int keyCode, char[] chars, int metaState);
+-    private static native char nativeGetDisplayLabel(long ptr, int keyCode);
+-    private static native int nativeGetKeyboardType(long ptr);
+-    private static native KeyEvent[] nativeGetEvents(long ptr, char[] chars);
+-    private static native KeyCharacterMap nativeObtainEmptyKeyCharacterMap(int deviceId);
+-    private static native boolean nativeEquals(long ptr1, long ptr2);
+-
+-    private static native KeyCharacterMap nativeObtainMapWithOverlay(long ptrForBaseMap,
+-            String layoutDescriptor, String overlay);
+-    private static native int nativeGetMappedKey(long ptr, int scanCode);
++    private static final KeyCharacterMap VIRTUAL_MAP = new KeyCharacterMap(true);
++    private static final SparseArray<Key> VIRTUAL_KEYS = new SparseArray<>();
++    private static final int MODIFIER_MASK = META_SHIFT_ON | META_ALT_ON | META_CTRL_ON | META_META_ON;
++    private final boolean mVirtual;
++
++    private static final class Key {
++        final char label;
++        final char number;
++        final Behavior[] behaviors;
++
++        Key(char label, char number, Behavior... behaviors) {
++            this.label = label;
++            this.number = number;
++            this.behaviors = behaviors;
++        }
++    }
++
++    private static final class Behavior {
++        final int modifiers;
++        final char character;
++        final int fallback;
++
++        Behavior(int modifiers, char character) {
++            this(modifiers, character, KeyEvent.KEYCODE_UNKNOWN);
++        }
++
++        Behavior(int modifiers, char character, int fallback) {
++            this.modifiers = modifiers;
++            this.character = character;
++            this.fallback = fallback;
++        }
++
++        boolean matches(int metaState) {
++            return (metaState & modifiers) == modifiers
++                    && (metaState & MODIFIER_MASK) == (modifiers & MODIFIER_MASK);
++        }
++    }
++
++    // AOSP frameworks/base/data/keyboards/Virtual.kcm. Later entries take precedence.
++    static {
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_A, new Key('A', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'a'),
++                new Behavior(META_CAPS_LOCK_ON, 'A'),
++                new Behavior(META_SHIFT_ON, 'A'),
++                new Behavior(0, 'a')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_B, new Key('B', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'b'),
++                new Behavior(META_CAPS_LOCK_ON, 'B'),
++                new Behavior(META_SHIFT_ON, 'B'),
++                new Behavior(0, 'b')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_C, new Key('C', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON | META_ALT_ON, '\u00e7'),
++                new Behavior(META_CAPS_LOCK_ON | META_ALT_ON, '\u00c7'),
++                new Behavior(META_SHIFT_ON | META_ALT_ON, '\u00c7'),
++                new Behavior(META_ALT_ON, '\u00e7'),
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'c'),
++                new Behavior(META_CAPS_LOCK_ON, 'C'),
++                new Behavior(META_SHIFT_ON, 'C'),
++                new Behavior(0, 'c')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_D, new Key('D', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'd'),
++                new Behavior(META_CAPS_LOCK_ON, 'D'),
++                new Behavior(META_SHIFT_ON, 'D'),
++                new Behavior(0, 'd')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_E, new Key('E', '\0',
++                new Behavior(META_ALT_ON, '\u0301'),
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'e'),
++                new Behavior(META_CAPS_LOCK_ON, 'E'),
++                new Behavior(META_SHIFT_ON, 'E'),
++                new Behavior(0, 'e')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_F, new Key('F', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'f'),
++                new Behavior(META_CAPS_LOCK_ON, 'F'),
++                new Behavior(META_SHIFT_ON, 'F'),
++                new Behavior(0, 'f')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_G, new Key('G', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'g'),
++                new Behavior(META_CAPS_LOCK_ON, 'G'),
++                new Behavior(META_SHIFT_ON, 'G'),
++                new Behavior(0, 'g')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_H, new Key('H', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'h'),
++                new Behavior(META_CAPS_LOCK_ON, 'H'),
++                new Behavior(META_SHIFT_ON, 'H'),
++                new Behavior(0, 'h')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_I, new Key('I', '\0',
++                new Behavior(META_ALT_ON, '\u0302'),
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'i'),
++                new Behavior(META_CAPS_LOCK_ON, 'I'),
++                new Behavior(META_SHIFT_ON, 'I'),
++                new Behavior(0, 'i')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_J, new Key('J', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'j'),
++                new Behavior(META_CAPS_LOCK_ON, 'J'),
++                new Behavior(META_SHIFT_ON, 'J'),
++                new Behavior(0, 'j')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_K, new Key('K', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'k'),
++                new Behavior(META_CAPS_LOCK_ON, 'K'),
++                new Behavior(META_SHIFT_ON, 'K'),
++                new Behavior(0, 'k')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_L, new Key('L', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'l'),
++                new Behavior(META_CAPS_LOCK_ON, 'L'),
++                new Behavior(META_SHIFT_ON, 'L'),
++                new Behavior(0, 'l')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_M, new Key('M', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'm'),
++                new Behavior(META_CAPS_LOCK_ON, 'M'),
++                new Behavior(META_SHIFT_ON, 'M'),
++                new Behavior(0, 'm')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_N, new Key('N', '\0',
++                new Behavior(META_ALT_ON, '\u0303'),
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'n'),
++                new Behavior(META_CAPS_LOCK_ON, 'N'),
++                new Behavior(META_SHIFT_ON, 'N'),
++                new Behavior(0, 'n')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_O, new Key('O', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'o'),
++                new Behavior(META_CAPS_LOCK_ON, 'O'),
++                new Behavior(META_SHIFT_ON, 'O'),
++                new Behavior(0, 'o')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_P, new Key('P', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'p'),
++                new Behavior(META_CAPS_LOCK_ON, 'P'),
++                new Behavior(META_SHIFT_ON, 'P'),
++                new Behavior(0, 'p')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_Q, new Key('Q', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'q'),
++                new Behavior(META_CAPS_LOCK_ON, 'Q'),
++                new Behavior(META_SHIFT_ON, 'Q'),
++                new Behavior(0, 'q')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_R, new Key('R', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'r'),
++                new Behavior(META_CAPS_LOCK_ON, 'R'),
++                new Behavior(META_SHIFT_ON, 'R'),
++                new Behavior(0, 'r')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_S, new Key('S', '\0',
++                new Behavior(META_ALT_ON, '\u00df'),
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 's'),
++                new Behavior(META_CAPS_LOCK_ON, 'S'),
++                new Behavior(META_SHIFT_ON, 'S'),
++                new Behavior(0, 's')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_T, new Key('T', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 't'),
++                new Behavior(META_CAPS_LOCK_ON, 'T'),
++                new Behavior(META_SHIFT_ON, 'T'),
++                new Behavior(0, 't')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_U, new Key('U', '\0',
++                new Behavior(META_ALT_ON, '\u0308'),
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'u'),
++                new Behavior(META_CAPS_LOCK_ON, 'U'),
++                new Behavior(META_SHIFT_ON, 'U'),
++                new Behavior(0, 'u')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_V, new Key('V', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'v'),
++                new Behavior(META_CAPS_LOCK_ON, 'V'),
++                new Behavior(META_SHIFT_ON, 'V'),
++                new Behavior(0, 'v')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_W, new Key('W', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'w'),
++                new Behavior(META_CAPS_LOCK_ON, 'W'),
++                new Behavior(META_SHIFT_ON, 'W'),
++                new Behavior(0, 'w')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_X, new Key('X', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'x'),
++                new Behavior(META_CAPS_LOCK_ON, 'X'),
++                new Behavior(META_SHIFT_ON, 'X'),
++                new Behavior(0, 'x')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_Y, new Key('Y', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'y'),
++                new Behavior(META_CAPS_LOCK_ON, 'Y'),
++                new Behavior(META_SHIFT_ON, 'Y'),
++                new Behavior(0, 'y')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_Z, new Key('Z', '\0',
++                new Behavior(META_SHIFT_ON | META_CAPS_LOCK_ON, 'z'),
++                new Behavior(META_CAPS_LOCK_ON, 'Z'),
++                new Behavior(META_SHIFT_ON, 'Z'),
++                new Behavior(0, 'z')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_0, new Key('0', '0',
++                new Behavior(META_SHIFT_ON, ')'),
++                new Behavior(0, '0')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_1, new Key('1', '1',
++                new Behavior(META_SHIFT_ON, '!'),
++                new Behavior(0, '1')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_2, new Key('2', '2',
++                new Behavior(META_SHIFT_ON, '@'),
++                new Behavior(0, '2')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_3, new Key('3', '3',
++                new Behavior(META_SHIFT_ON, '#'),
++                new Behavior(0, '3')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_4, new Key('4', '4',
++                new Behavior(META_SHIFT_ON, '$'),
++                new Behavior(0, '4')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_5, new Key('5', '5',
++                new Behavior(META_SHIFT_ON, '%'),
++                new Behavior(0, '5')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_6, new Key('6', '6',
++                new Behavior(META_ALT_ON | META_SHIFT_ON, '\u0302'),
++                new Behavior(META_SHIFT_ON, '^'),
++                new Behavior(0, '6')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_7, new Key('7', '7',
++                new Behavior(META_SHIFT_ON, '&'),
++                new Behavior(0, '7')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_8, new Key('8', '8',
++                new Behavior(META_SHIFT_ON, '*'),
++                new Behavior(0, '8')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_9, new Key('9', '9',
++                new Behavior(META_SHIFT_ON, '('),
++                new Behavior(0, '9')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_SPACE, new Key(' ', '\0',
++                new Behavior(META_CTRL_ON, '\0', KeyEvent.KEYCODE_LANGUAGE_SWITCH),
++                new Behavior(META_META_ON, '\0', KeyEvent.KEYCODE_SEARCH),
++                new Behavior(META_ALT_ON, '\0', KeyEvent.KEYCODE_SEARCH),
++                new Behavior(0, ' ')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_ENTER, new Key('\n', '\0',
++                new Behavior(0, '\n')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_TAB, new Key('\t', '\0',
++                new Behavior(0, '\t')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_COMMA, new Key(',', ',',
++                new Behavior(META_SHIFT_ON, '<'),
++                new Behavior(0, ',')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_PERIOD, new Key('.', '\0',
++                new Behavior(META_SHIFT_ON, '>'),
++                new Behavior(0, '.')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_SLASH, new Key('/', '\0',
++                new Behavior(META_SHIFT_ON, '?'),
++                new Behavior(0, '/')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_GRAVE, new Key('`', '\0',
++                new Behavior(META_ALT_ON | META_SHIFT_ON, '\u0303'),
++                new Behavior(META_ALT_ON, '\u0300'),
++                new Behavior(META_SHIFT_ON, '~'),
++                new Behavior(0, '`')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_MINUS, new Key('-', '\0',
++                new Behavior(META_SHIFT_ON, '_'),
++                new Behavior(0, '-')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_EQUALS, new Key('=', '\0',
++                new Behavior(META_SHIFT_ON, '+'),
++                new Behavior(0, '=')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_LEFT_BRACKET, new Key('[', '\0',
++                new Behavior(META_SHIFT_ON, '{'),
++                new Behavior(0, '[')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_RIGHT_BRACKET, new Key(']', '\0',
++                new Behavior(META_SHIFT_ON, '}'),
++                new Behavior(0, ']')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BACKSLASH, new Key('\\', '\0',
++                new Behavior(META_SHIFT_ON, '|'),
++                new Behavior(0, '\\')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_SEMICOLON, new Key(';', ';',
++                new Behavior(META_SHIFT_ON, ':'),
++                new Behavior(0, ';')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_APOSTROPHE, new Key('\'', '\0',
++                new Behavior(META_SHIFT_ON, '"'),
++                new Behavior(0, '\'')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_0, new Key('0', '0',
++                new Behavior(META_NUM_LOCK_ON, '0'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_INSERT)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_1, new Key('1', '1',
++                new Behavior(META_NUM_LOCK_ON, '1'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_MOVE_END)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_2, new Key('2', '2',
++                new Behavior(META_NUM_LOCK_ON, '2'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_DOWN)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_3, new Key('3', '3',
++                new Behavior(META_NUM_LOCK_ON, '3'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_PAGE_DOWN)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_4, new Key('4', '4',
++                new Behavior(META_NUM_LOCK_ON, '4'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_LEFT)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_5, new Key('5', '5',
++                new Behavior(META_NUM_LOCK_ON, '5'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_6, new Key('6', '6',
++                new Behavior(META_NUM_LOCK_ON, '6'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_RIGHT)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_7, new Key('7', '7',
++                new Behavior(META_NUM_LOCK_ON, '7'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_MOVE_HOME)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_8, new Key('8', '8',
++                new Behavior(META_NUM_LOCK_ON, '8'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_UP)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_9, new Key('9', '9',
++                new Behavior(META_NUM_LOCK_ON, '9'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_PAGE_UP)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_LEFT_PAREN, new Key('(', '\0',
++                new Behavior(0, '(')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_RIGHT_PAREN, new Key(')', '\0',
++                new Behavior(0, ')')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_DIVIDE, new Key('/', '\0',
++                new Behavior(0, '/')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_MULTIPLY, new Key('*', '*',
++                new Behavior(0, '*')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_SUBTRACT, new Key('-', '\0',
++                new Behavior(0, '-')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_ADD, new Key('+', '+',
++                new Behavior(0, '+')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_DOT, new Key('.', '\0',
++                new Behavior(META_NUM_LOCK_ON, '.'),
++                new Behavior(0, '\0', KeyEvent.KEYCODE_FORWARD_DEL)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_COMMA, new Key(',', ',',
++                new Behavior(0, ',')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_EQUALS, new Key('=', '\0',
++                new Behavior(0, '=')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_NUMPAD_ENTER, new Key('\n', '\0',
++                new Behavior(META_META_ON, '\0', KeyEvent.KEYCODE_ENTER),
++                new Behavior(META_ALT_ON, '\0', KeyEvent.KEYCODE_ENTER),
++                new Behavior(META_CTRL_ON, '\0', KeyEvent.KEYCODE_ENTER),
++                new Behavior(0, '\n', KeyEvent.KEYCODE_ENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_AT, new Key('@', '\0',
++                new Behavior(0, '@')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_STAR, new Key('*', '*',
++                new Behavior(0, '*')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_POUND, new Key('#', '#',
++                new Behavior(0, '#')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_PLUS, new Key('+', '+',
++                new Behavior(0, '+')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_ESCAPE, new Key('\0', '\0',
++                new Behavior(META_CTRL_ON, '\0', KeyEvent.KEYCODE_MENU),
++                new Behavior(META_META_ON, '\0', KeyEvent.KEYCODE_HOME),
++                new Behavior(META_ALT_ON, '\0', KeyEvent.KEYCODE_HOME),
++                new Behavior(0, '\0')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_DEL, new Key('\0', '\0',
++                new Behavior(META_CTRL_ON | META_ALT_ON, '\0', KeyEvent.KEYCODE_BACK)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_A, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_B, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_BACK)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_C, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_X, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_Y, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_BACK)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_Z, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_L1, new Key('\0', '\0',
++                new Behavior(0, '\0')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_R1, new Key('\0', '\0',
++                new Behavior(0, '\0')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_L2, new Key('\0', '\0',
++                new Behavior(0, '\0')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_R2, new Key('\0', '\0',
++                new Behavior(0, '\0')));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_THUMBL, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_THUMBR, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_START, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_SELECT, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_MENU)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_MODE, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_HOME)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_1, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_2, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_3, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_4, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_5, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_6, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_7, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_8, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_9, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_10, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_11, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_12, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_13, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_14, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_15, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++        VIRTUAL_KEYS.put(KeyEvent.KEYCODE_BUTTON_16, new Key('\0', '\0',
++                new Behavior(0, '\0', KeyEvent.KEYCODE_DPAD_CENTER)));
++    }
++
++    private KeyCharacterMap(boolean virtualKeyboard) {
++        mVirtual = virtualKeyboard;
++    }
+ 
+     private KeyCharacterMap(Parcel in) {
+         if (in == null) {
+             throw new IllegalArgumentException("parcel must not be null");
+         }
+-        mPtr = nativeReadFromParcel(in);
+-        if (mPtr == 0) {
+-            throw new RuntimeException("Could not read KeyCharacterMap from parcel.");
+-        }
+-    }
+-
+-    // Called from native
+-    @UnsupportedAppUsage(maxTargetSdk = Build.VERSION_CODES.R, trackingBug = 170729553)
+-    private KeyCharacterMap(long ptr) {
+-        mPtr = ptr;
+-    }
+-
+-    @Override
+-    protected void finalize() throws Throwable {
+-        if (mPtr != 0) {
+-            nativeDispose(mPtr);
+-            mPtr = 0;
+-        }
++        mVirtual = in.readInt() != 0;
++    }
++
++    private Key key(int keyCode) {
++        return mVirtual ? VIRTUAL_KEYS.get(keyCode) : null;
++    }
++
++    private Behavior behavior(int keyCode, int metaState) {
++        Key key = key(keyCode);
++        if (key != null) {
++            for (Behavior entry : key.behaviors) {
++                if (entry.matches(metaState)) return entry;
++            }
++        }
++        return null;
++    }
++
++    private char character(int keyCode, int metaState) {
++        Behavior entry = behavior(keyCode, metaState);
++        return entry == null ? 0 : entry.character;
+     }
+ 
+     /**
+@@ -356,10 +731,9 @@
+      * @return The KeyCharacterMap object
+      * @hide
+      */
+-    @VisibleForTesting
+     @Nullable
+     public static KeyCharacterMap obtainEmptyMap(int deviceId) {
+-        return nativeObtainEmptyKeyCharacterMap(deviceId);
++        return new KeyCharacterMap(false);
+     }
+ 
+     /**
+@@ -372,16 +746,7 @@
+      * is missing from the system.
+      */
+     public static KeyCharacterMap load(int deviceId) {
+-        final InputManagerGlobal im = InputManagerGlobal.getInstance();
+-        InputDevice inputDevice = im.getInputDevice(deviceId);
+-        if (inputDevice == null) {
+-            inputDevice = im.getInputDevice(VIRTUAL_KEYBOARD);
+-            if (inputDevice == null) {
+-                throw new UnavailableException(
+-                        "Could not load key character map for device " + deviceId);
+-            }
+-        }
+-        return inputDevice.getKeyCharacterMap();
++        return VIRTUAL_MAP;
+     }
+ 
+     /**
+@@ -396,13 +761,7 @@
+      * @hide
+      */
+     public static KeyCharacterMap load(@NonNull String layoutDescriptor, @NonNull String overlay) {
+-        KeyCharacterMap virtualKcm = KeyCharacterMap.load(VIRTUAL_KEYBOARD);
+-        KeyCharacterMap kcmWithOverlay = nativeObtainMapWithOverlay(virtualKcm.mPtr,
+-                layoutDescriptor, overlay);
+-        if (kcmWithOverlay == null) {
+-            return virtualKcm;
+-        }
+-        return kcmWithOverlay;
++        return VIRTUAL_MAP;
+     }
+ 
+     /**
+@@ -412,8 +771,7 @@
+      * @hide
+      */
+     public int getMappedKeyOrDefault(int scanCode, int defaultKeyCode) {
+-        int keyCode = nativeGetMappedKey(mPtr, scanCode);
+-        return keyCode == KeyEvent.KEYCODE_UNKNOWN ? defaultKeyCode : keyCode;
++        return defaultKeyCode;
+     }
+ 
+     /**
+@@ -421,7 +779,7 @@
+      * key state combination.
+      * <p>
+      * Returns the Unicode character that the specified key would produce
+-     * when the specified meta bits (see {@link MetaKeyKeyListener})
++     * when the specified meta bits (see {@link KeyEvent})
+      * were active.
+      * </p><p>
+      * Returns 0 if the key is not one that is used to type Unicode
+@@ -439,7 +797,7 @@
+      */
+     public int get(int keyCode, int metaState) {
+         metaState = KeyEvent.normalizeMetaState(metaState);
+-        char ch = nativeGetCharacter(mPtr, keyCode, metaState);
++        char ch = character(keyCode, metaState);
+ 
+         int map = sCombiningToAccent.get(ch);
+         if (map != 0) {
+@@ -467,22 +825,12 @@
+      * @hide
+      */
+     public FallbackAction getFallbackAction(int keyCode, int metaState) {
++        Behavior entry = behavior(keyCode, KeyEvent.normalizeMetaState(metaState));
++        if (entry == null || entry.fallback == KeyEvent.KEYCODE_UNKNOWN) return null;
+         FallbackAction action = FallbackAction.obtain();
+-        metaState = KeyEvent.normalizeMetaState(metaState);
+-        if (nativeGetFallbackAction(mPtr, keyCode, metaState, action)) {
+-            if (removeFallbackModifiers()) {
+-                // Strip all modifiers. This is safe to do since only exact keyCode + metaState
+-                // modifiers will trigger a fallback.
+-                // E.g. Ctrl + Space -> language_switch (fallback generated)
+-                //      Ctrl + Alt + Space -> Ctrl + Alt + Space (no fallback generated)
+-                action.metaState = 0;
+-            } else {
+-                action.metaState = KeyEvent.normalizeMetaState(action.metaState);
+-            }
+-            return action;
+-        }
+-        action.recycle();
+-        return null;
++        action.keyCode = entry.fallback;
++        action.metaState = 0;
++        return action;
+     }
+ 
+     /**
+@@ -507,7 +855,8 @@
+      * @return The associated numeric or symbolic character, or 0 if none.
+      */
+     public char getNumber(int keyCode) {
+-        return nativeGetNumber(mPtr, keyCode);
++        Key key = key(keyCode);
++        return key == null ? 0 : key.number;
+     }
+ 
+     /**
+@@ -544,7 +893,19 @@
+         }
+ 
+         metaState = KeyEvent.normalizeMetaState(metaState);
+-        return nativeGetMatch(mPtr, keyCode, chars, metaState);
++        Key key = key(keyCode);
++        if (key == null) return 0;
++        char preferred = character(keyCode, KeyEvent.normalizeMetaState(metaState));
++        for (char candidate : chars) {
++            if (candidate != 0 && candidate == preferred) return candidate;
++        }
++        for (Behavior entry : key.behaviors) {
++            if (entry.character == 0) continue;
++            for (char candidate : chars) {
++                if (candidate == entry.character) return candidate;
++            }
++        }
++        return 0;
+     }
+ 
+     /**
+@@ -555,7 +916,8 @@
+      * @return The display label character, or 0 if none (eg. for non-printing keys).
+      */
+     public char getDisplayLabel(int keyCode) {
+-        return nativeGetDisplayLabel(mPtr, keyCode);
++        Key key = key(keyCode);
++        return key == null ? 0 : key.label;
+     }
+ 
+     /**
+@@ -658,17 +1020,17 @@
+                     "results.meta.length must be >= " + KeyData.META_LENGTH);
+         }
+ 
+-        char displayLabel = nativeGetDisplayLabel(mPtr, keyCode);
++        char displayLabel = getDisplayLabel(keyCode);
+         if (displayLabel == 0) {
+             return false;
+         }
+ 
+         results.displayLabel = displayLabel;
+-        results.number = nativeGetNumber(mPtr, keyCode);
+-        results.meta[0] = nativeGetCharacter(mPtr, keyCode, 0);
+-        results.meta[1] = nativeGetCharacter(mPtr, keyCode, KeyEvent.META_SHIFT_ON);
+-        results.meta[2] = nativeGetCharacter(mPtr, keyCode, KeyEvent.META_ALT_ON);
+-        results.meta[3] = nativeGetCharacter(mPtr, keyCode,
++        results.number = getNumber(keyCode);
++        results.meta[0] = character(keyCode, 0);
++        results.meta[1] = character(keyCode, KeyEvent.META_SHIFT_ON);
++        results.meta[2] = character(keyCode, KeyEvent.META_ALT_ON);
++        results.meta[3] = character(keyCode,
+                 KeyEvent.META_ALT_ON | KeyEvent.META_SHIFT_ON);
+         return true;
+     }
+@@ -699,7 +1061,28 @@
+         if (chars == null) {
+             throw new IllegalArgumentException("chars must not be null.");
+         }
+-        return nativeGetEvents(mPtr, chars);
++        ArrayList<KeyEvent> events = new ArrayList<>();
++        long time = SystemClock.uptimeMillis();
++        for (char character : chars) {
++            int code = KeyEvent.KEYCODE_UNKNOWN;
++            int modifiers = 0;
++            int best = Integer.MAX_VALUE;
++            for (int i = 0; mVirtual && character != 0 && i < VIRTUAL_KEYS.size(); ++i) {
++                Key key = VIRTUAL_KEYS.valueAt(i);
++                for (Behavior entry : key.behaviors) {
++                    int count = Integer.bitCount(entry.modifiers);
++                    if (entry.character == character && count < best) {
++                        code = VIRTUAL_KEYS.keyAt(i);
++                        modifiers = entry.modifiers;
++                        best = count;
++                    }
++                }
++            }
++            if (code == KeyEvent.KEYCODE_UNKNOWN) return null;
++            events.add(new KeyEvent(time, time, KeyEvent.ACTION_DOWN, code, 0, modifiers));
++            events.add(new KeyEvent(time, time, KeyEvent.ACTION_UP, code, 0, modifiers));
++        }
++        return events.toArray(new KeyEvent[0]);
+     }
+ 
+     /**
+@@ -709,7 +1092,7 @@
+      * @return True if the key is a printing key.
+      */
+     public boolean isPrintingKey(int keyCode) {
+-        int type = Character.getType(nativeGetDisplayLabel(mPtr, keyCode));
++        int type = Character.getType(getDisplayLabel(keyCode));
+ 
+         switch (type)
+         {
+@@ -736,7 +1119,7 @@
+      * @return The keyboard type.
+      */
+     public int getKeyboardType() {
+-        return nativeGetKeyboardType(mPtr);
++        return mVirtual ? FULL : 0;
+     }
+ 
+     /**
+@@ -789,7 +1172,7 @@
+      * @return True if at least one attached keyboard supports the specified key code.
+      */
+     public static boolean deviceHasKey(int keyCode) {
+-        return InputManagerGlobal.getInstance().deviceHasKeys(new int[] { keyCode })[0];
++        return false;
+     }
+ 
+     /**
+@@ -802,7 +1185,7 @@
+      * at the same index in the key codes array.
+      */
+     public static boolean[] deviceHasKeys(int[] keyCodes) {
+-        return InputManagerGlobal.getInstance().deviceHasKeys(keyCodes);
++        return new boolean[keyCodes.length];
+     }
+ 
+     @Override
+@@ -810,7 +1193,7 @@
+         if (out == null) {
+             throw new IllegalArgumentException("parcel must not be null");
+         }
+-        nativeWriteToParcel(mPtr, out);
++        out.writeInt(mVirtual ? 1 : 0);
+     }
+ 
+     @Override
+@@ -824,10 +1207,12 @@
+             return false;
+         }
+         KeyCharacterMap peer = (KeyCharacterMap) obj;
+-        if (mPtr == 0 || peer.mPtr == 0) {
+-            return mPtr == peer.mPtr;
+-        }
+-        return nativeEquals(mPtr, peer.mPtr);
++        return mVirtual == peer.mVirtual;
++    }
++
++    @Override
++    public int hashCode() {
++        return mVirtual ? FULL : 0;
+     }
+ 
+     /**

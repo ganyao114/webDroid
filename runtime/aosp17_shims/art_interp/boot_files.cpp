@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <stdexcept>
 #include <sys/stat.h>
@@ -35,6 +36,79 @@ std::string_view Parent(std::string_view path) {
 int64_t NowMillis() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+// Linux errno values exposed by android.system.OsConstants.
+constexpr int32_t kNoEntry = 2;
+constexpr int32_t kIoError = 5;
+constexpr int32_t kBadDescriptor = 9;
+constexpr int32_t kBadAddress = 14;
+constexpr int32_t kNotDirectory = 20;
+constexpr int32_t kInvalidArgument = 22;
+constexpr int32_t kNotImplemented = 38;
+
+[[noreturn]] void ThrowErrno(Runtime& vm, std::string_view operation, int32_t error) {
+  auto& type = vm.linker.Resolve("Landroid/system/ErrnoException;");
+  auto& ctor = vm.linker.FindMethod(type, "<init>", "(Ljava/lang/String;I)V", false);
+  RootScope roots(vm);
+  const Value args[]{roots.Hold(StringValue(vm, operation)), Value::Int(error)};
+  vm.Throw(vm.NewObject(type, ctor, args));
+}
+
+Value StatGuestPath(Runtime& vm, Object* name, std::string_view operation) {
+  if (!name) ThrowErrno(vm, operation, kBadAddress);
+  if (name->text.contains(u'\0')) ThrowErrno(vm, operation, kInvalidArgument);
+  const auto path = GuestPath(name->text);
+  if (path.empty()) ThrowErrno(vm, operation, kNoEntry);
+  const auto entry = vm.guest_files.find(path);
+  if (entry == vm.guest_files.end()) {
+    for (auto parent = Parent(path); parent != "/"; parent = Parent(parent)) {
+      const auto ancestor = vm.guest_files.find(parent);
+      if (ancestor != vm.guest_files.end() && ancestor->second) {
+        ThrowErrno(vm, operation, kNotDirectory);
+      }
+    }
+    ThrowErrno(vm, operation, kNoEntry);
+  }
+  const auto& file = entry->second;
+  if (file && name->text.back() == u'/') ThrowErrno(vm, operation, kNotDirectory);
+
+  const bool read_only = vm.read_only_paths.contains(entry->first);
+  const int32_t mode = file ? (0100000 | (read_only ? 0444 : 0644)) : (0040000 | 0755);
+  const int32_t owner = read_only ? 0 : 10000;  // Process.FIRST_APPLICATION_UID
+  const uint64_t size = file ? file->Size() : 0;
+  const int64_t modified = file ? file->last_modified : 0;
+  const int64_t seconds = modified / 1000;
+  const int64_t remainder = modified % 1000;
+  auto& time_type = vm.linker.Resolve("Landroid/system/StructTimespec;");
+  auto& time_ctor = vm.linker.FindMethod(time_type, "<init>", "(JJ)V", false);
+  const Value time_args[]{
+      Value::Long(seconds - (remainder < 0)),
+      Value::Long((remainder < 0 ? remainder + 1000 : remainder) * 1000000)};
+  RootScope roots(vm);
+  const auto time = roots.Hold(Value::Ref(vm.NewObject(time_type, time_ctor, time_args)));
+  auto& stat_type = vm.linker.Resolve("Landroid/system/StructStat;");
+  auto& stat_ctor = vm.linker.FindMethod(stat_type, "<init>",
+      "(JJIJIIJJLandroid/system/StructTimespec;Landroid/system/StructTimespec;"
+      "Landroid/system/StructTimespec;JJ)V", false);
+  const Value args[]{
+      Value::Long(0), Value::Long(0), Value::Int(mode), Value::Long(1), Value::Int(owner),
+      Value::Int(owner), Value::Long(0), Value::Long(size), time, time, time, Value::Long(4096),
+      Value::Long(size / 512 + (size % 512 != 0))};
+  return Value::Ref(vm.NewObject(stat_type, stat_ctor, args));
+}
+
+Value DescribeGuestErrno(Runtime& vm, int32_t error) {
+  switch (error) {
+    case kNoEntry: return StringValue(vm, std::strerror(ENOENT));
+    case kIoError: return StringValue(vm, std::strerror(EIO));
+    case kBadDescriptor: return StringValue(vm, std::strerror(EBADF));
+    case kBadAddress: return StringValue(vm, std::strerror(EFAULT));
+    case kNotDirectory: return StringValue(vm, std::strerror(ENOTDIR));
+    case kInvalidArgument: return StringValue(vm, std::strerror(EINVAL));
+    case kNotImplemented: return StringValue(vm, std::strerror(ENOSYS));
+    default: return StringValue(vm, "Unknown error " + std::to_string(error));
+  }
 }
 
 bool CreateGuestFile(Runtime& vm, std::string_view path) {
@@ -134,29 +208,64 @@ Runtime::FileHandle& Handle(Runtime& vm, Object& descriptor, bool writable) {
   return entry->second;
 }
 
-std::span<Value> Buffer(Runtime& vm, Values args) {
-  auto& bytes = vm.NonNull(args[0].ref()).elements;
+struct ByteArrayRange {
+  std::span<Value> elements;
+  DirectBufferMemory* memory;
+  size_t offset, size;
+
+  bool CopyFrom(size_t start, std::span<const uint8_t> source) const {
+    if (source.empty()) return true;
+    if (memory) return memory->Write(offset + start, source);
+    for (size_t i = 0; i < source.size(); ++i) {
+      elements[offset + start + i] = Value::Int(static_cast<int8_t>(source[i]));
+    }
+    return true;
+  }
+
+  bool CopyTo(size_t start, std::span<uint8_t> destination) const {
+    if (destination.empty()) return true;
+    if (memory) return memory->Read(offset + start, destination);
+    for (size_t i = 0; i < destination.size(); ++i) {
+      destination[i] = static_cast<uint8_t>(elements[offset + start + i].i());
+    }
+    return true;
+  }
+};
+
+ByteArrayRange Buffer(Runtime& vm, Values args) {
+  auto& array = vm.NonNull(args[0].ref());
+  auto* memory = vm.DirectArray(array);
+  const auto size = memory ? memory->size : array.elements.size();
   const int32_t offset = args[1].i(), length = args[2].i();
-  if (offset < 0 || length < 0 || uint64_t(offset) + length > bytes.size()) {
+  if (offset < 0 || length < 0 || uint64_t(offset) + length > size) {
     vm.Fail("Ljava/lang/IndexOutOfBoundsException;");
   }
-  return std::span(bytes).subspan(offset, length);
+  return {array.elements, memory, static_cast<size_t>(offset), static_cast<size_t>(length)};
 }
 
-size_t ReadMountedFile(Runtime& vm, Runtime::FileHandle& handle, std::span<Value> buffer) {
+int32_t ReadMountedFile(Runtime::FileHandle& handle, const ByteArrayRange& buffer, size_t length) {
   std::array<uint8_t, 4096> bytes;
   size_t total = 0;
-  while (total < buffer.size()) {
-    const auto size = std::min(bytes.size(), buffer.size() - total);
+  while (total < length) {
+    const auto size = std::min(bytes.size(), length - total);
     const auto count = handle.file->reader(bytes.data(), size, handle.position);
-    if (count < 0 || static_cast<uint64_t>(count) > size)
-      vm.Fail("Ljava/io/IOException;", "Cannot read mounted file");
+    if (count < 0 || static_cast<uint64_t>(count) > size) return -1;
     if (count == 0) break;
-    for (int64_t i = 0; i < count; ++i) buffer[total + i] = Value::Int(static_cast<int8_t>(bytes[i]));
+    if (!buffer.CopyFrom(total, std::span(bytes).first(count))) return -1;
     handle.position += count;
     total += count;
   }
   return total;
+}
+
+int32_t ReadFile(Runtime::FileHandle& handle, const ByteArrayRange& buffer) {
+  const auto size = handle.file->Size();
+  if (handle.position >= size) return 0;
+  const auto count = std::min<uint64_t>(buffer.size, size - handle.position);
+  if (handle.file->reader) return ReadMountedFile(handle, buffer, count);
+  if (!buffer.CopyFrom(0, std::span(handle.file->bytes).subspan(handle.position, count))) return -1;
+  handle.position += count;
+  return count;
 }
 
 void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host_fd) {
@@ -184,26 +293,31 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
   cl.AddBootNative(kOut, "close0", "()V", close_stream);
   cl.AddBootNative(kRandom, "close0", "()V", close_stream);
   const Builtin read = [&android_fd](Runtime& vm, Object* self, Values args) {
-    auto buffer = Buffer(vm, args);
-    if (buffer.empty()) return Value::Int(0);
+    const auto buffer = Buffer(vm, args);
+    if (buffer.size == 0) return Value::Int(0);
     auto& descriptor = Descriptor(vm, self);
     if (descriptor.fields[android_fd.slot].i() == 0) return Value::Int(-1);
-    auto& handle = Handle(vm, descriptor, false);
-    const auto size = handle.file->Size();
-    if (handle.position >= size) return Value::Int(-1);
-    const auto count = std::min<uint64_t>(buffer.size(), size - handle.position);
-    if (handle.file->reader) {
-      const auto read = ReadMountedFile(vm, handle, buffer.first(count));
-      return Value::Int(read != 0 ? static_cast<int32_t>(read) : -1);
-    }
-    for (size_t i = 0; i < count; ++i) {
-      buffer[i] = Value::Int(static_cast<int8_t>(handle.file->bytes[handle.position + i]));
-    }
-    handle.position += count;
-    return Value::Int(count);
+    const auto count = ReadFile(Handle(vm, descriptor, false), buffer);
+    if (count < 0) vm.Fail("Ljava/io/IOException;", "Cannot read mounted file");
+    return Value::Int(count == 0 ? -1 : count);
   };
   cl.AddBootNative(kIn, "readBytes", "([BII)I", read);
   cl.AddBootNative(kRandom, "readBytes", "([BII)I", read);
+  cl.AddBootNative("Landroid/system/Os;", "pread", "(Ljava/io/FileDescriptor;[BIIJ)I",
+      [](Runtime& vm, Object*, Values args) {
+        const auto buffer = Buffer(vm, args.subspan(1, 3));
+        const auto entry = vm.file_handles.find(args[0].ref());
+        if (entry == vm.file_handles.end() || !entry->second.readable) {
+          ThrowErrno(vm, "pread", kBadDescriptor);
+        }
+        const auto offset = args[4].j();
+        if (offset < 0) ThrowErrno(vm, "pread", kInvalidArgument);
+        auto handle = entry->second;
+        handle.position = offset;
+        const auto count = ReadFile(handle, buffer);
+        if (count < 0) ThrowErrno(vm, "pread", kIoError);
+        return Value::Int(count);
+      });
   const Builtin length = [&android_fd](Runtime& vm, Object* self, Values) {
     auto& descriptor = Descriptor(vm, self);
     return Value::Long(descriptor.fields[android_fd.slot].i() == 0 ? 0 : Handle(vm, descriptor, false).file->Size());
@@ -251,15 +365,19 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
   });
   const Builtin write = [&android_fd](Runtime& vm, Object* self, Values args) {
     const auto buffer = Buffer(vm, args);
-    if (buffer.empty()) return Value{};
+    if (buffer.size == 0) return Value{};
     auto& descriptor = Descriptor(vm, self);
     const auto number = descriptor.fields[android_fd.slot].i();
     if (number == 1 || number == 2) {
       auto* stream = number == 2 ? stderr : stdout;
-      for (const auto byte : buffer) {
-        if (std::fputc(static_cast<uint8_t>(byte.i()), stream) == EOF) {
+      std::array<uint8_t, 4096> bytes;
+      for (size_t written = 0; written < buffer.size;) {
+        const auto count = std::min(bytes.size(), buffer.size - written);
+        if (!buffer.CopyTo(written, std::span(bytes).first(count)) ||
+            std::fwrite(bytes.data(), 1, count, stream) != count) {
           vm.Fail("Ljava/io/IOException;", "Console write failed");
         }
+        written += count;
       }
       if (std::fflush(stream) != 0) vm.Fail("Ljava/io/IOException;", "Console flush failed");
       return Value{};
@@ -267,12 +385,14 @@ void BindFileStreams(ClassLinker& cl, const Field& android_fd, const Field& host
     auto& handle = Handle(vm, descriptor, true);
     auto& bytes = handle.file->bytes;
     const auto position = handle.append ? bytes.size() : handle.position;
-    if (position > bytes.max_size() || buffer.size() > bytes.max_size() - position) {
+    if (position > bytes.max_size() || buffer.size > bytes.max_size() - position) {
       vm.Fail("Ljava/io/IOException;", "File is too large");
     }
-    const auto end = position + buffer.size();
+    const auto end = position + buffer.size;
     if (end > bytes.size()) bytes.resize(end);
-    for (size_t i = 0; i < buffer.size(); ++i) bytes[position + i] = static_cast<uint8_t>(buffer[i].i());
+    if (!buffer.CopyTo(0, std::span(bytes).subspan(position, buffer.size))) {
+      vm.Fail("Ljava/io/IOException;", "Cannot read array backing memory");
+    }
     handle.position = end;
     handle.file->last_modified = NowMillis();
     return Value{};
@@ -381,6 +501,14 @@ void InstallFiles(Runtime& vm) {
   vm.guest_files.try_emplace("/tmp", nullptr);
   if (vm.options.sandboxed_files) MountCpuFiles(vm);
   auto& cl = vm.linker;
+  for (std::string_view operation : {"stat", "lstat"}) {
+    cl.AddBootNative("Landroid/system/Os;", operation, "(Ljava/lang/String;)Landroid/system/StructStat;",
+        [operation](Runtime& vm, Object*, Values args) {
+          return StatGuestPath(vm, args[0].ref(), operation);
+        });
+  }
+  cl.AddBootNative("Landroid/system/Os;", "strerror", "(I)Ljava/lang/String;",
+      [](Runtime& vm, Object*, Values args) { return DescribeGuestErrno(vm, args[0].i()); });
   cl.AddBootNative("Landroid/net/LocalSocketImpl;", "newSocketDescriptor", "()Ljava/io/FileDescriptor;",
       [](Runtime& vm, Object*, Values) { return Value::Ref(NewGuestDescriptor(vm)); });
   auto& file = cl.Define("Ljava/io/File;", kObject, 0, {"Ljava/io/Serializable;"});
@@ -478,13 +606,15 @@ void InstallFiles(Runtime& vm) {
   cl.AddMethod(file, "exists", "()Z", 0, [](Runtime& vm, Object* self, Values) {
     return Value::Int(FileType(vm, self) != Type::not_found);
   });
-  cl.AddMethod(file, "canRead", "()Z", 0, [](Runtime& vm, Object* self, Values) {
-    const auto path = GuestPath(self->text);
-    if (vm.guest_files.contains(path)) return Value::Int(1);
-    if (vm.options.sandboxed_files || path.empty() ||
-        path.starts_with("/data/") || path.starts_with("/storage/")) return Value::Int(0);
-    return Value::Int(access(EncodeUtf8(self->text, false).c_str(), R_OK) == 0);
-  });
+  for (const bool write : {false, true}) {
+    cl.AddMethod(file, write ? "canWrite" : "canRead", "()Z", 0, [write](Runtime& vm, Object* self, Values) {
+      const auto path = GuestPath(self->text);
+      if (vm.guest_files.contains(path)) return Value::Int(!write || !vm.read_only_paths.contains(path));
+      if (vm.options.sandboxed_files || path.empty() ||
+          path.starts_with("/data/") || path.starts_with("/storage/")) return Value::Int(0);
+      return Value::Int(access(EncodeUtf8(self->text, false).c_str(), write ? W_OK : R_OK) == 0);
+    });
+  }
   cl.AddMethod(file, "createNewFile", "()Z", 0, [](Runtime& vm, Object* self, Values) {
     return Value::Int(CreateGuestFile(vm, GuestPath(self->text)));
   });
@@ -574,7 +704,8 @@ void InstallFiles(Runtime& vm) {
     vm.guest_files.erase(source);
     return Value::Int(1);
   });
-  const auto list_files = [](Runtime& vm, Object* self, Object* filter, bool names_only) {
+  const auto list_files = [](Runtime& vm, Object* self, Object* filter, bool names_only,
+                             bool filter_files = false) {
     std::vector<std::string> paths;
     const auto path = GuestPath(self->text);
     const auto entry = vm.guest_files.find(path);
@@ -602,16 +733,18 @@ void InstallFiles(Runtime& vm) {
     std::vector<Object*> accepted;
     for (const auto& path : paths) {
       Object* name = nullptr;
-      if (filter || names_only) {
+      if ((filter && !filter_files) || names_only) {
         name = roots.Hold(vm.NewString(DecodeUtf8(std::filesystem::path(path).filename().string())));
       }
-      if (filter && !CallVirtual(vm, filter, "accept", "(Ljava/io/File;Ljava/lang/String;)Z",
-                                 std::array{Value::Ref(self), Value::Ref(name)}).i()) continue;
+      if (filter && !filter_files && !CallVirtual(vm, filter, "accept", "(Ljava/io/File;Ljava/lang/String;)Z",
+                                                 std::array{Value::Ref(self), Value::Ref(name)}).i()) continue;
       if (names_only) {
         accepted.push_back(name);
       } else {
         auto* child = roots.Hold(vm.heap.Allocate(vm, file));
         child->text = DecodeUtf8(path);
+        if (filter && filter_files && !CallVirtual(vm, filter, "accept", "(Ljava/io/File;)Z",
+                                                  std::array{Value::Ref(child)}).i()) continue;
         accepted.push_back(child);
       }
     }
@@ -626,6 +759,10 @@ void InstallFiles(Runtime& vm) {
   cl.AddMethod(file, "listFiles", "(Ljava/io/FilenameFilter;)[Ljava/io/File;", 0,
                [list_files](Runtime& vm, Object* self, Values a) {
     return list_files(vm, self, a[0].ref(), false);
+  });
+  cl.AddMethod(file, "listFiles", "(Ljava/io/FileFilter;)[Ljava/io/File;", 0,
+               [list_files](Runtime& vm, Object* self, Values a) {
+    return list_files(vm, self, a[0].ref(), false, true);
   });
   cl.AddMethod(file, "list", "()[Ljava/lang/String;", 0, [list_files](Runtime& vm, Object* self, Values) {
     return list_files(vm, self, nullptr, true);

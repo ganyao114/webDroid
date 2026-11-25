@@ -4,6 +4,8 @@
 #include <link.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <signal.h>
+#include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/file.h>
 #include <sys/mman.h>
@@ -13,8 +15,10 @@
 #include <cerrno>
 #include <csetjmp>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <cwchar>
 #include <sstream>
 #include <stdexcept>
@@ -98,9 +102,16 @@ int Threads() {
     Exchange exchange;
     pthread_t thread;
     pthread_attr_t attr;
+    constexpr size_t supplied_size = 130 * 1024 * 1024;
+    auto* supplied_stack = mmap(nullptr, supplied_size, PROT_READ | PROT_WRITE,
+                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     size_t stack_size = 0;
-    if (pthread_attr_init(&attr) || pthread_attr_setstacksize(&attr, 64 * 1024) ||
+    void* stack_base = nullptr;
+    if (supplied_stack == MAP_FAILED || pthread_attr_init(&attr) || pthread_attr_setstacksize(&attr, 64 * 1024) ||
         pthread_attr_getstacksize(&attr, &stack_size) || stack_size != 64 * 1024 ||
+        pthread_attr_setstack(&attr, supplied_stack, supplied_size) ||
+        pthread_attr_getstack(&attr, &stack_base, &stack_size) ||
+        stack_base != supplied_stack || stack_size != supplied_size ||
         pthread_create(&thread, &attr, Worker, &exchange) || pthread_attr_destroy(&attr))
         return 3;
     if (pthread_equal(pthread_self(), thread) || sched_yield())
@@ -121,6 +132,11 @@ int Threads() {
         cpp_destructors != 1 || once_calls != 1 || pthread_getspecific(key) != &key ||
         pthread_key_delete(key) || sem_destroy(&gate))
         return 10 + exchange.error;
+    const auto worker_stack = reinterpret_cast<uintptr_t>(exchange.stack_local);
+    const auto mapped_stack = reinterpret_cast<uintptr_t>(supplied_stack);
+    if (worker_stack < mapped_stack || worker_stack - mapped_stack >= supplied_size ||
+        munmap(supplied_stack, supplied_size))
+        return 23;
 
     pthread_mutexattr_t type;
     pthread_mutex_t other;
@@ -129,6 +145,7 @@ int Threads() {
         pthread_mutex_init(&other, &type) || pthread_mutex_lock(&other) ||
         pthread_mutex_trylock(&other) || pthread_mutex_unlock(&other) ||
         pthread_mutex_unlock(&other) || pthread_mutex_destroy(&other) ||
+        pthread_mutex_lock(&other) != EINVAL ||
         pthread_mutexattr_settype(&type, PTHREAD_MUTEX_ERRORCHECK) ||
         pthread_mutex_init(&other, &type) || pthread_mutex_lock(&other) ||
         pthread_mutex_lock(&other) != EDEADLK || pthread_mutex_unlock(&other) ||
@@ -150,7 +167,48 @@ int Threads() {
         pthread_cond_timedwait(&timed, &mutex, &now) != ETIMEDOUT || pthread_mutex_unlock(&mutex) ||
         pthread_cond_destroy(&timed))
         return 22;
+    if (tgkill(getpid(), gettid(), 0) || tgkill(getpid(), -1, 0) != -1 || errno != EINVAL)
+        return 24;
+    tm parsed{};
+    parsed.tm_sec = 37;
+    const auto* remaining = strptime("2026-04-05tail", "%Y-%m-%d", &parsed);
+    if (!remaining || std::strcmp(remaining, "tail") || parsed.tm_year != 126 || parsed.tm_mon != 3 ||
+        parsed.tm_mday != 5 || parsed.tm_sec != 37)
+        return 25;
     return 0;
+}
+
+JavaVM* java_vm;
+pthread_t reference_worker;
+sem_t reference_ready, reference_release;
+
+void* ReferencingThread(void*) {
+    JNIEnv* env = nullptr;
+    bool valid = java_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_EDETACHED &&
+                 java_vm->AttachCurrentThread(&env, nullptr) == JNI_OK;
+    jclass integer = nullptr;
+    if (valid && env->PushLocalFrame(1) == JNI_OK) {
+        integer = env->FindClass("java/lang/Integer");
+        integer = static_cast<jclass>(env->PopLocalFrame(integer));
+    }
+    if (sem_post(&reference_ready) || sem_wait(&reference_release))
+        return reinterpret_cast<void*>(uintptr_t{1});
+    valid = valid && integer && env->GetObjectRefType(integer) == JNILocalRefType &&
+            env->GetMethodID(integer, "intValue", "()I") != nullptr;
+    if (valid) env->DeleteLocalRef(integer);
+    valid = java_vm->DetachCurrentThread() == JNI_OK && valid;
+    return valid ? nullptr : reinterpret_cast<void*>(uintptr_t{1});
+}
+
+jint BeginReferenceTest(JNIEnv*, jobject) {
+    return sem_init(&reference_ready, 0, 0) || sem_init(&reference_release, 0, 0) ||
+           pthread_create(&reference_worker, nullptr, ReferencingThread, nullptr) || sem_wait(&reference_ready);
+}
+
+jint FinishReferenceTest(JNIEnv*, jobject) {
+    void* result = nullptr;
+    return sem_post(&reference_release) || pthread_join(reference_worker, &result) ||
+           sem_destroy(&reference_ready) || sem_destroy(&reference_release) || result;
 }
 
 struct CheckImages {
@@ -183,6 +241,36 @@ struct CountDestruction {
     throw std::runtime_error("cpp-exc-ok");
 }
 
+#if defined(__aarch64__)
+int SparseMappings(size_t page) {
+    constexpr size_t size = size_t{20} << 30;
+    constexpr int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE;
+    auto* mapping = static_cast<char*>(mmap(nullptr, size, PROT_NONE, flags, -1, 0));
+    if (mapping == MAP_FAILED || reinterpret_cast<uintptr_t>(mapping) < (uint64_t{1} << 32)) return 60;
+    auto* region = mapping + size - 3 * page;
+    unsigned char resident[3]{};
+    if (mprotect(region, 3 * page, PROT_READ | PROT_WRITE) ||
+        mincore(region, 3 * page, resident) || resident[0] || resident[1] || resident[2]) return 61;
+    auto* cell = reinterpret_cast<volatile int*>(region + 2 * page);
+    if (*cell != 0) return 62;
+    std::memset(region + 2 * page, 'a', page);
+    if (mincore(region, 3 * page, resident) || resident[0] || resident[1] || !resident[2]) return 63;
+    if (mmap(region + 2 * page, page, PROT_NONE, flags | MAP_FIXED_NOREPLACE, -1, 0) != MAP_FAILED ||
+        errno != EEXIST) return 64;
+    if (mmap(region + 2 * page, page, PROT_READ | PROT_WRITE, flags | MAP_FIXED, -1, 0) != region + 2 * page ||
+        *cell != 0) return 65;
+    if (munmap(region + page, page) || mprotect(region, 3 * page, PROT_READ) != -1 || errno != ENOMEM)
+        return 66;
+    constexpr uint32_t code[]{0x52800540, 0xd65f03c0}; // mov w0, #42 and ret.
+    std::memcpy(region, code, sizeof(code));
+    if (mprotect(region, page, PROT_READ | PROT_EXEC) || reinterpret_cast<int (*)()>(region)() != 42)
+        return 67;
+    *cell = 42;
+    if (madvise(region + 2 * page, page, MADV_DONTNEED) || *cell || munmap(mapping, size)) return 68;
+    return 0;
+}
+#endif
+
 int Posix() {
     int descriptors[2];
     if (pipe(descriptors))
@@ -194,9 +282,19 @@ int Posix() {
         return 41;
 
     const int event = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    const int epoll = epoll_create1(EPOLL_CLOEXEC);
+    epoll_event watch{}, ready{};
+    watch.events = EPOLLIN | EPOLLONESHOT;
+    watch.data.u64 = 0x88aabbcc11223344ULL;
+    if (event < 0 || epoll < 0 || epoll_ctl(epoll, EPOLL_CTL_ADD, event, &watch) ||
+        epoll_wait(epoll, &ready, 1, 0) != 0) return 56;
     uint64_t value = 9;
     if (event < 0 || write(event, &value, sizeof(value)) != sizeof(value))
         return 42;
+    if (epoll_wait(epoll, &ready, 1, 0) != 1 || ready.events != EPOLLIN ||
+        ready.data.u64 != watch.data.u64 || epoll_wait(epoll, &ready, 1, 0) != 0 ||
+        epoll_ctl(epoll, EPOLL_CTL_MOD, event, &watch) || epoll_wait(epoll, &ready, 1, 0) != 1 ||
+        close(epoll)) return 57;
     value = 0;
     if (read(event, &value, sizeof(value)) != sizeof(value) || value != 9 ||
         read(event, &value, sizeof(value)) != -1 || errno != EAGAIN || close(event))
@@ -211,6 +309,9 @@ int Posix() {
     *cell = 47;
     if (mprotect(allocation, page, PROT_READ) || *cell != 47 || munmap(allocation, page))
         return 45;
+#if defined(__aarch64__)
+    if (const auto code = SparseMappings(page)) return code;
+#endif
 
     FILE* backed = std::tmpfile();
     const int fd = backed ? fileno(backed) : -1;
@@ -327,12 +428,18 @@ jint Run(JNIEnv* env, jobject receiver) {
 } // namespace
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void*) {
+    java_vm = vm;
     JNIEnv* env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK)
         return JNI_ERR;
     jclass activity = env->FindClass("com/wasmandroid/cpppthread/CppActivity");
     if (!activity)
         return JNI_ERR;
-    const JNINativeMethod methods[] = {{"runChecks", "()I", reinterpret_cast<void*>(Run)}};
-    return env->RegisterNatives(activity, methods, 1) == JNI_OK ? JNI_VERSION_1_6 : JNI_ERR;
+    const JNINativeMethod methods[] = {
+        {"runChecks", "()I", reinterpret_cast<void*>(Run)},
+        {"beginReferenceTest", "()I", reinterpret_cast<void*>(BeginReferenceTest)},
+        {"finishReferenceTest", "()I", reinterpret_cast<void*>(FinishReferenceTest)},
+    };
+    return env->RegisterNatives(activity, methods, sizeof(methods) / sizeof(*methods)) == JNI_OK
+        ? JNI_VERSION_1_6 : JNI_ERR;
 }

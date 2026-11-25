@@ -1,0 +1,92 @@
+--- a/libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentLinkedDeque.java
++++ b/libcore/ojluni/src/main/java/java/util/concurrent/ConcurrentLinkedDeque.java
+@@ -35,8 +35,6 @@
+ 
+ package java.util.concurrent;
+ 
+-import java.lang.invoke.MethodHandles;
+-import java.lang.invoke.VarHandle;
+ import java.util.AbstractCollection;
+ import java.util.Arrays;
+ import java.util.Collection;
+@@ -47,6 +45,7 @@
+ import java.util.Queue;
+ import java.util.Spliterator;
+ import java.util.Spliterators;
++import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+ import java.util.function.Consumer;
+ import java.util.function.Predicate;
+ 
+@@ -479,8 +478,8 @@
+                 updateTail(); // Ensure x is not reachable from tail
+ 
+                 // Finally, actually gc-unlink
+-                PREV.setRelease(x, isFirst ? prevTerminator() : x);
+-                NEXT.setRelease(x, isLast  ? nextTerminator() : x);
++                PREV.lazySet(x, isFirst ? prevTerminator() : x);
++                NEXT.lazySet(x, isLast  ? nextTerminator() : x);
+             }
+         }
+     }
+@@ -505,8 +504,8 @@
+                         updateTail(); // Ensure o is not reachable from tail
+ 
+                         // Finally, actually gc-unlink
+-                        NEXT.setRelease(o, o);
+-                        PREV.setRelease(o, prevTerminator());
++                        NEXT.lazySet(o, o);
++                        PREV.lazySet(o, prevTerminator());
+                     }
+                 }
+                 return;
+@@ -540,8 +539,8 @@
+                         updateTail(); // Ensure o is not reachable from tail
+ 
+                         // Finally, actually gc-unlink
+-                        PREV.setRelease(o, o);
+-                        NEXT.setRelease(o, nextTerminator());
++                        PREV.lazySet(o, o);
++                        NEXT.lazySet(o, nextTerminator());
+                     }
+                 }
+                 return;
+@@ -1650,28 +1649,21 @@
+                 action.accept(item);
+     }
+ 
+-    // VarHandle mechanics
+-    private static final VarHandle HEAD;
+-    private static final VarHandle TAIL;
+-    private static final VarHandle PREV;
+-    private static final VarHandle NEXT;
+-    private static final VarHandle ITEM;
++    // Atomic updates through the interpreter’s managed fields.
++    private static final AtomicReferenceFieldUpdater<ConcurrentLinkedDeque, Node> HEAD;
++    private static final AtomicReferenceFieldUpdater<ConcurrentLinkedDeque, Node> TAIL;
++    private static final AtomicReferenceFieldUpdater<Node, Node> PREV;
++    private static final AtomicReferenceFieldUpdater<Node, Node> NEXT;
++    private static final AtomicReferenceFieldUpdater<Node, Object> ITEM;
+     static {
+         PREV_TERMINATOR = new Node<Object>();
+         PREV_TERMINATOR.next = PREV_TERMINATOR;
+         NEXT_TERMINATOR = new Node<Object>();
+         NEXT_TERMINATOR.prev = NEXT_TERMINATOR;
+-        try {
+-            MethodHandles.Lookup l = MethodHandles.lookup();
+-            HEAD = l.findVarHandle(ConcurrentLinkedDeque.class, "head",
+-                                   Node.class);
+-            TAIL = l.findVarHandle(ConcurrentLinkedDeque.class, "tail",
+-                                   Node.class);
+-            PREV = l.findVarHandle(Node.class, "prev", Node.class);
+-            NEXT = l.findVarHandle(Node.class, "next", Node.class);
+-            ITEM = l.findVarHandle(Node.class, "item", Object.class);
+-        } catch (ReflectiveOperationException e) {
+-            throw new ExceptionInInitializerError(e);
+-        }
++        HEAD = AtomicReferenceFieldUpdater.newUpdater(ConcurrentLinkedDeque.class, Node.class, "head");
++        TAIL = AtomicReferenceFieldUpdater.newUpdater(ConcurrentLinkedDeque.class, Node.class, "tail");
++        PREV = AtomicReferenceFieldUpdater.newUpdater(Node.class, Node.class, "prev");
++        NEXT = AtomicReferenceFieldUpdater.newUpdater(Node.class, Node.class, "next");
++        ITEM = AtomicReferenceFieldUpdater.newUpdater(Node.class, Object.class, "item");
+     }
+ }

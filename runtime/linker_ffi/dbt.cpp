@@ -38,8 +38,8 @@ wa_dbt::~wa_dbt() {
     for (const auto& [address, allocation] : allocations)
         wa::softmmu::Unmap(mmu, address, allocation.mapped_size);
     const auto unmap_stack = [&](const wa::dbt::GuestThread& thread) {
-        if (thread.stack_base)
-            wa::softmmu::Unmap(mmu, thread.stack_base, thread.stack_size + WA_PAGE_SIZE);
+        if (thread.owns_stack && thread.stack_base)
+            wa::softmmu::Unmap(mmu, thread.stack_base - WA_PAGE_SIZE, thread.stack_size + WA_PAGE_SIZE);
     };
     unmap_stack(bionic->main);
     for (const auto& [id, thread] : bionic->threads) unmap_stack(thread);
@@ -60,6 +60,9 @@ using rt::ir::direct::AccessStatus;
 constexpr uint64_t kStackSearchTop = 0xfff00000;
 constexpr uint64_t kTimeSlice = 8192;
 constexpr uint64_t kCallBudget = 10'000'000;
+constexpr uint64_t kInitializerBudget = 50'000'000;
+// Managed callers can synchronously initialize large native libraries and assets.
+constexpr uint64_t kJniMethodBudget = 500'000'000;
 constexpr unsigned kMaxCallDepth = 64;
 
 struct CallDepth {
@@ -79,9 +82,13 @@ uint64_t Arm32PC(uint64_t entry, uint32_t fpscr = 0) {
 }
 
 bool ValidEntry(wa_guest_arch_t arch, uint64_t entry) {
-    if (entry >= wa::softmmu::kAddressLimit || entry == WA_EXIT_SENTINEL_PC)
+    if (entry >= wa::softmmu::AddressLimit(arch) || entry == WA_EXIT_SENTINEL_PC)
         return false;
     return (entry & 3) == 0 || (arch == WA_ARCH_ARM32 && (entry & 1));
+}
+
+bool IsSyntheticPc(uint64_t address) {
+    return address >= WA_HOST_STUB_BASE && address < wa::softmmu::kAddressLimit;
 }
 
 int32_t EnsureStack(wa_dbt& dbt, GuestThread& thread) {
@@ -97,7 +104,7 @@ int32_t EnsureStack(wa_dbt& dbt, GuestThread& thread) {
         status = wa_softmmu_map_anon(dbt.mmu, base + WA_PAGE_SIZE, thread.stack_size,
                                      WA_PROT_READ | WA_PROT_WRITE);
         if (status == WA_OK) {
-            thread.stack_base = base;
+            thread.stack_base = base + WA_PAGE_SIZE;
             return WA_OK;
         }
         wa::softmmu::Unmap(dbt.mmu, base, WA_PAGE_SIZE);
@@ -253,6 +260,7 @@ int32_t RunHost(wa_dbt& dbt, uint64_t pc, Arm32State& state) {
     context.dbt = &dbt;
     context.mmu = dbt.mmu;
     context.arch = WA_ARCH_ARM32;
+    context.fp_control = state.fpscr;
     // Android AAPCS32 passes single-precision scalar arguments in core registers.
     for (size_t i = 0; i < 4; ++i) {
         const auto bits = static_cast<uint32_t>(state.r[i]);
@@ -263,6 +271,7 @@ int32_t RunHost(wa_dbt& dbt, uint64_t pc, Arm32State& state) {
     if (dbt.running->jump_value) return RestoreJump(dbt, state);
     if (status != WA_OK && status != kThreadYielded)
         return status;
+    state.fpscr = context.fp_control;
     state.r[0] = static_cast<uint32_t>(context.ret0);
     state.r[1] = static_cast<uint32_t>(context.ret1);
     if (context.has_float_ret)
@@ -278,6 +287,7 @@ int32_t RunHost(wa_dbt& dbt, uint64_t pc, Arm64State& state) {
     context.dbt = &dbt;
     context.mmu = dbt.mmu;
     context.arch = WA_ARCH_ARM64;
+    context.fp_control = state.fpcr;
     for (size_t i = 0; i < 8; ++i) {
         float scalar;
         std::memcpy(&scalar, state.q[i], sizeof(scalar));
@@ -290,6 +300,7 @@ int32_t RunHost(wa_dbt& dbt, uint64_t pc, Arm64State& state) {
     if (dbt.running->jump_value) return RestoreJump(dbt, state);
     if (status != WA_OK && status != kThreadYielded)
         return status;
+    state.fpcr = context.fp_control;
     state.gprs[0] = context.ret0;
     state.gprs[1] = context.ret1;
     if (context.has_fp_ret_bits) {
@@ -444,13 +455,18 @@ int32_t Arm64Syscall(wa_dbt& dbt, Arm64State& state, uint64_t pc) {
     // Linux ARM64 exposes these calls with the same arguments as their Bionic thunks.
     using Call = std::pair<uint64_t, std::string_view>;
     constexpr Call calls[] = {
-        {57, "close"}, {63, "read"}, {64, "write"}, {113, "clock_gettime"},
-        {132, "sigaltstack"}, {167, "prctl"}, {172, "getpid"}, {178, "gettid"},
+        {57, "close"}, {62, "lseek"}, {63, "read"}, {64, "write"}, {80, "fstat"}, {113, "clock_gettime"},
+        {132, "sigaltstack"}, {167, "prctl"}, {172, "getpid"}, {174, "getuid"}, {178, "gettid"},
         {215, "munmap"}, {216, "mremap"}, {222, "mmap"}, {226, "mprotect"},
         {227, "msync"}, {233, "madvise"},
     };
     const auto call = std::ranges::find(calls, state.gprs[8], &Call::first);
-    if (call == std::end(calls)) return WA_ERR_NOSYS;
+    if (call == std::end(calls)) {
+        state.gprs[0] = WA_ERR_NOSYS; // Linux returns -ENOSYS in x0.
+        state.pc = pc + 4;
+        state.reservation_valid = 0;
+        return WA_OK;
+    }
     const auto symbol = std::ranges::find_if(dbt.hosts, [&](const auto& entry) {
         return entry.builtin && entry.soname == "libc.so" && entry.name == call->second && entry.function;
     });
@@ -480,12 +496,13 @@ template <typename State> uint64_t GuestAddress(uint64_t pc) {
         return pc;
 }
 
-template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice) {
+template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice,
+                                     const GuestWait* caller_wait = nullptr) {
     auto& thread = *dbt.running;
     ExecutionMemory memory{dbt};
     Exclusive exclusive;
     const rt::frontend::ReadyEntryLookup synthetic_pc{.ready = [](void*, uint64_t pc) noexcept {
-        return GuestAddress<State>(pc) >= WA_HOST_STUB_BASE;
+        return IsSyntheticPc(GuestAddress<State>(pc));
     }};
     while (true) {
         const auto pc = GuestAddress<State>(state.pc);
@@ -498,7 +515,7 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice)
             state.reservation_valid = 0;
             return kThreadYielded;
         }
-        if (pc >= WA_HOST_STUB_BASE) {
+        if (IsSyntheticPc(pc)) {
             if (pc >= WA_HOST_STUB_LIMIT)
                 return WA_ERR_FAULT;
             --thread.steps_left;
@@ -506,6 +523,9 @@ template <typename State> int32_t Run(wa_dbt& dbt, State& state, uint64_t slice)
             const auto status = RunHost(dbt, pc, state);
             if (status != WA_OK)
                 return status;
+            // Resume a synchronous caller as soon as its worker wakes it.
+            // The host call has completed, so the worker resumes at its return PC.
+            if (caller_wait && caller_wait->ready) slice = 0;
             continue;
         }
 
@@ -555,7 +575,7 @@ int32_t InitCpu(wa_dbt& dbt, GuestThread& thread, GuestCpu& cpu, uint64_t entry,
                 const wa_guest_call_frame_t& args) {
     auto status = EnsureStack(dbt, thread);
     if (status != WA_OK) return status;
-    const auto low = thread.stack_base + WA_PAGE_SIZE;
+    const auto low = thread.stack_base;
     const auto top = low + thread.stack_size;
     const auto caller_sp = thread.depth ? thread.active_sp : top;
     if (caller_sp > top || caller_sp < low || args.stack_size > caller_sp - low)
@@ -640,16 +660,17 @@ bool SleepUntilProgress(wa_dbt& dbt) {
     return true;
 }
 
-int32_t RunSlice(wa_dbt& dbt, GuestThread& thread, GuestCpu& cpu, bool resumable) {
+int32_t RunSlice(wa_dbt& dbt, GuestThread& thread, GuestCpu& cpu, bool resumable,
+                 const GuestWait* caller_wait = nullptr) {
     const CallDepth frame{thread.depth};
     thread.resumable = resumable;
     return std::visit([&](auto& state) {
-        return Run(dbt, state, resumable ? kTimeSlice : UINT64_MAX);
+        return Run(dbt, state, resumable ? kTimeSlice : UINT64_MAX, caller_wait);
     }, cpu.state);
 }
 
 int32_t Call(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& args,
-             wa_guest_call_result_t& result) {
+             wa_guest_call_result_t& result, uint64_t budget) {
     auto& thread = *dbt.running;
     if (thread.depth == kMaxCallDepth) return WA_ERR_OVERFLOW;
     if (!thread.depth) dbt.last_fault_address = 0;
@@ -668,7 +689,7 @@ int32_t Call(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& args,
         status = RunSlice(dbt, thread, cpu, false);
     } else {
         ActiveThread active(dbt, thread);
-        thread.steps_left = kCallBudget;
+        thread.steps_left = budget;
         while (true) {
             if (thread.wait.kind == WaitKind::None || thread.wait.ready) {
                 status = RunSlice(dbt, thread, cpu, true);
@@ -804,10 +825,12 @@ int32_t wa::dbt::StartThread(wa_dbt& dbt, GuestThread& thread, uint64_t routine,
 }
 
 void wa::dbt::ReleaseThread(wa_dbt& dbt, GuestThread& thread) {
-    if (thread.stack_base)
-        softmmu::Unmap(dbt.mmu, std::exchange(thread.stack_base, 0), thread.stack_size + WA_PAGE_SIZE);
+    const auto stack_base = std::exchange(thread.stack_base, 0);
+    if (thread.owns_stack && stack_base)
+        softmmu::Unmap(dbt.mmu, stack_base - WA_PAGE_SIZE, thread.stack_size + WA_PAGE_SIZE);
     FreeGuest(dbt, std::exchange(thread.errno_address, 0));
     FreeGuest(dbt, std::exchange(thread.host_entry, 0));
+    FreeGuest(dbt, std::exchange(thread.host_errno_address, 0));
     FreeGuest(dbt, std::exchange(thread.thread_pointer, 0));
     for (const auto& [control, address] : thread.emutls) FreeGuest(dbt, address);
     thread.emutls.clear();
@@ -816,6 +839,9 @@ void wa::dbt::ReleaseThread(wa_dbt& dbt, GuestThread& thread) {
 
 bool wa::dbt::RunReadyWorker(wa_dbt& dbt) {
     ExpireWaits(dbt);
+    const auto& wait = dbt.running->wait;
+    const auto* caller_wait = wait.kind == WaitKind::None ? nullptr : &wait;
+    if (caller_wait && caller_wait->ready) return false;
     auto& state = *dbt.bionic;
     auto next = state.threads.upper_bound(state.last_scheduled);
     for (size_t count = state.threads.size(); count; --count, ++next) {
@@ -827,7 +853,7 @@ bool wa::dbt::RunReadyWorker(wa_dbt& dbt) {
         {
             ActiveThread active(dbt, thread);
             try {
-                status = RunSlice(dbt, thread, *thread.cpu, true);
+                status = RunSlice(dbt, thread, *thread.cpu, true, caller_wait);
             } catch (const GuestFault& fault) {
                 status = fault.status;
             } catch (const std::bad_alloc&) {
@@ -844,6 +870,7 @@ bool wa::dbt::RunReadyWorker(wa_dbt& dbt) {
                 thread.result = result.gpr[0];
             }
             RunThreadDestructors(dbt);
+            if (dbt.on_thread_exit) dbt.on_thread_exit(dbt.thread_exit_context, thread.id);
             thread.exited = true;
             Wake(dbt, WaitKind::Join, thread.id);
             ReleaseThread(dbt, thread);
@@ -878,7 +905,7 @@ void wa::dbt::Yield(wa_dbt& dbt) {
 }
 
 bool wa::dbt::IsExecutable(const wa_dbt& dbt, uint64_t entry) {
-    if (!entry || entry >= WA_HOST_STUB_BASE || !ValidEntry(dbt.arch, entry) ||
+    if (!entry || IsSyntheticPc(entry) || !ValidEntry(dbt.arch, entry) ||
         CheckMappedAccess(&dbt, entry, 1, WA_PROT_EXEC) != WA_OK) return false;
     uint8_t byte;
     return softmmu::Read(dbt.mmu, entry & ~uint64_t{1}, {&byte, 1}, WA_PROT_EXEC).status == WA_OK;
@@ -890,7 +917,7 @@ int32_t wa::dbt::PrepareJitStack(wa_dbt& dbt, uint64_t& sp) {
     if (thread.depth) return WA_ERR_BUSY;
     const auto status = EnsureStack(dbt, thread);
     if (status == WA_OK)
-        sp = thread.stack_base + WA_PAGE_SIZE + thread.stack_size;
+        sp = thread.stack_base + thread.stack_size;
     return status;
 }
 
@@ -1001,15 +1028,15 @@ int32_t wa_dbt_call_f32(wa_dbt_t* dbt, uint64_t entry_vaddr, const uint64_t* int
     return status;
 }
 
-int32_t wa_dbt_call_abi(wa_dbt_t* dbt, uint64_t entry_vaddr, const wa_guest_call_frame_t* frame,
-                       wa_guest_call_result_t* out) {
+static int32_t CallAbi(wa_dbt_t* dbt, uint64_t entry_vaddr, const wa_guest_call_frame_t* frame,
+                       wa_guest_call_result_t* out, uint64_t budget) {
     if (!dbt || !frame || !out || (frame->stack_size && !frame->stack) ||
         !ValidEntry(dbt->arch, entry_vaddr))
         return WA_ERR_INVALID;
     try {
         std::lock_guard lock(dbt->mutex);
         wa_guest_call_result_t result{};
-        const auto status = Call(*dbt, entry_vaddr, *frame, result);
+        const auto status = Call(*dbt, entry_vaddr, *frame, result, budget);
         if (status == WA_OK) *out = result;
         return status;
     } catch (const GuestFault& fault) {
@@ -1019,6 +1046,34 @@ int32_t wa_dbt_call_abi(wa_dbt_t* dbt, uint64_t entry_vaddr, const wa_guest_call
     } catch (...) {
         return WA_ERR_INTERNAL;
     }
+}
+
+int32_t wa_dbt_call_abi(wa_dbt_t* dbt, uint64_t entry_vaddr, const wa_guest_call_frame_t* frame,
+                       wa_guest_call_result_t* out) {
+    return CallAbi(dbt, entry_vaddr, frame, out, kCallBudget);
+}
+
+int32_t wa::dbt::CallJniMethod(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& frame,
+                               wa_guest_call_result_t& result) {
+    return CallAbi(&dbt, entry, &frame, &result, kJniMethodBudget);
+}
+
+int32_t wa::dbt::CallInitializer(wa_dbt& dbt, uint64_t entry) {
+    wa_guest_call_result_t result{};
+    return CallInitializer(dbt, entry, {}, result);
+}
+
+int32_t wa::dbt::CallInitializer(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& frame,
+                                 wa_guest_call_result_t& result) {
+    std::lock_guard lock(dbt.mutex);
+    // An initializer can run inside dlopen from another guest native call.
+    // Its watchdog allowance is independent of the caller's remaining steps.
+    struct RestoreBudget {
+        GuestThread& thread;
+        uint64_t remaining;
+        ~RestoreBudget() { thread.steps_left = remaining; }
+    } restore{*dbt.running, std::exchange(dbt.running->steps_left, kInitializerBudget)};
+    return CallAbi(&dbt, entry, &frame, &result, kInitializerBudget);
 }
 
 int32_t wa_dbt_compile_wasm_unit(wa_dbt_t* dbt, uint64_t entry_vaddr, uint8_t** out_wasm_bytes,

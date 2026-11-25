@@ -1,0 +1,29 @@
+--- a/frameworks/base/core/java/android/text/format/Time.java
++++ b/frameworks/base/core/java/android/text/format/Time.java
+@@ -20,7 +20,6 @@
+ 
+ import com.android.i18n.timezone.WallTime;
+ import com.android.i18n.timezone.ZoneInfoData;
+-import com.android.i18n.timezone.ZoneInfoDb;
+ 
+ import java.util.Locale;
+ import java.util.TimeZone;
+@@ -1118,14 +1117,10 @@
+         }
+ 
+         private static ZoneInfoData lookupZoneInfoData(String timezoneId) {
+-            ZoneInfoData zoneInfoData = ZoneInfoDb.getInstance().makeZoneInfoData(timezoneId);
+-            if (zoneInfoData == null) {
+-                zoneInfoData = ZoneInfoDb.getInstance().makeZoneInfoData("GMT");
+-            }
+-            if (zoneInfoData == null) {
+-                throw new AssertionError("GMT not found: \"" + timezoneId + "\"");
+-            }
+-            return zoneInfoData;
++            // Use the same fixed-offset time zone as the embedded java.util.TimeZone.
++            TimeZone zone = TimeZone.getTimeZone(timezoneId);
++            return ZoneInfoData.createInstance(timezoneId, new long[0], new byte[0],
++                    new int[] {zone.getRawOffset() / 1000}, new boolean[1]);
+         }
+ 
+         public void switchTimeZone(String timezone) {

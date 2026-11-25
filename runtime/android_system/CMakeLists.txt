@@ -44,9 +44,10 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
         VERBATIM)
     set(wa_launcher_runtime_sources art_sf_entry.cpp launcher_session_entry.cpp "${wa_systemui_host_dex}")
     add_library(wa_android_system_foreground STATIC foreground_activity_entry.cpp
-        hybrid_native_runtime.cpp hybrid_jni_bridge.cpp guest_zlib.cpp)
+        hybrid_native_runtime.cpp hybrid_jni_bridge.cpp guest_zlib.cpp guest_media.cpp guest_window.cpp)
     target_include_directories(wa_android_system_foreground PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/../../include"
-        PRIVATE ../linker_ffi ../../tools/ffi_gen/generated)
+        PRIVATE ../linker_ffi ../../tools/ffi_gen/generated
+                "${AOSP17_SOURCE_DIR}/frameworks/base/core/jni/include")
     target_link_libraries(wa_android_system_foreground PUBLIC wa_hal_surfaceflinger
         PRIVATE wa_android_system_apk aosp17_ui_jni aosp17_libandroidfw wa_linker_ffi wa_hal_browser)
     if(BUILD_TESTING)

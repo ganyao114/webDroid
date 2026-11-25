@@ -110,6 +110,55 @@ template <typename Word> struct Rela {
 };
 
 static_assert(sizeof(ElfHeader<uint32_t>) == 52 && sizeof(ElfHeader<uint64_t>) == 64);
+
+template<class Word, class Program, class Symbol>
+std::vector<uint8_t> MakeVirtualLibraryElf(std::string_view soname) {
+    struct Metadata {
+        ElfHeader<Word> header;
+        Program programs[2];
+        Dynamic<Word> dynamic[7];
+        Symbol null_symbol;
+        uint32_t hash[4];
+    } metadata{};
+    constexpr bool is32 = sizeof(Word) == 4;
+    const uint8_t ident[]{0x7f, 'E', 'L', 'F', uint8_t(is32 ? 1 : 2), 1, 1};
+    std::ranges::copy(ident, metadata.header.ident);
+    auto& header = metadata.header;
+    header.type = 3; // ET_DYN.
+    header.machine = is32 ? 40 : 183; // EM_ARM or EM_AARCH64.
+    header.version = 1;
+    header.phoff = offsetof(Metadata, programs);
+    header.flags = is32 ? 0x05000000 : 0; // ARM EABI version 5.
+    header.ehsize = sizeof(header);
+    header.phentsize = sizeof(Program);
+    header.phnum = std::size(metadata.programs);
+
+    const Word string_size = soname.size() + 2;
+    const Word size = sizeof(metadata) + string_size;
+    auto& load = metadata.programs[0];
+    load.type = PT_LOAD;
+    load.flags = PF_R;
+    load.filesz = load.memsz = size;
+    load.align = WA_PAGE_SIZE;
+    auto& dynamic = metadata.programs[1];
+    dynamic.type = PT_DYNAMIC;
+    dynamic.flags = PF_R;
+    dynamic.offset = dynamic.vaddr = dynamic.paddr = offsetof(Metadata, dynamic);
+    dynamic.filesz = dynamic.memsz = sizeof(metadata.dynamic);
+    dynamic.align = alignof(Word);
+
+    metadata.dynamic[0] = {DT_STRTAB, sizeof(metadata)};
+    metadata.dynamic[1] = {DT_STRSZ, string_size};
+    metadata.dynamic[2] = {DT_SONAME, 1};
+    metadata.dynamic[3] = {DT_SYMTAB, offsetof(Metadata, null_symbol)};
+    metadata.dynamic[4] = {DT_SYMENT, sizeof(Symbol)};
+    metadata.dynamic[5] = {DT_HASH, offsetof(Metadata, hash)};
+    metadata.hash[0] = metadata.hash[1] = 1; // One bucket and one null symbol.
+    std::vector<uint8_t> file(size);
+    std::memcpy(file.data(), &metadata, sizeof(metadata));
+    std::memcpy(file.data() + sizeof(metadata) + 1, soname.data(), soname.size());
+    return file;
+}
 static_assert(sizeof(Program32) == 32 && sizeof(Program64) == 56);
 static_assert(sizeof(Symbol32) == 16 && sizeof(Symbol64) == 24);
 static_assert(sizeof(Rela<uint32_t>) == 12 && sizeof(Rela<uint64_t>) == 24);
@@ -885,9 +934,8 @@ template <typename Word> class Loader {
                         !InMemory(array, length, PF_R))))
             return WA_ERR_INVALID;
 
-        uint64_t result;
         if (init) {
-            const auto status = wa_dbt_call(dbt, bias + init, nullptr, 0, &result);
+            const auto status = CallInitializer(*dbt, bias + init);
             if (status != WA_OK) {
                 if (error) *error = "DT_INIT stopped at guest PC " + std::to_string(dbt->last_pc);
                 return status;
@@ -901,7 +949,7 @@ template <typename Word> class Loader {
                 return status;
             if (!address || address == static_cast<Word>(-1))
                 continue;
-            status = wa_dbt_call(dbt, address, nullptr, 0, &result);
+            status = CallInitializer(*dbt, address);
             if (status != WA_OK) {
                 if (error) *error = ".init_array stopped at guest PC " + std::to_string(dbt->last_pc);
                 return status;
@@ -927,6 +975,11 @@ template <typename Word> class Loader {
 
 } // namespace
 } // namespace wa::dbt
+
+std::vector<uint8_t> wa::dbt::VirtualLibraryElf(wa_guest_arch_t arch, std::string_view soname) {
+    return arch == WA_ARCH_ARM32 ? MakeVirtualLibraryElf<uint32_t, Program32, Symbol32>(soname)
+                                 : MakeVirtualLibraryElf<uint64_t, Program64, Symbol64>(soname);
+}
 
 int32_t wa::dbt::InspectElf(wa_guest_arch_t arch, std::span<const uint8_t> bytes, ElfInfo& info,
                             bool include_symbols) {
@@ -976,6 +1029,18 @@ uint64_t wa::dbt::FindElfSymbol(const wa_dbt& dbt, uint64_t base, std::string_vi
     for (const auto& image : dbt.images) {
         if (base && image.base != base) continue;
         if (const auto it = image.exports.find(name); it != image.exports.end()) return it->second;
+    }
+    return 0;
+}
+
+uint64_t wa::dbt::FindElfSymbolInScope(const wa_dbt& dbt, uint64_t base, std::string_view name) {
+    for (const auto& image : dbt.images) {
+        if (image.base != base) continue;
+        if (const auto found = image.exports.find(name); found != image.exports.end()) return found->second;
+        uint64_t address = 0;
+        // dlsym(handle) uses the image followed by its breadth-first dependency scope.
+        const std::vector<std::string_view> needed(image.needed.begin(), image.needed.end());
+        return ResolveImport(dbt, needed, name, address) ? address : 0;
     }
     return 0;
 }

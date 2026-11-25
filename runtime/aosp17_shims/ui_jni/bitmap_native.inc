@@ -341,11 +341,20 @@ jobject DecodeImage(JNIEnv* env, std::span<const uint8_t> bytes, jobject options
     opts.PutInt("outHeight", -1);
     opts.PutObject("outMimeType", "Ljava/lang/String;", nullptr);
     if (padding) SetRect(env, padding, {-1, -1, -1, -1});
+    if (bytes.empty() || bytes.size() > kMaxEncodedSize) return nullptr;
+    const bool webp = bytes.size() >= 12 && std::memcmp(bytes.data(), "RIFF", 4) == 0 &&
+                      std::memcmp(bytes.data() + 8, "WEBP", 4) == 0;
     int width, height, channels;
-    if (bytes.empty() || bytes.size() > kMaxEncodedSize ||
-        !stbi_info_from_memory(bytes.data(), bytes.size(), &width, &height, &channels) ||
-        !ValidSize(width, height))
+    if (webp) {
+        WebPBitstreamFeatures info{};
+        if (WebPGetFeatures(bytes.data(), bytes.size(), &info) != VP8_STATUS_OK) return nullptr;
+        width = info.width;
+        height = info.height;
+        channels = info.has_alpha ? 4 : 3;
+    } else if (!stbi_info_from_memory(bytes.data(), bytes.size(), &width, &height, &channels)) {
         return nullptr;
+    }
+    if (!ValidSize(width, height)) return nullptr;
     const auto sample = std::max(1, opts.Int("inSampleSize"));
     const jint density = opts.Int("inDensity"), target = opts.Int("inTargetDensity");
     const auto chunk = NinePatchChunk(bytes);
@@ -360,11 +369,13 @@ jobject DecodeImage(JNIEnv* env, std::span<const uint8_t> bytes, jobject options
     opts.PutInt("outHeight", bounds ? height : out_h);
     if (options) {
         const bool png = bytes.size() > 8 && bytes[0] == 137 && bytes[1] == 'P';
-        opts.PutObject("outMimeType", "Ljava/lang/String;", env->NewStringUTF(png ? "image/png" : "image/jpeg"));
+        opts.PutObject("outMimeType", "Ljava/lang/String;",
+                       env->NewStringUTF(webp ? "image/webp" : png ? "image/png" : "image/jpeg"));
     }
     if (bounds || env->ExceptionCheck()) return nullptr;
-    std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> rgba(
-        stbi_load_from_memory(bytes.data(), bytes.size(), &width, &height, &channels, 4), &stbi_image_free);
+    using DecodedPixels = std::unique_ptr<uint8_t, void (*)(void*)>;
+    const auto rgba = webp ? DecodedPixels(WebPDecodeRGBA(bytes.data(), bytes.size(), nullptr, nullptr), &WebPFree)
+        : DecodedPixels(stbi_load_from_memory(bytes.data(), bytes.size(), &width, &height, &channels, 4), &stbi_image_free);
     if (!rgba) {
         opts.PutInt("outWidth", -1);
         opts.PutInt("outHeight", -1);

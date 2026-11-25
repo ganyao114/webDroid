@@ -111,6 +111,8 @@ public final class UiRuntime {
         private NotificationManager notifications;
         private StorageManager storage;
         private ActivityManager activities;
+        private AlarmManager alarms;
+        private android.media.AudioManager audio;
         private android.net.ConnectivityManager connectivity;
         private Resources.Theme theme;
         private final ArrayMap<String, ServiceInfo> services;
@@ -347,7 +349,7 @@ public final class UiRuntime {
             RunningService service = runningServices.get(name);
             if (service != null || !create) return service;
             ServiceInfo info = services.get(name.getClassName());
-            if (info == null) return null;
+            if (info == null || !this.info.processName.equals(info.processName)) return null;
             Service instance = instantiate(name.getClassName(), Service.class);
             RunningService record = new RunningService(instance, name);
             instance.attachEmbedded(this, name.getClassName(), application, info.getForegroundServiceType(),
@@ -457,12 +459,24 @@ public final class UiRuntime {
                 current.getWindow().getDecorView().requestLayout();
             }
         }
+        @Override public String getSystemServiceName(Class<?> type) {
+            return type == android.media.AudioManager.class ? AUDIO_SERVICE : super.getSystemServiceName(type);
+        }
+
         @Override public Object getSystemService(String name) {
             if (DISPLAY_SERVICE.equals(name)) return displays;
             if (WINDOW_SERVICE.equals(name)) return windows;
             if (ACTIVITY_SERVICE.equals(name)) {
                 if (activities == null) activities = new ActivityManager(this, new Handler(getMainLooper()));
                 return activities;
+            }
+            if (ALARM_SERVICE.equals(name)) {
+                if (alarms == null) alarms = new AlarmManager(this);
+                return alarms;
+            }
+            if (AUDIO_SERVICE.equals(name)) {
+                if (audio == null) audio = new android.media.AudioManager(this);
+                return audio;
             }
             if (USER_SERVICE.equals(name)) return users;
             if (APPWIDGET_SERVICE.equals(name)) return widgets;
@@ -558,7 +572,9 @@ public final class UiRuntime {
             AppContext app = new AppContext(resources, manifest.info, manifest);
             context = app;
             Application.setEmbeddedProcessName(manifest.info.processName);
+            ActivityThread.bindEmbeddedProcess(manifest.info);
             app.application = createApplication(app, manifest.application);
+            ActivityThread.currentActivityThread().mInitialApplication = app.application;
             if (Boolean.getBoolean("org.wasmandroid.foreground")) {
                 app.application.getPackageManager().installEmbeddedProviders(app.application);
             }
@@ -574,6 +590,7 @@ public final class UiRuntime {
             root = new ViewRootImpl(activity, activity.getDisplay(), window);
             root.setView(window.getDecorView(), window.getAttributes(), null);
             current = activity;
+            ActivityThread.updateEmbeddedTask(activity, activity, 1);
             activity.performCreate(null);
             resume();
         } catch (IOException | XmlPullParserException | RuntimeException | Error error) {
@@ -677,6 +694,9 @@ public final class UiRuntime {
         service.applicationInfo = application;
         service.packageName = application.packageName;
         service.name = fullName(application.packageName, name);
+        String process = xml.getAttributeValue(XmlValues.ANDROID, "process");
+        service.processName = process == null || process.isEmpty() ? application.processName
+                : process.startsWith(":") ? application.packageName + process : process;
         service.exported = xml.getAttributeBooleanValue(XmlValues.ANDROID, "exported", false);
         service.permission = xml.getAttributeValue(XmlValues.ANDROID, "permission");
         service.mForegroundServiceType = xml.getAttributeIntValue(XmlValues.ANDROID, "foregroundServiceType", 0);
@@ -801,7 +821,10 @@ public final class UiRuntime {
                     try {
                         app.closeResources();
                     } finally {
-                        if (context == null) Application.setEmbeddedProcessName(null);
+                        if (context == null) {
+                            ActivityThread.unbindEmbeddedProcess();
+                            Application.setEmbeddedProcessName(null);
+                        }
                     }
                 }
             }

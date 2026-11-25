@@ -24,18 +24,20 @@ COMPATIBILITY = Path(__file__).with_name("framework_build")
 JAVA_BASE = Path("libcore/ojluni/src/main/java")
 LIBCORE_LUNI = Path("libcore/luni/src/main/java")
 LIBCORE_JSON = Path("libcore/json/src/main/java")
+LIBCORE_DALVIK = Path("libcore/dalvik/src/main/java")
 JAVA_BASE_ADAPTERS = {
     Path("java/util/Collections.java"): Path("java/util/EmbeddedSynchronizedCollections.java"),
 }
-SPARSE_LIBCORE_ROOTS = (JAVA_BASE, LIBCORE_LUNI, LIBCORE_JSON)
+SPARSE_LIBCORE_ROOTS = (JAVA_BASE, LIBCORE_LUNI, LIBCORE_JSON, LIBCORE_DALVIK)
 SPARSE_FRAMEWORK_ROOTS = ("frameworks/base/core/java", "frameworks/base/media/java")
 CONNECTIVITY_PROJECT = "packages/modules/Connectivity"
 UPSTREAM_JAVA_PROJECTS = ("frameworks/base/", "libcore/", CONNECTIVITY_PROJECT + "/")
 SPARSE_CONNECTIVITY_ROOT = CONNECTIVITY_PROJECT + "/staticlibs/framework"
+CONNECTIVITY_FRAMEWORK_T = CONNECTIVITY_PROJECT + "/framework-t/src"
 SPARSE_SOURCE_ROOTS = {
     "libcore": SPARSE_LIBCORE_ROOTS,
     "frameworks/base": SPARSE_FRAMEWORK_ROOTS,
-    CONNECTIVITY_PROJECT: (SPARSE_CONNECTIVITY_ROOT,),
+    CONNECTIVITY_PROJECT: (SPARSE_CONNECTIVITY_ROOT, CONNECTIVITY_FRAMEWORK_T),
 }
 SPARSE_SOURCE_MIRRORS = {
     "frameworks/base/core/java/android/service/notification/StatusBarNotification.java":
@@ -46,6 +48,8 @@ SPARSE_SOURCE_MIRRORS = {
         "985-connectivity-collection-utils-source-mirror.patch",
     f"{SPARSE_CONNECTIVITY_ROOT}/com/android/net/module/util/NetworkCapabilitiesUtils.java":
         "986-network-capabilities-utils-source-mirror.patch",
+    f"{CONNECTIVITY_FRAMEWORK_T}/android/app/usage/NetworkStatsManager.java":
+        "1081-network-stats-source-mirror.patch",
 }
 FRAMEWORK_DEX = "aosp17_upstream_framework.dex"
 FRAMEWORK_JAR = "aosp17_upstream_framework_classes.jar"
@@ -563,12 +567,6 @@ def compile_only_api(args, stage, inputs):
 def compile_only_platform_sources(args, stage, inputs):
     """Project SDK-hidden platform declarations used by framework source."""
     declarations = {
-        "dalvik/system/VMRuntime.java": (
-            "libcore/libart/src/main/java/dalvik/system/VMRuntime.java",
-            ("public static native VMRuntime getRuntime();",
-             "public native void registerNativeAllocation(int bytes);",
-             "public native void registerNativeFree(int bytes);"),
-        ),
         "libcore/util/NativeAllocationRegistry.java": (
             "libcore/luni/src/main/java/libcore/util/NativeAllocationRegistry.java",
             ("public static native NativeAllocationRegistry createMalloced(ClassLoader loader, long freeFunction);",
@@ -794,8 +792,9 @@ def build(args, stage):
           sourcepath=guest_api, debug_info="none")
     thread_api = "org/wasmandroid/ui/ThreadContext"
     boot_thread_context = stage_java(java_base, thread_api + ".java", thread_context.read_bytes())
+    java_base_inputs = os.pathsep.join(map(str, (java_base, annotations, framework)))
     javac(args, [*staged["java-base"], boot_thread_context], core_library, sdk_classpath,
-          "--patch-module", f"java.base={java_base}", debug_info="none")
+          "--patch-module", f"java.base={java_base_inputs}", debug_info="none")
     (core_library / (thread_api + ".class")).unlink()
     javac(args, staged["services"], services, [framework, *sdk_classpath])
     framework_jar = stage / FRAMEWORK_JAR

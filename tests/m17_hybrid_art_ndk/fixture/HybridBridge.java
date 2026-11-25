@@ -1,5 +1,8 @@
 package com.wasmandroid.hybrid;
 
+import android.graphics.Bitmap;
+import android.content.res.AssetManager;
+import android.view.Surface;
 import java.nio.ByteBuffer;
 
 final class HybridBridge {
@@ -18,6 +21,11 @@ final class HybridBridge {
     static native int readNativeBuffer();
     static native void requirePositive(int input);
     static native boolean verifyAbi();
+    static native boolean pollTimer();
+    static native boolean protectImageData();
+    static native boolean editBitmap(Bitmap bitmap);
+    static native boolean readAsset(AssetManager assets);
+    static native boolean postSurface(Surface surface);
     static native String dynamicBanner(String label, int seed);
     static native int decorated_name(int[] values);
     static native int decorated_name(String value);

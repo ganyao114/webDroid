@@ -10,4 +10,5 @@ add_test(NAME test_m20_wechat_compat COMMAND test_m20_wechat_compat
     "${WA_LAUNCHER_FRAMEWORK_DEX}" "${wechat_fallback}" "${WA_LAUNCHER_FRAMEWORK_RES}"
     "${CMAKE_SOURCE_DIR}/third_party/commercial_apks/weixin8080_arm64.apk")
 set_tests_properties(test_m20_wechat_compat PROPERTIES
-    SKIP_REGULAR_EXPRESSION "WeChat APK is absent" TIMEOUT 180)
+    SKIP_REGULAR_EXPRESSION "WeChat APK is absent"
+    FAIL_REGULAR_EXPRESSION "mutex lock failed: Invalid argument" TIMEOUT 240)

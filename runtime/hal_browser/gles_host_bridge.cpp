@@ -9,6 +9,7 @@
 #include <array>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 #if defined(__EMSCRIPTEN__) || defined(WA_HAL_NATIVE_GLES3)
 #include <GLES3/gl3.h>
@@ -176,6 +177,21 @@ void egl_query_surface(GuestCall& call) {
     }
 }
 
+void egl_query_context(GuestCall& call) {
+    const auto output = call.word(3);
+    if (!output) {
+        egl::fail(egl::bad_parameter);
+        return;
+    }
+    int32_t value;
+    if (egl::query_context(egl_handle(call, 0), egl_handle(call, 1), call.i32(2), value) &&
+        call.write(output, value)) call.result(1);
+}
+
+void egl_unsupported_image(GuestCall& call) {
+    egl::unsupported_image(egl_handle(call, 0));
+}
+
 void egl_bind_api(GuestCall& call) {
     if (call.word(0) == 0x30a0) call.result(1);
     else egl::fail(egl::bad_parameter);
@@ -269,6 +285,18 @@ template <auto Query> void query_object(GuestCall& call) {
     call.write(call.word(2), value);
 }
 
+void framebuffer_attachment(GuestCall& call) {
+    GLint value = 0;
+    glGetFramebufferAttachmentParameteriv(call.word(0), call.word(1), call.word(2), &value);
+    call.write(call.word(3), value);
+}
+
+void shader_precision(GuestCall& call) {
+    GLint range[2]{}, precision = 0;
+    glGetShaderPrecisionFormat(call.word(0), call.word(1), range, &precision);
+    if (call.copy_out(call.word(2), range, sizeof(range))) call.write(call.word(3), precision);
+}
+
 template <auto Query> void info_log(GuestCall& call) {
     const GLuint object = call.word(0);
     const GLsizei capacity = call.i32(1);
@@ -339,6 +367,18 @@ void buffer_data(GuestCall& call) {
     }
 }
 
+void buffer_sub_data(GuestCall& call) {
+    const auto offset = call.signed_word(1), size = call.signed_word(2);
+    if (offset < 0 || size < 0 || offset > std::numeric_limits<GLintptr>::max() ||
+        size > std::numeric_limits<GLsizeiptr>::max()) {
+        call.fail(WA_ERR_INVALID);
+        return;
+    }
+    const auto data = call.buffer<uint8_t>(size);
+    if (call.ok() && call.copy_in(call.word(3), data.get(), size))
+        glBufferSubData(call.word(0), offset, size, data.get());
+}
+
 const void* buffer_offset(GuestCall& call, uint64_t value) {
     if (value > UINTPTR_MAX) {
         call.fail(WA_ERR_OVERFLOW);
@@ -366,7 +406,16 @@ void vertex_attrib_pointer(GuestCall& call) {
     }
 }
 
-void draw_elements(GuestCall& call) {
+void vertex_attrib_integer_pointer(GuestCall& call) {
+    const auto* offset = buffer_offset(call, call.word(4));
+    if (!call.ok()) return;
+    GLint buffer = 0;
+    glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &buffer);
+    if (buffer) glVertexAttribIPointer(call.word(0), call.i32(1), call.word(2), call.i32(3), offset);
+    else call.fail(WA_ERR_NOTSUP);
+}
+
+template<bool Instanced> void draw_elements(GuestCall& call) {
     const auto* offset = buffer_offset(call, call.word(3));
     if (!call.ok()) {
         return;
@@ -374,7 +423,11 @@ void draw_elements(GuestCall& call) {
     GLint buffer = 0;
     glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &buffer);
     if (buffer) {
-        glDrawElements(call.word(0), call.i32(1), call.word(2), offset);
+        if constexpr (Instanced) {
+            glDrawElementsInstanced(call.word(0), call.i32(1), call.word(2), offset, call.i32(4));
+        } else {
+            glDrawElements(call.word(0), call.i32(1), call.word(2), offset);
+        }
     } else {
         call.fail(WA_ERR_NOTSUP);
     }
@@ -385,6 +438,12 @@ template<auto Find> void get_location(GuestCall& call) {
     if (call.string(call.word(1), name, shader_string_limit)) {
         call.result(Find(call.word(0), name.c_str()));
     }
+}
+
+void bind_attrib_location(GuestCall& call) {
+    std::string name;
+    if (call.string(call.word(2), name, shader_string_limit))
+        glBindAttribLocation(call.word(0), call.word(1), name.c_str());
 }
 
 template <size_t Width, auto Uniform> void uniform_matrix(GuestCall& call) {
@@ -403,26 +462,43 @@ template <size_t Width, auto Uniform> void uniform_matrix(GuestCall& call) {
     }
 }
 
-void uniform_vector(GuestCall& call) {
+template <typename T, size_t Width, auto Uniform> void uniform_vector(GuestCall& call) {
     const auto location = call.i32(0), count = call.i32(1);
     const auto address = call.word(2);
-    if (count < 0 || static_cast<size_t>(count) > SIZE_MAX / (4 * sizeof(GLfloat))) {
+    if (count < 0 || static_cast<size_t>(count) > SIZE_MAX / (Width * sizeof(T))) {
         call.fail(count < 0 ? WA_ERR_INVALID : WA_ERR_OVERFLOW);
         return;
     }
-    const size_t elements = size_t(count) * 4;
-    const auto values = call.buffer<GLfloat>(elements);
-    if (call.ok() && call.copy_in(address, values.get(), elements * sizeof(GLfloat)))
-        glUniform4fv(location, count, values.get());
+    const size_t elements = size_t(count) * Width;
+    const auto values = call.buffer<T>(elements);
+    if (call.ok() && call.copy_in(address, values.get(), elements * sizeof(T)))
+        Uniform(location, count, values.get());
 }
 
-void gl_get_string(GuestCall& call) {
-    const auto* value = glGetString(call.word(0));
+template <size_t Width, auto Attrib> void vertex_attrib_vector(GuestCall& call) {
+    std::array<GLfloat, Width> values;
+    if (call.copy_in(call.word(1), values.data(), sizeof(values))) Attrib(call.word(0), values.data());
+}
+
+template <typename T, auto Set> void tex_parameter_vector(GuestCall& call) {
+    const auto name = static_cast<GLenum>(call.word(1));
+    const size_t count = name == 0x1004 || name == 0x8b9d ? 4 : 1; // Border color and crop rectangle.
+    std::array<T, 4> values{};
+    if (call.copy_in(call.word(2), values.data(), count * sizeof(T))) Set(call.word(0), name, values.data());
+}
+
+template<bool Indexed> void gl_get_string(GuestCall& call) {
+    const auto* value = Indexed ? glGetStringi(call.word(0), call.word(1)) : glGetString(call.word(0));
     if (value) call.result(wa::dbt::InternString(*call.context().dbt,
                                                  reinterpret_cast<const char*>(value)));
 }
 
-void gl_get_integer(GuestCall& call) {
+void gl_get_error(GuestCall& call) {
+    auto& error = call.context().dbt->running->gl_error;
+    call.result(error ? std::exchange(error, 0) : glGetError());
+}
+
+template <typename T, auto Get> void gl_get_state(GuestCall& call) {
     const auto name = static_cast<GLenum>(call.word(0));
     GLint count = 1;
     switch (name) {
@@ -441,11 +517,19 @@ void gl_get_integer(GuestCall& call) {
         break;
     }
     if (count <= 0 || count > 4096) return;
-    const auto values = call.buffer<GLint>(count);
+    const auto values = call.buffer<T>(count);
     if (!call.ok()) return;
     std::fill_n(values.get(), count, 0);
-    glGetIntegerv(name, values.get());
-    call.copy_out(call.word(1), values.get(), count * sizeof(GLint));
+    Get(name, values.get());
+    call.copy_out(call.word(1), values.get(), count * sizeof(T));
+}
+
+template <typename T, auto Get> void get_texture_parameter(GuestCall& call) {
+    const auto name = static_cast<GLenum>(call.word(1));
+    const size_t count = name == 0x1004 || name == 0x8b9d ? 4 : 1;
+    std::array<T, 4> values{};
+    Get(call.word(0), name, values.data());
+    call.copy_out(call.word(2), values.data(), count * sizeof(T));
 }
 
 size_t pixel_size(GLenum format, GLenum type) {
@@ -593,6 +677,28 @@ void tex_sub_image(GuestCall& call) {
         glTexSubImage2D(target, level, x, y, width, height, format, type, pixels.get());
 }
 
+template <bool SubImage> void compressed_tex_image(GuestCall& call) {
+    constexpr size_t size_index = SubImage ? 7 : 6;
+    const auto size = call.i32(size_index);
+    const auto address = call.word(size_index + 1);
+    if (size < 0) {
+        call.fail(WA_ERR_INVALID);
+        return;
+    }
+    GLint unpack_buffer = 0;
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buffer);
+    const auto data = call.buffer<uint8_t>(unpack_buffer ? 0 : size);
+    const void* pixels = unpack_buffer ? buffer_offset(call, address) : data.get();
+    if (!call.ok() || (!unpack_buffer && !call.copy_in(address, data.get(), size))) return;
+    if constexpr (SubImage) {
+        glCompressedTexSubImage2D(call.word(0), call.i32(1), call.i32(2), call.i32(3),
+                                  call.i32(4), call.i32(5), call.word(6), size, pixels);
+    } else {
+        glCompressedTexImage2D(call.word(0), call.i32(1), call.word(2), call.i32(3),
+                               call.i32(4), call.i32(5), size, pixels);
+    }
+}
+
 void read_pixels(GuestCall& call) {
     const GLint x = call.i32(0);
     const GLint y = call.i32(1);
@@ -665,26 +771,50 @@ struct Binding {
 constexpr Binding gl_bindings[] = {
     GL_SCALAR(glViewport),
     GL_SCALAR(glClearColor),
+    GL_SCALAR(glClearStencil),
     GL_SCALAR(glClear),
+    GL_SCALAR(glBlendColor),
+    GL_SCALAR(glBlendEquation),
     GL_SCALAR(glBlendFunc),
+    GL_SCALAR(glColorMask),
     GL_SCALAR(glDepthMask),
+    GL_SCALAR(glStencilFunc),
+    GL_SCALAR(glStencilFuncSeparate),
+    GL_SCALAR(glStencilMask),
+    GL_SCALAR(glStencilMaskSeparate),
+    GL_SCALAR(glStencilOp),
+    GL_SCALAR(glStencilOpSeparate),
     GL_SCALAR(glFlush),
     GL_SCALAR(glFinish),
-    GL_COPY(glGetString, gl_get_string),
-    GL_COPY(glGetIntegerv, gl_get_integer),
+    GL_COPY(glGetString, gl_get_string<false>),
+    GL_COPY(glGetStringi, gl_get_string<true>),
+    GL_COPY(glGetIntegerv, gl_get_state<GLint, glGetIntegerv>),
+    GL_COPY(glGetFloatv, gl_get_state<GLfloat, glGetFloatv>),
+    GL_COPY(glGetBooleanv, gl_get_state<GLboolean, glGetBooleanv>),
     GL_SCALAR(glEnable),
     GL_SCALAR(glDisable),
     GL_SCALAR(glDepthFunc),
+    GL_SCALAR(glDepthRangef),
     GL_SCALAR(glCullFace),
+    GL_SCALAR(glFrontFace),
+    GL_SCALAR(glLineWidth),
+    GL_SCALAR(glPolygonOffset),
+    GL_SCALAR(glSampleCoverage),
+    GL_SCALAR(glHint),
+    GL_SCALAR(glScissor),
     GL_SCALAR(glCreateShader),
     GL_COPY(glShaderSource, shader_source),
     GL_SCALAR(glCompileShader),
     GL_COPY(glGetShaderiv, query_object<glGetShaderiv>),
     GL_COPY(glGetShaderInfoLog, info_log<glGetShaderInfoLog>),
+    GL_COPY(glGetShaderPrecisionFormat, shader_precision),
     GL_SCALAR(glDeleteShader),
     GL_SCALAR(glCreateProgram),
     GL_SCALAR(glAttachShader),
+    GL_SCALAR(glDetachShader),
+    GL_COPY(glBindAttribLocation, bind_attrib_location),
     GL_SCALAR(glLinkProgram),
+    GL_SCALAR(glValidateProgram),
     GL_COPY(glGetProgramiv, query_object<glGetProgramiv>),
     GL_COPY(glGetProgramInfoLog, info_log<glGetProgramInfoLog>),
     GL_SCALAR(glUseProgram),
@@ -692,36 +822,96 @@ constexpr Binding gl_bindings[] = {
     GL_COPY(glGenBuffers, gen_objects<glGenBuffers>),
     GL_SCALAR(glBindBuffer),
     GL_COPY(glBufferData, buffer_data),
+    GL_COPY(glBufferSubData, buffer_sub_data),
+    GL_COPY(glGetBufferParameteriv, query_object<glGetBufferParameteriv>),
     GL_COPY(glDeleteBuffers, delete_objects<glDeleteBuffers>),
+    GL_COPY(glGenFramebuffers, gen_objects<glGenFramebuffers>),
+    GL_COPY(glDeleteFramebuffers, delete_objects<glDeleteFramebuffers>),
+    GL_SCALAR(glBindFramebuffer),
+    GL_SCALAR(glCheckFramebufferStatus),
+    GL_SCALAR(glFramebufferTexture2D),
+    GL_SCALAR(glFramebufferRenderbuffer),
+    GL_COPY(glGetFramebufferAttachmentParameteriv, framebuffer_attachment),
+    GL_COPY(glGenRenderbuffers, gen_objects<glGenRenderbuffers>),
+    GL_COPY(glDeleteRenderbuffers, delete_objects<glDeleteRenderbuffers>),
+    GL_SCALAR(glBindRenderbuffer),
+    GL_SCALAR(glRenderbufferStorage),
+    GL_COPY(glGetRenderbufferParameteriv, query_object<glGetRenderbufferParameteriv>),
     GL_COPY(glGenVertexArrays, gen_objects<glGenVertexArrays>),
     GL_SCALAR(glBindVertexArray),
     GL_COPY(glDeleteVertexArrays, delete_objects<glDeleteVertexArrays>),
     GL_SCALAR(glEnableVertexAttribArray),
+    GL_SCALAR(glDisableVertexAttribArray),
+    GL_SCALAR(glVertexAttrib1f),
+    GL_SCALAR(glVertexAttrib2f),
+    GL_SCALAR(glVertexAttrib3f),
+    GL_SCALAR(glVertexAttrib4f),
+    GL_COPY(glVertexAttrib2fv, vertex_attrib_vector<2, glVertexAttrib2fv>),
+    GL_COPY(glVertexAttrib3fv, vertex_attrib_vector<3, glVertexAttrib3fv>),
+    GL_COPY(glVertexAttrib4fv, vertex_attrib_vector<4, glVertexAttrib4fv>),
     GL_COPY(glVertexAttribPointer, vertex_attrib_pointer),
     GL_COPY(glGetUniformLocation, get_location<glGetUniformLocation>),
     GL_COPY(glGetAttribLocation, get_location<glGetAttribLocation>),
     GL_COPY(glUniformMatrix2fv, uniform_matrix<4, glUniformMatrix2fv>),
     GL_COPY(glUniformMatrix3fv, uniform_matrix<9, glUniformMatrix3fv>),
     GL_COPY(glUniformMatrix4fv, uniform_matrix<16, glUniformMatrix4fv>),
-    GL_COPY(glUniform4fv, uniform_vector),
+    GL_COPY(glUniform1fv, uniform_vector<GLfloat, 1, glUniform1fv>),
+    GL_COPY(glUniform2fv, uniform_vector<GLfloat, 2, glUniform2fv>),
+    GL_COPY(glUniform3fv, uniform_vector<GLfloat, 3, glUniform3fv>),
+    GL_COPY(glUniform4fv, uniform_vector<GLfloat, 4, glUniform4fv>),
+    GL_COPY(glUniform1iv, uniform_vector<GLint, 1, glUniform1iv>),
+    GL_COPY(glUniform2iv, uniform_vector<GLint, 2, glUniform2iv>),
+    GL_COPY(glUniform3iv, uniform_vector<GLint, 3, glUniform3iv>),
+    GL_COPY(glUniform4iv, uniform_vector<GLint, 4, glUniform4iv>),
     GL_SCALAR(glUniform1f),
     GL_SCALAR(glUniform1i),
     GL_SCALAR(glUniform2f),
+    GL_SCALAR(glUniform2i),
     GL_SCALAR(glUniform3f),
+    GL_SCALAR(glUniform3i),
     GL_SCALAR(glUniform4f),
+    GL_SCALAR(glUniform4i),
     GL_SCALAR(glDrawArrays),
-    GL_COPY(glDrawElements, draw_elements),
+    GL_COPY(glDrawElements, draw_elements<false>),
+    GL_COPY(glDrawElementsInstanced, draw_elements<true>),
     GL_COPY(glGenTextures, gen_objects<glGenTextures>),
     GL_SCALAR(glBindTexture),
     GL_COPY(glTexImage2D, tex_image),
     GL_COPY(glTexSubImage2D, tex_sub_image),
+    GL_COPY(glCompressedTexImage2D, compressed_tex_image<false>),
+    GL_COPY(glCompressedTexSubImage2D, compressed_tex_image<true>),
+    GL_SCALAR(glCopyTexImage2D),
+    GL_SCALAR(glCopyTexSubImage2D),
     GL_SCALAR(glTexParameterf),
     GL_SCALAR(glTexParameteri),
+    GL_COPY(glTexParameterfv, tex_parameter_vector<GLfloat, glTexParameterfv>),
+    GL_COPY(glTexParameteriv, tex_parameter_vector<GLint, glTexParameteriv>),
+    GL_COPY(glGetTexParameterfv, get_texture_parameter<GLfloat, glGetTexParameterfv>),
+    GL_COPY(glGetTexParameteriv, get_texture_parameter<GLint, glGetTexParameteriv>),
+    GL_SCALAR(glGenerateMipmap),
+    GL_SCALAR(glIsTexture),
     GL_SCALAR(glActiveTexture),
     GL_SCALAR(glPixelStorei),
     GL_COPY(glReadPixels, read_pixels),
     GL_COPY(glDeleteTextures, delete_objects<glDeleteTextures>),
-    GL_SCALAR(glGetError),
+    GL_COPY(glGetError, gl_get_error),
+    GL_SCALAR(glBindBufferBase),
+    GL_SCALAR(glBlendEquationSeparate),
+    GL_SCALAR(glBlendFuncSeparate),
+    GL_SCALAR(glBlitFramebuffer),
+    GL_SCALAR(glClearDepthf),
+    GL_SCALAR(glIsBuffer),
+    GL_SCALAR(glIsEnabled),
+    GL_SCALAR(glIsFramebuffer),
+    GL_SCALAR(glIsProgram),
+    GL_SCALAR(glIsRenderbuffer),
+    GL_SCALAR(glIsShader),
+    GL_SCALAR(glIsVertexArray),
+    GL_SCALAR(glRenderbufferStorageMultisample),
+    GL_SCALAR(glUniformBlockBinding),
+    GL_SCALAR(glVertexAttribDivisor),
+    GL_COPY(glGetUniformBlockIndex, get_location<glGetUniformBlockIndex>),
+    GL_COPY(glVertexAttribIPointer, vertex_attrib_integer_pointer),
 };
 
 #undef GL_SCALAR
@@ -732,6 +922,9 @@ constexpr Binding egl_bindings[] = {
     {"eglGetProcAddress", invoke<egl_get_proc_address>},
     {"eglQueryString", invoke<egl_query_string>},
     {"eglGetDisplay", invoke<Scalars<egl::get_display>::run>},
+    {"eglGetCurrentDisplay", invoke<Scalars<egl::get_current_display>::run>},
+    {"eglGetCurrentContext", invoke<Scalars<egl::get_current_context>::run>},
+    {"eglGetCurrentSurface", invoke<Scalars<egl::get_current_surface>::run>},
     {"eglInitialize", invoke<egl_initialize>},
     {"eglChooseConfig", invoke<egl_choose_config>},
     {"eglCreateWindowSurface", invoke<egl_create_window_surface>},
@@ -740,6 +933,10 @@ constexpr Binding egl_bindings[] = {
     {"eglMakeCurrent", invoke<Scalars<egl::make_current>::run>},
     {"eglSwapBuffers", invoke<Scalars<egl::swap_buffers>::run>},
     {"eglQuerySurface", invoke<egl_query_surface>},
+    {"eglQueryContext", invoke<egl_query_context>},
+    {"eglReleaseThread", invoke<Scalars<egl::release_thread>::run>},
+    {"eglCreateImageKHR", invoke<egl_unsupported_image>},
+    {"eglDestroyImageKHR", invoke<egl_unsupported_image>},
     {"eglDestroyContext", invoke<Scalars<egl::destroy_context>::run>},
     {"eglDestroySurface", invoke<Scalars<egl::destroy_surface>::run>},
     {"eglTerminate", invoke<Scalars<egl::terminate>::run>},
@@ -754,12 +951,18 @@ constexpr Binding log_bindings[] = {
 constexpr Binding audio_bindings[] = {{"wa_ndk_audio_push_stereo_f32", invoke<audio_push>}};
 
 #if defined(__EMSCRIPTEN__) || defined(WA_HAL_NATIVE_GLES3)
-int32_t gles2(wa_host_call_ctx_t* context, void* user) {
+int32_t call_current_gl_context(wa_host_call_ctx_t* context, void* user) {
     const auto& binding = *static_cast<const Binding*>(user);
     if (wa::gfx::has_current_surface()) return binding.function(context, nullptr);
     const std::string_view name(binding.name);
-    if (name == "glGetError") context->ret0 = 0x0502;
-    else if (name == "glGetUniformLocation" || name == "glGetAttribLocation") context->ret0 = UINT32_MAX;
+    auto& error = context->dbt->running->gl_error;
+    if (name == "glGetError") {
+        context->ret0 = std::exchange(error, 0);
+    } else {
+        error = 0x0502;
+        if (name == "glGetUniformLocation" || name == "glGetAttribLocation" || name == "glGetUniformBlockIndex")
+            context->ret0 = UINT32_MAX;
+    }
     return WA_OK;
 }
 #endif
@@ -772,10 +975,12 @@ int32_t wa_hal_register_graphics_symbols(wa_dbt_t* dbt) {
         if (status != WA_OK) return status;
     }
 #if defined(__EMSCRIPTEN__) || defined(WA_HAL_NATIVE_GLES3)
-    for (const auto& binding : gl_bindings) {
-        const auto status = wa_dbt_register_symbol(dbt, "libGLESv2.so", binding.name, gles2,
-                                                   const_cast<Binding*>(&binding));
-        if (status != WA_OK) return status;
+    for (const auto* library : {"libGLESv2.so", "libGLESv3.so"}) {
+        for (const auto& binding : gl_bindings) {
+            const auto status = wa_dbt_register_symbol(dbt, library, binding.name, call_current_gl_context,
+                                                       const_cast<Binding*>(&binding));
+            if (status != WA_OK) return status;
+        }
     }
 #endif
     return WA_OK;

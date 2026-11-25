@@ -17,6 +17,7 @@ class JniBridge {
   ~JniBridge();
   void RegisterResources();
   Value Invoke(Method& method, Object* receiver, std::span<const Value> args);
+  Value InvokePlatform(Method& method, Object* receiver, std::span<const Value> args);
   void VisitRoots(const std::function<void(Object*)>& mark) const;
   void RetainNativePeer(jobject peer, std::shared_ptr<void> allocation);
   void SweepNativePeers();

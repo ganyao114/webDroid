@@ -17,6 +17,7 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
+#include <emscripten/heap.h>
 #endif
 
 #include "interpreter/safe_math.h"
@@ -81,6 +82,19 @@ void InstallMath(ClassLinker& cl, std::string_view descriptor) {
   Class& math = cl.Define(descriptor, kObject, art::kAccFinal);
   cl.AddField(math, "E", "D", true, Value::Double(std::numbers::e));
   cl.AddField(math, "PI", "D", true, Value::Double(std::numbers::pi));
+  auto& random = cl.AddField(math, "randomNumberGenerator", "Ljava/util/Random;", true);
+  random.flags |= art::kAccPrivate;
+  cl.AddMethod(math, "random", "()D", art::kAccStatic, [&random](Runtime& vm, Object*, Values) {
+    if (!random.value.ref()) {
+      RootScope roots(vm);
+      auto& type = vm.linker.Resolve("Ljava/util/Random;");
+      vm.linker.Initialize(type);
+      auto* instance = roots.Hold(vm.heap.Allocate(vm, type));
+      vm.Invoke(vm.linker.FindMethod(type, "<init>", "()V", false), instance, {});
+      random.value = Value::Ref(instance);
+    }
+    return CallVirtual(vm, random.value.ref(), "nextDouble", "()D");
+  });
   cl.AddMethod(math, "abs", "(I)I", art::kAccStatic, [](Runtime&, Object*, Values a) {
     return Value::Int(a[0].i() < 0 ? art::interpreter::SafeSub(0, a[0].i()) : a[0].i());
   });
@@ -334,6 +348,31 @@ void InstallSystem(Runtime& vm) {
       });
   cl.AddMethod(runtime, "availableProcessors", "()I", 0,
       [](Runtime&, Object*, Values) { return Value::Int(1); });
+  cl.AddMethod(runtime, "totalMemory", "()J", 0, [](Runtime& vm, Object*, Values) {
+    return Value::Long(vm.heap.ObjectCapacity() * sizeof(Object));
+  });
+  cl.AddMethod(runtime, "freeMemory", "()J", 0, [](Runtime& vm, Object*, Values) {
+    return Value::Long((vm.heap.ObjectCapacity() - vm.heap.Stats().live) * sizeof(Object));
+  });
+  cl.AddMethod(runtime, "maxMemory", "()J", 0, [](Runtime&, Object*, Values) {
+#ifdef __EMSCRIPTEN__
+    return Value::Long(emscripten_get_heap_max());
+#else
+    return Value::Long(INT64_MAX);
+#endif
+  });
+  const auto native_heap = [](const Runtime& vm) {
+    return vm.guest_native ? vm.guest_native->HeapStats() : GuestNativeHeapStats{};
+  };
+  cl.AddBootNative("Landroid/os/Debug;", "getNativeHeapSize", "()J",
+      [native_heap](Runtime& vm, Object*, Values) { return Value::Long(native_heap(vm).reserved); });
+  cl.AddBootNative("Landroid/os/Debug;", "getNativeHeapAllocatedSize", "()J",
+      [native_heap](Runtime& vm, Object*, Values) { return Value::Long(native_heap(vm).allocated); });
+  cl.AddBootNative("Landroid/os/Debug;", "getNativeHeapFreeSize", "()J",
+      [native_heap](Runtime& vm, Object*, Values) {
+        const auto stats = native_heap(vm);
+        return Value::Long(stats.reserved - stats.allocated);
+      });
   const Builtin check_shutdown_hook = [&shutting_down](Runtime& vm, Object* self, Values a) {
     vm.NonNull(a[0].ref());
     if (self->fields[shutting_down.slot].i()) vm.Fail("Ljava/lang/IllegalStateException;", "VM already shutting down");
@@ -396,9 +435,14 @@ void InstallSystem(Runtime& vm) {
 
   Class& charset = cl.Define("Ljava/nio/charset/Charset;", kObject, art::kAccAbstract);
   Class& standard = cl.Define("Ljava/nio/charset/StandardCharsets;", kObject, art::kAccFinal);
-  static constexpr std::array fields{"UTF_8", "US_ASCII", "ISO_8859_1", "UTF_16", "UTF_16LE", "UTF_16BE"};
-  static constexpr std::array names{u"UTF-8", u"US-ASCII", u"ISO-8859-1", u"UTF-16", u"UTF-16LE", u"UTF-16BE"};
-  for (auto field : fields) cl.AddField(standard, field, charset.descriptor, true);
+  static constexpr std::array fields{"UTF_8", "US_ASCII", "ISO_8859_1", "UTF_16", "UTF_16LE", "UTF_16BE",
+                                     "utf32", "utf32Le", "utf32Be"};
+  static constexpr std::array names{u"UTF-8", u"US-ASCII", u"ISO-8859-1", u"UTF-16", u"UTF-16LE", u"UTF-16BE",
+                                    u"UTF-32", u"UTF-32LE", u"UTF-32BE"};
+  for (size_t i = 0; i < fields.size(); ++i) {
+    auto& field = cl.AddField(standard, fields[i], charset.descriptor, true);
+    if (i >= static_cast<size_t>(Encoding::Utf32)) field.flags |= art::kAccPrivate;
+  }
   cl.AddMethod(standard, "<clinit>", "()V", art::kAccStatic,
       [&charset, &standard](Runtime& vm, Object*, Values) {
         vm.linker.Resolve(charset.descriptor);
@@ -435,7 +479,7 @@ void InstallSystem(Runtime& vm) {
       [](Runtime& vm, Object*, Values a) {
         const auto& array = vm.NonNull(a[0].ref());
         if (!array.type->component) vm.Fail("Ljava/lang/IllegalArgumentException;");
-        return Value::Int(static_cast<int32_t>(array.elements.size()));
+        return Value::Int(static_cast<int32_t>(vm.ArrayLength(array)));
       });
   const Builtin array_instance = [](Runtime& vm, Object*, Values a) {
     const Class& component = *vm.NonNull(a[0].ref()).represented_class;
@@ -479,6 +523,7 @@ const Field& InstallThread(Runtime& vm) {
   auto& name = cl.AddField(thread, "name", kString, false);
   auto& id = cl.AddField(thread, "tid", "J", false);
   auto& priority = cl.AddField(thread, "priority", "I", false);
+  cl.AddField(thread, "niceness", "I", false);
   auto& daemon = cl.AddField(thread, "daemon", "Z", false);
   auto& interrupted = cl.AddField(thread, "interrupted", "Z", false);
   auto& park_permit = cl.AddField(thread, "parkPermit", "Z", false);
@@ -547,6 +592,10 @@ const Field& InstallThread(Runtime& vm) {
       });
   cl.AddMethod(context, "suspendMainLooper", "()V", art::kAccStatic,
       [](Runtime& vm, Object*, Values) -> Value { vm.SuspendMainLooper(); });
+  cl.AddMethod(context, "runReadyThreads", "()V", art::kAccStatic,
+      [](Runtime& vm, Object*, Values) { vm.RunReadyThreads(); return Value{}; });
+  cl.AddMethod(context, "yieldWorker", "()V", art::kAccStatic,
+      [](Runtime& vm, Object*, Values) -> Value { vm.SuspendWorker(0, false); });
   cl.AddMethod(context, "postAtTime", "(Ljava/lang/Runnable;J)Z", art::kAccStatic,
       [&scheduler](Runtime& vm, Object*, Values args) {
         if (!scheduler.value.ref()) {
@@ -702,6 +751,24 @@ const Field& InstallThread(Runtime& vm) {
       [&main, &current](Runtime& vm, Object* self, Values) {
         return Value::Int(self == main.value.ref() || self == current.value.ref() || vm.HasThread(self));
       });
+  cl.AddMethod(thread, "getStackTrace", "()[Ljava/lang/StackTraceElement;", art::kAccPublic,
+      [&main, &current](Runtime& vm, Object* self, Values) {
+        std::vector<Object::TraceFrame> frames;
+        if (self == current.value.ref() || self == main.value.ref()) {
+          const auto* boundary = vm.worker_dispatch ? vm.worker_dispatch->boundary : nullptr;
+          const bool active = self == current.value.ref();
+          const auto* end = active ? boundary : nullptr;
+          for (auto* frame = active ? vm.active_trace : boundary; frame && frame != end; frame = frame->caller) {
+            frames.push_back({frame->method, *frame->dex_pc});
+          }
+        } else if (const auto worker = std::ranges::find(vm.workers, self, &Runtime::Worker::thread);
+                   worker != vm.workers.end()) {
+          for (auto frame = worker->frames.rbegin(); frame != worker->frames.rend(); ++frame) {
+            frames.push_back({frame->method, frame->dex_pc});
+          }
+        }
+        return StackTraceArray(vm, frames);
+      });
   cl.AddMethod(thread, "run", "()V", 0, [&target](Runtime& vm, Object* self, Values) {
     if (auto* runnable = self->fields[target.slot].ref()) CallVirtual(vm, runnable, "run", "()V");
     return Value{};
@@ -791,6 +858,11 @@ void InstallRandom(ClassLinker& cl) {
   });
   cl.AddMethod(random, "nextFloat", "()F", 0,
       [bits](Runtime& vm, Object* self, Values) { return Value::Float(bits(vm, self, 24) / 16777216.f); });
+  cl.AddMethod(random, "nextDouble", "()D", 0, [bits](Runtime& vm, Object* self, Values) {
+    const auto high = static_cast<uint64_t>(bits(vm, self, 26));
+    const auto low = static_cast<uint64_t>(bits(vm, self, 27));
+    return Value::Double(((high << 27) | low) * 0x1p-53);
+  });
   cl.AddMethod(random, "nextLong", "()J", 0, [bits](Runtime& vm, Object* self, Values) {
     const uint64_t high = static_cast<uint32_t>(bits(vm, self, 32));
     const int64_t low = bits(vm, self, 32);
@@ -1198,12 +1270,14 @@ void InstallAndroid(Runtime& vm) {
 
 void InstallPlatform(Runtime& vm) {
   InstallSystem(vm);
+  InstallVmRuntime(vm);
   const auto& current = InstallThread(vm);
   InstallRandom(vm.linker);
   InstallThreadLocal(vm.linker, current);
   InstallAtomicUpdaters(vm.linker);
   InstallManagedUnsafe(vm.linker);
   InstallFiles(vm);
+  InstallDeflater(vm);
   software_raster::Install(vm.linker);
   InstallAndroid(vm);
 }

@@ -37,7 +37,7 @@ foreach(abi arm64-v8a armeabi-v7a)
         VERBATIM)
     add_custom_command(OUTPUT "${jni}"
         COMMAND "${clang}" ${ndk_flags} -Wl,-soname,libhybrid_jni.so
-            "${fixture}/hybrid_jni.c" "-L${directory}" -lhybrid_math -llog -ldl -o "${jni}"
+            "${fixture}/hybrid_jni.c" "-L${directory}" -lhybrid_math -llog -ldl -ljnigraphics -landroid -o "${jni}"
         DEPENDS "${clang}" "${math}" "${fixture}/hybrid_jni.c" "${fixture}/hybrid_math.h"
         VERBATIM)
     set(libraries_${abi} "lib/${abi}/libhybrid_math.so" "lib/${abi}/libhybrid_jni.so")
@@ -71,8 +71,10 @@ set(manifest_apk "${CMAKE_CURRENT_BINARY_DIR}/manifest.apk")
 add_custom_command(OUTPUT "${manifest_apk}"
     COMMAND "${WA_AAPT2_EXECUTABLE}" link -I "${WA_ANDROID_JAR}"
         --manifest "${fixture}/AndroidManifest.xml" --min-sdk-version 24 --target-sdk-version 36
+        -A "${fixture}/assets"
         -o "${manifest_apk}"
-    DEPENDS "${fixture}/AndroidManifest.xml" "${WA_AAPT2_EXECUTABLE}" "${WA_ANDROID_JAR}"
+    DEPENDS "${fixture}/AndroidManifest.xml" "${fixture}/assets/native-probe.txt"
+        "${WA_AAPT2_EXECUTABLE}" "${WA_ANDROID_JAR}"
     VERBATIM)
 
 set(signing "${PROJECT_SOURCE_DIR}/tools/aosp/launcher3_build/signing")

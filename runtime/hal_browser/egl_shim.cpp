@@ -53,6 +53,7 @@ struct State {
     bool has_surface = false;
     bool has_context = false;
     bool current = false;
+    int32_t context_version = 0;
 };
 
 State& state() {
@@ -91,6 +92,10 @@ bool valid_context(Handle context) {
 bool fail(int32_t error) {
     state().error = error;
     return false;
+}
+
+void unsupported_image(Handle display) {
+    if (valid_display(display)) fail(bad_parameter);
 }
 
 const char* query_string(Handle display, int32_t name) {
@@ -265,6 +270,7 @@ Handle create_context(Handle display, Handle config, Handle share, Attributes at
         return fail(bad_match);
     }
     state().has_context = true;
+    state().context_version = major;
     return context_id;
 }
 
@@ -282,6 +288,18 @@ bool make_current(Handle display, Handle draw, Handle read, Handle context) {
     }
     state().current = context != 0;
     return true;
+}
+
+Handle get_current_display() { return state().current ? display_id : 0; }
+
+Handle get_current_context() { return state().current ? context_id : 0; }
+
+Handle get_current_surface(int32_t which) {
+    if (which != 0x3059 && which != 0x305a) { // EGL_DRAW and EGL_READ.
+        fail(bad_parameter);
+        return 0;
+    }
+    return state().current ? surface_id : 0;
 }
 
 bool swap_buffers(Handle display, Handle surface) {
@@ -309,6 +327,23 @@ bool query_surface(Handle display, Handle surface, int32_t attribute, int32_t& v
     default:
         return fail(bad_attribute);
     }
+}
+
+bool query_context(Handle display, Handle context, int32_t attribute, int32_t& value) {
+    if (!valid_display(display) || !valid_context(context)) return false;
+    switch (attribute) {
+    case config_id_attribute: value = config_id; return true;
+    case context_major_version: value = state().context_version; return true;
+    case 0x3097: value = 0x30a0; return true; // EGL_CONTEXT_CLIENT_TYPE: EGL_OPENGL_ES_API.
+    case 0x3086: value = state().current ? 0x3084 : none; return true; // EGL_RENDER_BUFFER.
+    default: return fail(bad_attribute);
+    }
+}
+
+bool release_thread() {
+    if (state().current && !make_current(display_id, 0, 0, 0)) return false;
+    state().error = success;
+    return true;
 }
 
 bool destroy_context(Handle display, Handle context) {

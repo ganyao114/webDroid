@@ -525,6 +525,20 @@ void GetAddrInfo(wa_host_call_ctx_t& ctx) {
     }
 }
 
+uint64_t HostErrnoAddress(wa_dbt& dbt, const GuestMemory& mem) {
+    auto& address = dbt.running->host_errno_address;
+    if (!address) {
+        address = AllocateGuest(dbt, sizeof(int32_t));
+        if (!address) throw GuestFault{WA_ERR_NOMEM};
+        mem.Write<int32_t>(address, 0);
+    }
+    return address;
+}
+
+void HostErrno(wa_host_call_ctx_t& ctx) {
+    ctx.ret0 = HostErrnoAddress(*ctx.dbt, GuestMemory(ctx));
+}
+
 void GetHostByName(wa_host_call_ctx_t& ctx) {
     auto& dbt = *ctx.dbt;
     const GuestMemory mem(ctx);
@@ -536,7 +550,17 @@ void GetHostByName(wa_host_call_ctx_t& ctx) {
     addrinfo* results = nullptr;
     const auto error = getaddrinfo(name.c_str(), nullptr, &hints, &results);
     if (error) {
-        if (error == EAI_SYSTEM) SetErrno(dbt, GuestErrno(errno));
+        int32_t host_error = 3; // NO_RECOVERY
+        if (error == EAI_AGAIN) host_error = 2;
+        if (error == EAI_NONAME) host_error = 1;
+#if defined(EAI_NODATA)
+        if (error == EAI_NODATA) host_error = 4;
+#endif
+        if (error == EAI_SYSTEM || error == EAI_MEMORY) {
+            SetErrno(dbt, GuestErrno(error == EAI_MEMORY ? ENOMEM : errno));
+            host_error = -1; // NETDB_INTERNAL
+        }
+        mem.Write<int32_t>(HostErrnoAddress(dbt, mem), host_error);
         return;
     }
     const std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> resolved(results, freeaddrinfo);
@@ -545,7 +569,10 @@ void GetHostByName(wa_host_call_ctx_t& ctx) {
         if (item->ai_family == AF_INET && item->ai_addrlen >= sizeof(sockaddr_in))
             addresses.push_back(reinterpret_cast<const sockaddr_in*>(item->ai_addr)->sin_addr);
     }
-    if (addresses.empty()) return;
+    if (addresses.empty()) {
+        mem.Write<int32_t>(HostErrnoAddress(dbt, mem), 4); // NO_DATA
+        return;
+    }
 
     const std::string_view canon = results->ai_canonname ? results->ai_canonname : name.c_str();
     const auto word = mem.width();
@@ -674,6 +701,14 @@ void InetAddr(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = inet_addr(text.c_str());
 }
 
+void InetAton(wa_host_call_ctx_t& ctx) {
+    const GuestMemory mem(ctx);
+    const auto text = mem.String(ctx.args[0]);
+    in_addr address{};
+    ctx.ret0 = inet_aton(text.c_str(), &address);
+    if (ctx.ret0 && ctx.args[1]) mem.Write<uint32_t>(ctx.args[1], address.s_addr);
+}
+
 void InetNtoa(wa_host_call_ctx_t& ctx) {
     in_addr address{.s_addr = static_cast<uint32_t>(ctx.args[0])};
     std::array<char, INET_ADDRSTRLEN> text;
@@ -714,6 +749,16 @@ void InterfaceIndex(wa_host_call_ctx_t& ctx) {
     if (!result)
         SetErrno(*ctx.dbt, GuestErrno(errno));
     ctx.ret0 = result;
+}
+
+void InterfaceName(wa_host_call_ctx_t& ctx) {
+    std::array<char, IF_NAMESIZE> name{};
+    if (!if_indextoname(ctx.args[0], name.data())) {
+        SetErrno(*ctx.dbt, GuestErrno(errno));
+        return;
+    }
+    GuestMemory(ctx).Write(ctx.args[1], name.data(), std::strlen(name.data()) + 1);
+    ctx.ret0 = ctx.args[1];
 }
 
 struct GuestMessage {
@@ -874,18 +919,22 @@ void RegisterNetwork(wa_dbt& dbt) {
         {"getsockopt", Dispatch<Options<false>>},
         {"getaddrinfo", Dispatch<GetAddrInfo>},
         {"gethostbyname", Dispatch<GetHostByName>},
+        {"__get_h_errno", Dispatch<HostErrno>},
         {"getifaddrs", Dispatch<GetInterfaces>},
         {"freeifaddrs", Dispatch<FreeInterfaces>},
         {"freeaddrinfo", Dispatch<FreeAddrInfo>},
         {"getnameinfo", Dispatch<GetNameInfo>},
         {"gai_strerror", Dispatch<GaiError>},
         {"inet_addr", Dispatch<InetAddr>},
+        {"inet_aton", Dispatch<InetAton>},
         {"inet_ntoa", Dispatch<InetNtoa>},
         {"inet_pton", Dispatch<Inet<true>>},
         {"inet_ntop", Dispatch<Inet<false>>},
         {"getservbyport", Dispatch<ServiceByPort>},
         {"if_nametoindex", Dispatch<InterfaceIndex>},
+        {"if_indextoname", Dispatch<InterfaceName>},
         {"sendmsg", Dispatch<Message<true>>},
+        {"sendmmsg", Dispatch<Message<true, true>>},
         {"recvmsg", Dispatch<Message<false>>},
         {"recvmmsg", Dispatch<Message<false, true>>},
         {"__cmsg_nxthdr", Dispatch<CmsgNext>},

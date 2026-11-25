@@ -6,6 +6,7 @@
 #include <climits>
 #include <exception>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <ftw.h>
 #include <poll.h>
 #include <sys/file.h>
@@ -17,6 +18,14 @@
 #include <unistd.h>
 #include <utility>
 
+#if !defined(__EMSCRIPTEN__)
+#include <fts.h>
+#endif
+
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include <sys/inotify.h>
+#endif
+
 #if defined(__APPLE__)
 #include <sys/mount.h>
 #else
@@ -25,13 +34,37 @@
 
 namespace wa::dbt {
 
-int OpenMountedFile(std::span<const uint8_t> bytes, int flags) {
+#if !defined(__EMSCRIPTEN__)
+struct GuestFileTree {
+    explicit GuestFileTree(wa_dbt& dbt) : handle(dbt, 1) {}
+    ~GuestFileTree() { if (host) fts_close(host); }
+
+    GuestBuffer handle;
+    FTS* host = nullptr;
+    FTSENT* current = nullptr;
+    uint64_t entry = 0;
+    int options = 0;
+    std::vector<std::string> roots;
+    std::vector<std::unique_ptr<GuestBuffer>> snapshot;
+};
+#endif
+
+std::optional<GuestMountedFile> FindMountedFile(const wa_dbt& dbt, std::string_view path) {
+    const auto& find = dbt.bionic->find_guest_file;
+    return find && path.starts_with('/') ? find(path) : std::nullopt;
+}
+
+int OpenMountedFile(const GuestMountedFile& file, int flags) {
     if ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC))) {
         errno = EROFS;
         return -1;
     }
     if (flags & O_DIRECTORY) {
-        errno = ENOTDIR;
+        errno = file.directory ? ENOTSUP : ENOTDIR;
+        return -1;
+    }
+    if (file.directory) {
+        errno = EISDIR;
         return -1;
     }
     // Give Bionic's descriptor operations a private, seekable snapshot of data
@@ -39,19 +72,36 @@ int OpenMountedFile(std::span<const uint8_t> bytes, int flags) {
     char path[] = "/tmp/wa-native-file-XXXXXX";
     const int backing = mkstemp(path);
     if (backing < 0) return -1;
-    while (!bytes.empty()) {
-        const auto count = write(backing, bytes.data(), bytes.size());
-        if (count < 0 && errno == EINTR) continue;
-        if (count <= 0) break;
-        bytes = bytes.subspan(count);
+    struct CloseBacking {
+        int fd;
+        const char* path;
+        ~CloseBacking() {
+            const int error = errno;
+            close(fd);
+            unlink(path);
+            errno = error;
+        }
+    } cleanup{backing, path};
+    std::array<uint8_t, 16 * 1024> bytes;
+    for (uint64_t offset = 0; offset < file.size;) {
+        const auto limit = std::min<uint64_t>(bytes.size(), file.size - offset);
+        const auto count = file.read(bytes.data(), limit, offset);
+        if (count <= 0 || static_cast<uint64_t>(count) > limit) {
+            errno = EIO;
+            return -1;
+        }
+        for (int64_t written = 0; written < count;) {
+            const auto result = write(backing, bytes.data() + written, count - written);
+            if (result < 0 && errno == EINTR) continue;
+            if (result <= 0) {
+                if (result == 0) errno = EIO;
+                return -1;
+            }
+            written += result;
+        }
+        offset += count;
     }
-    if (!bytes.empty()) errno = EIO;
-    const int fd = bytes.empty() ? open(path, flags) : -1;
-    const int error = errno;
-    close(backing);
-    unlink(path);
-    errno = error;
-    return fd;
+    return open(path, flags);
 }
 
 namespace {
@@ -73,20 +123,14 @@ std::string Path(const wa_host_call_ctx_t& ctx, uint64_t address, int directory 
     return path;
 }
 
-std::optional<std::span<const uint8_t>> MountedFile(const wa_host_call_ctx_t& ctx,
-                                                    std::string_view path) {
-    const auto& read = ctx.dbt->bionic->read_guest_file;
-    return read && path.starts_with('/') ? read(path) : std::nullopt;
-}
-
 bool StatMountedFile(const wa_host_call_ctx_t& ctx, std::string_view path, struct stat& result) {
-    const auto data = MountedFile(ctx, path);
+    const auto data = FindMountedFile(*ctx.dbt, path);
     if (!data) return false;
-    result.st_mode = S_IFREG | 0444;
+    result.st_mode = data->directory ? S_IFDIR | 0555 : S_IFREG | 0444;
     result.st_nlink = 1;
-    result.st_size = data->size();
+    result.st_size = data->size;
     result.st_blksize = WA_PAGE_SIZE;
-    result.st_blocks = (data->size() + 511) / 512;
+    result.st_blocks = (data->size + 511) / 512;
     return true;
 }
 
@@ -128,7 +172,7 @@ template <Open op> void OpenFile(wa_host_call_ctx_t& ctx) {
     const auto path = Path(ctx, ctx.args[at ? 1 : 0], fd);
     const auto mode = checked ? 0 : static_cast<mode_t>(ctx.args[at ? 3 : 2]);
     const auto host_flags = OpenFlags(flags);
-    const auto mounted = MountedFile(ctx, path);
+    const auto mounted = FindMountedFile(*ctx.dbt, path);
     const auto result = mounted ? OpenMountedFile(*mounted, host_flags) :
         openat(fd, path.c_str(), host_flags, mode);
     PosixResult(ctx, AdoptFd(*ctx.dbt, result));
@@ -141,7 +185,8 @@ bool TransferEvent(wa_host_call_ctx_t& ctx, int descriptor, uint64_t address, ui
     if (!event)
         return false;
     const GuestMemory mem(ctx);
-    if (count < sizeof(uint64_t)) {
+    const bool timer = event->timer_clock >= 0;
+    if (count < sizeof(uint64_t) || (timer && !read)) {
         Fail(ctx, EINVAL);
         return true;
     }
@@ -150,7 +195,9 @@ bool TransferEvent(wa_host_call_ctx_t& ctx, int descriptor, uint64_t address, ui
             Fail(ctx, EAGAIN);
             return false;
         }
-        if (const auto error = Park(dbt, kind, event->id)) {
+        const auto deadline = timer ? Clock::now() + std::chrono::milliseconds(2) : kNoDeadline;
+        if (const auto error = Park(dbt, kind, event->id, deadline);
+                error && !(timer && error == GuestErrno(ETIMEDOUT))) {
             SetErrno(dbt, error);
             ctx.ret0 = UINT64_MAX;
             return false;
@@ -158,9 +205,12 @@ bool TransferEvent(wa_host_call_ctx_t& ctx, int descriptor, uint64_t address, ui
         return true;
     };
     if (read) {
-        while (!event->count)
+        for (;;) {
+            if (timer) RefreshTimers(dbt);
+            if (event->count) break;
             if (!wait(WaitKind::EventRead))
                 return true;
+        }
         const auto value = event->semaphore ? 1 : event->count;
         mem.Write<uint64_t>(address, value);
         event->count -= value;
@@ -194,12 +244,11 @@ bool TransferEvent(wa_host_call_ctx_t& ctx, int descriptor, uint64_t address, ui
     return true;
 }
 
-enum class Io { Read, ReadChecked, Write, WriteChecked, Pread, Pwrite, Pread64, Pwrite64 };
-template <Io op> void Transfer(wa_host_call_ctx_t& ctx) {
-    constexpr bool read =
-        op == Io::Read || op == Io::ReadChecked || op == Io::Pread || op == Io::Pread64;
-    constexpr bool positioned =
-        op == Io::Pread || op == Io::Pread64 || op == Io::Pwrite || op == Io::Pwrite64;
+enum class Io { Read, Write, Pread, Pwrite, Pread64, Pwrite64 };
+template <Io op, bool Checked = false> void Transfer(wa_host_call_ctx_t& ctx) {
+    constexpr bool read = op == Io::Read || op == Io::Pread || op == Io::Pread64;
+    constexpr bool positioned = op != Io::Read && op != Io::Write;
+    constexpr bool wide = op == Io::Pread64 || op == Io::Pwrite64;
     const GuestMemory mem(ctx);
     CallReader args(ctx);
     const auto descriptor = static_cast<int>(args.Next());
@@ -207,8 +256,10 @@ template <Io op> void Transfer(wa_host_call_ctx_t& ctx) {
     if (fd < 0)
         return PosixResult(ctx, -1);
     const auto address = args.Next(), count = args.Next();
-    if constexpr (op == Io::ReadChecked || op == Io::WriteChecked)
-        if (count > args.Next())
+    const auto offset = positioned ? (wide ? static_cast<int64_t>(args.Next(ArgKind::Long))
+                                           : SignedWord(mem, args.Next())) : 0;
+    if constexpr (Checked)
+        if (count > args.Next() || count > (mem.width() == 8 ? INT64_MAX : INT32_MAX))
             throw GuestFault{WA_ERR_FAULT};
     if constexpr (!positioned)
         if (TransferEvent(ctx, descriptor, address, count, read))
@@ -219,9 +270,6 @@ template <Io op> void Transfer(wa_host_call_ctx_t& ctx) {
         mem.Read(address, bytes.data(), size);
     ssize_t result;
     if constexpr (positioned) {
-        const auto offset = op == Io::Pread64 || op == Io::Pwrite64
-                                ? static_cast<int64_t>(args.Next(ArgKind::Long))
-                                : SignedWord(mem, args.Next());
         if constexpr (read)
             result = pread(fd, bytes.data(), size, offset);
         else
@@ -324,6 +372,133 @@ void WriteStat(GuestMemory mem, uint64_t address, const struct stat& st) {
         mem.WriteWord(slot, times[i].tv_sec);
         mem.WriteWord(slot + mem.width(), times[i].tv_nsec);
     }
+}
+
+#if !defined(__EMSCRIPTEN__)
+uint64_t FileTreeEntry(wa_host_call_ctx_t& ctx, GuestFileTree& tree, const FTSENT& entry,
+                       std::map<const FTSENT*, uint64_t>& ancestors) {
+    const auto parent = entry.fts_parent && entry.fts_level >= 0
+        ? FileTreeEntry(ctx, tree, *entry.fts_parent, ancestors) : 0;
+    const GuestMemory mem(ctx);
+    const auto word = mem.width();
+    const auto numeric = 7 * word;
+    const auto inode = numeric + 8 + 2 * word;
+    const auto level = inode + 2 * word + 4;
+    const auto stat_ptr = AlignUp(level + 4 * sizeof(uint16_t), word);
+    const auto name = stat_ptr + word;
+    const auto path = name + entry.fts_namelen + 1;
+    const auto stat = AlignUp(path + entry.fts_pathlen + 1, 8);
+    auto buffer = std::make_unique<GuestBuffer>(*ctx.dbt, stat + 128);
+    const auto address = buffer->address;
+    tree.snapshot.push_back(std::move(buffer));
+    ancestors.emplace(&entry, address);
+    const auto cycle = entry.fts_info == FTS_DC ? ancestors.find(entry.fts_cycle) : ancestors.end();
+    mem.WriteWord(address, cycle == ancestors.end() ? 0 : cycle->second);
+    mem.WriteWord(address + word, parent);
+    mem.WriteWord(address + 3 * word, entry.fts_number);
+    mem.WriteWord(address + 4 * word, reinterpret_cast<uintptr_t>(entry.fts_pointer));
+    mem.WriteWord(address + 5 * word, address + path);
+    mem.WriteWord(address + 6 * word, address + path);
+    mem.Write<int32_t>(address + numeric, GuestErrno(entry.fts_errno));
+    mem.Write<int32_t>(address + numeric + 4, -1);
+    mem.WriteWord(address + numeric + 8, entry.fts_pathlen);
+    mem.WriteWord(address + numeric + 8 + word, entry.fts_namelen);
+    mem.WriteWord(address + inode, entry.fts_ino);
+    mem.WriteWord(address + inode + word, entry.fts_dev);
+    mem.Write<uint32_t>(address + inode + 2 * word, entry.fts_nlink);
+    mem.Write<int16_t>(address + level, entry.fts_level);
+    mem.Write<uint16_t>(address + level + 2, entry.fts_info);
+    mem.Write<uint16_t>(address + level + 4, entry.fts_flags);
+    mem.Write<uint16_t>(address + level + 6, entry.fts_instr);
+    mem.Write(address + name, entry.fts_name, entry.fts_namelen);
+    mem.Write<uint8_t>(address + name + entry.fts_namelen, 0);
+    mem.Write(address + path, entry.fts_path, entry.fts_pathlen);
+    mem.Write<uint8_t>(address + path + entry.fts_pathlen, 0);
+    if (entry.fts_level >= 0 && entry.fts_info != FTS_NS && entry.fts_statp && !(tree.options & FTS_NOSTAT)) {
+        WriteStat(mem, address + stat, *entry.fts_statp);
+        mem.WriteWord(address + stat_ptr, address + stat);
+    }
+    return address;
+}
+
+enum class Walk { Open, Read, Set, Close };
+template<Walk operation> void FileTree(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    auto& trees = dbt.bionic->file_trees;
+    const GuestMemory mem(ctx);
+    if constexpr (operation == Walk::Open) {
+        if (!ctx.args[0] || (ctx.args[1] & ~0x7fu) || ctx.args[2]) {
+            SetErrno(dbt, GuestErrno(ctx.args[2] ? ENOTSUP : EINVAL));
+            return;
+        }
+        auto tree = std::make_shared<GuestFileTree>(dbt);
+        tree->options = static_cast<int>(ctx.args[1]) | FTS_NOCHDIR;
+        for (auto slot = ctx.args[0];; slot += mem.width()) {
+            const auto path = mem.ReadWord(slot);
+            if (!path) break;
+            tree->roots.push_back(Path(ctx, path));
+        }
+        std::vector<char*> roots;
+        for (auto& path : tree->roots) roots.push_back(path.data());
+        roots.push_back(nullptr);
+        tree->host = fts_open(roots.data(), tree->options, nullptr);
+        if (!tree->host) {
+            SetErrno(dbt, GuestErrno(errno));
+            return;
+        }
+        const auto handle = tree->handle.address;
+        trees.emplace(handle, std::move(tree));
+        ctx.ret0 = handle;
+    } else {
+        const auto found = trees.find(ctx.args[0]);
+        if (found == trees.end()) {
+            SetErrno(dbt, GuestErrno(EINVAL));
+            if constexpr (operation != Walk::Read) ctx.ret0 = UINT64_MAX;
+            return;
+        }
+        auto& tree = *found->second;
+        if constexpr (operation == Walk::Close) {
+            const auto result = fts_close(std::exchange(tree.host, nullptr));
+            const auto error = errno;
+            trees.erase(found);
+            errno = error;
+            PosixResult(ctx, result);
+        } else if constexpr (operation == Walk::Set) {
+            if (!tree.current || ctx.args[1] != tree.entry) return Fail(ctx, EINVAL);
+            PosixResult(ctx, fts_set(tree.host, tree.current, static_cast<int>(ctx.args[2])));
+        } else {
+            if (tree.entry && tree.current) {
+                tree.current->fts_number = SignedWord(mem, mem.ReadWord(tree.entry + 3 * mem.width()));
+                tree.current->fts_pointer = reinterpret_cast<void*>(
+                    static_cast<uintptr_t>(mem.ReadWord(tree.entry + 4 * mem.width())));
+            }
+            tree.snapshot.clear();
+            tree.entry = 0;
+            errno = 0;
+            tree.current = fts_read(tree.host);
+            if (!tree.current) {
+                SetErrno(dbt, GuestErrno(errno));
+                return;
+            }
+            std::map<const FTSENT*, uint64_t> ancestors;
+            ctx.ret0 = tree.entry = FileTreeEntry(ctx, tree, *tree.current, ancestors);
+        }
+    }
+}
+#endif
+
+void FilenameMatch(wa_host_call_ctx_t& ctx) {
+    constexpr Flag flags[] = {
+        {0x01, FNM_NOESCAPE}, {0x02, FNM_PATHNAME}, {0x04, FNM_PERIOD},
+        {0x08, FNM_LEADING_DIR}, {0x10, FNM_CASEFOLD},
+    };
+    int options = 0;
+    for (const auto flag : flags)
+        if (ctx.args[2] & flag.guest) options |= flag.host;
+    const GuestMemory mem(ctx);
+    const auto pattern = mem.String(ctx.args[0]);
+    const auto path = mem.String(ctx.args[1]);
+    ctx.ret0 = fnmatch(pattern.c_str(), path.c_str(), options) == 0 ? 0 : 1;
 }
 
 struct FileTreeWalk {
@@ -465,19 +640,26 @@ template<bool ByPath> void Statfs(wa_host_call_ctx_t& ctx) {
 
 enum class FilePath {
     Access,
+    AccessAt,
     Unlink,
     Mkdir,
+    MkdirAt,
+    Mkfifo,
+    Mknod,
     Rmdir,
     Remove,
     Rename,
+    RenameAt,
     Link,
     Symlink,
+    SymlinkAt,
     Chmod,
     UnlinkAt,
     ChmodAt,
     Truncate,
     Truncate64,
     Readlink,
+    ReadlinkAt,
     Realpath,
     Chdir,
     Pathconf,
@@ -485,36 +667,62 @@ enum class FilePath {
     Utimes,
     UtimensAt
 };
-template <FilePath op> void PathCall(wa_host_call_ctx_t& ctx) {
-    constexpr bool at =
-        op == FilePath::UnlinkAt || op == FilePath::ChmodAt || op == FilePath::UtimensAt;
+template <FilePath op, bool Checked = false> void PathCall(wa_host_call_ctx_t& ctx) {
+    constexpr bool at = op == FilePath::AccessAt || op == FilePath::MkdirAt || op == FilePath::RenameAt ||
+        op == FilePath::ReadlinkAt || op == FilePath::UnlinkAt || op == FilePath::ChmodAt || op == FilePath::UtimensAt;
     const GuestMemory mem(ctx);
     const auto fd = at ? AtFd(ctx, ctx.args[0]) : AT_FDCWD;
     const auto path = Path(ctx, ctx.args[at ? 1 : 0], fd);
     const auto p = path.c_str();
     int64_t result = 0;
-    if constexpr (op == FilePath::Access) {
-        if (MountedFile(ctx, path)) {
-            if (ctx.args[1] & (W_OK | X_OK)) return Fail(ctx, EACCES);
-            ctx.ret0 = 0;
+    if constexpr (op == FilePath::Access || op == FilePath::AccessAt) {
+        const auto mode = ctx.args[at ? 2 : 1];
+        if (mode & ~(R_OK | W_OK | X_OK)) return Fail(ctx, EINVAL);
+        const auto flags = at ? ctx.args[3] : 0;
+        if (flags & ~0x300u) return Fail(ctx, EINVAL);
+        if (const auto mounted = FindMountedFile(*ctx.dbt, path)) {
+            if (mode & (mounted->directory ? W_OK : W_OK | X_OK)) return Fail(ctx, EACCES);
             return;
         }
-        result = access(p, ctx.args[1]);
+        if constexpr (at) {
+            result = faccessat(fd, p, mode, (flags & 0x100 ? AT_SYMLINK_NOFOLLOW : 0) |
+                                             (flags & 0x200 ? AT_EACCESS : 0));
+        } else {
+            result = access(p, mode);
+        }
     }
     if constexpr (op == FilePath::Unlink)
         result = unlink(p);
     if constexpr (op == FilePath::Mkdir)
         result = mkdir(p, ctx.args[1]);
+    if constexpr (op == FilePath::MkdirAt)
+        result = mkdirat(fd, p, ctx.args[2]);
+    if constexpr (op == FilePath::Mkfifo || op == FilePath::Mknod) {
+        const auto mode = static_cast<mode_t>(ctx.args[1]);
+        if constexpr (op == FilePath::Mknod) {
+            if (!S_ISFIFO(mode)) return Fail(ctx, EPERM);
+        }
+        if (FindMountedFile(*ctx.dbt, path)) return Fail(ctx, EROFS);
+        result = mkfifo(p, mode & 07777);
+    }
     if constexpr (op == FilePath::Rmdir)
         result = rmdir(p);
     if constexpr (op == FilePath::Remove)
         result = std::remove(p);
     if constexpr (op == FilePath::Rename)
         result = std::rename(p, Path(ctx, ctx.args[1]).c_str());
+    if constexpr (op == FilePath::RenameAt) {
+        const auto new_fd = AtFd(ctx, ctx.args[2]);
+        result = renameat(fd, p, new_fd, Path(ctx, ctx.args[3], new_fd).c_str());
+    }
     if constexpr (op == FilePath::Link)
         result = link(p, Path(ctx, ctx.args[1]).c_str());
     if constexpr (op == FilePath::Symlink)
         result = symlink(mem.String(ctx.args[0]).c_str(), Path(ctx, ctx.args[1]).c_str());
+    if constexpr (op == FilePath::SymlinkAt) {
+        const auto new_fd = AtFd(ctx, ctx.args[1]);
+        result = symlinkat(mem.String(ctx.args[0]).c_str(), new_fd, Path(ctx, ctx.args[2], new_fd).c_str());
+    }
     if constexpr (op == FilePath::Chmod)
         result = chmod(p, ctx.args[1]);
     if constexpr (op == FilePath::UnlinkAt)
@@ -538,13 +746,29 @@ template <FilePath op> void PathCall(wa_host_call_ctx_t& ctx) {
         errno = 0;
         result = pathconf(p, options[command - 1]);
     }
-    if constexpr (op == FilePath::Readlink) {
-        std::vector<char> bytes(std::min<uint64_t>(ctx.args[2], kIoLimit));
-        result = readlink(p, bytes.data(), bytes.size());
+    if constexpr (op == FilePath::Readlink || op == FilePath::ReadlinkAt) {
+        if (FindMountedFile(*ctx.dbt, path)) return Fail(ctx, EINVAL);
+        const auto count = ctx.args[at ? 3 : 2];
+        if constexpr (Checked)
+            if (count > ctx.args[at ? 4 : 3]) throw GuestFault{WA_ERR_FAULT};
+        std::vector<char> bytes(std::min<uint64_t>(count, kIoLimit));
+        result = readlinkat(fd, p, bytes.data(), bytes.size());
         if (result > 0)
-            mem.Write(ctx.args[1], bytes.data(), result);
+            mem.Write(ctx.args[at ? 2 : 1], bytes.data(), result);
     }
     if constexpr (op == FilePath::Realpath || op == FilePath::Chdir) {
+        if (const auto mounted = FindMountedFile(*ctx.dbt, path)) {
+            if constexpr (op == FilePath::Chdir) {
+                if (!mounted->directory) return Fail(ctx, ENOTDIR);
+                ctx.dbt->bionic->cwd = path;
+            } else if (ctx.args[1]) {
+                mem.Write(ctx.args[1], path.c_str(), path.size() + 1);
+                ctx.ret0 = ctx.args[1];
+            } else {
+                ctx.ret0 = CopyString(*ctx.dbt, path);
+            }
+            return;
+        }
         std::unique_ptr<char, decltype(&std::free)> resolved(realpath(p, nullptr), std::free);
         if (!resolved) {
             SetErrno(*ctx.dbt, GuestErrno(errno));
@@ -620,11 +844,11 @@ void Getcwd(wa_host_call_ctx_t& ctx) {
         SetErrno(*ctx.dbt, GuestErrno(ENOMEM));
 }
 
-void Mkstemp(wa_host_call_ctx_t& ctx) {
+template<bool Suffix> void Mkstemp(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     auto path = Path(ctx, ctx.args[0]);
     const auto length = mem.String(ctx.args[0]).size();
-    const auto fd = mkstemp(path.data());
+    const auto fd = Suffix ? mkstemps(path.data(), static_cast<int32_t>(ctx.args[1])) : mkstemp(path.data());
     const auto guest = AdoptFd(*ctx.dbt, fd);
     PosixResult(ctx, guest);
     if (guest >= 0)
@@ -643,22 +867,56 @@ void Mkdtemp(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = ctx.args[0];
 }
 
-void Tempnam(wa_host_call_ctx_t& ctx) {
+template<bool Legacy> void Tempnam(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
     const GuestMemory mem(ctx);
-    const auto dir = ctx.args[0] ? Path(ctx, ctx.args[0]) : "/tmp";
-    const auto prefix = ctx.args[1] ? mem.String(ctx.args[1], 255, true) : "";
+    const auto dir = !Legacy && ctx.args[0] ? Path(ctx, ctx.args[0]) : "/tmp";
+    const auto prefix = !Legacy && ctx.args[1] ? mem.String(ctx.args[1], 255, true) : "";
     auto path = dir + "/" + prefix + "XXXXXX";
     const auto fd = mkstemp(path.data());
     if (fd < 0) {
-        SetErrno(*ctx.dbt, GuestErrno(errno));
+        SetErrno(dbt, GuestErrno(errno));
         return;
     }
     close(fd);
-    unlink(path.c_str());
-    ctx.ret0 = CopyString(*ctx.dbt, path);
+    if (unlink(path.c_str())) {
+        SetErrno(dbt, GuestErrno(errno));
+        return;
+    }
+    if constexpr (Legacy) {
+        auto address = ctx.args[0];
+        if (!address) {
+            auto& buffer = dbt.bionic->tmpnam;
+            if (!buffer) buffer = AllocateGuest(dbt, path.size() + 1);
+            if (!buffer) {
+                SetErrno(dbt, GuestErrno(ENOMEM));
+                return;
+            }
+            address = buffer;
+        }
+        mem.Write(address, path.c_str(), path.size() + 1);
+        ctx.ret0 = address;
+    } else {
+        ctx.ret0 = CopyString(dbt, path);
+    }
 }
 
 enum class Directory { Open, FdOpen, Read, Reentrant, Close, Rewind, Descriptor };
+
+void WriteDirectoryEntry(const GuestMemory& mem, uint64_t address, const struct dirent& item) {
+    const auto length = std::strlen(item.d_name);
+    if (length > 255) throw GuestFault{WA_ERR_OVERFLOW};
+    mem.Write<uint64_t>(address, item.d_ino);
+#if defined(__APPLE__)
+    mem.Write<int64_t>(address + 8, item.d_seekoff);
+#else
+    mem.Write<int64_t>(address + 8, item.d_off);
+#endif
+    mem.Write<uint16_t>(address + 16, AlignUp(20 + length, 8));
+    mem.Write<uint8_t>(address + 18, item.d_type);
+    mem.Write(address + 19, item.d_name, length + 1);
+}
+
 template <Directory op> void DirectoryCall(wa_host_call_ctx_t& ctx) {
     auto& dbt = *ctx.dbt;
     const GuestMemory mem(ctx);
@@ -721,18 +979,7 @@ template <Directory op> void DirectoryCall(wa_host_call_ctx_t& ctx) {
             const auto* item = readdir(dir);
             const auto output = op == Directory::Reentrant ? ctx.args[1] : entry;
             if (item) {
-                const auto name_length = std::strlen(item->d_name);
-                if (name_length > 255)
-                    throw GuestFault{WA_ERR_OVERFLOW};
-                mem.Write<uint64_t>(output, item->d_ino);
-#if defined(__APPLE__)
-                mem.Write<int64_t>(output + 8, item->d_seekoff);
-#else
-                mem.Write<int64_t>(output + 8, item->d_off);
-#endif
-                mem.Write<uint16_t>(output + 16, AlignUp(20 + name_length, 8));
-                mem.Write<uint8_t>(output + 18, item->d_type);
-                mem.Write(output + 19, item->d_name, name_length + 1);
+                WriteDirectoryEntry(mem, output, *item);
             } else if (errno && op == Directory::Read) {
                 SetErrno(dbt, GuestErrno(errno));
             }
@@ -748,11 +995,54 @@ template <Directory op> void DirectoryCall(wa_host_call_ctx_t& ctx) {
     }
 }
 
+void ScanDirectory(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    const GuestMemory mem(ctx);
+    const auto path = Path(ctx, ctx.args[0]);
+    const std::unique_ptr<DIR, decltype(&closedir)> dir(opendir(path.c_str()), closedir);
+    if (!dir) return PosixResult(ctx, -1);
+    std::vector<std::unique_ptr<GuestBuffer>> entries;
+    for (;;) {
+        errno = 0;
+        const auto* item = readdir(dir.get());
+        if (!item) {
+            if (errno) return PosixResult(ctx, -1);
+            break;
+        }
+        auto entry = std::make_unique<GuestBuffer>(dbt, 280);
+        WriteDirectoryEntry(mem, entry->address, *item);
+        if (ctx.args[2]) {
+            uint64_t selected;
+            CheckGuest(wa_dbt_call(&dbt, ctx.args[2], &entry->address, 1, &selected));
+            if (!static_cast<int32_t>(selected)) continue;
+        }
+        entries.push_back(std::move(entry));
+    }
+    if (ctx.args[3]) {
+        GuestBuffer slots(dbt, 2 * mem.width());
+        const uint64_t args[]{slots.address, slots.address + mem.width()};
+        std::ranges::stable_sort(entries, [&](const auto& left, const auto& right) {
+            mem.WriteWord(args[0], left->address);
+            mem.WriteWord(args[1], right->address);
+            uint64_t order;
+            CheckGuest(wa_dbt_call(&dbt, ctx.args[3], args, 2, &order));
+            return static_cast<int32_t>(order) < 0;
+        });
+    }
+    GuestBuffer list(dbt, std::max<size_t>(1, entries.size()) * mem.width());
+    for (size_t i = 0; i < entries.size(); ++i)
+        mem.WriteWord(list.address + i * mem.width(), entries[i]->address);
+    mem.WriteWord(ctx.args[1], list.address);
+    list.address = 0;
+    for (auto& entry : entries) entry->address = 0;
+    ctx.ret0 = entries.size();
+}
+
 void Close(wa_host_call_ctx_t& ctx) {
     PosixResult(ctx, CloseFd(*ctx.dbt, static_cast<int32_t>(ctx.args[0])));
 }
 
-template <bool Exact> void DuplicateFd(wa_host_call_ctx_t& ctx) {
+template <bool Exact, bool Flags = false> void DuplicateFd(wa_host_call_ctx_t& ctx) {
     auto& dbt = *ctx.dbt;
     const auto source = static_cast<int32_t>(ctx.args[0]);
     const auto fd = HostFd(dbt, source);
@@ -760,16 +1050,21 @@ template <bool Exact> void DuplicateFd(wa_host_call_ctx_t& ctx) {
         return PosixResult(ctx, -1);
     if constexpr (Exact) {
         const auto target = static_cast<int32_t>(ctx.args[1]);
+        const auto flags = Flags ? ctx.args[2] : 0;
+        if constexpr (Flags)
+            if (source == target || (flags & ~uint64_t{02000000})) return Fail(ctx, EINVAL);
         if (target < 0)
             return Fail(ctx, EBADF);
         if (target != source) {
             auto& descriptors = dbt.bionic->descriptors;
             auto entry = descriptors.find(target);
+            const auto epoll = EpollFor(dbt, source);
             // Never overwrite an original host standard descriptor.
             if (entry != descriptors.end() && entry->second.host >= 3 && !entry->second.event) {
                 if (dup2(fd, entry->second.host) < 0)
                     return PosixResult(ctx, -1);
                 entry->second.event = EventFor(dbt, source);
+                entry->second.epoll = epoll;
             } else {
                 const auto copy = dup(fd);
                 if (copy < 0)
@@ -778,18 +1073,25 @@ template <bool Exact> void DuplicateFd(wa_host_call_ctx_t& ctx) {
                 try {
                     if (entry != descriptors.end() && entry->second.owned)
                         close(entry->second.host);
-                    descriptors.insert_or_assign(target, GuestDescriptor{copy, true, event});
+                    descriptors.insert_or_assign(target, GuestDescriptor{copy, true, event, epoll});
                 } catch (...) {
                     close(copy);
                     throw;
                 }
             }
+            RemoveEpollInterests(dbt, target);
+            if constexpr (Flags) {
+                if (flags && fcntl(HostFd(dbt, target), F_SETFD, FD_CLOEXEC) < 0)
+                    return PosixResult(ctx, -1);
+            }
         }
         ctx.ret0 = target;
     } else {
         const auto copy = AdoptFd(dbt, dup(fd));
-        if (copy >= 0)
+        if (copy >= 0) {
             dbt.bionic->descriptors.at(copy).event = EventFor(dbt, source);
+            dbt.bionic->descriptors.at(copy).epoll = EpollFor(dbt, source);
+        }
         PosixResult(ctx, copy);
     }
 }
@@ -846,8 +1148,10 @@ void Fcntl(wa_host_call_ctx_t& ctx) {
             return Fail(ctx, EINVAL);
         const auto copy =
             AdoptFd(dbt, fcntl(fd, ctx.args[1] ? F_DUPFD_CLOEXEC : F_DUPFD, 0), true, value);
-        if (copy >= 0)
+        if (copy >= 0) {
             dbt.bionic->descriptors.at(copy).event = EventFor(dbt, ctx.args[0]);
+            dbt.bionic->descriptors.at(copy).epoll = EpollFor(dbt, ctx.args[0]);
+        }
         PosixResult(ctx, copy);
         break;
     }
@@ -955,6 +1259,7 @@ int PollWait(wa_host_call_ctx_t& ctx, std::vector<pollfd>& descriptors, int mill
         thread.io_deadline = millis < 0 ? kNoDeadline : Clock::now() + milliseconds(millis);
     }
     while (true) {
+        RefreshTimers(dbt);
         const auto result = poll(descriptors.data(), descriptors.size(), 0);
         const auto now = Clock::now();
         if (result != 0 || now >= thread.io_deadline) {
@@ -965,6 +1270,103 @@ int PollWait(wa_host_call_ctx_t& ctx, std::vector<pollfd>& descriptors, int mill
         const auto wake = std::min(thread.io_deadline, now + milliseconds(2));
         Park(dbt, WaitKind::Io, 0, wake);
     }
+}
+
+// ARM's epoll_event has four bytes of padding before the 64-bit user data.
+struct EpollEvent {
+    uint32_t events, padding;
+    uint64_t data;
+};
+static_assert(sizeof(EpollEvent) == 16 && offsetof(EpollEvent, data) == 8);
+constexpr uint32_t kEpollOneShot = uint32_t{1} << 30;
+constexpr uint32_t kEpollAlways = 0x018; // EPOLLERR and EPOLLHUP.
+constexpr uint32_t kEpollPollFlags = 0x3df; // Linux poll flags except POLLNVAL.
+
+template<bool Flags> void EpollCreate(wa_host_call_ctx_t& ctx) {
+    const auto arg = static_cast<int32_t>(ctx.args[0]);
+    if (Flags ? (arg & ~02000000) != 0 : arg <= 0) return Fail(ctx, EINVAL);
+    auto epoll = std::make_shared<GuestEpoll>();
+    const auto host = open("/dev/null", O_RDONLY | (Flags && (arg & 02000000) ? O_CLOEXEC : 0));
+    const auto id = AdoptFd(*ctx.dbt, host);
+    if (id >= 0) ctx.dbt->bionic->descriptors.at(id).epoll = std::move(epoll);
+    PosixResult(ctx, id);
+}
+
+void EpollControl(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    const int epfd = ctx.args[0], op = ctx.args[1], fd = ctx.args[2];
+    const int host = HostFd(dbt, fd);
+    if (HostFd(dbt, epfd) < 0 || host < 0) return Fail(ctx, EBADF);
+    const auto epoll = EpollFor(dbt, epfd);
+    if (!epoll || op < 1 || op > 3) return Fail(ctx, EINVAL);
+    if (EpollFor(dbt, fd)) return Fail(ctx, epfd == fd ? EINVAL : ENOTSUP);
+    struct stat metadata{};
+    if (fstat(host, &metadata) < 0) return PosixResult(ctx, -1);
+    if (S_ISREG(metadata.st_mode) || S_ISDIR(metadata.st_mode)) return Fail(ctx, EPERM);
+    const auto found = epoll->interests.find(fd);
+    if (op == 1 && found != epoll->interests.end()) return Fail(ctx, EEXIST);
+    if (op != 1 && found == epoll->interests.end()) return Fail(ctx, ENOENT);
+    if (op == 2) {
+        epoll->interests.erase(found);
+        return;
+    }
+    if (!ctx.args[3]) return Fail(ctx, EFAULT);
+    const auto event = GuestMemory(ctx).Read<EpollEvent>(ctx.args[3]);
+    if (event.events & ~(kEpollPollFlags | kEpollOneShot)) return Fail(ctx, ENOTSUP);
+    epoll->interests.insert_or_assign(fd, GuestEpoll::Interest{event.events, event.data, ++epoll->revision});
+}
+
+void EpollWait(wa_host_call_ctx_t& ctx) {
+    auto& dbt = *ctx.dbt;
+    if (HostFd(dbt, ctx.args[0]) < 0) return Fail(ctx, EBADF);
+    const auto epoll = EpollFor(dbt, ctx.args[0]);
+    const int maximum = ctx.args[2];
+    if (!epoll || maximum <= 0) return Fail(ctx, EINVAL);
+    if (!ctx.args[1]) return Fail(ctx, EFAULT);
+    std::vector<pollfd> descriptors;
+    std::vector<std::pair<int, uint64_t>> guest_fds;
+    const auto& interests = epoll->interests;
+    const auto start = interests.upper_bound(epoll->last_ready);
+    for (auto it = start; guest_fds.size() < interests.size();) {
+        if (it == interests.end()) it = interests.begin();
+        const auto& [fd, interest] = *it++;
+        guest_fds.emplace_back(fd, interest.revision);
+        const auto host = interest.enabled ? HostFd(dbt, fd) : -1;
+        descriptors.push_back({host, static_cast<short>(PollEvents(interest.events, true)), 0});
+    }
+    const auto result = PollWait(ctx, descriptors, static_cast<int32_t>(ctx.args[3]));
+    if (result < 0) return PosixResult(ctx, result);
+    const GuestMemory memory(ctx);
+    int written = 0;
+    for (size_t i = 0; i < descriptors.size() && written < maximum; ++i) {
+        const auto [fd, revision] = guest_fds[i];
+        const auto found = epoll->interests.find(fd);
+        if (found == epoll->interests.end() || found->second.revision != revision) continue;
+        auto& interest = found->second;
+        const auto ready = uint32_t(PollEvents(descriptors[i].revents, false)) &
+                           (interest.events | kEpollAlways);
+        if (!ready) continue;
+        memory.Write(ctx.args[1] + written * sizeof(EpollEvent), EpollEvent{ready, 0, interest.data});
+        ++written;
+        epoll->last_ready = fd;
+        if (interest.events & kEpollOneShot) interest.enabled = false;
+    }
+    ctx.ret0 = written;
+}
+
+void EpollPwait(wa_host_call_ctx_t& ctx) {
+    auto& thread = *ctx.dbt->running;
+    struct RestoreMask {
+        GuestThread& thread;
+        uint64_t previous;
+        ~RestoreMask() { thread.signal_mask = previous; }
+    } restore{thread, thread.signal_mask};
+    if (ctx.args[4]) {
+        // SIGKILL and SIGSTOP cannot be blocked.
+        constexpr uint64_t unblocked = (uint64_t{1} << 8) | (uint64_t{1} << 18);
+        thread.signal_mask = GuestMemory(ctx).ReadWord(ctx.args[4]) & ~unblocked;
+    }
+    EpollWait(ctx);
 }
 
 void Poll(wa_host_call_ctx_t& ctx) {
@@ -1073,6 +1475,50 @@ void Fchown(wa_host_call_ctx_t& ctx) {
     PosixResult(ctx, fchown(HostFd(*ctx.dbt, ctx.args[0]), ctx.args[1], ctx.args[2]));
 }
 
+template<bool Follow> void ChangeOwner(wa_host_call_ctx_t& ctx) {
+    const auto path = Path(ctx, ctx.args[0]);
+    if (FindMountedFile(*ctx.dbt, path)) return Fail(ctx, EROFS);
+    struct stat current{};
+    if ((Follow ? stat : lstat)(path.c_str(), &current)) return PosixResult(ctx, -1);
+    const auto uid = static_cast<uint32_t>(ctx.args[1]);
+    const auto gid = static_cast<uint32_t>(ctx.args[2]);
+    // Guest applications have no privilege to change backing-file ownership.
+    if (current.st_uid != geteuid() || (uid != UINT32_MAX && uid != current.st_uid) ||
+        (gid != UINT32_MAX && gid != current.st_gid)) return Fail(ctx, EPERM);
+}
+
+void Futimens(wa_host_call_ctx_t& ctx) {
+    const int fd = HostFd(*ctx.dbt, ctx.args[0]);
+    const auto source = ctx.args[1];
+    const GuestMemory mem(ctx);
+    struct timespec times[2]{};
+    if (source) {
+        for (size_t i = 0; i < 2; ++i) {
+            const auto address = source + i * 2 * mem.width();
+            times[i].tv_sec = SignedWord(mem, mem.ReadWord(address));
+            const auto fraction = SignedWord(mem, mem.ReadWord(address + mem.width()));
+            switch (fraction) {
+            case 0x3fffffff: times[i].tv_nsec = UTIME_NOW; break;
+            case 0x3ffffffe: times[i].tv_nsec = UTIME_OMIT; break;
+            default: times[i].tv_nsec = fraction; break;
+            }
+        }
+    }
+    PosixResult(ctx, futimens(fd, source ? times : nullptr));
+}
+
+void TtyName(wa_host_call_ctx_t& ctx) {
+    const int fd = HostFd(*ctx.dbt, ctx.args[0]);
+    if (fd < 0) {
+        ctx.ret0 = GuestErrno(EBADF);
+        return;
+    }
+    std::array<char, PATH_MAX> buffer;
+    const auto size = std::min<uint64_t>(buffer.size(), ctx.args[2]);
+    ctx.ret0 = GuestErrno(ttyname_r(fd, buffer.data(), size));
+    if (!ctx.ret0) GuestMemory(ctx).Write(ctx.args[1], buffer.data(), std::strlen(buffer.data()) + 1);
+}
+
 void Fdatasync(wa_host_call_ctx_t& ctx) {
 #if defined(__APPLE__)
     PosixResult(ctx, fsync(HostFd(*ctx.dbt, ctx.args[0])));
@@ -1121,7 +1567,7 @@ template <bool Allocate, bool Wide = false> void PosixAllocation(wa_host_call_ct
 #endif
 }
 
-void Sendfile(wa_host_call_ctx_t& ctx) {
+template <bool Wide> void Sendfile(wa_host_call_ctx_t& ctx) {
     const GuestMemory mem(ctx);
     const auto out = HostFd(*ctx.dbt, ctx.args[0]), in = HostFd(*ctx.dbt, ctx.args[1]);
     if (out < 0 || in < 0)
@@ -1129,15 +1575,18 @@ void Sendfile(wa_host_call_ctx_t& ctx) {
     const auto offset_address = ctx.args[2];
     const auto limit = std::min<uint64_t>(ctx.args[3], kIoLimit);
     std::vector<char> bytes(limit);
-    const auto offset = offset_address ? SignedWord(mem, mem.ReadWord(offset_address)) : 0;
+    const auto offset = !offset_address ? 0 : Wide ? mem.Read<int64_t>(offset_address)
+                                                  : SignedWord(mem, mem.ReadWord(offset_address));
     const auto count = offset_address ? pread(in, bytes.data(), bytes.size(), offset)
                                       : read(in, bytes.data(), bytes.size());
     if (count <= 0)
         return PosixResult(ctx, count);
     const auto result = write(out, bytes.data(), count);
     PosixResult(ctx, result);
-    if (offset_address && result > 0)
-        mem.WriteWord(offset_address, offset + result);
+    if (offset_address && result > 0) {
+        if constexpr (Wide) mem.Write<int64_t>(offset_address, offset + result);
+        else mem.WriteWord(offset_address, offset + result);
+    }
     if (!offset_address && result != count)
         lseek(in, std::max<ssize_t>(result, 0) - count, SEEK_CUR);
 }
@@ -1195,19 +1644,24 @@ void CloseMount(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = 1;
 }
 
-void Eventfd(wa_host_call_ctx_t& ctx) {
+template <bool Timer> void Eventfd(wa_host_call_ctx_t& ctx) {
     auto& dbt = *ctx.dbt;
     const auto flags = ctx.args[1];
-    if (flags & ~UINT64_C(0x80801))
+    if (flags & ~(Timer ? UINT64_C(0x80800) : UINT64_C(0x80801)))
         return Fail(ctx, EINVAL);
     auto event = std::make_shared<GuestEvent>();
+    if constexpr (Timer) {
+        if (ctx.args[0] != 0 && ctx.args[0] != 1 && ctx.args[0] != 7) return Fail(ctx, EINVAL);
+        event->timer_clock = ctx.args[0];
+    } else {
+        event->count = static_cast<uint32_t>(ctx.args[0]);
+        event->semaphore = (flags & 1) != 0;
+    }
     int pipe_fds[2];
     if (pipe(pipe_fds))
         return PosixResult(ctx, -1);
     event->notification = pipe_fds[1];
-    event->count = static_cast<uint32_t>(ctx.args[0]);
     event->id = dbt.bionic->next_event++;
-    event->semaphore = (flags & 1) != 0;
     event->nonblocking = (flags & 0x800) != 0;
     for (const auto fd : pipe_fds) {
         fcntl(fd, F_SETFL, O_NONBLOCK);
@@ -1228,13 +1682,125 @@ void Eventfd(wa_host_call_ctx_t& ctx) {
     PosixResult(ctx, guest);
 }
 
+std::chrono::nanoseconds TimerNow(const GuestEvent& event) {
+    using namespace std::chrono;
+    return event.timer_clock == 0 ? duration_cast<nanoseconds>(system_clock::now().time_since_epoch())
+                                  : duration_cast<nanoseconds>(Clock::now().time_since_epoch());
+}
+
+void RefreshTimer(GuestEvent& event) {
+    using namespace std::chrono;
+    if (event.timer_clock < 0 || event.timer_due == nanoseconds{}) return;
+    const auto now = TimerNow(event);
+    if (now < event.timer_due) return;
+    const auto overdue = now - event.timer_due;
+    const uint64_t elapsed = event.timer_interval.count() ? uint64_t(overdue / event.timer_interval) + 1 : 1;
+    if (!event.count) {
+        const char token = 1;
+        if (write(event.notification, &token, 1) != 1) return;
+    }
+    event.count += std::min(elapsed, UINT64_MAX - event.count);
+    if (event.timer_interval.count()) {
+        const auto next = event.timer_interval - overdue % event.timer_interval;
+        event.timer_due = now + std::min(next, nanoseconds::max() - now);
+    } else {
+        event.timer_due = {};
+    }
+}
+
+std::optional<std::chrono::nanoseconds> ReadTimerDuration(const GuestMemory& memory, uint64_t address) {
+    using namespace std::chrono;
+    const auto sec = SignedWord(memory, memory.ReadWord(address));
+    const auto nanos = SignedWord(memory, memory.ReadWord(address + memory.width()));
+    if (sec < 0 || nanos < 0 || nanos >= 1'000'000'000 ||
+        sec > (nanoseconds::max().count() - nanos) / 1'000'000'000) return std::nullopt;
+    return seconds(sec) + nanoseconds(nanos);
+}
+
+void WriteTimerDuration(const GuestMemory& memory, uint64_t address, std::chrono::nanoseconds duration) {
+    using namespace std::chrono;
+    const auto whole = duration_cast<seconds>(duration);
+    memory.WriteWord(address, whole.count());
+    memory.WriteWord(address + memory.width(), (duration - whole).count());
+}
+
+template <bool Set> void TimerTime(wa_host_call_ctx_t& ctx) {
+    using namespace std::chrono;
+    auto& dbt = *ctx.dbt;
+    const auto event = EventFor(dbt, ctx.args[0]);
+    if (!event || event->timer_clock < 0) return Fail(ctx, HostFd(dbt, ctx.args[0]) < 0 ? EBADF : EINVAL);
+    const GuestMemory memory(ctx);
+    const auto timespec_size = 2 * memory.width();
+    const auto write_state = [&](uint64_t output) {
+        RefreshTimer(*event);
+        WriteTimerDuration(memory, output, event->timer_interval);
+        WriteTimerDuration(memory, output + timespec_size,
+                           std::max(nanoseconds{}, event->timer_due - TimerNow(*event)));
+    };
+    if constexpr (Set) {
+        const auto flags = ctx.args[1];
+        if (flags & ~3u) return Fail(ctx, EINVAL);
+        if (flags & 2) return Fail(ctx, ENOTSUP);
+        if (!ctx.args[2]) return Fail(ctx, EFAULT);
+        const auto interval = ReadTimerDuration(memory, ctx.args[2]);
+        const auto value = ReadTimerDuration(memory, ctx.args[2] + timespec_size);
+        if (!interval || !value) return Fail(ctx, EINVAL);
+        const auto now = TimerNow(*event);
+        if (!(flags & 1) && *value > nanoseconds::max() - now) return Fail(ctx, EOVERFLOW);
+        if (ctx.args[3]) write_state(ctx.args[3]);
+        if (event->count) {
+            char marker;
+            ::read(HostFd(dbt, ctx.args[0]), &marker, 1);
+        }
+        event->count = 0;
+        event->timer_interval = *interval;
+        event->timer_due = !value->count() || flags & 1 ? *value : now + *value;
+        RefreshTimer(*event);
+    } else {
+        if (!ctx.args[1]) return Fail(ctx, EFAULT);
+        write_state(ctx.args[1]);
+    }
+}
+
 void Isatty(wa_host_call_ctx_t& ctx) {
     ctx.ret0 = isatty(HostFd(*ctx.dbt, ctx.args[0]));
     if (!ctx.ret0)
         SetErrno(*ctx.dbt, GuestErrno(errno));
 }
 
+void TerminalAttributes(wa_host_call_ctx_t& ctx) {
+    if (HostFd(*ctx.dbt, ctx.args[0]) < 0) return PosixResult(ctx, -1);
+    // Guest application descriptors have no terminal line discipline.
+    Fail(ctx, ENOTTY);
+}
+
+enum class NotifyWatch { Create, Add, Remove };
+template <NotifyWatch operation> void Inotify(wa_host_call_ctx_t& ctx) {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+    auto& dbt = *ctx.dbt;
+    if constexpr (operation == NotifyWatch::Create) {
+        if (ctx.args[0] & ~0x80800u) return Fail(ctx, EINVAL);
+        const auto flags = (ctx.args[0] & 0x80000 ? IN_CLOEXEC : 0) |
+                           (ctx.args[0] & 0x800 ? IN_NONBLOCK : 0);
+        return PosixResult(ctx, AdoptFd(dbt, inotify_init1(flags)));
+    } else if constexpr (operation == NotifyWatch::Add) {
+        const auto fd = HostFd(dbt, ctx.args[0]);
+        return PosixResult(ctx, inotify_add_watch(fd, Path(ctx, ctx.args[1]).c_str(), ctx.args[2]));
+    } else {
+        const auto fd = HostFd(dbt, ctx.args[0]);
+        return PosixResult(ctx, inotify_rm_watch(fd, ctx.args[1]));
+    }
+#else
+    Fail(ctx, ENOSYS);
+#endif
+}
+
 } // namespace
+
+void RefreshTimers(wa_dbt& dbt) {
+    for (const auto& [fd, entry] : dbt.bionic->descriptors)
+        if (entry.event) RefreshTimer(*entry.event);
+}
 
 std::string GuestPath(const wa_host_call_ctx_t& ctx, uint64_t address) {
     return Path(ctx, address);
@@ -1257,17 +1823,24 @@ void RegisterFiles(wa_dbt& dbt) {
         {"close", Dispatch<Close>},
         {"dup", Dispatch<DuplicateFd<false>>},
         {"dup2", Dispatch<DuplicateFd<true>>},
+        {"dup3", Dispatch<DuplicateFd<true, true>>},
         FD(fsync),
         FD(flock),
         {"isatty", Dispatch<Isatty>},
+        {"tcgetattr", Dispatch<TerminalAttributes>},
+        {"tcsetattr", Dispatch<TerminalAttributes>},
         {"read", Dispatch<Transfer<Io::Read>>},
-        {"__read_chk", Dispatch<Transfer<Io::ReadChecked>>},
+        {"__read_chk", Dispatch<Transfer<Io::Read, true>>},
         {"write", Dispatch<Transfer<Io::Write>>},
-        {"__write_chk", Dispatch<Transfer<Io::WriteChecked>>},
+        {"__write_chk", Dispatch<Transfer<Io::Write, true>>},
         {"pread", Dispatch<Transfer<Io::Pread>>},
         {"pread64", Dispatch<Transfer<Io::Pread64>>},
+        {"__pread_chk", Dispatch<Transfer<Io::Pread, true>>},
+        {"__pread64_chk", Dispatch<Transfer<Io::Pread64, true>>},
         {"pwrite", Dispatch<Transfer<Io::Pwrite>>},
         {"pwrite64", Dispatch<Transfer<Io::Pwrite64>>},
+        {"__pwrite_chk", Dispatch<Transfer<Io::Pwrite, true>>},
+        {"__pwrite64_chk", Dispatch<Transfer<Io::Pwrite64, true>>},
         {"readv", Dispatch<VectorTransfer<true>>},
         {"writev", Dispatch<VectorTransfer<false>>},
         {"lseek", Dispatch<OffsetCall<false, false>>},
@@ -1286,19 +1859,27 @@ void RegisterFiles(wa_dbt& dbt) {
         {"fstatfs", Dispatch<Statfs<false>>},
         {"statfs", Dispatch<Statfs<true>>},
         PATH(access, Access),
+        PATH(faccessat, AccessAt),
         PATH(unlink, Unlink),
         PATH(mkdir, Mkdir),
+        PATH(mkdirat, MkdirAt),
+        PATH(mkfifo, Mkfifo),
+        PATH(mknod, Mknod),
         PATH(rmdir, Rmdir),
         PATH(rename, Rename),
+        PATH(renameat, RenameAt),
         PATH(remove, Remove),
         PATH(link, Link),
         PATH(symlink, Symlink),
+        PATH(symlinkat, SymlinkAt),
         PATH(chmod, Chmod),
         PATH(fchmodat, ChmodAt),
         PATH(unlinkat, UnlinkAt),
         PATH(truncate, Truncate),
         PATH(truncate64, Truncate64),
         PATH(readlink, Readlink),
+        {"__readlink_chk", Dispatch<PathCall<FilePath::Readlink, true>>},
+        PATH(readlinkat, ReadlinkAt),
         PATH(realpath, Realpath),
         PATH(chdir, Chdir),
         PATH(pathconf, Pathconf),
@@ -1306,14 +1887,24 @@ void RegisterFiles(wa_dbt& dbt) {
         PATH(utimes, Utimes),
         PATH(utimensat, UtimensAt),
         {"getcwd", Dispatch<Getcwd>},
-        {"mkstemp", Dispatch<Mkstemp>},
-        {"mkstemp64", Dispatch<Mkstemp>},
+        {"mkstemp", Dispatch<Mkstemp<false>>},
+        {"mkstemp64", Dispatch<Mkstemp<false>>},
+        {"mkstemps", Dispatch<Mkstemp<true>>},
         {"mkdtemp", Dispatch<Mkdtemp>},
         {"nftw", Dispatch<WalkFiles>},
-        {"tempnam", Dispatch<Tempnam>},
+        {"fnmatch", Dispatch<FilenameMatch>},
+#if !defined(__EMSCRIPTEN__)
+        {"fts_open", Dispatch<FileTree<Walk::Open>>},
+        {"fts_read", Dispatch<FileTree<Walk::Read>>},
+        {"fts_set", Dispatch<FileTree<Walk::Set>>},
+        {"fts_close", Dispatch<FileTree<Walk::Close>>},
+#endif
+        {"tempnam", Dispatch<Tempnam<false>>},
+        {"tmpnam", Dispatch<Tempnam<true>>},
         DIR(opendir, Open),
         DIR(fdopendir, FdOpen),
         DIR(readdir, Read),
+        {"scandir", Dispatch<ScanDirectory>},
         DIR(readdir64, Read),
         DIR(readdir_r, Reentrant),
         DIR(closedir, Close),
@@ -1324,22 +1915,38 @@ void RegisterFiles(wa_dbt& dbt) {
         {"pipe", Dispatch<Pipe<false>>},
         {"pipe2", Dispatch<Pipe<true>>},
         {"poll", Dispatch<Poll>},
+        {"epoll_create", Dispatch<EpollCreate<false>>},
+        {"epoll_create1", Dispatch<EpollCreate<true>>},
+        {"epoll_ctl", Dispatch<EpollControl>},
+        {"epoll_wait", Dispatch<EpollWait>},
+        {"epoll_pwait", Dispatch<EpollPwait>},
         {"select", Dispatch<Select>},
         {"__FD_ISSET_chk", Dispatch<FdSet<0>>},
         {"__FD_SET_chk", Dispatch<FdSet<1>>},
         {"__FD_CLR_chk", Dispatch<FdSet<2>>},
         {"fchmod", Dispatch<Fchmod>},
         {"fchown", Dispatch<Fchown>},
+        {"chown", Dispatch<ChangeOwner<true>>},
+        {"lchown", Dispatch<ChangeOwner<false>>},
+        {"futimens", Dispatch<Futimens>},
+        {"ttyname_r", Dispatch<TtyName>},
         {"fdatasync", Dispatch<Fdatasync>},
         {"posix_fallocate", Dispatch<PosixAllocation<true>>},
         {"posix_fadvise", Dispatch<PosixAllocation<false>>},
         {"posix_fadvise64", Dispatch<PosixAllocation<false, true>>},
         {"posix_fallocate64", Dispatch<PosixAllocation<true, true>>},
-        {"sendfile", Dispatch<Sendfile>},
+        {"sendfile", Dispatch<Sendfile<false>>},
+        {"sendfile64", Dispatch<Sendfile<true>>},
         {"setmntent", Dispatch<MountTable>},
         {"getmntent_r", Dispatch<ReadMount>},
         {"endmntent", Dispatch<CloseMount>},
-        {"eventfd", Dispatch<Eventfd>},
+        {"eventfd", Dispatch<Eventfd<false>>},
+        {"timerfd_create", Dispatch<Eventfd<true>>},
+        {"timerfd_gettime", Dispatch<TimerTime<false>>},
+        {"timerfd_settime", Dispatch<TimerTime<true>>},
+        {"inotify_init1", Dispatch<Inotify<NotifyWatch::Create>>},
+        {"inotify_add_watch", Dispatch<Inotify<NotifyWatch::Add>>},
+        {"inotify_rm_watch", Dispatch<Inotify<NotifyWatch::Remove>>},
     };
 #undef FD
 #undef DIR

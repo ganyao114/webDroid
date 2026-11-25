@@ -1830,7 +1830,7 @@
      public void overridePendingTransition(int enterAnim, int exitAnim, int backgroundColor) {
 -        ActivityClient.getInstance().overridePendingTransition(mToken, getPackageName(), enterAnim,
 -                exitAnim, backgroundColor);
-+        throw new UnsupportedOperationException("No platform service in the embedded runtime");
++        // The embedded activity host switches surfaces immediately.
      }
  
 @@ -7200,5 +6213,5 @@

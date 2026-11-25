@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -34,6 +36,7 @@ struct Entry {
     std::shared_ptr<FilePage> file;
     wa_page_state_t state = WA_PAGE_UNMAPPED;
     uint8_t prot = WA_PROT_NONE;
+    uint8_t maximum_prot = WA_PROT_NONE;
     bool cow = false;
 
     const Bytes& ReadBytes() const { return data ? *data : kZeroPage; }
@@ -45,6 +48,97 @@ struct Entry {
 
 using PageTable = std::array<Entry, kTableSize>;
 
+struct SparseAnonymousPages {
+    struct Range {
+        uint64_t end;
+        uint32_t prot;
+    };
+    std::map<uint64_t, Range> mappings;
+    std::map<uint64_t, std::shared_ptr<Bytes>> resident;
+
+    auto FirstIntersection(uint64_t start) const {
+        auto next = mappings.upper_bound(start);
+        if (next != mappings.begin() && std::prev(next)->second.end > start) --next;
+        return next;
+    }
+
+    uint64_t FindGap(uint64_t start, uint64_t size) const {
+        for (auto it = FirstIntersection(start); it != mappings.end(); ++it) {
+            if (it->first >= start && it->first - start >= size) return start;
+            start = it->second.end;
+        }
+        return size <= wa::softmmu::kArm64AddressLimit - start ? start : 0;
+    }
+
+    uint64_t FirstFault(uint64_t start, uint64_t end, uint32_t permission) const {
+        for (auto it = FirstIntersection(start); start < end; ++it) {
+            if (it == mappings.end() || it->first > start || (permission & ~it->second.prot))
+                return start;
+            start = it->second.end;
+        }
+        return 0;
+    }
+
+    int32_t Change(uint64_t start, uint64_t end, std::optional<uint32_t> protection) {
+        const auto first = FirstIntersection(start);
+        const auto last = mappings.lower_bound(end);
+        // Prepare partial edge ranges before changing the live map.
+        std::map<uint64_t, Range> replacement;
+        try {
+            if (first != last && first->first < start)
+                replacement.emplace(first->first, Range{start, first->second.prot});
+            if (protection) replacement.emplace(start, Range{end, *protection});
+            if (first != last && std::prev(last)->second.end > end)
+                replacement.emplace(end, std::prev(last)->second);
+        } catch (const std::bad_alloc&) {
+            return WA_ERR_NOMEM;
+        }
+        mappings.erase(first, last);
+        mappings.merge(replacement);
+        return WA_OK;
+    }
+
+    void Discard(uint64_t start, uint64_t end) {
+        resident.erase(resident.lower_bound(start), resident.lower_bound(end));
+    }
+
+    std::shared_ptr<Bytes> Backing(uint64_t address) const {
+        const auto it = resident.find(address & ~uint64_t{kPageMask});
+        return it != resident.end() ? it->second : nullptr;
+    }
+
+    template <typename Byte>
+    wa::softmmu::Access Transfer(uint64_t address, std::span<Byte> bytes, uint32_t permission,
+                                 wa_softmmu_stats_t& stats) {
+        const auto end = address + bytes.size();
+        if (const auto fault = FirstFault(address, end, permission)) return {WA_ERR_FAULT, fault};
+        constexpr bool write = std::is_const_v<Byte>;
+        if constexpr (write) {
+            std::map<uint64_t, std::shared_ptr<Bytes>> new_pages;
+            for (auto page = address & ~uint64_t{kPageMask}; page < end; page += WA_PAGE_SIZE)
+                if (!resident.contains(page)) new_pages.emplace(page, std::make_shared<Bytes>());
+            stats.private_pages_allocated += new_pages.size();
+            resident.merge(new_pages);
+        }
+        for (auto cursor = address; cursor < end;) {
+            const auto offset = cursor & kPageMask;
+            const auto count = std::min<uint64_t>(end - cursor, WA_PAGE_SIZE - offset);
+            auto backing = Backing(cursor);
+            if constexpr (write)
+                std::memcpy(backing->data() + offset, bytes.data() + (cursor - address), count);
+            else
+                std::memcpy(bytes.data() + (cursor - address),
+                            (backing ? *backing : kZeroPage).data() + offset, count);
+            cursor += count;
+        }
+        if constexpr (write) {
+            for (auto it = FirstIntersection(address); it != mappings.end() && it->first < end; ++it)
+                if (it->second.prot & WA_PROT_EXEC) return {WA_OK, 0, true};
+        }
+        return {};
+    }
+};
+
 struct PageRange {
     uint32_t first;
     uint32_t end;
@@ -52,6 +146,11 @@ struct PageRange {
 
 bool ValidRange(uint64_t address, size_t bytes) {
     return address <= wa::softmmu::kAddressLimit && bytes <= wa::softmmu::kAddressLimit - address;
+}
+
+bool ValidSparseRange(uint64_t address, uint64_t bytes) {
+    return address >= wa::softmmu::kAddressLimit && address <= wa::softmmu::kArm64AddressLimit &&
+           bytes <= wa::softmmu::kArm64AddressLimit - address;
 }
 
 PageRange Pages(uint64_t address, size_t bytes) {
@@ -77,6 +176,7 @@ struct wa_softmmu {
 
     mutable std::mutex mutex;
     std::array<std::unique_ptr<PageTable>, kTableSize> directory;
+    SparseAnonymousPages sparse;
     wa_page_read_fn reader;
     void* user;
     wa_softmmu_stats_t stats{};
@@ -106,6 +206,7 @@ int32_t Map(wa_softmmu_t* mmu, uint64_t address, size_t bytes, uint32_t prot,
             auto& entry = *mmu->Find(index);
             entry = make_entry(uint64_t{index} << WA_PAGE_SHIFT);
             entry.prot = static_cast<uint8_t>(prot);
+            entry.maximum_prot = entry.prot;
             shared += entry.IsShared();
         }
     } catch (const std::bad_alloc&) {
@@ -175,9 +276,20 @@ wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte
     constexpr bool write = std::is_const_v<Byte>;
     if (!mmu || (!bytes.data() && !bytes.empty()))
         return {WA_ERR_INVALID, address};
+    if (address >= wa::softmmu::kAddressLimit) {
+        if (!ValidSparseRange(address, bytes.size())) return {WA_ERR_FAULT, address};
+        if (bytes.empty()) return {};
+        try {
+            std::lock_guard lock(mmu->mutex);
+            return mmu->sparse.Transfer(address, bytes, permission, mmu->stats);
+        } catch (const std::bad_alloc&) {
+            return {WA_ERR_NOMEM, address};
+        } catch (...) {
+            return {WA_ERR_INTERNAL, address};
+        }
+    }
     if (!ValidRange(address, bytes.size()))
-        return {WA_ERR_FAULT,
-                address >= wa::softmmu::kAddressLimit ? address : wa::softmmu::kAddressLimit};
+        return {WA_ERR_FAULT, wa::softmmu::kAddressLimit};
     if (bytes.empty())
         return {};
 
@@ -385,12 +497,105 @@ Access Write(wa_softmmu_t* mmu, uint64_t address, std::span<const uint8_t> bytes
     return Transfer(mmu, address, bytes, WA_PROT_WRITE);
 }
 
+bool PageResidency(const wa_softmmu_t* mmu, uint64_t address, std::span<uint8_t> pages) {
+    if (!mmu || (address & kPageMask)) return false;
+    std::lock_guard lock(mmu->mutex);
+    if (address >= kAddressLimit) {
+        if (address >= kArm64AddressLimit || pages.size() > (kArm64AddressLimit - address) / WA_PAGE_SIZE)
+            return false;
+        if (mmu->sparse.FirstFault(address, address + uint64_t{pages.size()} * WA_PAGE_SIZE, 0))
+            return false;
+        for (auto& state : pages) {
+            state = mmu->sparse.resident.contains(address);
+            address += WA_PAGE_SIZE;
+        }
+        return true;
+    }
+    if (pages.size() > (kAddressLimit - address) / WA_PAGE_SIZE) return false;
+    auto page_number = static_cast<uint32_t>(address >> WA_PAGE_SHIFT);
+    for (auto& resident : pages) {
+        const auto* entry = mmu->Find(page_number++);
+        if (!entry || entry->state == WA_PAGE_UNMAPPED) return false;
+        resident = entry->data != nullptr;
+    }
+    return true;
+}
+
+int32_t Protect(wa_softmmu_t* mmu, uint64_t address, size_t bytes, uint32_t prot) {
+    if (!mmu || (address & kPageMask) || !ValidRange(address, bytes) || (prot & ~kProtectionMask))
+        return WA_ERR_INVALID;
+    if (!bytes) return WA_OK;
+    std::lock_guard lock(mmu->mutex);
+    const auto range = Pages(address, bytes);
+    for (auto page = range.first; page < range.end; ++page) {
+        const auto* entry = mmu->Find(page);
+        if (!entry || entry->state == WA_PAGE_UNMAPPED || entry->state == WA_PAGE_GUARD) return WA_ERR_NOMEM;
+        if (prot & ~entry->maximum_prot) return WA_ERR_NOTSUP;
+    }
+    for (auto page = range.first; page < range.end; ++page) mmu->Find(page)->prot = prot;
+    return WA_OK;
+}
+
+int32_t MapSparse(wa_softmmu_t* mmu, uint64_t& address, uint64_t bytes, uint32_t prot,
+                  Placement placement) {
+    if (!mmu || !bytes || (bytes & kPageMask) || (prot & ~kProtectionMask) ||
+        bytes > kArm64AddressLimit - kAddressLimit) return WA_ERR_INVALID;
+    std::lock_guard lock(mmu->mutex);
+    auto& sparse = mmu->sparse;
+    if (placement == Placement::Hint) {
+        address &= ~uint64_t{kPageMask};
+        address = ValidSparseRange(address, bytes) ? sparse.FindGap(address, bytes) : 0;
+        if (!address) address = sparse.FindGap(kAddressLimit, bytes);
+        if (!address) return WA_ERR_NOMEM;
+    } else if ((address & kPageMask) || !ValidSparseRange(address, bytes)) {
+        return WA_ERR_INVALID;
+    } else if (placement == Placement::FixedNoReplace) {
+        const auto first = sparse.FirstIntersection(address);
+        if (first != sparse.mappings.end() && first->first < address + bytes) return WA_ERR_EXIST;
+    }
+    if (const auto status = sparse.Change(address, address + bytes, prot); status != WA_OK) return status;
+    sparse.Discard(address, address + bytes);
+    return WA_OK;
+}
+
+int32_t ProtectSparse(wa_softmmu_t* mmu, uint64_t address, uint64_t bytes, uint32_t prot) {
+    if (!mmu || !bytes || ((address | bytes) & kPageMask) || (prot & ~kProtectionMask) ||
+        !ValidSparseRange(address, bytes)) return WA_ERR_INVALID;
+    std::lock_guard lock(mmu->mutex);
+    auto& sparse = mmu->sparse;
+    if (sparse.FirstFault(address, address + bytes, 0)) return WA_ERR_NOMEM;
+    return sparse.Change(address, address + bytes, prot);
+}
+
+int32_t UnmapSparse(wa_softmmu_t* mmu, uint64_t address, uint64_t bytes) {
+    if (!mmu || !bytes || ((address | bytes) & kPageMask) || !ValidSparseRange(address, bytes))
+        return WA_ERR_INVALID;
+    std::lock_guard lock(mmu->mutex);
+    if (const auto status = mmu->sparse.Change(address, address + bytes, std::nullopt); status != WA_OK) return status;
+    mmu->sparse.Discard(address, address + bytes);
+    return WA_OK;
+}
+
+int32_t AdviseSparse(wa_softmmu_t* mmu, uint64_t address, uint64_t bytes, bool discard) {
+    if (!mmu || ((address | bytes) & kPageMask) || !ValidSparseRange(address, bytes)) return WA_ERR_INVALID;
+    std::lock_guard lock(mmu->mutex);
+    if (mmu->sparse.FirstFault(address, address + bytes, 0)) return WA_ERR_NOMEM;
+    if (discard) mmu->sparse.Discard(address, address + bytes);
+    return WA_OK;
+}
+
 Access GetUnitWindow(wa_softmmu_t* mmu, uint64_t address, PageWindow& window) noexcept {
     window = {};
-    if (!mmu || address >= kAddressLimit)
+    if (!mmu || address >= kArm64AddressLimit)
         return {WA_ERR_FAULT, address};
     try {
         std::lock_guard lock(mmu->mutex);
+        if (address >= kAddressLimit) {
+            if (mmu->sparse.FirstFault(address, address + 1, WA_PROT_EXEC)) return {WA_ERR_FAULT, address};
+            auto backing = mmu->sparse.Backing(address);
+            window = {backing, std::span{backing ? *backing : kZeroPage}.subspan(address & kPageMask)};
+            return {};
+        }
         auto* entry = mmu->Find(static_cast<uint32_t>(address >> WA_PAGE_SHIFT));
         auto status = CheckPermission(*mmu, entry, WA_PROT_EXEC);
         if (status == WA_OK)
