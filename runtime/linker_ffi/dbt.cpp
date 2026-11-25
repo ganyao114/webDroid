@@ -522,6 +522,7 @@ int32_t InvokeHost(wa_dbt& dbt, uint64_t pc, uint64_t sp, wa_host_call_ctx_t& co
     thread.active_sp = sp;
     ++dbt.stats.host_calls;
     context.sp = sp;
+    const BootProfile::HostCall profile(dbt.hosts[index].name);
     try {
         return function(&context, user);
     } catch (const GuestFault& fault) {

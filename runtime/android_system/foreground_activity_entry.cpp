@@ -21,6 +21,7 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <numeric>
 #include <stdexcept>
@@ -86,6 +87,35 @@ std::string Quote(std::string_view text) {
     return result + '"';
 }
 
+void DescribeHotspots(std::string& json, const BootProfile& profile) {
+    const auto append = [&]<class Map, class Rank, class Format>(
+                            std::string_view label, const Map& map, Rank rank, Format format) {
+        std::vector<const typename Map::value_type*> entries;
+        for (const auto& entry : map) entries.push_back(&entry);
+        const auto count = std::min<size_t>(20, entries.size());
+        std::partial_sort(entries.begin(), entries.begin() + count, entries.end(),
+            [&](const auto* a, const auto* b) {
+                const auto first = std::invoke(rank, a->second), second = std::invoke(rank, b->second);
+                return first == second ? a->first < b->first : first > second;
+            });
+        json += ',' + Quote(label) + ":[";
+        for (size_t i = 0; i < count; ++i) {
+            const auto& [name, value] = *entries[i];
+            if (i) json += ',';
+            json += "{\"name\":" + Quote(name) + format(value) + '}';
+        }
+        json += ']';
+    };
+    const auto host = [](const BootProfile::HostCallStats& calls) {
+        return ",\"calls\":" + std::to_string(calls.calls) + ",\"ms\":" +
+            std::to_string(std::chrono::duration<double, std::milli>(calls.elapsed).count());
+    };
+    append("hostCallsByCount", profile.host_calls, &BootProfile::HostCallStats::calls, host);
+    append("hostCallsByTime", profile.host_calls, &BootProfile::HostCallStats::elapsed, host);
+    append("inflatedApkEntries", profile.inflated_entries, std::identity{},
+        [](uint64_t bytes) { return ",\"bytes\":" + std::to_string(bytes); });
+}
+
 std::string DescribeBootProfile(const BootProfile& profile) {
     const auto ms = [](auto duration) {
         return std::to_string(std::chrono::duration<double, std::milli>(duration).count());
@@ -126,7 +156,9 @@ std::string DescribeBootProfile(const BootProfile& profile) {
             ",\"jniOnLoadMs\":" + ms(calls.jni_on_load.elapsed) +
             ",\"jniOnLoadInstructions\":" + std::to_string(calls.jni_on_load.instructions) + '}';
     }
-    return json + "]}";
+    json += ']';
+    if (profile.collect_hotspots) DescribeHotspots(json, profile);
+    return json + '}';
 }
 
 std::string Descriptor(std::string name) {
@@ -985,6 +1017,9 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
         Clock::time_point start = Clock::now();
         ~BootTimer() { elapsed = MillisecondsSince(start); }
     } timer{s.boot_ms};
+#ifdef WA_PROFILE_BOOT_HOTSPOTS
+    s.boot_profile.collect_hotspots = true;
+#endif
     const BootProfile::Capture profile(s.boot_profile);
     const auto& pkg = package.manifest.package;
     const auto requested = wa::system::ActivityClassName(pkg, activity ? activity : "");

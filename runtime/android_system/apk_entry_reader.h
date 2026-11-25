@@ -5,6 +5,8 @@
 
 #include <array>
 #include <memory>
+#include <string>
+#include <string_view>
 
 namespace wa::system {
 
@@ -32,7 +34,7 @@ class ApkEntryCache {
 class ApkEntryReader {
   public:
     ApkEntryReader(ZipArchiveHandle zip, const ZipEntry64& entry, std::span<const uint8_t> apk = {},
-                   ApkEntryCache* cache = nullptr);
+                   ApkEntryCache* cache = nullptr, std::string_view name = {});
     ~ApkEntryReader();
 
     uint64_t Size() const { return entry_.uncompressed_length; }
@@ -48,6 +50,7 @@ class ApkEntryReader {
     const ZipEntry64 entry_;
     const std::span<const uint8_t> apk_;
     ApkEntryCache* const cache_;
+    const std::string name_;
     std::unique_ptr<Deflate> deflate_;
 };
 

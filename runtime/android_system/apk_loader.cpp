@@ -612,7 +612,7 @@ int32_t FindLegacyCube(ZipArchiveHandle zip, std::span<const uint8_t> bytes, std
             if (!name.starts_with("lib") || name.contains('/') || !entry.uncompressed_length) continue;
             bool match = cube_package && name.starts_with("libndk_gles3_cube");
             if (!match) {
-                wa::system::ApkEntryReader file(zip, entry, bytes);
+                wa::system::ApkEntryReader file(zip, entry, bytes, nullptr, path);
                 wa::dbt::ElfInfo elf;
                 const auto arch = i == 0 ? WA_ARCH_ARM32 : WA_ARCH_ARM64;
                 match = wa::dbt::InspectElf(arch, file.Elf(), elf, true) == WA_OK &&

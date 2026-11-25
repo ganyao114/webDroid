@@ -133,7 +133,10 @@ struct ApkEntryReader::Deflate {
         chunk_size = count;
         cursor->position += count;
         cursor->crc = crc32(cursor->crc, chunk.data(), static_cast<uInt>(count));
-        if (auto* profile = BootProfile::active) profile->inflated_bytes += count;
+        if (auto* profile = BootProfile::active) {
+            profile->inflated_bytes += count;
+            if (profile->collect_hotspots) profile->inflated_entries[source.name_] += count;
+        }
         if (cursor->position == source.Size()) {
             uint8_t extra;
             if (!cursor->ended && (!Inflate(source, &extra, 1) || !cursor->stream.avail_out))
@@ -157,8 +160,8 @@ struct ApkEntryReader::Deflate {
 };
 
 ApkEntryReader::ApkEntryReader(ZipArchiveHandle zip, const ZipEntry64& entry,
-                               std::span<const uint8_t> apk, ApkEntryCache* cache)
-    : fd_(GetFileDescriptor(zip)), entry_(entry), apk_(apk), cache_(cache) {}
+                               std::span<const uint8_t> apk, ApkEntryCache* cache, std::string_view name)
+    : fd_(GetFileDescriptor(zip)), entry_(entry), apk_(apk), cache_(cache), name_(name) {}
 
 ApkEntryReader::~ApkEntryReader() = default;
 

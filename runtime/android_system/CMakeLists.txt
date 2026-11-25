@@ -51,6 +51,10 @@ if(IS_DIRECTORY "${AOSP17_SOURCE_DIR}")
                 "${AOSP17_SOURCE_DIR}/frameworks/base/core/jni/include")
     target_link_libraries(wa_android_system_foreground PUBLIC wa_hal_surfaceflinger
         PRIVATE wa_android_system_apk aosp17_ui_jni aosp17_libandroidfw wa_linker_ffi wa_hal_browser)
+    option(WA_PROFILE_BOOT_HOTSPOTS "Measure per-symbol host calls and per-entry APK inflation" OFF)
+    if(WA_PROFILE_BOOT_HOTSPOTS)
+        target_compile_definitions(wa_android_system_foreground PRIVATE WA_PROFILE_BOOT_HOTSPOTS=1)
+    endif()
     if(BUILD_TESTING)
         target_compile_definitions(wa_android_system_foreground PRIVATE WA_FOREGROUND_TESTING=1)
         target_sources(wa_android_system_foreground PRIVATE
