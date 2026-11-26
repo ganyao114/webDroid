@@ -127,8 +127,11 @@ std::string DescribeBootProfile(const BootProfile& profile) {
         ",\"wasmBytesEmitted\":" + std::to_string(profile.dbt_stats.wasm_bytes_emitted) +
         ",\"jitEntries\":" + std::to_string(profile.dbt_stats.jit_entries) +
         ",\"jitChains\":" + std::to_string(profile.dbt_stats.jit_chains) +
+        ",\"jitDirectChains\":" + std::to_string(profile.dbt_stats.jit_direct_chains) +
         ",\"jitEvictions\":" + std::to_string(profile.dbt_stats.jit_evictions) +
         ",\"jitFastHostCalls\":" + std::to_string(profile.dbt_stats.jit_fast_host_calls) +
+        ",\"jitInlineHostCalls\":" + std::to_string(profile.dbt_stats.jit_inline_host_calls) +
+        ",\"jitAtomicFallbacks\":" + std::to_string(profile.dbt_stats.jit_atomic_fallbacks) +
         ",\"jitExecSamples\":" + std::to_string(profile.dbt_stats.jit_exec_samples) +
         ",\"jitCompileFailures\":" + std::to_string(profile.dbt_stats.jit_compile_failures) +
         ",\"jitCompileMs\":" + std::to_string(profile.dbt_stats.jit_compile_ms) +
@@ -1067,9 +1070,15 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
     }
     if (!s.vm.DexLocation(s.activity_descriptor).starts_with(prefix))
         throw std::invalid_argument("Launcher activity is absent from the APK DEX files");
-    std::function<void()> release_inflaters;
+    struct InflateCleanup {
+        std::function<void()> trim;
+        void Run() {
+            if (trim) std::exchange(trim, {})();
+        }
+        ~InflateCleanup() { Run(); }
+    } inflate_cleanup;
     const auto native_library_dir = wa::system::MountGuestApkLibraries(s.vm, apk_path, s.package_name,
-                                                                      &release_inflaters);
+                                                                      &inflate_cleanup.trim);
     s.ui.RegisterNatives(s.vm);
     s.natives_registered = true;
     s.ui.BindSurfaceFlinger(s.scene.get(), kActivityLayer);
@@ -1120,7 +1129,7 @@ int32_t BootForeground(Session& s, Package package, const char* activity) {
     if (frame != WA_OK) return frame;
     // Keep the shared ZIP windows and mapped guest pages. Cold-start readers'
     // zlib checkpoints can be recreated when a later fault needs the entry.
-    if (release_inflaters) release_inflaters();
+    inflate_cleanup.Run();
     s.vm.Collect();
     s.booted = true;
     return WA_OK;

@@ -18,7 +18,11 @@
 #include <iterator>
 #include <memory>
 #include <string_view>
+#include <utility>
 #include <vector>
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
 
 namespace {
 
@@ -362,12 +366,46 @@ void TestFastHosts(wa_dbt& dbt, wa_guest_arch_t arch, wa_softmmu_t* mmu, uint32_
                   << " chains, " << hot.dbt_stats.jit_fast_host_calls << " fast calls, "
                   << hot.dbt_stats.iotlb_slow_writes << " slow writes, "
                   << cold.dbt_stats.wasm_units_compiled << " warmup units, "
+                  << cold.dbt_stats.wasm_bytes_emitted << " Wasm bytes, "
                   << cold.dbt_stats.jit_emit_ms << " ms emission, " << cold.dbt_stats.jit_install_ms
                   << " ms install, " << cold.dbt_stats.tier0_insns << " warmup Tier-0 instructions\n";
         CHECK(!cold.dbt_stats.jit_evictions && !hot.dbt_stats.jit_evictions);
         return hot.dbt_stats;
     };
-    const auto space = measure("wa_hot_space", {warmup}, {rounds}, warmup / 2, rounds / 2);
+    constexpr uint32_t space_rounds = 100'000;
+#ifdef __EMSCRIPTEN__
+    const auto space_entry = Find(&dbt, "wa_hot_space");
+    CHECK(Call(&dbt, space_entry, {4096}) == 2048);
+    for (unsigned i = 0; i < 128; ++i) CHECK(Call(&dbt, space_entry, {4}) == 2);
+    const auto benchmark_space = [&](bool inlined) {
+        const auto before = DbtStats(&dbt).host_calls;
+        wa::BootProfile profile;
+        const auto start = std::chrono::steady_clock::now();
+        {
+            const wa::BootProfile::Capture capture(profile);
+            CHECK(Call(&dbt, space_entry, {space_rounds}) == space_rounds / 2);
+        }
+        const auto elapsed = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start);
+        const auto& stats = profile.dbt_stats;
+        CHECK(DbtStats(&dbt).host_calls - before == space_rounds);
+        CHECK(stats.jit_chains && stats.jit_direct_chains == stats.jit_chains);
+        std::cout << "isspace x " << space_rounds << (inlined ? " inline " : " imported ")
+                  << elapsed.count() << " ms, "
+                  << stats.jit_fast_host_calls - stats.jit_inline_host_calls << " fast_host imports, "
+                  << stats.jit_inline_host_calls << " inlined, "
+                  << stats.jit_direct_chains << " direct chains\n";
+        CHECK(stats.jit_fast_host_calls >= space_rounds - 256);
+        CHECK(stats.jit_inline_host_calls == (inlined ? stats.jit_fast_host_calls : 0));
+    };
+    // Disable only the inline op table, keeping the same Wasm code and profiling level.
+    const auto ctype_stubs = std::exchange(dbt.inline_ctype, {});
+    benchmark_space(false);
+    dbt.inline_ctype = ctype_stubs;
+    benchmark_space(true);
+#else
+    measure("wa_hot_space", {warmup}, {space_rounds}, warmup / 2, space_rounds / 2);
+#endif
     const auto heap = measure("wa_hot_heap", {warmup}, {rounds}, 7 * warmup, 7 * rounds);
     const auto memory = measure("wa_hot_memory", {dst, src, sizeof(text), warmup},
         {dst, src, sizeof(text), memory_rounds}, warmup * (sizeof(text) - 1),
@@ -376,7 +414,6 @@ void TestFastHosts(wa_dbt& dbt, wa_guest_arch_t arch, wa_softmmu_t* mmu, uint32_
 #ifdef __EMSCRIPTEN__
     // Run through the regular DBT entry point. Each 8192-tick guest scheduler
     // slice can start another chain, and the function prologues are still cold.
-    CHECK(space.jit_chains <= 24 && space.jit_fast_host_calls >= rounds - 32);
     CHECK(heap.jit_fast_host_calls >= 6 * rounds - 32 && heap.iotlb_slow_writes < 10);
     CHECK(memory.jit_fast_host_calls >= 13 * memory_rounds - 32);
     CHECK(jni.jit_fast_host_calls >= rounds - 32);
@@ -389,6 +426,7 @@ void TestFastHosts(wa_dbt& dbt, wa_guest_arch_t arch, wa_softmmu_t* mmu, uint32_
         CHECK(Call(&dbt, Find(&dbt, "wa_hot_heap"), {warmup}) == 7 * warmup);
     }
     CHECK(accounting.host_calls.at("isspace").calls == rounds);
+    CHECK(accounting.dbt_stats.jit_inline_host_calls == 0);
     CHECK(accounting.host_calls.at("FixtureIsSameObject").calls == rounds);
     CHECK(accounting.host_calls.at("malloc").calls == warmup);
     CHECK(accounting.host_calls.at("free").calls == 2 * warmup);
@@ -401,14 +439,53 @@ void TestFastHosts(wa_dbt& dbt, wa_guest_arch_t arch, wa_softmmu_t* mmu, uint32_
         {"ispunct", ::ispunct}, {"iscntrl", ::iscntrl}, {"isblank", ::isblank},
         {"isascii", ::isascii}, {"tolower", ::tolower}, {"toupper", ::toupper},
     };
+    constexpr uint32_t count = 259;
+    const auto batch = Find(&dbt, "wa_ctype_results");
     for (const auto& [name, fn] : ctype) {
         const auto stub = wa::dbt::FindVirtualSymbol(dbt, "libc.so", name);
         CHECK(stub);
-        for (int value = -2; value <= 256; ++value) {
+        Call(&dbt, batch, {stub, dst, count});
+        const auto results = Read<std::array<int32_t, count>>(mmu, dst);
+        for (size_t i = 0; i < results.size(); ++i) {
+            const auto value = static_cast<int>(i) - 2;
             const auto expected = value >= -1 && value <= 255 ? fn(value) : 0;
             CHECK(static_cast<int32_t>(Call(&dbt, stub, {static_cast<uint32_t>(value)})) == expected);
+            CHECK(results[i] == expected);
         }
     }
+
+    const auto looper_symbol = [&](const char* name) {
+        const auto stub = wa::dbt::FindVirtualSymbol(dbt, "libandroid.so", name);
+        CHECK(stub);
+        return stub;
+    };
+    const auto poll_once = looper_symbol("ALooper_pollOnce");
+    const auto looper = Call(&dbt, looper_symbol("ALooper_prepare"), {1});
+    CHECK(looper && Call(&dbt, looper_symbol("ALooper_forThread")) == looper);
+    const auto poll_loop = Find(&dbt, "wa_hot_poll");
+#ifdef __EMSCRIPTEN__
+    for (unsigned i = 0; i < 128; ++i) CHECK(Call(&dbt, poll_loop, {poll_once, 4}) == 4);
+#endif
+    const auto polls = measure("wa_hot_poll", {poll_once, warmup}, {poll_once, rounds}, warmup, rounds);
+    Call(&dbt, looper_symbol("ALooper_wake"), {looper});
+    CHECK(Call(&dbt, poll_loop, {poll_once, warmup}) == warmup - 1);
+#ifdef __EMSCRIPTEN__
+    CHECK(polls.jit_fast_host_calls >= rounds - 64);
+    CHECK(polls.jit_chains < 64 && polls.jit_direct_chains == polls.jit_chains);
+#endif
+    const auto eventfd = wa::dbt::FindVirtualSymbol(dbt, "libc.so", "eventfd");
+    CHECK(eventfd);
+    const auto fd = Call(&dbt, eventfd, {0, 0x800}); // EFD_NONBLOCK
+    CHECK(fd <= INT32_MAX);
+    CHECK(Call(&dbt, looper_symbol("ALooper_addFd"), {looper, fd, 17, 1, 0, 0}) == 1);
+    wa::BootProfile watched;
+    {
+        const wa::BootProfile::Capture capture(watched);
+        CHECK(Call(&dbt, poll_loop, {poll_once, warmup}) == warmup);
+    }
+    CHECK(watched.dbt_stats.jit_fast_host_calls == 0);
+    CHECK(Call(&dbt, looper_symbol("ALooper_removeFd"), {looper, fd}) == 1);
+    CHECK(Call(&dbt, wa::dbt::FindVirtualSymbol(dbt, "libc.so", "close"), {fd}) == 0);
 
     const auto move = Find(&dbt, "wa_move_bytes");
     for (uint32_t i = 0; i < 64; ++i)
@@ -634,6 +711,230 @@ void TestELF(wa_guest_arch_t arch, const char* fixture, const char* wasm_output)
 }
 
 #ifdef __EMSCRIPTEN__
+EM_JS(void, AllowDispatcherTableGrowth, (int allow), {
+    const prototype = WebAssembly.Table.prototype;
+    if (allow) {
+        prototype.grow = Module['testTableGrow'];
+        delete Module['testTableGrow'];
+    } else {
+        Module['testTableGrow'] = prototype.grow;
+        prototype.grow = () => { throw new RangeError('Test dispatcher table limit'); };
+    }
+});
+
+EM_JS(void, ReplaceFirstJitUnit, (const wa_dbt_t* dbt, uintptr_t unit), {
+    Module['waDbtJit'].get(dbt).table.set(1, wasmTable.get(unit));
+});
+
+uint64_t TrapUnit(void*) { __builtin_trap(); }
+
+void TestDispatcherEntry(bool direct) {
+    constexpr uint64_t code = 0x200000;
+    constexpr uint32_t rwx = WA_PROT_READ | WA_PROT_WRITE | WA_PROT_EXEC;
+    constexpr std::array instructions{0x528000e0u, 0xd65f03c0u}; // mov w0, #7; ret
+    Mmu mmu(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
+    Dbt dbt(wa_dbt_create(WA_ARCH_ARM64, mmu.get()), wa_dbt_destroy);
+    CHECK(mmu && dbt);
+    OK(wa_softmmu_map_anon(mmu.get(), code, WA_PAGE_SIZE, rwx));
+    Write(mmu.get(), code, instructions);
+    Write(mmu.get(), code + 16, instructions);
+    OK(wa::softmmu::Protect(mmu.get(), code, WA_PAGE_SIZE, WA_PROT_READ | WA_PROT_EXEC));
+    if (!direct) AllowDispatcherTableGrowth(0);
+    for (unsigned i = 0; i < 128; ++i) CHECK(Call(dbt.get(), code) == 7);
+    if (!direct) AllowDispatcherTableGrowth(1);
+
+    constexpr unsigned chains = 10'000;
+    wa::BootProfile profile;
+    const auto start = std::chrono::steady_clock::now();
+    {
+        const wa::BootProfile::Capture capture(profile);
+        for (unsigned i = 0; i < chains; ++i) CHECK(Call(dbt.get(), code) == 7);
+    }
+    const auto elapsed = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - start);
+    CHECK(profile.dbt_stats.jit_chains == chains);
+    CHECK(profile.dbt_stats.jit_direct_chains == (direct ? chains : 0));
+    std::cout << chains << (direct ? " direct dispatcher chains " : " checked dispatcher chains ")
+              << elapsed.count() << " ms\n";
+
+    if (!direct) {
+        ReplaceFirstJitUnit(dbt.get(), reinterpret_cast<uintptr_t>(TrapUnit));
+        uint64_t result = 0;
+        STATUS(wa_dbt_call(dbt.get(), code, nullptr, 0, &result), WA_ERR_INTERNAL);
+        CHECK(Call(dbt.get(), code + 16) == 7);
+    }
+}
+
+void TestJitRegionDensity() {
+    constexpr uint64_t code = 0x200000;
+    constexpr size_t blocks = 48;
+    constexpr uint32_t rwx = WA_PROT_READ | WA_PROT_WRITE | WA_PROT_EXEC;
+    std::array<uint32_t, blocks * 8 + 3> instructions;
+    for (size_t block = 0; block < blocks; ++block) {
+        const auto start = block * 8;
+        for (unsigned i = 0; i < 7; ++i)
+            instructions[start + i] = 0x91000000 | ((i + 1) << 10); // add x0, x0, #i
+        const auto branch = start + 7;
+        const auto to_ret = instructions.size() - 1 - branch;
+        instructions[branch] = 0xb4000000 | (to_ret << 5); // cbz x0, ret
+    }
+    instructions[blocks * 8] = 0x71000421; // subs w1, w1, #1
+    instructions[blocks * 8 + 1] = 0x54000001 | ((0x7ffff - blocks * 8) << 5); // b.ne start
+    instructions.back() = 0xd65f03c0;
+    Mmu mmu(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
+    Dbt dbt(wa_dbt_create(WA_ARCH_ARM64, mmu.get()), wa_dbt_destroy);
+    CHECK(mmu && dbt);
+    OK(wa_softmmu_map_anon(mmu.get(), code, WA_PAGE_SIZE, rwx));
+    Write(mmu.get(), code, instructions);
+    OK(wa::softmmu::Protect(mmu.get(), code, WA_PAGE_SIZE, WA_PROT_READ | WA_PROT_EXEC));
+    const auto run = [&](wa::BootProfile& profile, uint32_t rounds) {
+        const auto start = std::chrono::steady_clock::now();
+        const wa::BootProfile::Capture capture(profile);
+        CHECK(Call(dbt.get(), code, {1, rounds}) == 1 + rounds * blocks * 28);
+        return std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count();
+    };
+    wa::BootProfile cold, hot;
+    const auto warmup = run(cold, 128);
+    const auto elapsed = run(hot, 10'000);
+    const auto& compiled = cold.dbt_stats;
+    CHECK(compiled.wasm_units_compiled > 0 && compiled.jit_compile_failures == 0);
+    std::cout << "JIT region warmup " << warmup << " ms, " << compiled.wasm_units_compiled << " units, "
+              << compiled.wasm_bytes_emitted << " Wasm bytes, " << compiled.jit_emit_ms << " ms emission, "
+              << compiled.jit_install_ms << " ms install, " << compiled.tier0_insns << " Tier-0 instructions. "
+              << "Hot " << elapsed << " ms, " << hot.dbt_stats.jit_entries << " entries, "
+              << hot.dbt_stats.tier0_insns << " Tier-0 instructions\n";
+    CHECK(hot.dbt_stats.tier0_insns < 4'000 && hot.dbt_stats.jit_entries > 0);
+}
+
+void TestForegroundLse() {
+    constexpr uint64_t code = 0x200000, data = 0x400000;
+    constexpr uint64_t load = code + 0x400, cas_pair = code + 0x420, exclusive = code + 0x440;
+    constexpr uint32_t rw = WA_PROT_READ | WA_PROT_WRITE;
+    constexpr uint32_t rx = WA_PROT_READ | WA_PROT_EXEC;
+    constexpr uint32_t ret = 0xd65f03c0u;
+    struct Operation {
+        uint32_t word;
+        uint64_t operand;
+    };
+    constexpr std::array operations{
+        Operation{0xf8210004, 7},    // LDADD
+        Operation{0xf8218004, 5},    // SWP
+        Operation{0xc8a17c02, 0},    // CAS
+        Operation{0xf8213004, 0x42}, // LDSET
+        Operation{0xf8211004, 0x14}, // LDCLR
+        Operation{0xf8212004, 0x19}, // LDEOR
+        Operation{0xf8215004, 0x42}, // LDSMIN
+        Operation{0xf8214004, 0x42}, // LDSMAX
+        Operation{0xf8217004, 0x42}, // LDUMIN
+        Operation{0xf8216004, 0x42}, // LDUMAX
+    };
+    Mmu mmu(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
+    Dbt dbt(wa_dbt_create(WA_ARCH_ARM64, mmu.get()), wa_dbt_destroy);
+    CHECK(mmu && dbt);
+    OK(wa_softmmu_map_anon(mmu.get(), code, WA_PAGE_SIZE, rw | rx));
+    OK(wa_softmmu_map_anon(mmu.get(), data, 2 * WA_PAGE_SIZE, rw));
+    OK(wa_softmmu_map_guard(mmu.get(), data + 2 * WA_PAGE_SIZE, WA_PAGE_SIZE));
+    Write(mmu.get(), load, std::array{0xf9400000u, ret}); // ldr x0, [x0]
+    Write(mmu.get(), cas_pair, std::array{0x48227c04u, 0xaa0203e0u, ret}); // casp x2, x3, x4, x5, [x0]
+    Write(mmu.get(), exclusive, std::array{0xc85f7c05u, 0xf8218064u, 0xc8067c02u, 0x2a0603e0u, ret});
+    const auto entry = [&](unsigned size, size_t index) {
+        return code + (size * operations.size() + index) * 16;
+    };
+    for (unsigned size = 0; size < 4; ++size) {
+        for (size_t i = 0; i < operations.size(); ++i) {
+            const auto op = (operations[i].word & 0x3fffffffu) | (size << 30);
+            Write(mmu.get(), entry(size, i), std::array{op, i == 2 ? 0xaa0103e0u : 0xaa0403e0u, ret});
+        }
+    }
+    OK(wa::softmmu::Protect(mmu.get(), code, WA_PAGE_SIZE, rx));
+    Write(mmu.get(), data, uint64_t{0});
+    for (unsigned i = 0; i < 128; ++i) CHECK(Call(dbt.get(), load, {data}) == 0);
+
+    wa::BootProfile hot;
+    for (unsigned size = 0; size < 4; ++size) {
+        const auto bits = 8u << size;
+        const auto mask = UINT64_MAX >> (64 - bits);
+        const auto initial = (uint64_t{1} << (bits - 1)) | 0x15;
+        const auto upper = uint64_t{0xfedcba9876543210} & ~mask;
+        constexpr uint64_t desired = 73;
+        const std::array expected{initial + 7, uint64_t{5}, desired, initial | 0x42, initial & ~uint64_t{0x14},
+                                  initial ^ 0x19, initial, uint64_t{0x42}, uint64_t{0x42}, initial};
+        for (size_t i = 0; i < operations.size(); ++i) {
+            const auto operand = i == 2 ? initial : operations[i].operand;
+            const auto verify = [&] {
+                Write(mmu.get(), data, upper | initial);
+                CHECK(Call(dbt.get(), entry(size, i), {data, operand, desired}) == initial);
+                CHECK(Read<uint64_t>(mmu.get(), data) == (upper | expected[i]));
+            };
+            for (unsigned j = 0; j < 96; ++j) verify();
+            const wa::BootProfile::Capture capture(hot);
+            verify();
+            if (i == 2) {
+                CHECK(Call(dbt.get(), entry(size, i), {data, desired - 1, 9}) == desired);
+                CHECK(Read<uint64_t>(mmu.get(), data) == (upper | desired));
+            }
+        }
+    }
+    CHECK(hot.dbt_stats.jit_entries == 44 && hot.dbt_stats.jit_direct_chains == 44);
+    CHECK(hot.dbt_stats.jit_atomic_fallbacks == 0 && hot.dbt_stats.tier0_insns == 0);
+    std::cout << "ARM64 LSE " << hot.dbt_stats.jit_entries << " resident JIT runs, "
+              << hot.dbt_stats.jit_atomic_fallbacks << " atomic fallbacks\n";
+
+    const auto ldadd = entry(3, 0);
+    const auto check_fallback = [&](uint64_t address, int32_t status, uint64_t expected) {
+        wa::BootProfile profile;
+        {
+            const wa::BootProfile::Capture capture(profile);
+            const uint64_t args[]{address, 7};
+            uint64_t result{};
+            STATUS(wa_dbt_call(dbt.get(), ldadd, args, std::size(args), &result), status);
+            if (status == WA_OK) CHECK(result == expected);
+        }
+        CHECK(profile.dbt_stats.jit_direct_chains >= 1 && profile.dbt_stats.jit_atomic_fallbacks == 1);
+    };
+    const auto cold = data + WA_PAGE_SIZE;
+    Write(mmu.get(), cold, uint64_t{17});
+    check_fallback(cold, WA_OK, 17);
+    CHECK(Read<uint64_t>(mmu.get(), cold) == 24);
+    wa::BootProfile warmed;
+    {
+        const wa::BootProfile::Capture capture(warmed);
+        CHECK(Call(dbt.get(), ldadd, {cold, 7}) == 24);
+    }
+    CHECK(warmed.dbt_stats.jit_direct_chains == 1 && warmed.dbt_stats.jit_atomic_fallbacks == 0);
+    CHECK(Read<uint64_t>(mmu.get(), cold) == 31);
+    Write(mmu.get(), data, uint64_t{31});
+    check_fallback(data + 1, WA_ERR_FAULT, 0);
+    CHECK(Read<uint64_t>(mmu.get(), data) == 31);
+    OK(wa::softmmu::Protect(mmu.get(), data, WA_PAGE_SIZE, WA_PROT_READ));
+    check_fallback(data, WA_ERR_FAULT, 0);
+    CHECK(Read<uint64_t>(mmu.get(), data) == 31);
+    check_fallback(cold + WA_PAGE_SIZE, WA_ERR_FAULT, 0);
+    uint64_t high = wa::softmmu::kAddressLimit + data;
+    OK(wa::softmmu::MapSparse(mmu.get(), high, WA_PAGE_SIZE, rw, wa::softmmu::Placement::Fixed));
+    Write(mmu.get(), high, uint64_t{21});
+    check_fallback(high, WA_OK, 21);
+    CHECK(Read<uint64_t>(mmu.get(), high) == 28 && Read<uint64_t>(mmu.get(), data) == 31);
+
+    OK(wa::softmmu::Protect(mmu.get(), data, WA_PAGE_SIZE, rw));
+    Call(dbt.get(), load, {data});
+    Write(mmu.get(), data + 8, uint64_t{41});
+    for (unsigned i = 0; i < 96; ++i) {
+        Write(mmu.get(), data, uint64_t{31});
+        CHECK(Call(dbt.get(), exclusive, {data, 9, 7, data + 8}) == 1);
+        CHECK(Read<uint64_t>(mmu.get(), data) == 31 && Read<uint64_t>(mmu.get(), data + 8) == 9);
+        CHECK(Call(dbt.get(), cas_pair, {data, 0, 31, 9, 51, 61}) == 31);
+        CHECK(Read<uint64_t>(mmu.get(), data) == 51 && Read<uint64_t>(mmu.get(), data + 8) == 61);
+    }
+    wa::BootProfile pair;
+    {
+        const wa::BootProfile::Capture capture(pair);
+        CHECK(Call(dbt.get(), cas_pair, {data, 0, 51, 61, 31, 41}) == 51);
+    }
+    CHECK(pair.dbt_stats.jit_atomic_fallbacks == 1);
+}
+
 void TestForegroundJitMemory() {
     namespace softmmu = wa::softmmu;
     constexpr uint64_t code = 0x00200000;
@@ -690,7 +991,12 @@ void TestForegroundJitMemory() {
     const auto fault = [&](uint64_t read, uint64_t write) {
         const uint64_t args[]{read, write, 1};
         uint64_t result{};
-        STATUS(wa_dbt_call(dbt.get(), pc, args, 3, &result), WA_ERR_FAULT);
+        wa::BootProfile profile;
+        {
+            const wa::BootProfile::Capture capture(profile);
+            STATUS(wa_dbt_call(dbt.get(), pc, args, 3, &result), WA_ERR_FAULT);
+        }
+        CHECK(profile.dbt_stats.jit_direct_chains == 1);
     };
     OK(softmmu::Protect(mmu.get(), dest, WA_PAGE_SIZE, WA_PROT_READ));
     fault(source + 3, dest + 7);
@@ -725,7 +1031,18 @@ void TestForegroundJitMemory() {
 } // namespace
 
 int main(int argc, char** argv) {
+#ifdef __EMSCRIPTEN__
+    if (argc == 2 && std::string_view(argv[1]) == "--region-only") {
+        TestJitRegionDensity();
+        return 0;
+    }
+#endif
     CHECK(argc == 5);
+#ifdef __EMSCRIPTEN__
+    TestDispatcherEntry(false);
+    TestDispatcherEntry(true);
+    TestJitRegionDensity();
+#endif
     TestSoftMMU();
     TestGuestHeap(WA_ARCH_ARM32);
     TestGuestHeap(WA_ARCH_ARM64);
@@ -733,5 +1050,6 @@ int main(int argc, char** argv) {
     TestELF(WA_ARCH_ARM64, argv[2], argv[4]);
 #ifdef __EMSCRIPTEN__
     TestForegroundJitMemory();
+    TestForegroundLse();
 #endif
 }

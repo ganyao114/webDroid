@@ -27,14 +27,15 @@ struct ElfInfo {
 // reader form lets APK-backed callers inspect only the ELF metadata they use.
 struct ElfFile {
     explicit ElfFile(std::span<const uint8_t> bytes) : bytes(bytes), size(bytes.size()) {}
-    ElfFile(uint64_t size, wa_page_read_fn read, void* user, uint32_t file_id)
-        : size(size), read(read), user(user), file_id(file_id) {}
+    ElfFile(uint64_t size, wa_page_read_fn read, void* user, uint32_t file_id, bool read_ahead = false)
+        : size(size), read(read), user(user), file_id(file_id), read_ahead(read_ahead) {}
 
     std::span<const uint8_t> bytes;
     uint64_t size;
     wa_page_read_fn read = nullptr;
     void* user = nullptr;
     uint32_t file_id = 0;
+    bool read_ahead = false;
 };
 
 int32_t InspectElf(wa_guest_arch_t arch, std::span<const uint8_t> bytes, ElfInfo& info,

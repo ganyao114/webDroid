@@ -29,6 +29,7 @@ struct NativeLooper {
     GuestBuffer handle;
     int wake_pipe[2]{-1, -1};
     uint64_t owner = 0, serial = 0;
+    uint32_t wake_pending = 0;
     size_t retained = 0;
     bool allow_identifiers = false;
     bool callback_turn_deferred = false;
@@ -41,24 +42,29 @@ namespace {
 constexpr int kWake = -1, kCallback = -2, kTimeout = -3, kError = -4;
 constexpr int kInput = 1, kOutput = 2, kPollError = 4, kHangup = 8, kInvalid = 16;
 
-void Notify(const NativeLooper& looper) {
+void Notify(NativeLooper& looper) {
     const uint8_t signal = 1;
-    while (write(looper.wake_pipe[1], &signal, 1) < 0 && errno == EINTR) {}
+    ssize_t written;
+    do {
+        written = write(looper.wake_pipe[1], &signal, 1);
+    } while (written < 0 && errno == EINTR);
+    if (written == 1 && looper.wake_pending != UINT32_MAX) ++looper.wake_pending;
 }
 
-void DrainWake(const NativeLooper& looper) {
+void DrainWake(NativeLooper& looper) {
     std::array<uint8_t, 64> bytes;
     for (;;) {
         const auto result = read(looper.wake_pipe[0], bytes.data(), bytes.size());
-        if (result == 0 || (result < 0 && errno != EINTR)) return;
+        if (result == 0 || (result < 0 && errno != EINTR)) break;
     }
+    looper.wake_pending = 0;
 }
 
 template <bool Prepare> void ForThread(wa_host_call_ctx_t& ctx) {
     auto& dbt = *ctx.dbt;
-    auto& handle = dbt.running->native_looper;
+    auto*& active = dbt.running->native_looper;
     if constexpr (Prepare) {
-        if (!handle) {
+        if (!active) {
             auto looper = std::make_shared<NativeLooper>(dbt);
             if (pipe(looper->wake_pipe) < 0) return;
             for (const int fd : looper->wake_pipe)
@@ -66,11 +72,11 @@ template <bool Prepare> void ForThread(wa_host_call_ctx_t& ctx) {
             looper->allow_identifiers = (ctx.args[0] & 1) != 0;
             looper->owner = dbt.running->id;
             const auto id = looper->handle.address;
-            dbt.bionic->loopers.emplace(id, std::move(looper));
-            handle = id;
+            const auto entry = dbt.bionic->loopers.emplace(id, std::move(looper)).first;
+            active = entry->second.get();
         }
     }
-    ctx.ret0 = handle;
+    ctx.ret0 = active ? active->handle.address : 0;
 }
 
 enum class Operation { Acquire, Release, Wake, Add, Remove };
@@ -232,9 +238,8 @@ int PollOnce(NativeLooper& looper, wa_host_call_ctx_t& ctx) {
 }
 
 void PollLooper(wa_host_call_ctx_t& ctx) {
-    const auto& dbt = *ctx.dbt;
-    const auto looper = dbt.bionic->loopers.find(dbt.running->native_looper);
-    if (looper == dbt.bionic->loopers.end()) {
+    auto* looper = ctx.dbt->running->native_looper;
+    if (!looper) {
         const GuestMemory memory(ctx);
         if (ctx.args[1]) memory.Write<int32_t>(ctx.args[1], 0);
         if (ctx.args[2]) memory.Write<int32_t>(ctx.args[2], 0);
@@ -242,12 +247,17 @@ void PollLooper(wa_host_call_ctx_t& ctx) {
         ctx.ret0 = uint32_t(kError);
         return;
     }
-    ctx.ret0 = uint32_t(PollOnce(*looper->second, ctx));
+    ctx.ret0 = uint32_t(PollOnce(*looper, ctx));
 }
 
 #ifdef __EMSCRIPTEN__
 bool FastPollLooper(FastHostCall& call) {
-    if (call.dbt.running->native_looper) return false;
+    const auto& thread = *call.dbt.running;
+    const auto* looper = thread.native_looper;
+    if (looper && (static_cast<int32_t>(call.args[0]) || !looper->watches.empty() ||
+                   !looper->responses.empty() || looper->wake_pending || looper->callback_turn_deferred ||
+                   thread.wait.kind != WaitKind::None || thread.io_deadline != Deadline{}))
+        return false;
     std::array<uint8_t*, 3> outputs{};
     const size_t word = call.dbt.arch == WA_ARCH_ARM32 ? 4 : 8;
     for (size_t i = 0; i < outputs.size(); ++i) {
@@ -257,7 +267,7 @@ bool FastPollLooper(FastHostCall& call) {
     }
     for (size_t i = 0; i < outputs.size(); ++i)
         if (outputs[i]) std::memset(outputs[i], 0, i == 2 ? word : 4);
-    call.result = uint32_t(kError);
+    call.result = uint32_t(looper ? kTimeout : kError);
     return true;
 }
 #endif
@@ -265,12 +275,10 @@ bool FastPollLooper(FastHostCall& call) {
 } // namespace
 
 void DropThreadLooper(wa_dbt& dbt) {
-    const auto handle = std::exchange(dbt.running->native_looper, 0);
-    auto& loopers = dbt.bionic->loopers;
-    const auto looper = loopers.find(handle);
-    if (looper == loopers.end()) return;
-    looper->second->owner = 0;
-    if (!looper->second->retained) loopers.erase(looper);
+    auto* looper = std::exchange(dbt.running->native_looper, nullptr);
+    if (!looper) return;
+    looper->owner = 0;
+    if (!looper->retained) dbt.bionic->loopers.erase(looper->handle.address);
 }
 
 void RegisterNativeLooper(wa_dbt& dbt) {

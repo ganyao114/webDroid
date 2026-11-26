@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace wa::system {
 
@@ -29,6 +30,7 @@ class ApkEntryCache {
     std::span<const uint8_t> Get(Contents contents, uint64_t entry, uint64_t offset);
     void Put(Contents contents, uint64_t entry, uint64_t offset, std::span<const uint8_t> bytes,
              bool speculative = false);
+    void TrimInflaters() noexcept;
 
   private:
     friend class ApkEntryReader;
@@ -39,16 +41,16 @@ class ApkEntryCache {
         bool speculative = true;
     };
     std::span<Window> Candidates(Contents contents, uint64_t entry, uint64_t offset);
-    size_t CheckpointsPerEntry() const { return large_ ? 128 : 64; }
+    size_t CheckpointsPerEntry() const { return large_ ? 256 : 64; }
     void UseInflater(ApkEntryReader& reader);
     void RemoveInflater(ApkEntryReader& reader) noexcept;
     void AddCheckpoint();
 
+    const bool large_;
     std::array<Window, 16> compressed_{};
-    std::array<Window, 128> inflated_{};
+    std::vector<Window> inflated_;
     std::list<ApkEntryReader*> inflaters_;
     size_t checkpoints_ = 0;
-    bool large_ = true;
     uint64_t sequence_ = 0, next_entry_ = 0;
 };
 

@@ -20,6 +20,7 @@ namespace wa::dbt {
 
 struct ActiveJitAccess;
 struct GuestWait;
+struct InlineCtypeStubs;
 struct GuestCpu {
     swift::runtime::backend::wasm::WasmRunContext run{};
     union {
@@ -28,7 +29,9 @@ struct GuestCpu {
     };
 #ifdef __EMSCRIPTEN__
     ActiveJitAccess* jit_access = nullptr;
+    const InlineCtypeStubs* jit_ctype = nullptr;
     uint32_t jit_fast_calls = 0;
+    uint32_t jit_inline_host_calls = 0;
 #endif
     GuestCpu() : arm64{} {}
 };
@@ -38,6 +41,23 @@ static_assert(offsetof(GuestCpu, arm32) == sizeof(GuestCpu::run));
 static_assert(offsetof(GuestCpu, arm64) == sizeof(GuestCpu::run));
 
 #ifdef __EMSCRIPTEN__
+template <bool Arm32> void SetJitHostReturn(GuestCpu& cpu, uint64_t value) noexcept {
+    if constexpr (Arm32) {
+        auto& state = cpu.arm32;
+        state.r[0] = static_cast<uint32_t>(value);
+        state.r[1] = 0;
+        const auto lr = state.r[14];
+        state.pc = swift::runtime::arm32::Location::Make(lr & ~1u, lr & 1u, 0, state.fpscr).Key();
+        state.reservation_valid = 0;
+    } else {
+        auto& state = cpu.arm64;
+        state.gprs[0] = value;
+        state.gprs[1] = 0;
+        state.pc = state.gprs[30];
+        state.reservation_valid = 0;
+    }
+}
+
 struct JitRunResult {
     uint64_t exit = 0;
     uint32_t ticks = 0;
@@ -54,6 +74,7 @@ class WasmJit {
     bool Observe(uint64_t pc) noexcept;
     bool Prepare(uint64_t pc);
     bool Ready(uint64_t pc) const noexcept;
+    void WarmAtomicPage(softmmu::CpuAccess& memory, uint64_t address, size_t size) noexcept;
     JitRunResult Run(GuestCpu& cpu, uint64_t pc, uint32_t budget, softmmu::CpuAccess& memory,
                      const GuestWait* caller_wait);
 

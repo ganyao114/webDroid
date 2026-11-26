@@ -238,11 +238,11 @@ struct LoadMappings {
         ranges.push_back({address, page.offset, WA_PAGE_SIZE, page.valid, page.prot});
     }
 
-    int32_t Map(uint32_t file_id) {
+    int32_t Map(uint32_t file_id, bool read_ahead) {
         for (const auto& range : ranges) {
-            const auto status = wa_softmmu_map_file_lazy(
+            const auto status = softmmu::MapFileLazy(
                 mmu, range.address, range.length, range.prot, file_id, range.offset, range.valid,
-                (range.prot & WA_PROT_WRITE) != 0);
+                (range.prot & WA_PROT_WRITE) != 0, read_ahead);
             if (status != WA_OK)
                 return status;
             ++mapped;
@@ -324,7 +324,7 @@ template <typename Word> class Loader {
             return status;
         const auto mapped_base = image.base;
         dbt->images.reserve(dbt->images.size() + 1);
-        status = mappings.Map(file_id);
+        status = mappings.Map(file_id, file.read_ahead);
         if (status == WA_OK) status = Relocate();
         if (status == WA_OK && !image.tls_initial.empty())
             status = wa_softmmu_read(dbt->mmu, bias + tls->vaddr, image.tls_initial.data(),

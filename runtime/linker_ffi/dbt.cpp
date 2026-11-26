@@ -6,6 +6,7 @@
 #include "runtime/arch/arm32/service.h"
 #include "runtime/arch/arm64/service.h"
 #include "runtime/arch/x86/flags.h"
+#include "runtime/atomic_ops.h"
 #include "runtime/backend/wasm/compile.h"
 #include "runtime/exit.h"
 #include "runtime/frontend/arm32/build_ir.h"
@@ -193,6 +194,38 @@ struct ExecutionMemory {
             wa::softmmu::Write(memory.dbt.mmu, address, bytes));
     }
 
+    static AccessResult Atomic(void* opaque, const rt::AtomicRequest& request,
+                               rt::AtomicValue& observed) noexcept {
+        if (!rt::atomic::ValidRequest(request)) return {AccessStatus::UnsupportedBeforeAccess};
+        auto& memory = *static_cast<ExecutionMemory*>(opaque);
+        const auto address = request.address;
+        const auto size = request.bits / 8;
+        constexpr auto permissions = WA_PROT_READ | WA_PROT_WRITE;
+        const auto status = memory.Check(address, size, permissions);
+        if (status != WA_OK) return memory.Record({status, address});
+        if (address & (size - 1)) return memory.Record({WA_ERR_FAULT, address});
+
+        // Keep qualification, observation and replacement under one MMU lock.
+        std::optional<wa::softmmu::CpuAccess> lock;
+        if (!memory.batch) lock.emplace(memory.dbt.mmu);
+        auto& batch = memory.batch ? *memory.batch : *lock;
+        observed = {};
+        const auto access = batch.Read(address, {reinterpret_cast<uint8_t*>(&observed), size},
+                                       WA_PROT_READ);
+        if (access.status != WA_OK) return memory.Record(access);
+
+        const auto old = rt::atomic::Bits(observed);
+        if (request.operation == rt::AtomicOperation::StoreExclusive && !rt::atomic::Matches(request, old))
+            return memory.Record(access);
+        const auto replacement = rt::atomic::Pair(rt::atomic::Replacement(request, old));
+        const auto written = batch.Write(address, {reinterpret_cast<const uint8_t*>(&replacement), size});
+#ifdef __EMSCRIPTEN__
+        if (written.status == WA_OK && memory.dbt.wasm_jit)
+            memory.dbt.wasm_jit->WarmAtomicPage(batch, address, size);
+#endif
+        return memory.Record(written);
+    }
+
     bool FetchArm64(uint64_t pc, uint32_t& word) {
         const auto base = AlignDown(pc, WA_PAGE_SIZE);
         if (!code_page || code_base != base) {
@@ -210,7 +243,7 @@ struct ExecutionMemory {
     }
 
     template <typename Services> Services Callbacks() {
-        return {.opaque = this, .fetch = Fetch, .read = Read, .write = Write};
+        return {.opaque = this, .fetch = Fetch, .read = Read, .write = Write, .atomic = Atomic};
     }
 };
 
@@ -1233,7 +1266,7 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_
         Layout layout, Decode decode, Build build) -> rt::frontend::BuildResult {
         const rt::frontend::DecodeLimits limits = single_block
             ? rt::frontend::DecodeLimits{.max_instructions = 64, .max_blocks = 1}
-            : rt::frontend::DecodeLimits{.max_instructions = 256, .max_blocks = 32};
+            : rt::frontend::DecodeLimits{.max_instructions = 512, .max_blocks = 64};
         const auto decoded = decode(region, key, limits);
         if (!decoded || decoded.instructions.empty()) return {};
         auto built = build(decoded, region, layout, target);

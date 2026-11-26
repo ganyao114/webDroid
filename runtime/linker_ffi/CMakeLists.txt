@@ -18,6 +18,7 @@ target_include_directories(wa_linker_ffi PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../s
 if(EMSCRIPTEN)
     target_compile_options(wa_linker_ffi PRIVATE
         -O3 -msimd128 -matomics -mbulk-memory -fwasm-exceptions)
+    target_link_options(wa_linker_ffi INTERFACE -sALLOW_TABLE_GROWTH=1)
     set(WA_JIT_HOT_THRESHOLD 32 CACHE STRING "Guest entry count before compiling a foreground Wasm unit")
     set_property(SOURCE wasm_jit.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         "WA_JIT_HOT_THRESHOLD=${WA_JIT_HOT_THRESHOLD}")

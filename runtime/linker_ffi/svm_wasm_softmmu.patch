@@ -149,20 +149,16 @@
  }  // namespace swift::runtime::backend::wasm::detail
 --- a/emit_atomic.cpp
 +++ b/emit_atomic.cpp
-@@ -5,6 +5,24 @@
+@@ -5,6 +5,20 @@
  namespace swift::runtime::backend::wasm::detail {
  bool Writer::Atomic() {
      const auto op = Op().opcode;
-+    // The foreground owner handles atomics with the interpreter's access
-+    // checks and reservation state. Return before the instruction's effects.
-+    if (options.wide_softmmu_callbacks &&
++    const bool foreground = options.wide_softmmu_callbacks;
++    const auto unsupported = ExitValue(NativeExit::UnsupportedAtomic);
++    if (foreground && (options.guest_isa != GuestISA::Arm64 || op == OpCode::CompareAndSwap128) &&
 +        (op == OpCode::AtomicRMW || op == OpCode::AtomicExchange || op == OpCode::AtomicFetchAdd ||
 +         op == OpCode::CompareAndSwap || op == OpCode::CompareAndSwap128)) {
-+        I64(guest_pc);
-+        Set(allocation.pc);
-+        Flush();
-+        I64(ExitValue(NativeExit::UnsupportedAtomic));
-+        B(0x0f);
++        Exit(unsupported, true);
 +        // Emit a typed placeholder for the unreachable remainder of the block.
 +        if (Op().type == Type::V128) ZeroVector();
 +        else if (NodeIsI32(node)) I32(0);
@@ -174,6 +170,88 @@
      if (op == OpCode::CompareAndSwap128) {
          if (options.shared_memory) return false;
          if (Op().type != Type::V128) Reject(CompileError::UnsupportedType);
+@@ -81,8 +95,17 @@
+         else
+             Result(false, true);
+     };
++    const auto address = [&] {
++        if (foreground) {
++            Get(allocation.mmu_address);
++            Get(allocation.mmu_write);
++            B(0x6a);
++        } else {
++            GetGuestAddress();
++        }
++    };
+     const auto store = [&] {
+-        if (SoftMMU())
++        if (SoftMMU() && !foreground)
+             MmuStore(bits);
+         else if (narrow)
+             StoreI32(bits);
+@@ -91,9 +114,17 @@
+     };
+     const unsigned address_arg = op == OpCode::AtomicRMW ? 1 : 0;
+     GuestAddress(address_arg, true);
+-    if (SoftMMU())
++    if (SoftMMU()) {
+         MmuPrepare(bits, 3, args[address_arg]);
+-    else {
++        if (foreground) {
++            // The foreground owner holds the SoftMMU lock and schedules guest
++            // threads cooperatively. The ARM64 IR checks alignment and clears
++            // the exclusive reservation. Require both permissions before RMW.
++            Get(allocation.mmu_fast);
++            B(0x45);
++            FaultIf(NativeExit::UnsupportedAtomic);
++        }
++    } else {
+         BoundsCheck(bits, 3);
+         B(0x1a);
+     }
+@@ -104,7 +135,8 @@
+         U(code + variant);
+         MemArg(0, 0, align);
+     };
+-    if (options.shared_memory) {
++    const bool wasm_atomics = options.shared_memory && !foreground;
++    if (wasm_atomics) {
+         GetGuestAddress64();
+         Tee(T(8));
+         I64(bits / 8 - 1);
+@@ -137,10 +169,10 @@
+         Get(temp(4));
+         Set(temp(0));
+     } else {
+-        if (SoftMMU()) {
++        if (SoftMMU() && !foreground) {
+             MmuLoad(bits, false, narrow);
+         } else {
+-            GetGuestAddress();
++            address();
+             if (narrow)
+                 LoadI32(bits);
+             else
+@@ -153,7 +185,7 @@
+         read(1);
+         B(narrow ? 0x46 : 0x51);
+         Block(0x04);
+-        if (!SoftMMU()) GetGuestAddress();
++        if (!SoftMMU() || foreground) address();
+         read(2);
+         store();
+         B(0x0b);
+@@ -205,8 +237,8 @@
+         }
+         normalize();
+         Set(temp(1));
+-        if (!SoftMMU()) GetGuestAddress();
+-        if (options.shared_memory) {
++        if (!SoftMMU() || foreground) address();
++        if (wasm_atomics) {
+             Get(temp(0));
+             Get(temp(1));
+             atomic(0x48);
 --- a/emit_calls.cpp
 +++ b/emit_calls.cpp
 @@ -61,7 +61,8 @@
@@ -217,17 +295,17 @@
          I32(abi::ContextBytes);
          B(0x6a);
      }
-@@ -44,6 +45,10 @@
-         if (options.pc_offset != UINT32_MAX) {
+@@ -45,6 +46,10 @@
              UniformLoad(options.pc_offset, Type::U64);
              Set(allocation.pc);
-+        }
+         }
 +        if (SoftMMU() && options.flags_offset != UINT32_MAX) {
 +            UniformLoad(options.flags_offset, Type::U64);
 +            Set(allocation.flags);
-         }
++        }
      } else if (!options.private_state) {
          const auto type = options.gpr_stride == 4 ? Type::U32 : Type::U64;
+         for (u32 parameter = FirstGprParameter; parameter < allocation.parameters; ++parameter) {
 @@ -95,8 +100,22 @@
      guest_pc = options.entry_pc;
      has_fault_location = options.entry_pc != 0;
@@ -252,20 +330,78 @@
          B(0x7d);
          Set(allocation.ticks);
      }
-@@ -234,6 +253,12 @@
+@@ -119,6 +138,14 @@
+ void Writer::Function(u32 entry) {
+     for (auto& home : allocation.homes) home.normalized = false;
+     bytes.clear();
++    const auto unreachable = [&] {
++        if (options.wide_softmmu_callbacks) {
++            I64(UINT64_MAX);
++            B(0x0f);
++        } else {
++            B(0x00);
++        }
++    };
+     auto& layout = allocation.block_layout;
+     const auto next_member = [&](u32 id) {
+         return (layout[id].loop_end == UINT32_MAX ? id : layout[id].loop_end) + 1;
+@@ -182,7 +209,7 @@
+             for (u32 j = 0; j < layout[i].loops_ending; ++j) B(0x0b);
+             depth -= layout[i].loops_ending;
+         }
+-        B(0x00);
++        unreachable();
+     } else {
+         Block(0x03);
+         Block();
+@@ -197,9 +224,9 @@
+             EmitBlock(i, static_cast<u32>(blocks.size()) - i);
+         }
+         B(0x0b);
+-        B(0x00);
++        unreachable();
+         B(0x0b);
+-        B(0x00);
++        unreachable();
+     }
+     B(0x0b);
+     // Scratch locals are discovered while emitting instructions. Encode the
+@@ -231,10 +258,34 @@
+         I64(guest_pc);
+         Set(allocation.pc);
+     }
++    if (options.wide_softmmu_callbacks && options.guest_isa == GuestISA::Arm64 &&
++        reason == ExitValue(NativeExit::UnsupportedAtomic) && allocation.ticks != UINT32_MAX &&
++        block < options.block_pcs.size() && block < options.block_ticks.size() &&
++        guest_pc >= options.block_pcs[block]) {
++        // The block's remaining instructions have not executed.
++        const auto executed = (guest_pc - options.block_pcs[block]) / 4;
++        const auto cost = options.block_ticks[block];
++        if (executed < cost) {
++            Get(allocation.ticks);
++            I64(cost - executed);
++            B(0x7c);
++            Set(allocation.ticks);
++        }
++    }
      Flush();
      if (Linked()) {
          I32(static_cast<u32>(reason));
-+        B(0x0f);
+         B(0x0f);
 +    } else if (SoftMMU() && reason == ExitValue(NativeExit::MemoryFault)) {
 +        Get(0);
 +        I32(static_cast<u32>(reason));
 +        HostStore32(abi::ExitSubcode);
 +        I64(0);
-         B(0x0f);
++        B(0x0f);
++    } else if (options.wide_softmmu_callbacks) {
++        // Foreground units return the former trap as an internal error.
++        I64(reason == ExitValue(NativeExit::UnsupportedAtomic) ? reason : UINT64_MAX);
++        B(0x0f);
      } else
          B(0x00);
-@@ -344,7 +369,10 @@
+ }
+@@ -344,12 +395,18 @@
                  Dispatch();
              else {
                  Flush();
@@ -277,6 +413,15 @@
                  B(0x0f);
              }
              return;
+         case TerminalKind::Unreachable:
+-            B(0x00);
++            if (options.wide_softmmu_callbacks)
++                Exit(UINT64_MAX, false);
++            else
++                B(0x00);
+             return;
+         default:
+             Reject(CompileError::UnsupportedControlFlow);
 --- a/emit_memory.cpp
 +++ b/emit_memory.cpp
 @@ -12,6 +12,28 @@
@@ -308,6 +453,16 @@
      if (SoftMMU() || (wasm32 && !options.checked_memory)) {
          ReadI32(argument);
          if (wasm32 && (Linked() || for_atomic)) {
+@@ -343,7 +365,8 @@
+             B(0x83);
+             I64(0);
+             B(0x52);
+-            FaultIf(NativeExit::AlignmentFault);
++            FaultIf(options.wide_softmmu_callbacks ? NativeExit::UnsupportedAtomic :
++                                                   NativeExit::AlignmentFault);
+             return true;
+         case OpCode::MemoryBarrierTSO:
+         case OpCode::MemoryStoreFence:
 --- a/emit_softmmu.cpp
 +++ b/emit_softmmu.cpp
 @@ -19,7 +19,7 @@

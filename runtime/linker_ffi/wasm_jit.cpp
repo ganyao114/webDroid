@@ -115,20 +115,10 @@ extern "C" EMSCRIPTEN_KEEPALIVE JitHostResult wa_dbt_jit_fast_host(GuestCpu* cpu
     if (!symbol.fast(call)) return JitHostResult::Slow;
     profile.counted = true;
     ++dbt.stats.host_calls;
-    if (arm32) {
-        auto& state = cpu->arm32;
-        state.r[0] = static_cast<uint32_t>(call.result);
-        state.r[1] = 0;
-        const auto lr = state.r[14];
-        state.pc = rt::arm32::Location::Make(lr & ~1u, lr & 1u, 0, state.fpscr).Key();
-        state.reservation_valid = 0;
-    } else {
-        auto& state = cpu->arm64;
-        state.gprs[0] = call.result;
-        state.gprs[1] = 0;
-        state.pc = state.gprs[30];
-        state.reservation_valid = 0;
-    }
+    if (arm32)
+        SetJitHostReturn<true>(*cpu, call.result);
+    else
+        SetJitHostReturn<false>(*cpu, call.result);
     return active.caller_wait && active.caller_wait->ready ? JitHostResult::CallerReady :
                                                             JitHostResult::Continue;
 } catch (const std::bad_alloc&) {
@@ -147,6 +137,7 @@ static_assert(WA_JIT_HOT_THRESHOLD > 0 && WA_JIT_HOT_THRESHOLD < kRejected);
 constexpr uint8_t kHot = WA_JIT_HOT_THRESHOLD;
 constexpr unsigned kMaxUnits = 12288;
 static_assert(kMaxUnits < kJitDispatchEntries);
+using Dispatcher = uint64_t (*)(GuestCpu*, uint64_t, int32_t);
 
 constexpr uint8_t kUnsharedDispatcher[] = {
 #include "wasm_dispatcher_unshared.wasm.inc"
@@ -165,6 +156,8 @@ EM_JS(int, JitMemoryIsShared, (), {
     return typeof SharedArrayBuffer !== 'undefined' &&
            wasmMemory.buffer instanceof SharedArrayBuffer;
 });
+
+EM_JS_DEPS(wa_jit_dispatch_table, "$addFunction,$removeFunction");
 
 EM_JS(int, InstallJitUnit, (const wa_dbt* owner, unsigned slot, const uint8_t* bytes,
                             size_t size, unsigned capacity, const uint8_t* dispatcher,
@@ -189,8 +182,13 @@ EM_JS(int, InstallJitUnit, (const wa_dbt* owner, unsigned slot, const uint8_t* b
             for (const id of [4, 19, 53, 68, 70, 71]) {
                 svm['sym_' + id] = (state, op, guestPc, a, b, c, d, e, f, g, h) => {
                     const ctx = state - 64;
-                    const low = _wa_dbt_jit_helper(ctx, id, op, guestPc, a, b, c, d, e, f, g, h);
-                    return [low, HEAP64[(ctx + 40) >>> 3], 0n];
+                    try {
+                        const low = _wa_dbt_jit_helper(ctx, id, op, guestPc, a, b, c, d, e, f, g, h);
+                        return [low, HEAP64[(ctx + 40) >>> 3], 0n];
+                    } catch {
+                        HEAPU32[(ctx + 28) >>> 2] = 0xffffffff;
+                        return [0n, 0n, 0n];
+                    }
                 };
             }
             const table = new WebAssembly.Table({ initial: capacity + 1, maximum: capacity + 1,
@@ -202,7 +200,14 @@ EM_JS(int, InstallJitUnit, (const wa_dbt* owner, unsigned slot, const uint8_t* b
                 __indirect_function_table: table,
                 fast_host: _wa_dbt_jit_fast_host,
             } });
-            cache = { svm, table, dispatch: exports.wa_dbt_dispatch };
+            const dispatch = exports.wa_dbt_dispatch;
+            let dispatchSlot = 0;
+            try {
+                dispatchSlot = addFunction(dispatch);
+            } catch {
+                // Keep the checked entry if the embedding cannot reserve a table slot.
+            }
+            cache = { svm, table, dispatch, dispatchSlot };
             caches.set(owner, cache);
         }
         // Chrome restricts synchronous compilation of large modules on its
@@ -210,13 +215,13 @@ EM_JS(int, InstallJitUnit, (const wa_dbt* owner, unsigned slot, const uint8_t* b
         const module = new WebAssembly.Module(HEAPU8.subarray(bytes, bytes + size));
         const instance = new WebAssembly.Instance(module, { svm: cache.svm });
         cache.table.set(slot, instance.exports.run);
-        return 1;
+        return cache.dispatchSlot || -1;
     } catch {
         return 0;
     }
 });
 
-EM_JS(uint64_t, CallJitDispatcher, (const wa_dbt* owner, GuestCpu* cpu, uint64_t pc, int arm32), {
+EM_JS(uint64_t, CallCheckedDispatcher, (const wa_dbt* owner, GuestCpu* cpu, uint64_t pc, int arm32), {
     try {
         return Module['waDbtJit'].get(owner).dispatch(cpu, pc, arm32);
     } catch {
@@ -226,7 +231,11 @@ EM_JS(uint64_t, CallJitDispatcher, (const wa_dbt* owner, GuestCpu* cpu, uint64_t
 });
 
 EM_JS(void, ClearJitUnits, (const wa_dbt* owner), {
-    Module['waDbtJit']?.delete(owner);
+    const caches = Module['waDbtJit'];
+    const cache = caches?.get(owner);
+    if (!cache) return;
+    if (cache.dispatchSlot) removeFunction(cache.dispatchSlot);
+    caches.delete(owner);
 });
 
 void RecordFault(GuestCpu& cpu, int32_t status, uint64_t address, NativeExit reason) {
@@ -402,6 +411,7 @@ struct WasmJit::DispatchCache {
     std::array<JitDispatchEntry, kJitDispatchEntries> entries{};
     std::array<uint64_t, kMaxUnits + 1> pcs{};
     unsigned next = 1, hand = 1;
+    Dispatcher dispatch = nullptr;
 
     unsigned SelectSlot() {
         if (next <= kMaxUnits) return next;
@@ -440,6 +450,7 @@ struct WasmJit::DispatchCache {
         entries.fill({});
         pcs.fill(0);
         next = hand = 1;
+        dispatch = nullptr;
     }
 };
 
@@ -481,6 +492,10 @@ bool WasmJit::Ready(uint64_t pc) const noexcept {
     });
 }
 
+void WasmJit::WarmAtomicPage(softmmu::CpuAccess& memory, uint64_t address, size_t size) noexcept {
+    if (tlb_) memory.FillIotlb(*tlb_, address, size, WA_PROT_READ | WA_PROT_WRITE);
+}
+
 bool WasmJit::Prepare(uint64_t pc) {
     auto bucket = Bucket(pc);
     auto entry = std::ranges::find(bucket, pc, &Heat::pc);
@@ -503,9 +518,11 @@ bool WasmJit::Prepare(uint64_t pc) {
             const auto slot = cache_->SelectSlot();
             const auto dispatcher = shared_memory_ ? std::span<const uint8_t>(kSharedDispatcher) :
                                                      std::span<const uint8_t>(kUnsharedDispatcher);
-            installed = InstallJitUnit(&dbt_, slot, buffer.get(), size, kMaxUnits,
-                                       dispatcher.data(), dispatcher.size());
+            const auto dispatch_slot = InstallJitUnit(&dbt_, slot, buffer.get(), size, kMaxUnits,
+                                                      dispatcher.data(), dispatcher.size());
+            installed = dispatch_slot != 0;
             if (installed) {
+                if (dispatch_slot > 0) cache_->dispatch = reinterpret_cast<Dispatcher>(dispatch_slot);
                 const auto evicted = cache_->Install(slot, pc);
                 if (evicted) {
                     for (auto& old : Bucket(evicted)) {
@@ -551,6 +568,11 @@ JitRunResult WasmJit::Run(GuestCpu& cpu, uint64_t pc, uint32_t budget, softmmu::
     ActiveJitAccess active{dbt_, memory, *tlb_, caller_wait};
     cpu.jit_access = &active;
     cpu.jit_fast_calls = 0;
+    cpu.jit_inline_host_calls = 0;
+    auto* profile = BootProfile::active;
+    cpu.jit_ctype = ((profile && profile->collect_hotspots) ||
+                     dbt_.running->jump_buffer || dbt_.running->jump_value ||
+                     (caller_wait && caller_wait->ready)) ? nullptr : &dbt_.inline_ctype;
     cpu.run = {
         .l1_offset = reinterpret_cast<uintptr_t>(cache_->entries.data()),
         .iotlb_read_offset = reinterpret_cast<uintptr_t>(tlb_->ReadDirectory()),
@@ -562,24 +584,35 @@ JitRunResult WasmJit::Run(GuestCpu& cpu, uint64_t pc, uint32_t budget, softmmu::
     profile_sequence_ = profile_sequence_ * 1664525u + 1013904223u;
     const bool sample = profile_sequence_ / (UINT32_MAX / kSamplePeriod + 1) == 0;
     const auto start = sample ? Clock::now() : Clock::time_point{};
-    const auto exit = CallJitDispatcher(&dbt_, &cpu, pc, dbt_.arch == WA_ARCH_ARM32);
+    const int32_t arm32 = dbt_.arch == WA_ARCH_ARM32;
+    uint64_t exit = UINT64_MAX;
+    try {
+        exit = cache_->dispatch ? cache_->dispatch(&cpu, pc, arm32) :
+                                  CallCheckedDispatcher(&dbt_, &cpu, pc, arm32);
+    } catch (...) {
+        // A host callback can fail after a JIT store has committed.
+    }
     cpu.jit_access = nullptr;
 
     const auto elapsed = sample ? std::chrono::duration<double, std::milli>(Clock::now() - start).count() : 0;
     const auto estimated = elapsed * kSamplePeriod;
     dbt_.stats.jit_entries += cpu.run.dispatches;
     dbt_.stats.jit_exec_ms += estimated;
-    if (auto* profile = BootProfile::active) {
+    dbt_.stats.host_calls += cpu.jit_inline_host_calls;
+    if (profile) {
         auto& stats = profile->dbt_stats;
         stats.jit_entries += cpu.run.dispatches;
         stats.jit_fast_host_calls += cpu.jit_fast_calls;
+        stats.jit_inline_host_calls += cpu.jit_inline_host_calls;
         ++stats.jit_chains;
+        stats.jit_direct_chains += cache_->dispatch != nullptr;
+        stats.jit_atomic_fallbacks += exit == rt::ExitValue(NativeExit::UnsupportedAtomic);
         stats.jit_exec_samples += sample;
         stats.jit_exec_ms += estimated;
     }
 
     const uint32_t steps = budget - std::clamp<int64_t>(cpu.run.slice_ticks, 0, budget);
-    if (exit == UINT64_MAX) active.status = WA_ERR_INTERNAL;
+    if (exit == UINT64_MAX || cpu.run.exit_subcode == UINT32_MAX) active.status = WA_ERR_INTERNAL;
     if (cpu.run.exit_subcode && active.status == WA_OK) active.status = WA_ERR_FAULT;
     return {exit, steps, static_cast<uint32_t>(cpu.run.dispatches), cpu.jit_fast_calls, active.status};
 }

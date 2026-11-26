@@ -103,6 +103,23 @@ uint32_t wa_hot_space(uint32_t rounds) {
     return total;
 }
 
+void wa_ctype_results(int (*ctype)(int), int* results, uint32_t count) {
+    for (uint32_t i = 0; i < count; ++i)
+        results[i] = ctype((int)i - 2);
+}
+
+uint32_t wa_hot_poll(int (*poll_once)(int, int*, int*, void**), uint32_t rounds) {
+    uint32_t timeouts = 0;
+    while (rounds--) {
+        int fd = -1, events = -1;
+        void* data = (void*)1;
+        const int result = poll_once(0, &fd, &events, &data);
+        if (fd || events || data) return UINT32_MAX;
+        timeouts += result == -3; // ALOOPER_POLL_TIMEOUT
+    }
+    return timeouts;
+}
+
 uint32_t wa_hot_heap(uint32_t rounds) {
     uint32_t total = 0;
     for (uint32_t i = 0; i < rounds; ++i) {
