@@ -10,10 +10,10 @@ namespace wa::dbt {
 
 struct JitDispatchEntry {
     uint64_t pc = 0;
-    uint32_t slot = 0;
-    uint32_t recent = 0;
+    uint32_t slot = 0, recent = 0;
 };
-static_assert(sizeof(JitDispatchEntry) == 16);
+inline constexpr unsigned kJitDispatchEntryShift = 4;
+static_assert(sizeof(JitDispatchEntry) == (1u << kJitDispatchEntryShift));
 
 enum class JitHostResult : int32_t { Slow, Continue, CallerReady };
 
@@ -62,13 +62,16 @@ struct InlineCtypeStubs {
     }
 };
 
-inline constexpr size_t kJitDispatchEntries = 32768;
+inline constexpr unsigned kJitDispatchShiftA = 11, kJitDispatchShiftB = 32, kJitDispatchHashShift = 49;
+inline constexpr uint64_t kJitDispatchMultiplier = 0x9e3779b97f4a7c15ull;
+inline constexpr size_t kJitDispatchEntries = 1u << (64 - kJitDispatchHashShift);
 inline constexpr size_t kJitDispatchMask = kJitDispatchEntries - 1;
 inline constexpr uint64_t kMinJitCodeAddress = 0x10000;
 
-inline size_t JitDispatchIndex(uint64_t pc) noexcept {
-    const auto hash = (pc ^ (pc >> 11) ^ (pc >> 32)) * 0x9e3779b97f4a7c15ull;
-    return (hash >> 49) & kJitDispatchMask;
+inline constexpr size_t JitDispatchIndex(uint64_t pc) noexcept {
+    const auto hash = (pc ^ (pc >> kJitDispatchShiftA) ^ (pc >> kJitDispatchShiftB)) *
+                      kJitDispatchMultiplier;
+    return hash >> kJitDispatchHashShift;
 }
 
 inline JitDispatchEntry& FindJitDispatchEntry(JitDispatchEntry* entries, uint64_t pc) noexcept {

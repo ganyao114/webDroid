@@ -1205,23 +1205,20 @@ int32_t Call(wa_dbt& dbt, uint64_t entry, const wa_guest_call_frame_t& args,
     return status;
 }
 
-int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_length,
-                    bool foreground = false, bool shared_memory = false, bool single_block = false) {
+int32_t PinWasmCode(wa_dbt& dbt, uint64_t key, WasmCodeRegion& code, bool foreground) noexcept {
     const rt::arm32::Location location{key};
     const auto address = dbt.arch == WA_ARCH_ARM32 ? location.Address() : key;
     const auto start = AlignDown(address, WA_PAGE_SIZE);
     using wa::softmmu::UnitWindow;
-    std::array<wa::softmmu::PageWindow, 4> pages;
-    std::array<rt::frontend::BlockWindow, 4> windows;
-    size_t count = 0;
     const auto pin = [&](uint64_t page, UnitWindow mode) {
         if (foreground && CheckMappedAccess(&dbt, page, 1, WA_PROT_EXEC) != WA_OK)
             return wa::softmmu::Access{WA_ERR_FAULT, page};
         const bool writable = !foreground || CheckMappedAccess(&dbt, page, 1, WA_PROT_WRITE) == WA_OK;
-        const auto access = wa::softmmu::GetUnitWindow(dbt.mmu, page, pages[count], mode, writable);
+        wa::softmmu::PageWindow window;
+        const auto access = wa::softmmu::GetUnitWindow(dbt.mmu, page, window, mode, writable);
         if (access.status == WA_OK) {
-            windows[count] = {page, pages[count].bytes};
-            ++count;
+            code.backing[code.count] = std::move(window.backing);
+            code.windows[code.count++] = {page, window.bytes};
         }
         return access;
     };
@@ -1231,36 +1228,38 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_
     if (access.status != WA_OK)
         return access.status;
     if (foreground) {
-        for (auto page = start + WA_PAGE_SIZE; count < pages.size(); page += WA_PAGE_SIZE) {
+        for (auto page = start + WA_PAGE_SIZE; code.count < code.windows.size(); page += WA_PAGE_SIZE) {
             if (page >= WA_HOST_STUB_BASE || pin(page, UnitWindow::JitAdjacent).status != WA_OK)
                 break;
         }
     } else if (dbt.arch == WA_ARCH_ARM32 && location.Thumb() &&
                start + WA_PAGE_SIZE - address == 2) {
-        const auto first = swift::arm32::DecodeOne(pages[0].bytes.last(2), key);
+        const auto first = swift::arm32::DecodeOne(code.windows[0].bytes.last(2), key);
         if (first.error == swift::arm32::DecodeError::Truncated) {
             access = pin(start + WA_PAGE_SIZE, UnitWindow::Standalone);
             if (access.status != WA_OK)
                 return access.status;
         }
     }
+    return WA_OK;
+}
 
-    wasm::CompileOptions options;
+int32_t CompileUnit(wa_dbt& dbt, const WasmCodeRegion& code, wasm::CompileOptions options,
+                    WasmCompileScratch& scratch, bool single_block = false) {
+    const auto key = options.entry_pc;
+    const bool foreground = options.wide_softmmu_callbacks;
     options.module_mode = wasm::ModuleMode::Standalone;
     options.address_mode = wasm::AddressMode::SoftMMU32;
     options.single_memory = true;
     options.alignment_fault = !foreground && dbt.arch == WA_ARCH_ARM64;
-    options.entry_pc = key;
     options.gpr_stride = sizeof(uint64_t);
     options.vector_stride = 16;
-    const auto region = std::span{windows}.first(count);
+    const auto region = code.Windows();
     auto target = wasm::KnownTargetInfo();
     if (foreground) {
         target.features |= uint64_t(ir::TargetFeature::FaultLocations);
-        options.wide_softmmu_callbacks = true;
         options.check_slice_ticks = true;
-        options.shared_memory = shared_memory;
-        if (shared_memory) options.max_memory_pages = wa::softmmu::kAddressLimit / 65536;
+        if (options.shared_memory) options.max_memory_pages = wa::softmmu::kAddressLimit / 65536;
     }
     const auto build_region = [&]<typename Layout, typename Decode, typename Build>(
         Layout layout, Decode decode, Build build) -> rt::frontend::BuildResult {
@@ -1344,37 +1343,33 @@ int32_t CompileUnit(wa_dbt& dbt, uint64_t key, uint8_t** out_bytes, size_t* out_
     auto optimized = ir::Optimize(std::move(built.program), SIZE_MAX, uniforms);
     if (!optimized)
         return optimized.allocation_failed ? WA_ERR_NOMEM : WA_ERR_NOTSUP;
-    const auto compiled = wasm::Compile(optimized.program, options);
-    if (!compiled)
-        return WA_ERR_NOTSUP;
-    const auto bytes = wasm::ModuleBytes(compiled);
-    auto* buffer = static_cast<uint8_t*>(std::malloc(bytes.size()));
-    if (!buffer)
-        return WA_ERR_NOMEM;
-    std::memcpy(buffer, bytes.data(), bytes.size());
-    *out_bytes = buffer;
-    *out_length = bytes.size();
-    if (!foreground) {
-        ++dbt.stats.wasm_units_compiled;
-        dbt.stats.wasm_bytes_emitted += bytes.size();
-    }
-    return WA_OK;
+    wasm::Compile(optimized.program, options, scratch.result, scratch.allocation);
+    return scratch.result ? WA_OK : WA_ERR_NOTSUP;
 }
 
 } // namespace
 
 #ifdef __EMSCRIPTEN__
-int32_t wa::dbt::CompileForegroundWasm(wa_dbt& dbt, uint64_t key, bool shared_memory,
-                                       uint8_t** bytes, size_t* size) {
+int32_t wa::dbt::PinForegroundWasmCode(wa_dbt& dbt, uint64_t key, WasmCodeRegion& code) noexcept {
+    return PinWasmCode(dbt, key, code, true);
+}
+
+std::span<const uint8_t> wa::dbt::CompileForegroundWasm(wa_dbt& dbt, uint64_t key,
+                                                        const WasmCodeRegion& code,
+                                                        bool shared_memory,
+                                                        WasmCompileScratch& scratch, bool chain) {
     try {
-        const auto status = CompileUnit(dbt, key, bytes, size, true, shared_memory);
-        if (status == WA_ERR_NOTSUP) return CompileUnit(dbt, key, bytes, size, true, shared_memory, true);
-        return status;
-    } catch (const std::bad_alloc&) {
-        return WA_ERR_NOMEM;
+        wasm::CompileOptions options;
+        options.entry_pc = key;
+        options.shared_memory = shared_memory;
+        options.wide_softmmu_callbacks = true;
+        options.enable_l1_dispatch = chain;
+        auto status = CompileUnit(dbt, code, options, scratch);
+        if (status == WA_ERR_NOTSUP) status = CompileUnit(dbt, code, options, scratch, true);
+        if (status == WA_OK) return wasm::ModuleBytes(scratch.result);
     } catch (...) {
-        return WA_ERR_INTERNAL;
     }
+    return {};
 }
 #endif
 
@@ -1676,7 +1671,21 @@ int32_t wa::dbt::CompileWasmLocation(wa_dbt& dbt, uint64_t pc, uint8_t** out_byt
     *out_length = 0;
     try {
         std::lock_guard lock(dbt.mutex);
-        return CompileUnit(dbt, pc, out_bytes, out_length);
+        WasmCodeRegion code;
+        if (const auto status = PinWasmCode(dbt, pc, code, false); status != WA_OK)
+            return status;
+        WasmCompileScratch scratch;
+        if (const auto status = CompileUnit(dbt, code, {.entry_pc = pc}, scratch); status != WA_OK)
+            return status;
+        const auto bytes = wasm::ModuleBytes(scratch.result);
+        auto* buffer = static_cast<uint8_t*>(std::malloc(bytes.size()));
+        if (!buffer) return WA_ERR_NOMEM;
+        std::memcpy(buffer, bytes.data(), bytes.size());
+        *out_bytes = buffer;
+        *out_length = bytes.size();
+        ++dbt.stats.wasm_units_compiled;
+        dbt.stats.wasm_bytes_emitted += bytes.size();
+        return WA_OK;
     } catch (const std::bad_alloc&) {
         return WA_ERR_NOMEM;
     } catch (...) {

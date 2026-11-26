@@ -21,6 +21,8 @@
 #include <utility>
 #include <vector>
 #ifdef __EMSCRIPTEN__
+#include "runtime/exit.h"
+#include "wasm_jit.h"
 #include <emscripten.h>
 #endif
 
@@ -726,6 +728,343 @@ EM_JS(void, ReplaceFirstJitUnit, (const wa_dbt_t* dbt, uintptr_t unit), {
     Module['waDbtJit'].get(dbt).table.set(1, wasmTable.get(unit));
 });
 
+EM_JS(uint64_t, InvokeJitTestUnit, (const wa_dbt_t* dbt, wa::dbt::GuestCpu* cpu,
+                                     uint64_t pc, unsigned slot), {
+    const cache = Module['waDbtJit'].get(dbt);
+    return slot ? cache.table.get(slot)(cpu) : cache.dispatch(cpu, pc, 0);
+});
+
+EM_JS(int, InstallDispatcherOnlyUnit, (const wa_dbt_t* dbt, unsigned slot,
+                                        const uint8_t* bytes, size_t size), {
+    const cache = Module['waDbtJit'].get(dbt);
+    const originals = cache.testOriginals || (cache.testOriginals = new Map());
+    if (!bytes) {
+        cache.table.set(slot, originals.get(slot));
+        originals.delete(slot);
+        return 1;
+    }
+    const code = HEAPU8.subarray(bytes, bytes + size);
+    if (!WebAssembly.validate(code) || cache.svm.unit_table !== cache.table) return 0;
+    const unit = new WebAssembly.Instance(new WebAssembly.Module(code), { svm: cache.svm });
+    originals.set(slot, cache.table.get(slot));
+    cache.table.set(slot, unit.exports.run);
+    return 1;
+});
+
+EM_JS(int, TestMemoryIsShared, (), {
+    return wasmMemory.buffer instanceof SharedArrayBuffer;
+});
+
+EM_JS(void, HoldUnitTable, (const wa_dbt_t* dbt), {
+    Module['testInvalidatedTable'] = Module['waDbtJit'].get(dbt).table;
+});
+
+EM_JS(int, CheckInvalidatedUnitTable, (const wa_dbt_t* dbt), {
+    const table = Module['testInvalidatedTable'];
+    delete Module['testInvalidatedTable'];
+    return !Module['waDbtJit'].has(dbt) && !table.get(1) && !table.get(2);
+});
+
+EM_JS(void, SetMockJitCache, (int mode), {
+    if (mode < 0) {
+        delete Module['waJitCache'];
+        delete Module['testJitCache'];
+        return;
+    }
+    if (Module['testJitCache']) {
+        Module['testJitCache'].mode = mode;
+        return;
+    }
+    const cache = { mode, entries: new Map(), hits: 0, misses: 0, puts: 0, valid: true };
+    Module['testJitCache'] = cache;
+    Module['waJitCache'] = {
+        get(pc, hash) {
+            cache.valid &&= typeof pc === 'bigint' && typeof hash === 'bigint' &&
+                            BigInt.asUintN(64, hash) === hash;
+            const entry = cache.entries.get(pc + '/' + hash);
+            if (!entry) {
+                ++cache.misses;
+                return undefined;
+            }
+            ++cache.hits;
+            if (cache.mode === 1) return entry.bytes;
+            if (cache.mode === 2) return Uint8Array.of(0);
+            if (cache.mode === 3) {
+                // Valid module with the expected table import and run(i32) -> i32.
+                return new WebAssembly.Module(Uint8Array.of(
+                    0, 97, 115, 109, 1, 0, 0, 0,
+                    1, 6, 1, 0x60, 1, 0x7f, 1, 0x7f,
+                    2, 20, 1, 3, 115, 118, 109, 10, 117, 110, 105, 116, 95, 116, 97, 98, 108, 101,
+                    1, 0x70, 0, 0,
+                    3, 2, 1, 0,
+                    7, 7, 1, 3, 114, 117, 110, 0, 0,
+                    10, 6, 1, 4, 0, 0x41, 0, 0x0b
+                ));
+            }
+            return entry.module;
+        },
+        put(pc, hash, bytes, compiled) {
+            ++cache.puts;
+            cache.valid &&= bytes instanceof Uint8Array &&
+                bytes.buffer !== wasmMemory.buffer && !(bytes.buffer instanceof SharedArrayBuffer) &&
+                compiled instanceof WebAssembly.Module && WebAssembly.validate(bytes) &&
+                WebAssembly.Module.imports(compiled).some(entry =>
+                    entry.module === 'svm' && entry.name === 'unit_table' && entry.kind === 'table') &&
+                WebAssembly.Module.imports(compiled).some(entry => entry.name === 'sym_19');
+            cache.entries.set(pc + '/' + hash, { bytes, module: compiled });
+        },
+    };
+});
+
+EM_JS(int, CheckMockJitCache, (int hits, int misses, int puts), {
+    const cache = Module['testJitCache'];
+    return cache.valid && cache.hits === hits && cache.misses === misses && cache.puts === puts;
+});
+
+constexpr uint32_t kCodeRX = WA_PROT_READ | WA_PROT_EXEC;
+constexpr uint32_t kCodeRWX = kCodeRX | WA_PROT_WRITE;
+
+template <typename T> void MapJitCode(wa_softmmu_t* mmu, uint64_t pc, const T& instructions) {
+    const auto page = pc & ~uint64_t(WA_PAGE_SIZE - 1);
+    OK(wa_softmmu_map_anon(mmu, page, WA_PAGE_SIZE, kCodeRWX));
+    Write(mmu, pc, instructions);
+    OK(wa::softmmu::Protect(mmu, page, WA_PAGE_SIZE, kCodeRX));
+}
+
+uint32_t Arm64Branch(uint64_t from, uint64_t to) {
+    return 0x14000000u | (((to - from) >> 2) & 0x03ffffffu);
+}
+
+void WarmJitUnit(wa::dbt::WasmJit& jit, uint64_t pc) {
+    for (unsigned i = 0; i < 254; ++i) {
+        if (jit.Observe(pc)) {
+            CHECK(jit.Prepare(pc));
+            return;
+        }
+    }
+    CHECK(false);
+}
+
+void TestUnitChaining(bool indirect) {
+    using namespace wa::dbt;
+    constexpr uint64_t first = 0x200000, second = 0x220000;
+    constexpr uint32_t add = 0x91000400u; // add x0, x0, #1
+    Mmu mmu(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
+    Dbt dbt(wa_dbt_create(WA_ARCH_ARM64, mmu.get()), wa_dbt_destroy);
+    CHECK(mmu && dbt);
+    MapJitCode(mmu.get(), first, std::array{add, Arm64Branch(first + 4, second)});
+    MapJitCode(mmu.get(), second,
+               std::array{add, indirect ? 0xd61f0020u : Arm64Branch(second + 4, first)}); // br x1
+    auto& jit = *(dbt->wasm_jit = std::make_unique<WasmJit>(*dbt));
+    WarmJitUnit(jit, first);
+    WarmJitUnit(jit, second);
+    const auto entries = std::make_unique<std::array<JitDispatchEntry, kJitDispatchEntries>>();
+    auto& first_entry = FindJitDispatchEntry(entries->data(), first);
+    auto& second_entry = FindJitDispatchEntry(entries->data(), second);
+    first_entry = {first, 1, 0};
+    second_entry = {second, 2, 0};
+    const auto make_cpu = [&](uint64_t pc, int64_t ticks) {
+        GuestCpu cpu;
+        cpu.arm64.pc = pc;
+        cpu.arm64.gprs[1] = first;
+        cpu.run.l1_offset = reinterpret_cast<uintptr_t>(entries->data());
+        cpu.run.slice_ticks = ticks;
+        return cpu;
+    };
+    constexpr unsigned hops = 120'000;
+    auto cpu = make_cpu(first, 2 * hops);
+    // Enter slot 1 directly. Every subsequent invocation must be a Wasm tail call.
+    CHECK(InvokeJitTestUnit(dbt.get(), &cpu, first, 1) == first);
+    CHECK(cpu.arm64.pc == first && cpu.arm64.gprs[0] == hops);
+    CHECK(cpu.run.dispatches == hops - 1 && cpu.run.slice_ticks == 0);
+    CHECK(first_entry.recent == 1 && second_entry.recent == 1);
+
+    cpu = make_cpu(first, 3);
+    CHECK(InvokeJitTestUnit(dbt.get(), &cpu, first, 1) ==
+          swift::runtime::ExitValue(swift::runtime::NativeExit::GuestEvents));
+    CHECK(cpu.arm64.pc == second && cpu.arm64.gprs[0] == 1);
+    CHECK(cpu.run.dispatches == 1 && cpu.run.slice_ticks == 1);
+
+    cpu = make_cpu(first, 4);
+    cpu.run.exit_subcode = 9;
+    CHECK(InvokeJitTestUnit(dbt.get(), &cpu, first, 1) == second);
+    CHECK(cpu.arm64.gprs[0] == 1 && cpu.run.dispatches == 0 && cpu.run.slice_ticks == 2);
+
+    second_entry = {second, 0, 0};
+    cpu = make_cpu(first, 8);
+    CHECK(InvokeJitTestUnit(dbt.get(), &cpu, first, 0) == second);
+    CHECK(cpu.arm64.gprs[0] == 1 && cpu.run.dispatches == 1 && cpu.run.slice_ticks == 6);
+    second_entry = {second, 2, 0};
+
+    if (indirect) {
+        // Even a matching tag cannot make a host stub or native exit chain.
+        for (const auto target : {uint64_t(WA_HOST_STUB_BASE + WA_HOST_STUB_STRIDE), uint64_t{0}}) {
+            auto& forbidden = FindJitDispatchEntry(entries->data(), target);
+            forbidden = {target, 1, 0};
+            cpu = make_cpu(second, 8);
+            cpu.arm64.gprs[1] = target;
+            CHECK(InvokeJitTestUnit(dbt.get(), &cpu, second, 2) == target);
+            CHECK(cpu.arm64.gprs[0] == 1 && cpu.run.dispatches == 0 && cpu.run.slice_ticks == 6);
+            forbidden = {};
+        }
+    }
+
+    const auto benchmark = [&] {
+        constexpr unsigned run_hops = 1'000'000;
+        std::array<double, 5> samples;
+        for (size_t i = 0; i <= samples.size(); ++i) {
+            cpu = make_cpu(first, 2 * run_hops);
+            const auto start = std::chrono::steady_clock::now();
+            const auto exit = InvokeJitTestUnit(dbt.get(), &cpu, first, 0);
+            const auto elapsed = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+            CHECK(exit == first && cpu.arm64.gprs[0] == run_hops);
+            CHECK(cpu.run.dispatches == run_hops && cpu.run.slice_ticks == 0);
+            if (i) samples[i - 1] = elapsed;
+        }
+        std::ranges::sort(samples);
+        return samples[samples.size() / 2];
+    };
+
+    WasmCompileScratch scratch;
+    unsigned slot = 0;
+    for (const auto pc : {first, second}) {
+        WasmCodeRegion code;
+        OK(PinForegroundWasmCode(*dbt, pc, code));
+        const auto bytes = CompileForegroundWasm(*dbt, pc, code, TestMemoryIsShared(), scratch, false);
+        CHECK(!bytes.empty() && InstallDispatcherOnlyUnit(dbt.get(), ++slot, bytes.data(), bytes.size()));
+    }
+    const auto before = benchmark();
+    for (unsigned i = 1; i <= slot; ++i) CHECK(InstallDispatcherOnlyUnit(dbt.get(), i, nullptr, 0));
+    const auto after = benchmark();
+    std::cout << (indirect ? "Mixed direct/indirect" : "Constant-target")
+              << " chain, 1,000,000 entries (median of five) "
+              << before << " ms through dispatcher, " << after << " ms with tail calls\n";
+}
+
+void TestThumbUnitChaining() {
+    using namespace wa::dbt;
+    constexpr uint32_t first = 0x200000, second = 0x220000;
+    const auto first_key = swift::runtime::arm32::Location::Make(first, true).Key();
+    const auto second_key = swift::runtime::arm32::Location::Make(second, true).Key();
+    Mmu mmu(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
+    Dbt dbt(wa_dbt_create(WA_ARCH_ARM32, mmu.get()), wa_dbt_destroy);
+    CHECK(mmu && dbt);
+    // adds r0, #1; bx r1/r2
+    MapJitCode(mmu.get(), first, std::array<uint16_t, 2>{0x3001, 0x4708});
+    MapJitCode(mmu.get(), second, std::array<uint16_t, 2>{0x3001, 0x4710});
+    auto& jit = *(dbt->wasm_jit = std::make_unique<WasmJit>(*dbt));
+    WarmJitUnit(jit, first_key);
+    WarmJitUnit(jit, second_key);
+    GuestCpu cpu;
+    cpu.arm32 = {};
+    cpu.arm32.pc = first_key;
+    cpu.arm32.r[1] = second | 1;
+    cpu.arm32.r[2] = first | 1;
+    wa::softmmu::CpuAccess memory(mmu.get());
+    const auto result = jit.Run(cpu, first_key, 8192, memory, nullptr);
+    CHECK(result.status == WA_OK && result.entries == 4096 && result.ticks == 8192);
+    CHECK(result.exit == first_key && cpu.arm32.pc == first_key && cpu.arm32.r[0] == 4096);
+}
+
+void TestUnitEvictionAndInvalidation() {
+    using namespace wa::dbt;
+    constexpr uint64_t first = 0x218604, target = 0x231354, replacement = 0x265f6c;
+    static_assert(JitDispatchIndex(first) == kJitDispatchMask &&
+                  JitDispatchIndex(target) == kJitDispatchMask &&
+                  JitDispatchIndex(replacement) == kJitDispatchMask);
+    constexpr uint32_t ret = 0xd65f03c0u;
+    Mmu mmu(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
+    Dbt dbt(wa_dbt_create(WA_ARCH_ARM64, mmu.get()), wa_dbt_destroy);
+    CHECK(mmu && dbt);
+    MapJitCode(mmu.get(), first, Arm64Branch(first, target));
+    MapJitCode(mmu.get(), target, std::array{0x528000e0u, ret}); // mov w0, #7; ret
+    MapJitCode(mmu.get(), replacement, std::array{0x52800120u, ret}); // mov w0, #9; ret
+    auto& jit = *(dbt->wasm_jit = std::make_unique<WasmJit>(*dbt, 2));
+    WarmJitUnit(jit, target);
+    WarmJitUnit(jit, first);
+    CHECK(Call(dbt.get(), first) == 7);
+    WarmJitUnit(jit, replacement);
+    CHECK(jit.Ready(first) && jit.Ready(replacement) && !jit.Ready(target));
+    CHECK(Call(dbt.get(), replacement) == 9);
+    const auto run = [&] {
+        GuestCpu cpu;
+        cpu.arm64.pc = first;
+        wa::softmmu::CpuAccess memory(mmu.get());
+        return jit.Run(cpu, first, 8, memory, nullptr);
+    };
+    const auto miss = run();
+    CHECK(miss.status == WA_OK && miss.exit == target && miss.entries == 1 && miss.ticks == 1);
+
+    HoldUnitTable(dbt.get());
+    const auto page = target & ~uint64_t(WA_PAGE_SIZE - 1);
+    OK(wa::softmmu::Protect(mmu.get(), page, WA_PAGE_SIZE, kCodeRWX));
+    Write(mmu.get(), target, std::array{0xf9400040u, ret}); // ldr x0, [x2]; ret
+    OK(wa::softmmu::Protect(mmu.get(), page, WA_PAGE_SIZE, kCodeRX));
+    CHECK(run().entries == 0 && !jit.Ready(first) && !jit.Ready(replacement));
+    CHECK(CheckInvalidatedUnitTable(dbt.get()));
+    WarmJitUnit(jit, target);
+    WarmJitUnit(jit, first);
+    const auto fault = run();
+    CHECK(fault.status == WA_ERR_FAULT && fault.entries == 2);
+}
+
+void TestPersistentJitCache() {
+    constexpr uint64_t pc = 0x200000;
+    constexpr uint32_t ret = 0xd65f03c0u;
+    std::array<uint32_t, 12> code;
+    code.fill(0xd503201fu); // nop
+    code[0] = 0x1e6e1000u; // fmov d0, #1.0
+    code[1] = 0x1e684000u; // frint32z d0, d0 (numeric callback)
+    code[2] = 0x9e660001u; // fmov x1, d0
+    code[9] = 0x528000e0u; // mov w0, #7, outside the first 32 bytes
+    code[10] = 0x8b010000u; // add x0, x0, x1
+    code[11] = ret;
+    Mmu mmu(wa_softmmu_create(nullptr, nullptr), wa_softmmu_destroy);
+    CHECK(mmu != nullptr);
+    MapJitCode(mmu.get(), pc, code);
+    SetMockJitCache(0);
+    const auto run = [&](uint64_t expected, bool emits) {
+        Dbt dbt(wa_dbt_create(WA_ARCH_ARM64, mmu.get()), wa_dbt_destroy);
+        CHECK(dbt != nullptr);
+        wa::BootProfile profile;
+        const wa::BootProfile::Capture capture(profile);
+        for (unsigned i = 0; i < 256; ++i)
+            CHECK(Call(dbt.get(), pc) == std::bit_cast<uint64_t>(1.0) + expected);
+        const auto stats = DbtStats(dbt.get());
+        CHECK(stats.jit_entries > 0 && !stats.jit_compile_failures);
+        CHECK(stats.wasm_units_compiled == unsigned(emits));
+        CHECK((stats.wasm_bytes_emitted > 0) == emits);
+        if (!emits) CHECK(profile.dbt_stats.jit_emit_ms == 0);
+    };
+    run(7, true);
+    CHECK(CheckMockJitCache(0, 1, 1));
+    run(7, false);
+    CHECK(CheckMockJitCache(1, 1, 1));
+    SetMockJitCache(1);
+    run(7, false);
+    CHECK(CheckMockJitCache(2, 1, 1));
+    SetMockJitCache(2);
+    run(7, true);
+    CHECK(CheckMockJitCache(3, 1, 2));
+    SetMockJitCache(3);
+    run(7, true);
+    CHECK(CheckMockJitCache(4, 1, 3));
+    SetMockJitCache(0);
+    run(7, false);
+    CHECK(CheckMockJitCache(5, 1, 3));
+
+    OK(wa::softmmu::Protect(mmu.get(), pc, WA_PAGE_SIZE, kCodeRWX));
+    Write(mmu.get(), pc + 9 * sizeof(uint32_t), uint32_t{0x52800120}); // mov w0, #9
+    OK(wa::softmmu::Protect(mmu.get(), pc, WA_PAGE_SIZE, kCodeRX));
+    run(9, true);
+    CHECK(CheckMockJitCache(5, 2, 4));
+    run(9, false);
+    CHECK(CheckMockJitCache(6, 2, 4));
+    SetMockJitCache(-1);
+    std::cout << "Persistent JIT cache passed module and byte hits, corrupt entries, and code changes\n";
+}
+
 uint64_t TrapUnit(void*) { __builtin_trap(); }
 
 void TestDispatcherEntry(bool direct) {
@@ -1036,11 +1375,21 @@ int main(int argc, char** argv) {
         TestJitRegionDensity();
         return 0;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--chaining-only") {
+        TestUnitChaining(false);
+        TestUnitChaining(true);
+        return 0;
+    }
 #endif
     CHECK(argc == 5);
 #ifdef __EMSCRIPTEN__
     TestDispatcherEntry(false);
     TestDispatcherEntry(true);
+    TestUnitChaining(false);
+    TestUnitChaining(true);
+    TestThumbUnitChaining();
+    TestUnitEvictionAndInvalidation();
+    TestPersistentJitCache();
     TestJitRegionDensity();
 #endif
     TestSoftMMU();

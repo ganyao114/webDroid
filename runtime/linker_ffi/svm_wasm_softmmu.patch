@@ -1,3 +1,16 @@
+--- a/abi.h
++++ b/abi.h
+@@ -68,6 +68,9 @@
+ // ordinary pairs directly; Linked also mirrors high into ctx+40.
+ inline constexpr unsigned HelperWords = 10;
+ inline constexpr std::uint32_t NoOffset = UINT32_MAX;
++// Foreground numeric lambdas encode stable per-ISA IDs. ARM32 uses its
++// numeric callback registry, and ARM64 has a single numeric callback.
++inline constexpr std::uint64_t ForegroundArm64NumericId = 1;
+-
++
+ constexpr bool PairedValueArguments(HostSymbol symbol) noexcept {
+     switch (symbol) {
 --- a/allocate.cpp
 +++ b/allocate.cpp
 @@ -404,7 +404,7 @@
@@ -91,7 +104,28 @@
          if (!(allocation.mmu_imports & (1u << i))) continue;
          mmu_functions[i] = imported_functions++;
      }
-@@ -198,18 +205,21 @@
+@@ -144,7 +151,8 @@
+     s.clear();
+     const bool link_base = Linked() && options.relocatable_links && !output.links.empty();
+     Uleb(s,
+-         2 - unsigned(options.single_memory) + unsigned(allocation.table) + unsigned(l2) +
++         2 - unsigned(options.single_memory) + unsigned(allocation.table) +
++                 unsigned(options.wide_softmmu_callbacks) + unsigned(l2) +
+                  globals.count + unsigned(link_base) + unsigned(options.checked_memory) +
+                  allocation.helpers.size() + std::popcount(allocation.mmu_imports));
+     const auto import = [&](std::string_view name, unsigned kind) {
+@@ -167,6 +175,10 @@
+         s.insert(s.end(), {0x64, 0, 0});
+         Uleb(s, options.min_unit_table_size);
+     }
++    if (options.wide_softmmu_callbacks) {
++        import("unit_table", 1);
++        s.insert(s.end(), {0x70, 0, 0});  // funcref, no required minimum size
++    }
+     const auto import_context_global = [&](u32 index, std::string_view name, std::uint8_t type) {
+         if (index == UINT32_MAX) return;
+         import(name, 3);
+@@ -198,18 +210,21 @@
                 0);
          Uleb(s, abi::HelperType);
      }
@@ -131,7 +165,15 @@
      bool alignment_fault = false;
 --- a/emit.h
 +++ b/emit.h
-@@ -235,7 +235,7 @@
+@@ -46,6 +46,7 @@
+     bool Calls();
+     void Terminal(const StoredTerminal&, u32 loop_depth);
+     void Dispatch();
++    void ForegroundDispatch();
+     void StaticLink(u64);
+     bool ConstantPC(CellView, u64&, bool raw = false, unsigned depth = 0) const;
+     void UnitArguments();
+@@ -235,7 +236,7 @@
      bool has_fault_location{};
      u32 guest_address32{UINT32_MAX}, enter_loop{UINT32_MAX};
      u32 imported_functions{}, helper_base{}, memory_check{}, link_base_global{};
@@ -140,7 +182,7 @@
      enum class MmuGroup { None, Adjacent, Span } mmu_group{};
      std::int32_t mmu_group_displacement{};
      u32 fused_flags_local{UINT32_MAX};
-@@ -247,5 +247,5 @@
+@@ -247,5 +248,5 @@
  inline constexpr u32 SaturatingFloatToInt = 2;
  bool UsesSaturatingFloatToInt(const Program&, const Operation&);
  HostSymbol HelperFor(const Program&, u32 node, const CompileOptions&, bool precise_fp);
@@ -254,7 +296,15 @@
              atomic(0x48);
 --- a/emit_calls.cpp
 +++ b/emit_calls.cpp
-@@ -61,7 +61,8 @@
+@@ -1,4 +1,6 @@
+ #include "emit.h"
++#include "runtime/arch/arm32/numeric_registry.h"
++#include "runtime/arch/arm64/numeric.h"
+ #include "runtime/arch/x86/x87.h"
+-
++
+ #include <algorithm>
+@@ -61,7 +63,8 @@
          case OpCode::VecSha256Rnds2:
              return HostSymbol::Crypto;
          case OpCode::CompareAndSwap128:
@@ -264,7 +314,30 @@
          case OpCode::ArmFPBinary:
              return HostSymbol::ArmFPBinary;
          case OpCode::ArmFPTernary:
-@@ -182,7 +183,7 @@
+@@ -110,6 +113,22 @@
+         if (index++ < first) continue;
+         if (cell.Kind() == OperandKind::Arguments) continue;
+         if (cell.Kind() == OperandKind::Expression) Reject(CompileError::UnsupportedOperand);
++        if (options.wide_softmmu_callbacks && Op().opcode == OpCode::CallLambda && words == 1) {
++            // Wasm function table indices can change when the runtime is relinked.
++            u64 callback{};
++            if (!ConstantPC(cell, callback) || callback > UINTPTR_MAX)
++                Reject(CompileError::UnsupportedOperand);
++            u64 id = 0;
++            if (options.guest_isa == GuestISA::Arm32)
++                id = arm32::NumericCallbackIdentity(static_cast<std::uintptr_t>(callback));
++            else if (options.guest_isa == GuestISA::Arm64 &&
++                     callback == reinterpret_cast<std::uintptr_t>(&arm64::ExecuteNumeric))
++                id = abi::ForegroundArm64NumericId;
++            if (!id) Reject(CompileError::UnsupportedOperand);
++            I64(id);
++            ++words;
++            continue;
++        }
+         const bool value = cell.Kind() == OperandKind::Value;
+         const bool vector = value && TypeBits(paired ? source.Operations()[cell.Payload()].type
+                                                      : View(cell)) == 128;
+@@ -182,7 +201,7 @@
          Store(64, abi::HostMemory, abi::AuxReturnHi);
      }
      Reload();
@@ -273,7 +346,7 @@
          Get(0);
          HostLoad32(abi::ExitSubcode);
          Tee(allocation.predicate);
-@@ -192,7 +193,8 @@
+@@ -192,7 +211,8 @@
              Set(allocation.pc);
          }
          Flush();
@@ -401,16 +474,16 @@
      } else
          B(0x00);
  }
-@@ -344,12 +395,18 @@
+@@ -342,6 +393,8 @@
+         case TerminalKind::Dispatch:
+             if (Linked())
                  Dispatch();
++            else if (options.wide_softmmu_callbacks)
++                ForegroundDispatch();
              else {
                  Flush();
--                I64(0);
-+                if (options.wide_softmmu_callbacks)
-+                    Get(allocation.pc);
-+                else
-+                    I64(0);
-                 B(0x0f);
+                 I64(0);
+@@ -349,7 +402,10 @@
              }
              return;
          case TerminalKind::Unreachable:
@@ -422,6 +495,155 @@
              return;
          default:
              Reject(CompileError::UnsupportedControlFlow);
+--- a/emit_dispatch.cpp
++++ b/emit_dispatch.cpp
+@@ -1,5 +1,6 @@
+ #include "emit.h"
+ #include "runtime/backend/dispatch_layout.inc"
++#include "wasm_dispatcher.h"
+-
++
+ namespace swift::runtime::backend::wasm::detail {
+ bool Writer::ConstantPC(CellView cell, u64& value, bool raw, unsigned depth) const {
+@@ -40,6 +41,137 @@
+         return false;
+     if (!raw) value &= Mask(TypeBits(View(cell)));
+     return true;
++}
++
++void Writer::ForegroundDispatch() {
++    using namespace wa::dbt;
++    Flush();
++    const bool arm32 = options.guest_isa == GuestISA::Arm32;
++    u64 target = 0;
++    bool constant = false;
++    if (options.enable_l1_dispatch && allocation.ticks != UINT32_MAX) {
++        const auto& b = source.Blocks()[block];
++        for (u32 i = b.first_node + b.node_count; i > b.first_node;) {
++            const auto& op = source.Operations()[--i];
++            if (op.opcode == OpCode::StoreUniform || op.opcode == OpCode::StoreUniformSelectImm) {
++                auto operands = source.Operands(NodeId{i}).begin();
++                const auto uniform = *operands++;
++                const auto offset = uniform.Payload();
++                const auto bits = op.opcode == OpCode::StoreUniformSelectImm
++                                          ? 64u : TypeBits(uniform.TypeView());
++                if (offset >= u64{options.pc_offset} + 8 || offset + (bits + 7) / 8 <= options.pc_offset)
++                    continue;
++                constant = op.opcode == OpCode::StoreUniform && offset == options.pc_offset &&
++                           bits == 64 && ConstantPC(*operands, target);
++                break;
++            }
++            if (op.opcode == OpCode::SetLocation || op.opcode == OpCode::AdvancePC ||
++                HasAnyEffect(EffectsFor(op.opcode),
++                             Effect::WriteGuestState | Effect::External | Effect::Unknown))
++                break;
++        }
++        const auto address = arm32 ? u64{static_cast<u32>(target)} : target;
++        constexpr u64 range = WA_HOST_STUB_BASE - kMinJitCodeAddress;
++        const auto in_range = address - kMinJitCodeAddress < range;
++        if (!constant || in_range) {
++            const auto bail = [&](u32 depth = 0) {
++                B(0x0d);  // br_if
++                U(depth);
++            };
++            Block();
++            Get(allocation.ticks);
++            I64(0);
++            B(0x57);  // i64.le_s
++            bail();
++            Get(0);
++            HostLoad32(abi::ExitSubcode);
++            bail();
++            if (!constant) {
++                Get(allocation.pc);
++                if (arm32) {
++                    B(0xa7);  // i32.wrap_i64
++                    I32(kMinJitCodeAddress);
++                    B(0x6b);  // i32.sub
++                    I32(range);
++                    B(0x4f);  // i32.ge_u
++                } else {
++                    I64(kMinJitCodeAddress);
++                    B(0x7d);  // i64.sub
++                    I64(range);
++                    B(0x5a);  // i64.ge_u
++                }
++                bail();
++            }
++
++            const auto base = T32(0), offset = T32(1), entry = T32(2), slot = T32(3);
++            Get(0);
++            HostLoad32(abi::L1Offset);
++            Tee(base);
++            B(0x45);  // i32.eqz
++            bail();
++            if (constant) {
++                I32(JitDispatchIndex(target) << kJitDispatchEntryShift);
++            } else {
++                Get(allocation.pc);
++                for (const auto shift : {kJitDispatchShiftA, kJitDispatchShiftB}) {
++                    Get(allocation.pc);
++                    I64(shift);
++                    B(0x88);  // i64.shr_u
++                    B(0x85);  // i64.xor
++                }
++                I64(kJitDispatchMultiplier);
++                B(0x7e);  // i64.mul
++                I64(kJitDispatchHashShift);
++                B(0x88);  // i64.shr_u
++                B(0xa7);  // i32.wrap_i64
++                I32(kJitDispatchEntryShift);
++                B(0x74);  // i32.shl
++            }
++            Set(offset);
++            Block(0x03);  // loop over displaced entries
++            Get(base);
++            Get(offset);
++            B(0x6a);  // i32.add
++            Tee(entry);
++            HostLoad32(offsetof(JitDispatchEntry, slot));
++            Tee(slot);
++            B(0x45);  // i32.eqz
++            bail(1);
++            Get(entry);
++            Load(64, abi::HostMemory, offsetof(JitDispatchEntry, pc));
++            if (constant) I64(target);
++            else Get(allocation.pc);
++            B(0x51);  // i64.eq
++            Block(0x04);
++            Get(entry);
++            I32(1);
++            StoreI32(8, abi::HostMemory, offsetof(JitDispatchEntry, recent));
++            Get(0);
++            Get(0);
++            Load(64, abi::HostMemory, abi::Dispatches);
++            I64(1);
++            B(0x7c);  // i64.add
++            Store(64, abi::HostMemory, abi::Dispatches);
++            Get(0);
++            Get(slot);
++            B(0x13);  // return_call_indirect
++            U(abi::StandaloneType);
++            U(abi::UnitTable);
++            B(0x0b);
++            Get(offset);
++            I32(sizeof(JitDispatchEntry));
++            B(0x6a);  // i32.add
++            I32(kJitDispatchMask << kJitDispatchEntryShift);
++            B(0x71);  // i32.and
++            Set(offset);
++            B(0x0c);  // br
++            U(0);
++            B(0x0b);
++            B(0x0b);
++        }
++    }
++    Get(allocation.pc);
++    B(0x0f);
+ }
+-
++
+ void Writer::UnitArguments() {
 --- a/emit_memory.cpp
 +++ b/emit_memory.cpp
 @@ -12,6 +12,28 @@
