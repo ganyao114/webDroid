@@ -36,6 +36,7 @@ template <bool Arm32> uint64_t Dispatch(GuestCpu* cpu, uint64_t pc) {
         return Arm32 ? static_cast<uint32_t>(location) : location;
     };
     auto* entries = reinterpret_cast<JitDispatchEntry*>(cpu->run.l1_offset);
+    cpu->run.dispatches = 0;
     uint64_t dispatches = 0;
     uint32_t inline_calls = 0;
     while (cpu->run.slice_ticks > 0) {
@@ -59,7 +60,7 @@ template <bool Arm32> uint64_t Dispatch(GuestCpu* cpu, uint64_t pc) {
         pc = reinterpret_cast<Unit>(entry.slot)(cpu);
         if (cpu->run.exit_subcode || pc == UINT64_MAX || address(pc) < kMinJitCodeAddress) break;
     }
-    cpu->run.dispatches = dispatches;
+    cpu->run.dispatches += dispatches;
     cpu->jit_inline_host_calls = inline_calls;
     return pc;
 }

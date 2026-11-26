@@ -11,27 +11,41 @@ namespace rt = swift::runtime;
 using Arm32State = rt::arm32::GuestState;
 using Arm64State = rt::arm64::GuestState;
 
-int32_t CallWasmNumericLambda(wa_guest_arch_t arch, void* state, uint32_t opcode,
-                              uint64_t callback, uint64_t address, uint64_t a, uint64_t b,
-                              uint64_t& result) {
+template <bool StableId>
+static int32_t CallNumericLambda(wa_guest_arch_t arch, void* state, uint32_t opcode,
+                                  uint64_t callback, uint64_t address, uint64_t a, uint64_t b,
+                                  uint64_t& result) {
     if (opcode != uint32_t(rt::ir::OpCode::CallLambda) || callback > UINTPTR_MAX)
         return WA_ERR_NOTSUP;
     if (arch == WA_ARCH_ARM32) {
         auto& arm = *static_cast<Arm32State*>(state);
-        if (address != reinterpret_cast<uintptr_t>(&arm.fpscr) ||
-            !rt::arm32::NumericCallbackIdentity(callback))
+        if (address != reinterpret_cast<uintptr_t>(&arm.fpscr)) return WA_ERR_NOTSUP;
+        auto pointer = static_cast<uintptr_t>(callback);
+        if constexpr (StableId) {
+            if (callback > UINT16_MAX) return WA_ERR_NOTSUP;
+            pointer = rt::arm32::ResolveNumericCallbackIdentity(static_cast<uint16_t>(callback));
+            if (!pointer) return WA_ERR_NOTSUP;
+        } else if (!rt::arm32::NumericCallbackIdentity(pointer)) {
             return WA_ERR_NOTSUP;
-        const auto fn = reinterpret_cast<rt::arm32::NumericCallback>(static_cast<uintptr_t>(callback));
+        }
+        const auto fn = reinterpret_cast<rt::arm32::NumericCallback>(pointer);
         result = fn(address, a, b);
     } else {
         auto& arm = *static_cast<Arm64State*>(state);
-        if (address != reinterpret_cast<uintptr_t>(&arm) ||
-            callback != reinterpret_cast<uintptr_t>(&rt::arm64::ExecuteNumeric))
+        const auto expected = StableId ? rt::backend::wasm::abi::ForegroundArm64NumericId :
+                                         reinterpret_cast<uintptr_t>(&rt::arm64::ExecuteNumeric);
+        if (address != reinterpret_cast<uintptr_t>(&arm) || callback != expected)
             return WA_ERR_NOTSUP;
         result = rt::arm64::ExecuteNumeric(address, a, b);
         if (arm.helper_status) return WA_ERR_NOTSUP;
     }
     return WA_OK;
+}
+
+int32_t CallWasmNumericLambda(wa_guest_arch_t arch, void* state, uint32_t opcode,
+                              uint64_t callback, uint64_t address, uint64_t a, uint64_t b,
+                              uint64_t& result) {
+    return CallNumericLambda<false>(arch, state, opcode, callback, address, a, b, result);
 }
 
 } // namespace wa::dbt
@@ -46,8 +60,9 @@ int32_t CallWasmNumericLambda(wa_guest_arch_t arch, void* state, uint32_t opcode
 #include "wasm_dispatcher.h"
 
 #include <algorithm>
-#include <cstdlib>
+#include <bit>
 #include <cstring>
+#include <string_view>
 #include <utility>
 #include <emscripten.h>
 
@@ -135,8 +150,8 @@ using Block128 = rt::x86::crypto::Block128;
 constexpr uint8_t kRejected = 254, kReady = 255;
 static_assert(WA_JIT_HOT_THRESHOLD > 0 && WA_JIT_HOT_THRESHOLD < kRejected);
 constexpr uint8_t kHot = WA_JIT_HOT_THRESHOLD;
-constexpr unsigned kMaxUnits = 12288;
-static_assert(kMaxUnits < kJitDispatchEntries);
+// Bump when compiled code or its runtime ABI changes.
+constexpr std::string_view kWasmJitCacheAbiVersion = "p17a-v1";
 using Dispatcher = uint64_t (*)(GuestCpu*, uint64_t, int32_t);
 
 constexpr uint8_t kUnsharedDispatcher[] = {
@@ -152,6 +167,31 @@ static_assert(offsetof(GuestCpu, run.exit_subcode) == 28 &&
               offsetof(GuestCpu, run.slice_ticks) == 56);
 static_assert(WA_PAGE_SHIFT == 12 && softmmu::Iotlb::kSlabBits == 10);
 
+uint64_t JitCodeHash(wa_guest_arch_t arch, bool shared_memory, uint64_t pc,
+                     const WasmCodeRegion& code) noexcept {
+    uint64_t hash = 0xcbf29ce484222325ull;
+    const auto mix = [&](uint64_t word) {
+        hash = std::rotl(hash ^ word, 27) * 0x9e3779b185ebca87ull;
+    };
+    for (const auto c : kWasmJitCacheAbiVersion) mix(static_cast<uint8_t>(c));
+    mix(arch);
+    mix(shared_memory);
+    mix(pc);
+    // Every window is a full page. The decoder can follow branches past the
+    // entry's first 32 bytes, so fingerprint all pinned code it can consume.
+    static_assert(WA_PAGE_SIZE % sizeof(uint64_t) == 0);
+    for (const auto& window : code.Windows()) {
+        mix(window.pc);
+        mix(window.bytes.size());
+        for (size_t offset = 0; offset < window.bytes.size(); offset += sizeof(uint64_t)) {
+            uint64_t word;
+            std::memcpy(&word, window.bytes.data() + offset, sizeof(word));
+            mix(word);
+        }
+    }
+    return hash;
+}
+
 EM_JS(int, JitMemoryIsShared, (), {
     return typeof SharedArrayBuffer !== 'undefined' &&
            wasmMemory.buffer instanceof SharedArrayBuffer;
@@ -159,65 +199,129 @@ EM_JS(int, JitMemoryIsShared, (), {
 
 EM_JS_DEPS(wa_jit_dispatch_table, "$addFunction,$removeFunction");
 
-EM_JS(int, InstallJitUnit, (const wa_dbt* owner, unsigned slot, const uint8_t* bytes,
-                            size_t size, unsigned capacity, const uint8_t* dispatcher,
-                            size_t dispatcher_size), {
+EM_JS(int, InitJitUnits, (const wa_dbt* owner, unsigned capacity, const uint8_t* dispatcher,
+                          size_t dispatcher_size), {
     try {
         const caches = Module['waDbtJit'] || (Module['waDbtJit'] = new Map());
-        let cache = caches.get(owner);
-        if (!cache) {
-            const svm = {
-                guest_mem: wasmMemory,
-                mmu_read8: _wa_dbt_jit_read8,
-                mmu_read16: _wa_dbt_jit_read16,
-                mmu_read32: _wa_dbt_jit_read32,
-                mmu_read64: _wa_dbt_jit_read64,
-                mmu_read128: _wa_dbt_jit_read128,
-                mmu_write8: _wa_dbt_jit_write8,
-                mmu_write16: _wa_dbt_jit_write16,
-                mmu_write32: _wa_dbt_jit_write32,
-                mmu_write64: _wa_dbt_jit_write64,
-                mmu_write128: _wa_dbt_jit_write128,
+        const table = new WebAssembly.Table({ initial: capacity + 1, maximum: capacity + 1,
+                                               element: 'anyfunc' });
+        const svm = {
+            guest_mem: wasmMemory,
+            unit_table: table,
+            mmu_read8: _wa_dbt_jit_read8,
+            mmu_read16: _wa_dbt_jit_read16,
+            mmu_read32: _wa_dbt_jit_read32,
+            mmu_read64: _wa_dbt_jit_read64,
+            mmu_read128: _wa_dbt_jit_read128,
+            mmu_write8: _wa_dbt_jit_write8,
+            mmu_write16: _wa_dbt_jit_write16,
+            mmu_write32: _wa_dbt_jit_write32,
+            mmu_write64: _wa_dbt_jit_write64,
+            mmu_write128: _wa_dbt_jit_write128,
+        };
+        for (const id of [4, 19, 53, 68, 70, 71]) {
+            svm['sym_' + id] = (state, op, guestPc, a, b, c, d, e, f, g, h) => {
+                const ctx = state - 64;
+                try {
+                    const low = _wa_dbt_jit_helper(ctx, id, op, guestPc, a, b, c, d, e, f, g, h);
+                    return [low, HEAP64[(ctx + 40) >>> 3], 0n];
+                } catch {
+                    HEAPU32[(ctx + 28) >>> 2] = 0xffffffff;
+                    return [0n, 0n, 0n];
+                }
             };
-            for (const id of [4, 19, 53, 68, 70, 71]) {
-                svm['sym_' + id] = (state, op, guestPc, a, b, c, d, e, f, g, h) => {
-                    const ctx = state - 64;
-                    try {
-                        const low = _wa_dbt_jit_helper(ctx, id, op, guestPc, a, b, c, d, e, f, g, h);
-                        return [low, HEAP64[(ctx + 40) >>> 3], 0n];
-                    } catch {
-                        HEAPU32[(ctx + 28) >>> 2] = 0xffffffff;
-                        return [0n, 0n, 0n];
-                    }
-                };
-            }
-            const table = new WebAssembly.Table({ initial: capacity + 1, maximum: capacity + 1,
-                                                   element: 'anyfunc' });
-            const dispatchModule = Module['waJitDispatcher'] || (Module['waJitDispatcher'] =
-                new WebAssembly.Module(HEAPU8.subarray(dispatcher, dispatcher + dispatcher_size)));
-            const { exports } = new WebAssembly.Instance(dispatchModule, { env: {
-                memory: wasmMemory,
-                __indirect_function_table: table,
-                fast_host: _wa_dbt_jit_fast_host,
-            } });
-            const dispatch = exports.wa_dbt_dispatch;
-            let dispatchSlot = 0;
-            try {
-                dispatchSlot = addFunction(dispatch);
-            } catch {
-                // Keep the checked entry if the embedding cannot reserve a table slot.
-            }
-            cache = { svm, table, dispatch, dispatchSlot };
-            caches.set(owner, cache);
         }
+        const dispatchModule = Module['waJitDispatcher'] || (Module['waJitDispatcher'] =
+            new WebAssembly.Module(HEAPU8.subarray(dispatcher, dispatcher + dispatcher_size)));
+        const { exports } = new WebAssembly.Instance(dispatchModule, { env: {
+            memory: wasmMemory,
+            __indirect_function_table: table,
+            fast_host: _wa_dbt_jit_fast_host,
+        } });
+        const dispatch = exports.wa_dbt_dispatch;
+        let dispatchSlot = 0;
+        try {
+            dispatchSlot = addFunction(dispatch);
+        } catch {
+            // Keep the checked entry if the embedding cannot reserve a table slot.
+        }
+        caches.set(owner, { svm, table, dispatch, dispatchSlot });
+        return dispatchSlot || -1;
+    } catch {
+        return 0;
+    }
+});
+
+// The optional embedding hooks take unsigned BigInts. get is synchronous.
+EM_JS(int, JitCacheCapabilities, (), {
+    try {
+        const hook = Module['waJitCache'];
+        return (typeof hook?.get === 'function' ? 1 : 0) |
+               (typeof hook?.put === 'function' ? 2 : 0);
+    } catch {
+        return 0;
+    }
+});
+
+EM_JS(int, LookupCachedJitUnit, (const wa_dbt* owner, uint64_t pc, uint64_t code_hash,
+                                 unsigned slot), {
+    try {
+        const hook = Module['waJitCache'];
+        if (typeof hook?.get !== 'function') return 0;
+        const caches = Module['waDbtJit'];
+        const cache = caches.get(owner);
+        const cached = hook.get(BigInt.asUintN(64, pc), BigInt.asUintN(64, code_hash));
+        if (caches.get(owner) !== cache) return 0;
+        const module = cached instanceof WebAssembly.Module ? cached :
+            cached instanceof Uint8Array ? new WebAssembly.Module(cached) : null;
+        if (!module || !WebAssembly.Module.imports(module).some(
+                entry => entry.module === 'svm' && entry.name === 'unit_table' && entry.kind === 'table'))
+            return 0;
+        const { run } = new WebAssembly.Instance(module, { svm: cache.svm }).exports;
+        if (typeof run !== 'function') return 0;
+        // Linking this import verifies the cached export's type without calling it.
+        const signature = Module['waJitUnitSignature'] || (Module['waJitUnitSignature'] =
+            new WebAssembly.Module(Uint8Array.of(
+                0, 97, 115, 109, 1, 0, 0, 0,
+                1, 6, 1, 0x60, 1, 0x7f, 1, 0x7e, // (i32) -> i64
+                2, 9, 1, 1, 0x6d, 3, 0x72, 0x75, 0x6e, 0, 0 // import m.run
+            )));
+        new WebAssembly.Instance(signature, { m: { run } });
+        cache.table.set(slot, run);
+        return 1;
+    } catch {
+        return 0;
+    }
+});
+
+EM_JS(int, InstallJitUnit, (const wa_dbt* owner, unsigned slot, const uint8_t* bytes,
+                            size_t size, bool persist), {
+    try {
+        const cache = Module['waDbtJit'].get(owner);
         // Chrome restricts synchronous compilation of large modules on its
         // main thread. A rejected unit stays in the interpreter.
         const module = new WebAssembly.Module(HEAPU8.subarray(bytes, bytes + size));
         const instance = new WebAssembly.Instance(module, { svm: cache.svm });
         cache.table.set(slot, instance.exports.run);
-        return cache.dispatchSlot || -1;
+        if (persist) cache.compiledModule = module;
+        return 1;
     } catch {
         return 0;
+    }
+});
+
+EM_JS(void, StoreCachedJitUnit, (const wa_dbt* owner, uint64_t pc, uint64_t code_hash,
+                                 const uint8_t* bytes, size_t size), {
+    try {
+        const cache = Module['waDbtJit'].get(owner);
+        const module = cache.compiledModule;
+        cache.compiledModule = undefined;
+        const hook = Module['waJitCache'];
+        if (typeof hook?.put === 'function')
+            hook.put(BigInt.asUintN(64, pc), BigInt.asUintN(64, code_hash),
+                     HEAPU8.slice(bytes, bytes + size), module)?.catch?.(() => {});
+    } catch {
+        // Persistence is best effort.
     }
 });
 
@@ -230,10 +334,11 @@ EM_JS(uint64_t, CallCheckedDispatcher, (const wa_dbt* owner, GuestCpu* cpu, uint
     }
 });
 
-EM_JS(void, ClearJitUnits, (const wa_dbt* owner), {
+EM_JS(void, ClearJitUnits, (const wa_dbt* owner, unsigned next_slot), {
     const caches = Module['waDbtJit'];
     const cache = caches?.get(owner);
     if (!cache) return;
+    for (let slot = 1; slot < next_slot; ++slot) cache.table.set(slot, null);
     if (cache.dispatchSlot) removeFunction(cache.dispatchSlot);
     caches.delete(owner);
 });
@@ -378,7 +483,7 @@ EMSCRIPTEN_KEEPALIVE uint64_t wa_dbt_jit_helper(GuestCpu* cpu, uint32_t id, uint
         switch (static_cast<JitSymbol>(id)) {
         case JitSymbol::ArmLambdaBridge: {
             void* state = arch == WA_ARCH_ARM32 ? static_cast<void*>(&cpu->arm32) : &cpu->arm64;
-            if (a || CallWasmNumericLambda(arch, state, opcode, b, c, d, e, result.low) != WA_OK)
+            if (a || CallNumericLambda<true>(arch, state, opcode, b, c, d, e, result.low) != WA_OK)
                 throw WA_ERR_NOTSUP;
             break;
         }
@@ -412,13 +517,14 @@ struct WasmJit::DispatchCache {
     std::array<uint64_t, kMaxUnits + 1> pcs{};
     unsigned next = 1, hand = 1;
     Dispatcher dispatch = nullptr;
+    bool initialized = false;
 
-    unsigned SelectSlot() {
-        if (next <= kMaxUnits) return next;
+    unsigned SelectSlot(unsigned capacity) {
+        if (next <= capacity) return next;
         // Give each unit used since the previous pass a second chance.
         for (;;) {
             const auto slot = hand;
-            hand = slot == kMaxUnits ? 1 : slot + 1;
+            hand = slot == capacity ? 1 : slot + 1;
             if (!std::exchange(FindJitDispatchEntry(entries.data(), pcs[slot]).recent, 0))
                 return slot;
         }
@@ -451,19 +557,24 @@ struct WasmJit::DispatchCache {
         pcs.fill(0);
         next = hand = 1;
         dispatch = nullptr;
+        initialized = false;
     }
 };
 
-WasmJit::WasmJit(wa_dbt& dbt) : dbt_(dbt), shared_memory_(JitMemoryIsShared()) {
+WasmJit::WasmJit(wa_dbt& dbt, unsigned capacity)
+    : dbt_(dbt), capacity_(std::clamp(capacity, 1u, kMaxUnits)),
+      shared_memory_(JitMemoryIsShared()) {
+    static_assert(kMaxUnits < kJitDispatchEntries);
     softmmu::CpuAccess memory(dbt_.mmu);
     code_generation_ = memory.CodeGeneration();
 }
 
-WasmJit::~WasmJit() { ClearJitUnits(&dbt_); }
+WasmJit::~WasmJit() {
+    if (cache_) ClearJitUnits(&dbt_, cache_->next);
+}
 
 std::span<const WasmJit::Heat, 4> WasmJit::Bucket(uint64_t pc) const noexcept {
-    const auto hash = (pc ^ (pc >> 11) ^ (pc >> 32)) * 0x9e3779b97f4a7c15ull;
-    return std::span<const Heat, 4>{heat_.data() + ((hash >> 49) & (heat_.size() - 4)), 4};
+    return std::span<const Heat, 4>{heat_.data() + (JitDispatchIndex(pc) & (heat_.size() - 4)), 4};
 }
 
 std::span<WasmJit::Heat, 4> WasmJit::Bucket(uint64_t pc) noexcept {
@@ -501,28 +612,56 @@ bool WasmJit::Prepare(uint64_t pc) {
     auto entry = std::ranges::find(bucket, pc, &Heat::pc);
     if (entry == bucket.end()) return false;
     if (entry->hits == kReady) return true;
-    if (entry->hits != kHot) return false;
+    if (entry->hits != kHot || preparing_) return false;
+    struct Preparing {
+        bool& active;
+        ~Preparing() { active = false; }
+    } guard{preparing_};
+    preparing_ = true;
     const auto start = Clock::now();
-    Clock::time_point emitted{};
+    Clock::duration emit_time{};
     auto* profile = BootProfile::active;
     bool installed = false;
-    size_t size = 0;
+    std::span<const uint8_t> bytes;
     try {
-        uint8_t* bytes = nullptr;
-        const auto status = CompileForegroundWasm(dbt_, pc, shared_memory_, &bytes, &size);
-        if (profile) emitted = Clock::now();
-        const std::unique_ptr<uint8_t, decltype(&std::free)> buffer(bytes, std::free);
-        if (status == WA_OK) {
+        unsigned slot = 0;
+        const auto select_slot = [&]() {
             if (!tlb_) tlb_ = std::make_unique<softmmu::Iotlb>(dbt_.mmu);
             if (!cache_) cache_ = std::make_unique<DispatchCache>();
-            const auto slot = cache_->SelectSlot();
-            const auto dispatcher = shared_memory_ ? std::span<const uint8_t>(kSharedDispatcher) :
-                                                     std::span<const uint8_t>(kUnsharedDispatcher);
-            const auto dispatch_slot = InstallJitUnit(&dbt_, slot, buffer.get(), size, kMaxUnits,
-                                                      dispatcher.data(), dispatcher.size());
-            installed = dispatch_slot != 0;
-            if (installed) {
+            if (!cache_->initialized) {
+                slot = 0;
+                const auto dispatcher = shared_memory_ ? std::span<const uint8_t>(kSharedDispatcher) :
+                                                         std::span<const uint8_t>(kUnsharedDispatcher);
+                const auto dispatch_slot = InitJitUnits(&dbt_, capacity_, dispatcher.data(),
+                                                        dispatcher.size());
+                if (!dispatch_slot) return false;
                 if (dispatch_slot > 0) cache_->dispatch = reinterpret_cast<Dispatcher>(dispatch_slot);
+                cache_->initialized = true;
+            }
+            if (!slot) slot = cache_->SelectSlot(capacity_);
+            return true;
+        };
+        const auto capabilities = JitCacheCapabilities();
+        const bool can_store = capabilities & 2;
+        const auto generation = can_store ? softmmu::CpuAccess(dbt_.mmu).CodeGeneration() : 0;
+        WasmCodeRegion code;
+        if (PinForegroundWasmCode(dbt_, pc, code) == WA_OK) {
+            const auto hash = capabilities ? JitCodeHash(dbt_.arch, shared_memory_, pc, code) : 0;
+            if ((capabilities & 1) && select_slot())
+                installed = LookupCachedJitUnit(&dbt_, pc, hash, slot);
+            bool persist = false;
+            if (!installed) {
+                const auto emit_start = profile ? Clock::now() : Clock::time_point{};
+                bytes = CompileForegroundWasm(dbt_, pc, code, shared_memory_, scratch_);
+                if (profile) emit_time = Clock::now() - emit_start;
+                if (!bytes.empty() && select_slot()) {
+                    persist = can_store && generation == softmmu::CpuAccess(dbt_.mmu).CodeGeneration();
+                    installed = InstallJitUnit(&dbt_, slot, bytes.data(), bytes.size(), persist);
+                }
+            }
+            if (installed) {
+                // Publish the new tag and remove the old one before running
+                // the optional hook, which can call back into the runtime.
                 const auto evicted = cache_->Install(slot, pc);
                 if (evicted) {
                     for (auto& old : Bucket(evicted)) {
@@ -530,26 +669,27 @@ bool WasmJit::Prepare(uint64_t pc) {
                     }
                     if (profile) ++profile->dbt_stats.jit_evictions;
                 }
+                *entry = {pc, kReady};
+                if (persist) StoreCachedJitUnit(&dbt_, pc, hash, bytes.data(), bytes.size());
             }
         }
     } catch (const std::bad_alloc&) {
         if (!tlb_ || !cache_) disabled_ = true;
     }
-    entry->hits = installed ? kReady : kRejected;
-    const auto finished = Clock::now();
-    const auto elapsed = std::chrono::duration<double, std::milli>(finished - start).count();
+    if (!installed) *entry = {pc, kRejected};
+    const auto elapsed = Clock::now() - start;
+    using Milliseconds = std::chrono::duration<double, std::milli>;
     const auto record = [&](auto& stats) {
-        stats.jit_compile_ms += elapsed;
+        stats.jit_compile_ms += Milliseconds(elapsed).count();
         stats.jit_compile_failures += !installed;
-        stats.wasm_units_compiled += installed;
-        if (installed) stats.wasm_bytes_emitted += size;
+        stats.wasm_units_compiled += installed && !bytes.empty();
+        if (installed) stats.wasm_bytes_emitted += bytes.size();
     };
     record(dbt_.stats);
     if (profile) {
         record(profile->dbt_stats);
-        if (emitted == Clock::time_point{}) emitted = finished;
-        profile->dbt_stats.jit_emit_ms += std::chrono::duration<double, std::milli>(emitted - start).count();
-        profile->dbt_stats.jit_install_ms += std::chrono::duration<double, std::milli>(finished - emitted).count();
+        profile->dbt_stats.jit_emit_ms += Milliseconds(emit_time).count();
+        profile->dbt_stats.jit_install_ms += Milliseconds(elapsed - emit_time).count();
     }
     return installed;
 }
@@ -558,8 +698,9 @@ JitRunResult WasmJit::Run(GuestCpu& cpu, uint64_t pc, uint32_t budget, softmmu::
                            const GuestWait* caller_wait) {
     const auto generation = memory.CodeGeneration();
     if (code_generation_ != generation) {
-        ClearJitUnits(&dbt_);
+        const auto next_slot = cache_->next;
         cache_->Clear();
+        ClearJitUnits(&dbt_, next_slot);
         code_generation_ = generation;
         heat_.fill({});
         return {};

@@ -4,7 +4,8 @@
 
 #include "runtime/arch/arm32/state.h"
 #include "runtime/arch/arm64/state.h"
-#include "runtime/backend/wasm/abi.h"
+#include "runtime/backend/wasm/allocate.h"
+#include "runtime/frontend/source.h"
 
 #include <array>
 #include <memory>
@@ -40,6 +41,19 @@ static_assert(std::is_standard_layout_v<GuestCpu> && offsetof(GuestCpu, run) == 
 static_assert(offsetof(GuestCpu, arm32) == sizeof(GuestCpu::run));
 static_assert(offsetof(GuestCpu, arm64) == sizeof(GuestCpu::run));
 
+struct WasmCodeRegion {
+    std::array<std::shared_ptr<const void>, 4> backing;
+    std::array<swift::runtime::frontend::BlockWindow, 4> windows;
+    size_t count = 0;
+
+    auto Windows() const noexcept { return std::span{windows}.first(count); }
+};
+
+struct WasmCompileScratch {
+    swift::runtime::backend::wasm::Allocation allocation;
+    swift::runtime::backend::CompileResult result;
+};
+
 #ifdef __EMSCRIPTEN__
 template <bool Arm32> void SetJitHostReturn(GuestCpu& cpu, uint64_t value) noexcept {
     if constexpr (Arm32) {
@@ -68,7 +82,7 @@ struct JitRunResult {
 
 class WasmJit {
   public:
-    explicit WasmJit(wa_dbt& dbt);
+    explicit WasmJit(wa_dbt& dbt, unsigned capacity = kMaxUnits);
     ~WasmJit();
 
     bool Observe(uint64_t pc) noexcept;
@@ -79,6 +93,7 @@ class WasmJit {
                      const GuestWait* caller_wait);
 
   private:
+    static constexpr unsigned kMaxUnits = 12288;
     struct Heat {
         uint64_t pc = 0;
         uint8_t hits = 0;
@@ -88,17 +103,22 @@ class WasmJit {
 
     struct DispatchCache;
     wa_dbt& dbt_;
+    const unsigned capacity_;
     std::unique_ptr<DispatchCache> cache_;
     std::unique_ptr<softmmu::Iotlb> tlb_;
+    WasmCompileScratch scratch_;
     uint64_t code_generation_ = 0;
     bool disabled_ = false;
+    bool preparing_ = false;
     bool shared_memory_ = false;
     uint32_t profile_sequence_ = 1;
     std::array<Heat, 32768> heat_{};
 };
 
-int32_t CompileForegroundWasm(wa_dbt& dbt, uint64_t key, bool shared_memory,
-                              uint8_t** bytes, size_t* size);
+int32_t PinForegroundWasmCode(wa_dbt& dbt, uint64_t key, WasmCodeRegion& code) noexcept;
+std::span<const uint8_t> CompileForegroundWasm(wa_dbt& dbt, uint64_t key,
+                                               const WasmCodeRegion& code, bool shared_memory,
+                                               WasmCompileScratch& scratch, bool chain = true);
 #endif
 
 // Shared with the legacy standalone renderer. An emitted callback ID must

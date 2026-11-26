@@ -1,6 +1,9 @@
 if(NOT TARGET svm_wasm)
     include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/SvmEmbed.cmake")
 endif()
+target_include_directories(svm_wasm PRIVATE "${CMAKE_CURRENT_LIST_DIR}"
+    "${CMAKE_CURRENT_LIST_DIR}/../../include")
+target_link_libraries(svm_wasm PRIVATE svm_arm32_numeric svm_arm64_numeric)
 
 add_library(wa_guest_audio STATIC ../android_system/guest_audio.cpp)
 target_compile_features(wa_guest_audio PUBLIC cxx_std_20)
