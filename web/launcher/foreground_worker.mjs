@@ -36,8 +36,10 @@ serveWorker({
         access = opened;
         return { size: opened.getSize(), read: (target, offset) => opened.read(target, { at: offset }) };
       });
-      // Cache I/O may finish in parallel with instantiation, or miss this boot.
+      // Wait briefly for cache preloading in parallel with instantiation so warm
+      // launches hydrate before synchronous boot blocks the worker event loop.
       const cache = bootCache = createBootCache(launch.package, apk, { dex: true });
+      const cacheBudget = new Promise(resolve => setTimeout(resolve, 250));
       const [module, , { size: apkSize, read }] = await Promise.all([
         loadAndroidSystem({
           largeApk: true,
@@ -47,6 +49,7 @@ serveWorker({
         }),
         loadAospRoboto({ fonts: self.fonts, defaultView: self }),
         apk,
+        Promise.race([cache.ready.catch(() => {}), cacheBudget]),
       ]);
       const source = measureApkReads(apkSize, read);
       const started = bootForegroundActivity(module, { assets, packages, launch, size, locale, source, cache });
