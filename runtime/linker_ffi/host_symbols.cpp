@@ -293,6 +293,9 @@ int32_t RegisterHost(wa_dbt& dbt, std::string_view soname, std::string_view name
     for (const auto slot : HostSlots(dbt, name)) {
         auto& symbol = dbt.hosts[slot];
         if (symbol.soname == soname) {
+#ifdef __EMSCRIPTEN__
+            dbt.inline_ctype.Set(symbol.address, InlineCtype::None);
+#endif
             if (!symbol.function)
                 symbol.address = WA_HOST_STUB_BASE + (&symbol - dbt.hosts.data()) * WA_HOST_STUB_STRIDE;
             symbol.function = function;
@@ -337,6 +340,9 @@ int32_t RegisterData(wa_dbt& dbt, std::string_view soname, std::string_view name
     for (const auto slot : HostSlots(dbt, name)) {
         auto& symbol = dbt.hosts[slot];
         if (symbol.soname == soname) {
+#ifdef __EMSCRIPTEN__
+            dbt.inline_ctype.Set(symbol.address, InlineCtype::None);
+#endif
             symbol = {std::string(soname), std::string(name), nullptr, nullptr, builtin, address};
             return WA_OK;
         }

@@ -2,6 +2,9 @@
 
 #include "guest_heap.h"
 #include "wasmandroid/softmmu_linker.h"
+#ifdef __EMSCRIPTEN__
+#include "wasm_dispatcher.h"
+#endif
 
 #include <functional>
 #include <map>
@@ -108,6 +111,7 @@ struct wa_dbt {
     std::unique_ptr<wa::dbt::BionicState> bionic;
 #ifdef __EMSCRIPTEN__
     std::unique_ptr<wa::dbt::WasmJit> wasm_jit;
+    wa::dbt::InlineCtypeStubs inline_ctype;
     bool wasm_jit_unavailable = false;
 #endif
     wa::dbt::GuestThread* running;

@@ -30,6 +30,7 @@ struct FilePage {
     uint32_t id = 0;
     uint16_t first_byte = 0;
     uint16_t valid_bytes = 0;
+    bool read_ahead = false;
 };
 
 struct Entry {
@@ -279,10 +280,80 @@ void InstallPrivatePage(wa_softmmu_t& mmu, Entry& entry, std::shared_ptr<Bytes> 
     ++mmu.stats.private_pages_allocated;
 }
 
-int32_t Materialize(wa_softmmu_t& mmu, Entry& entry) {
+void PublishFilePage(Entry& entry) {
+    entry.file.reset();
+    entry.state = entry.cow ? WA_PAGE_SHARED_COW : WA_PAGE_SHARED_RO;
+}
+
+bool ReadAhead(wa_softmmu_t& mmu, const Entry& fault, uint32_t page) try {
+    constexpr uint32_t chunk_pages = 64 * 1024 / WA_PAGE_SIZE;
+    constexpr uint64_t chunk_bytes = chunk_pages * WA_PAGE_SIZE;
+    const auto& file = *fault.file;
+    if (!file.reader || file.valid_bytes != WA_PAGE_SIZE) return false;
+
+    const auto chunk = page & ~(chunk_pages - 1);
+    const auto matches = [&](uint32_t index) {
+        const auto* next = mmu.Find(index);
+        if (!next || next->state != WA_PAGE_UNMAPPED_FILE || !next->file ||
+            next->prot != fault.prot || next->cow != fault.cow)
+            return false;
+        const auto& other = *next->file;
+        return other.read_ahead && other.reader == file.reader && other.user == file.user &&
+               other.id == file.id && other.valid_bytes == WA_PAGE_SIZE &&
+               other.offset / chunk_bytes == file.offset / chunk_bytes &&
+               other.offset + uint64_t{page} * WA_PAGE_SIZE ==
+                   file.offset + uint64_t{index} * WA_PAGE_SIZE;
+    };
+    auto first = page, end = page + 1;
+    while (first > chunk && matches(first - 1)) --first;
+    while (end < chunk + chunk_pages && matches(end)) ++end;
+    if (end == first + 1) return false;
+
+    {
+        // Clones share each FilePage. Lock pages in the same order in every
+        // MMU, and skip pages another clone has already read.
+        std::array<std::unique_lock<std::mutex>, chunk_pages> locks;
+        for (auto i = first; i < end; ++i)
+            locks[i - chunk] = std::unique_lock(mmu.Find(i)->file->mutex);
+        if (file.data) return false;
+        for (auto i = page; i > first; --i) {
+            if (mmu.Find(i - 1)->file->data) {
+                first = i;
+                break;
+            }
+        }
+        for (auto i = page + 1; i < end; ++i) {
+            if (mmu.Find(i)->file->data) {
+                end = i;
+                break;
+            }
+        }
+        const auto count = end - first;
+        if (count == 1) return false;
+        static_assert(sizeof(Bytes) == WA_PAGE_SIZE);
+        std::shared_ptr<Bytes[]> data(new Bytes[count]);
+        const auto length = count * WA_PAGE_SIZE;
+        if (file.reader(file.user, file.id, data.get(), length, mmu.Find(first)->file->offset) != length)
+            return false;
+        for (auto i = first; i < end; ++i) {
+            auto& entry = *mmu.Find(i);
+            entry.data = entry.file->data = std::shared_ptr<Bytes>(data, &data[i - first]);
+        }
+    }
+    for (auto i = first; i < end; ++i) PublishFilePage(*mmu.Find(i));
+    // The backing read services a single demand fault.
+    ++mmu.stats.demand_file_faults;
+    return true;
+} catch (const std::bad_alloc&) {
+    // Speculative pages may not fit even though the faulting page does.
+    return false;
+}
+
+int32_t Materialize(wa_softmmu_t& mmu, Entry& entry, uint32_t page) {
     if (entry.state == WA_PAGE_UNMAPPED_FILE) {
         const wa::BootProfile::Scope phase(wa::BootProfile::PageFault);
         if (entry.file) {
+            if (entry.file->read_ahead && ReadAhead(mmu, entry, page)) return WA_OK;
             auto& file = *entry.file;
             {
                 std::lock_guard lock(file.mutex);
@@ -299,9 +370,8 @@ int32_t Materialize(wa_softmmu_t& mmu, Entry& entry) {
                 }
                 entry.data = file.data;
             }
-            entry.file.reset();
         }
-        entry.state = entry.cow ? WA_PAGE_SHARED_COW : WA_PAGE_SHARED_RO;
+        PublishFilePage(entry);
     }
 
     return WA_OK;
@@ -355,7 +425,7 @@ wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte
             auto* entry = mmu->Translate(range.first);
             auto status = CheckPermission(*mmu, entry, permission);
             if (status == WA_OK)
-                status = Materialize(*mmu, *entry);
+                status = Materialize(*mmu, *entry, range.first);
             if (status != WA_OK)
                 return {status, address};
             if constexpr (write) {
@@ -376,7 +446,7 @@ wa::softmmu::Access Transfer(wa_softmmu_t* mmu, uint64_t address, std::span<Byte
         }
         for (auto page = range.first; page < range.end; ++page) {
             fault_address = at(page);
-            const auto status = Materialize(*mmu, *mmu->Find(page));
+            const auto status = Materialize(*mmu, *mmu->Find(page), page);
             if (status != WA_OK)
                 return {status, fault_address};
         }
@@ -422,6 +492,13 @@ void wa_softmmu_destroy(wa_softmmu_t* mmu) {
 int32_t wa_softmmu_map_file_lazy(wa_softmmu_t* mmu, uint64_t guest_vaddr, size_t byte_len,
                                  uint32_t prot, uint32_t file_id, uint64_t file_offset,
                                  size_t file_valid_bytes, int32_t cow_writable) {
+    return wa::softmmu::MapFileLazy(mmu, guest_vaddr, byte_len, prot, file_id, file_offset,
+                                  file_valid_bytes, cow_writable != 0, false);
+}
+
+int32_t wa::softmmu::MapFileLazy(wa_softmmu_t* mmu, uint64_t guest_vaddr, size_t byte_len,
+                                uint32_t prot, uint32_t file_id, uint64_t file_offset,
+                                size_t file_valid_bytes, bool cow_writable, bool read_ahead) {
     if (file_valid_bytes > byte_len || file_valid_bytes > UINT64_MAX - file_offset)
         return WA_ERR_INVALID;
 
@@ -439,6 +516,7 @@ int32_t wa_softmmu_map_file_lazy(wa_softmmu_t* mmu, uint64_t guest_vaddr, size_t
             entry.file->offset = file_offset + (data_start - guest_vaddr);
             entry.file->first_byte = static_cast<uint16_t>(data_start - page_address);
             entry.file->valid_bytes = static_cast<uint16_t>(data_end - data_start);
+            entry.file->read_ahead = read_ahead;
         }
         return entry;
     });
@@ -678,9 +756,10 @@ Access CpuAccess::ExecutablePage(uint64_t address, const PageBytes*& page) noexc
             const auto data = mmu_->sparse.Backing(address);
             page = data ? data.get() : &kZeroPage;
         } else {
-            auto* entry = mmu_->Translate(static_cast<uint32_t>(address >> WA_PAGE_SHIFT));
+            const auto index = static_cast<uint32_t>(address >> WA_PAGE_SHIFT);
+            auto* entry = mmu_->Translate(index);
             auto status = CheckPermission(*mmu_, entry, WA_PROT_EXEC);
-            if (status == WA_OK) status = Materialize(*mmu_, *entry);
+            if (status == WA_OK) status = Materialize(*mmu_, *entry, index);
             if (status != WA_OK) return {status, address};
             page = &entry->ReadBytes();
         }
@@ -798,7 +877,8 @@ Access GetUnitWindow(wa_softmmu_t* mmu, uint64_t address, PageWindow& window,
             window = {backing, std::span{backing ? *backing : kZeroPage}.subspan(address & kPageMask)};
             return {};
         }
-        auto* entry = mmu->Find(static_cast<uint32_t>(address >> WA_PAGE_SHIFT));
+        const auto page = static_cast<uint32_t>(address >> WA_PAGE_SHIFT);
+        auto* entry = mmu->Find(page);
         auto status = CheckPermission(*mmu, entry, WA_PROT_EXEC);
         // Writable code uses the interpreter. Decode and dispatch must see the
         // same bytes even when a store targets the currently executing unit.
@@ -807,7 +887,7 @@ Access GetUnitWindow(wa_softmmu_t* mmu, uint64_t address, PageWindow& window,
              (mode == UnitWindow::JitAdjacent && !entry->data)))
             return {WA_ERR_NOTSUP, address};
         if (status == WA_OK)
-            status = Materialize(*mmu, *entry);
+            status = Materialize(*mmu, *entry, page);
         if (status != WA_OK)
             return {status, address};
 #ifdef __EMSCRIPTEN__

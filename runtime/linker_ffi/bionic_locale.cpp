@@ -1,5 +1,6 @@
 #include "bionic_internal.h"
 #include "bionic_math.h"
+#include "elf_image.h"
 
 #include <cctype>
 #include <cerrno>
@@ -669,6 +670,16 @@ void RegisterLocale(wa_dbt& dbt) {
     CTYPE_FUNCTIONS(FAST_CHAR)
     FAST_CHAR(isascii)
 #undef FAST_CHAR
+    const std::pair<const char*, InlineCtype> inline_functions[] = {
+        {"isspace", InlineCtype::Space}, {"isdigit", InlineCtype::Digit},
+        {"isalpha", InlineCtype::Alpha}, {"isalnum", InlineCtype::Alnum},
+        {"isxdigit", InlineCtype::XDigit}, {"isupper", InlineCtype::Upper},
+        {"islower", InlineCtype::Lower}, {"isprint", InlineCtype::Print},
+        {"tolower", InlineCtype::ToLower}, {"toupper", InlineCtype::ToUpper},
+    };
+    dbt.inline_ctype.first_pc = FindVirtualSymbol(dbt, "libc.so", "tolower");
+    for (const auto& [name, op] : inline_functions)
+        dbt.inline_ctype.Set(FindVirtualSymbol(dbt, "libc.so", name), op);
 #endif
 #undef CTYPE_FUNCTIONS
 }

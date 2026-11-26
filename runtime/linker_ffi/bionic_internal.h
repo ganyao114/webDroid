@@ -59,6 +59,7 @@ struct CondWait {
 };
 
 struct GuestCpu;
+struct NativeLooper;
 struct GuestSignalStack {
     uint64_t address = 0, size = 0;
     uint32_t flags = 2; // Linux SS_DISABLE.
@@ -70,7 +71,7 @@ struct GuestThread {
     bool owns_stack = true;
     uint64_t errno_address = 0, thread_pointer = 0, result = 0, joiner = 0;
     uint64_t host_entry = 0, host_errno_address = 0;
-    uint64_t native_looper = 0;
+    NativeLooper* native_looper = nullptr;
     uint64_t locale = 0, signal_mask = 0, pending_signals = 0;
     GuestSignalStack signal_stack;
     int policy = 0, priority = 0, nice = 0, egl_error = 0x3000, gl_error = 0;
@@ -154,7 +155,6 @@ struct GuestMountedFile {
 
 struct SharedFilePage;
 struct GuestFileTree;
-struct NativeLooper;
 struct PosixRegex;
 struct GuestMappingPage {
     uint8_t prot;

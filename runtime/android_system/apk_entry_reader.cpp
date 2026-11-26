@@ -16,21 +16,29 @@
 #endif
 
 namespace wa::system {
+namespace {
 
-ApkEntryCache::ApkEntryCache() {
+bool HasLargeHeap() {
 #ifdef __EMSCRIPTEN__
-    large_ = emscripten_get_heap_size() > 256 * 1024 * 1024;
+    return emscripten_get_heap_size() > 256 * 1024 * 1024;
+#else
+    return true;
 #endif
 }
+
+} // namespace
+
+ApkEntryCache::ApkEntryCache() : large_(HasLargeHeap()), inflated_(large_ ? 384 : 64) {}
 
 std::span<ApkEntryCache::Window> ApkEntryCache::Candidates(Contents contents, uint64_t entry,
                                                          uint64_t offset) {
     if (contents == Contents::Compressed) return compressed_;
-    // Eight ways per set, with up to 4 MiB on the standard heap and 8 MiB on the large heap.
+    // Eight ways per set, with up to 4 MiB on the standard heap and 24 MiB on the large heap.
+    constexpr size_t ways = 8;
     const auto key = (entry * 0x9e3779b97f4a7c15ull) ^
                      (offset / kWindowBytes * 0xbf58476d1ce4e5b9ull);
-    const auto set = key >> (large_ ? 60 : 61);
-    return std::span(inflated_).subspan(set * 8, 8);
+    const auto set = ((key >> 32) * (inflated_.size() / ways)) >> 32;
+    return std::span(inflated_).subspan(set * ways, ways);
 }
 
 std::span<const uint8_t> ApkEntryCache::Get(Contents contents, uint64_t entry, uint64_t offset) {
@@ -207,7 +215,7 @@ void ApkEntryCache::UseInflater(ApkEntryReader& reader) {
         inflaters_.push_front(&reader);
         lru = inflaters_.begin();
         // Bound cursor and staging-buffer memory even for many small entries.
-        if (inflaters_.size() > (large_ ? 16 : 8)) inflaters_.back()->ReleaseInflateState();
+        if (inflaters_.size() > (large_ ? 64 : 12)) inflaters_.back()->ReleaseInflateState();
     }
 }
 
@@ -220,10 +228,13 @@ void ApkEntryCache::RemoveInflater(ApkEntryReader& reader) noexcept {
 
 void ApkEntryCache::AddCheckpoint() {
     ++checkpoints_;
-    // A zlib snapshot is about 40 KiB. Keep up to 10 MiB across large-heap
-    // readers or 3.75 MiB on the standard heap by reclaiming idle readers.
-    const size_t limit = large_ ? 256 : 96;
+    // A zlib snapshot is about 40 KiB. Reclaim idle readers to bound peak memory.
+    const size_t limit = large_ ? 1024 : 128;
     while (checkpoints_ > limit) inflaters_.back()->ReleaseInflateState();
+}
+
+void ApkEntryCache::TrimInflaters() noexcept {
+    while (!inflaters_.empty()) inflaters_.back()->ReleaseInflateState();
 }
 
 ApkEntryReader::ApkEntryReader(int fd, const ApkZipEntry& entry,
@@ -312,7 +323,7 @@ int64_t ApkEntryReader::Read(void* output, size_t count, uint64_t offset) try {
 dbt::ElfFile ApkEntryReader::Elf() {
     return {Size(), [](void* file, uint32_t, void* output, size_t count, uint64_t offset) {
         return static_cast<ApkEntryReader*>(file)->Read(output, count, offset);
-    }, this, 0};
+    }, this, 0, entry_.method == ApkZipEntry::Deflated};
 }
 
 } // namespace wa::system

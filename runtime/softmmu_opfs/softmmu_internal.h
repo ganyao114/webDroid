@@ -110,6 +110,8 @@ void InvalidateIotlb(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcep
 void PublishFileTemplates(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept;
 int32_t MapAnon(wa_softmmu_t* mmu, uint64_t address, size_t length, uint32_t prot,
                 uint64_t* conflict = nullptr);
+int32_t MapFileLazy(wa_softmmu_t* mmu, uint64_t address, size_t length, uint32_t prot,
+                    uint32_t file_id, uint64_t offset, size_t valid, bool cow, bool read_ahead);
 void Unmap(wa_softmmu_t* mmu, uint64_t address, size_t length) noexcept;
 
 // Attach storage to an anonymous writable page. Aliases are confined to this MMU.
