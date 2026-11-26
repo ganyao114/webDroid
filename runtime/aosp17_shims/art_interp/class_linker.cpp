@@ -15,6 +15,11 @@
 #include "ziparchive/zip_archive.h"
 #include "ziparchive/zip_error.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <zlib.h>
+#endif
+
 namespace wa::interp {
 
 const Class* ClassLinker::FindLinkedClass(std::string_view descriptor) const {
@@ -22,6 +27,43 @@ const Class* ClassLinker::FindLinkedClass(std::string_view descriptor) const {
   return it != classes_.end() && it->second.link_state == LinkState::Linked ? &it->second : nullptr;
 }
 namespace {
+
+class ExtractedDexContainer : public art::DexFileContainer {
+ public:
+  explicit ExtractedDexContainer(size_t size)
+      : bytes_(std::make_unique_for_overwrite<uint8_t[]>(size)), size_(size) {}
+
+  bool IsReadOnly() const override { return true; }
+  bool EnableWrite() override { return true; }
+  bool DisableWrite() override { return false; }
+  const uint8_t* Begin() const override { return bytes_.get(); }
+  const uint8_t* End() const override { return bytes_.get() + size_; }
+  uint8_t* Data() { return bytes_.get(); }
+
+ private:
+  std::unique_ptr<uint8_t[]> bytes_;
+  size_t size_;
+};
+
+#ifdef __EMSCRIPTEN__
+EM_JS(int, BeginDexCache, (size_t count), {
+  try { return Module['waDexCache']?.begin(count >>> 0) ? 1 : 0; }
+  catch { return 0; }
+});
+
+EM_JS(int, ReadCachedDex, (size_t index, size_t number, uint32_t crc, uint8_t* output, size_t length), {
+  try {
+    const start = output >>> 0;
+    return Module['waDexCache'].read(index >>> 0, number >>> 0, crc >>> 0,
+                                    HEAPU8.subarray(start, start + (length >>> 0))) ? 1 : 0;
+  } catch { return 0; }
+});
+
+EM_JS(void, RecordDexCache, (size_t number, uint32_t crc, const uint8_t* data, size_t length, int hit), {
+  try { Module['waDexCache'].record(number >>> 0, crc >>> 0, data >>> 0, length >>> 0, hit !== 0); }
+  catch { /* Keep boot independent of cache errors. */ }
+});
+#endif
 
 std::unique_ptr<const art::DexFile> OpenDex(art::ArtDexFileLoader& loader,
                                            const std::string& location, bool verify,
@@ -46,7 +88,10 @@ size_t DexEntryNumber(std::string_view name) {
 
 std::unique_ptr<const art::DexFile> OpenApkEntry(ZipArchiveHandle archive, const ZipEntry64& entry,
                                                 const std::string& location, bool verify,
-                                                [[maybe_unused]] bool file_backed) {
+                                                [[maybe_unused]] bool file_backed,
+                                                [[maybe_unused]] bool cache,
+                                                [[maybe_unused]] size_t index,
+                                                [[maybe_unused]] size_t number) {
   if (entry.uncompressed_length == 0 || entry.uncompressed_length > UINT32_MAX ||
       entry.uncompressed_length > std::vector<uint8_t>().max_size() || (entry.gpbf & 1)) {
     throw std::runtime_error("Invalid or encrypted DEX entry " + location);
@@ -67,17 +112,33 @@ std::unique_ptr<const art::DexFile> OpenApkEntry(ZipArchiveHandle archive, const
   }
 #endif
   // A compressed entry needs a backing buffer. Wasm also uses this path because
-  // mmap of a virtual filesystem file copies it into linear memory.
-  std::vector<uint8_t> bytes;
+  // mmap of a virtual filesystem file copies it into linear memory. Extraction
+  // fills the entire buffer before it can reach ART.
+  auto bytes = std::make_shared<ExtractedDexContainer>(size);
+  art::ArtDexFileLoader loader(bytes, location);
+#ifdef __EMSCRIPTEN__
+  if (cache && ReadCachedDex(index, number, entry.crc32, bytes->Data(), size) &&
+      crc32(0, bytes->Data(), size) == entry.crc32) {
+    try {
+      auto dex = OpenDex(loader, location, verify, entry.crc32);
+      RecordDexCache(number, entry.crc32, bytes->Data(), size, true);
+      return dex;
+    } catch (const std::runtime_error&) {
+      // A bad cache must still let the original APK go through extraction and verification.
+    }
+  }
+#endif
   {
     const BootProfile::Scope phase(BootProfile::DexExtract);
-    bytes.resize(size);
-    if (const auto status = ExtractToMemory(archive, &entry, bytes.data(), size); status != 0) {
+    if (const auto status = ExtractToMemory(archive, &entry, bytes->Data(), size); status != 0) {
       throw std::runtime_error("DEX " + location + ": " + ErrorCodeString(status));
     }
   }
-  art::ArtDexFileLoader loader(std::move(bytes), location);
-  return OpenDex(loader, location, verify, entry.crc32);
+  auto dex = OpenDex(loader, location, verify, entry.crc32);
+#ifdef __EMSCRIPTEN__
+  if (cache) RecordDexCache(number, entry.crc32, bytes->Data(), size, false);
+#endif
+  return dex;
 }
 
 std::vector<std::unique_ptr<const art::DexFile>> ReadDexArchive(
@@ -104,13 +165,26 @@ std::vector<std::unique_ptr<const art::DexFile>> ReadDexArchive(
   }
   std::vector<std::unique_ptr<const art::DexFile>> files;
   files.reserve(entries.size());
+  bool cache = false;
+#ifdef __EMSCRIPTEN__
+  if (file_backed) {
+    // Stored DEX entries are already readable without inflation.
+    const auto compressed = std::ranges::count_if(entries, [](const auto& item) {
+      return item.second.method == kCompressDeflated;
+    });
+    cache = compressed != 0 && BeginDexCache(compressed);
+  }
+#endif
+  size_t cache_index = 0;
   for (const auto& [number, entry] : entries) {
     // Memory-backed class path archives use consecutive framework shard names.
     if (!file_backed && number != files.size() + 1)
       throw std::runtime_error("DEX archive " + path + ": missing " +
                                art::DexFileLoader::GetMultiDexZipEntryName(files.size()));
     const std::string location = path + '!' + art::DexFileLoader::GetMultiDexZipEntryName(number - 1);
-    files.push_back(OpenApkEntry(handle, entry, location, verify, file_backed));
+    const bool use_cache = cache && entry.method == kCompressDeflated;
+    files.push_back(OpenApkEntry(handle, entry, location, verify, file_backed, use_cache, cache_index, number));
+    if (use_cache) ++cache_index;
   }
   return files;
 }

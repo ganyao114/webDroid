@@ -3,12 +3,15 @@ import { createSurfaceFlingerCompositor } from '../surfaceflinger/compositor.mjs
 import { serveWorker } from '../workers/worker_rpc.mjs';
 import { measureApkReads } from './abi_helpers.mjs';
 import { loadAndroidSystem } from './assets.mjs';
+import { createBootCache } from './boot_cache.mjs';
 import { bootForegroundActivity } from './foreground_java_apk.mjs';
 import { sceneLabels } from './scene_labels.mjs';
 
-let abi, compositor, access, viewport, startedAt;
+let abi, compositor, access, bootCache, viewport, startedAt;
 
 function dispose() {
+  bootCache?.close();
+  bootCache = undefined;
   try {
     compositor?.dispose();
   } finally {
@@ -23,8 +26,19 @@ function dispose() {
 
 serveWorker({
   async open({ handle, canvas, size, assets, packages, launch, locale, backend }) {
+    let failed = false;
     try {
-      const [module] = await Promise.all([
+      const apk = handle.createSyncAccessHandle({ mode: 'read-only' }).then(opened => {
+        if (failed) {
+          opened.close();
+          return;
+        }
+        access = opened;
+        return { size: opened.getSize(), read: (target, offset) => opened.read(target, { at: offset }) };
+      });
+      // Cache I/O may finish in parallel with instantiation, or miss this boot.
+      const cache = bootCache = createBootCache(launch.package, apk, { dex: true });
+      const [module, , { size: apkSize, read }] = await Promise.all([
         loadAndroidSystem({
           largeApk: true,
           // Guest libraries use stderr for diagnostics and startup messages.
@@ -32,10 +46,10 @@ serveWorker({
           printErr: message => console.warn(`Android stderr: ${message}`),
         }),
         loadAospRoboto({ fonts: self.fonts, defaultView: self }),
+        apk,
       ]);
-      access = await handle.createSyncAccessHandle({ mode: 'read-only' });
-      const source = measureApkReads(access.getSize(), (target, offset) => access.read(target, { at: offset }));
-      const started = bootForegroundActivity(module, { assets, packages, launch, size, locale, source });
+      const source = measureApkReads(apkSize, read);
+      const started = bootForegroundActivity(module, { assets, packages, launch, size, locale, source, cache });
       abi = started.abi;
       const bootHeapEndBytes = started.state.wasmHeapEndBytes;
       const scene = abi.scene;
@@ -78,15 +92,17 @@ serveWorker({
             type: 'frame', labels, layout, inputModal, overlays,
             inputRead: compositor.input.ring.readIndex,
             size: { width: packet.width, height: packet.height },
-            state: { ...compositor.stats(), ...state, ...source.stats, bootHeapEndBytes,
+            state: { ...compositor.stats(), ...state, ...source.stats, ...cache.stats, bootHeapEndBytes,
               presentedFrames: compositor.frame,
               freeHeadroomBytes: state.wasmLinearBytes - state.wasmHeapEndBytes },
           }, overlays.map(({ image }) => image));
+          cache.scheduleFlush(module);
         },
       });
       return { memory: module.wasmMemory.buffer, input: module._wa_sf_input(scene),
         webviewRequests: module._wa_sf_webview_requests(scene), webviewEvents: module._wa_sf_webview_events(scene) };
     } catch (error) {
+      failed = true;
       dispose();
       throw error;
     }
