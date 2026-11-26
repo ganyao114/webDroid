@@ -3,6 +3,7 @@ import { createSurfaceFlingerCompositor } from '../surfaceflinger/compositor.mjs
 import { attachAndroidInput, BrowserDocumentPicker } from '../surfaceflinger/input_ime.mjs';
 import { PcmAudioOutput } from '../surfaceflinger/mediacodec_bridge.mjs';
 import { frameTimeNs, withApkFile } from './abi_helpers.mjs';
+import { createBootCache } from './boot_cache.mjs';
 import { sceneLabels } from './scene_labels.mjs';
 
 const textCapacity = 16 * 1024;
@@ -199,7 +200,8 @@ export class ForegroundActivityAbi {
   }
 }
 
-export function bootForegroundActivity(module, { assets, packages, size, locale, launch, source }) {
+export function bootForegroundActivity(module, { assets, packages, size, locale, launch, source, cache }) {
+  if (cache?.jit) module.waJitCache = cache.jit;
   const abi = new ForegroundActivityAbi(module);
   try {
     abi.create(size, locale);
@@ -210,7 +212,15 @@ export function bootForegroundActivity(module, { assets, packages, size, locale,
       // boot_apk adds the active APK to the catalog with its application resources.
       if (name !== launch.apkName) abi.install(name, data);
     }
-    abi.boot(launch.apkName, source, launch.activity);
+    if (cache?.dex) module.waDexCache = cache.dex;
+    try {
+      abi.boot(launch.apkName, source, launch.activity);
+    } finally {
+      if (cache?.dex) {
+        delete module.waDexCache;
+        cache.dex.closeReader();
+      }
+    }
     const state = abi.state();
     if (state.package !== launch.package) throw new Error('Foreground Activity package does not match the launch');
     return { abi, state };
@@ -235,6 +245,7 @@ export function createForegroundSurface(surface, launch) {
 
 export class ForegroundJavaApk {
   #abi;
+  #cache;
   #compositor;
   #input;
   #audio;
@@ -257,12 +268,13 @@ export class ForegroundJavaApk {
 
   async start(bytes) {
     const { loadSystem, launcherModule, assets, packages, surface, launch, viewport, locale, backend } = this.options;
+    const cache = this.#cache = createBootCache(launch.package, bytes);
     const module = await loadSystem();
     if (this.#closed) return;
     if (module === launcherModule) throw new Error('The foreground Activity requires an isolated android_system instance');
     this.#size = viewport();
     const { abi, state } = bootForegroundActivity(module, {
-      assets, packages, size: this.#size, locale, launch, source: bytes,
+      assets, packages, size: this.#size, locale, launch, source: bytes, cache,
     });
     this.#abi = abi;
     this.#state = state;
@@ -279,6 +291,7 @@ export class ForegroundJavaApk {
       module, scene: abi.scene, canvas, webviewHost: host, viewport, preferredBackend: backend,
       readWebViewFile: (id, url) => abi.readWebViewFile(id, url),
       onVsync: () => this.#tick(),
+      onPresented: () => cache.scheduleFlush(module),
       onError: error => { if (!this.#closed) this.options.onError(error); },
       onCanvasChanged: next => { if (this.#input && !this.#closed) this.#bindInput(next); },
     });
@@ -355,7 +368,8 @@ export class ForegroundJavaApk {
   }
 
   stats() {
-    return { ...this.#compositor?.stats(), ...this.#state, ...this.#audio?.stats(), document_error: this.#documentError };
+    return { ...this.#compositor?.stats(), ...this.#state, ...this.#cache?.stats,
+      ...this.#audio?.stats(), document_error: this.#documentError };
   }
 
   labels() { return this.#ready && !this.#closed ? sceneLabels(this.#abi.module, this.#abi.scene) : []; }
@@ -380,6 +394,8 @@ export class ForegroundJavaApk {
 
   #dispose() {
     const abi = this.#abi, compositor = this.#compositor, input = this.#input;
+    this.#cache?.close();
+    this.#cache = undefined;
     this.#abi = this.#compositor = this.#input = this.#host = this.#state = this.#tap = undefined;
     try {
       input?.dispose();
